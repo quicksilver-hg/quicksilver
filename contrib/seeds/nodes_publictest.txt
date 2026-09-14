@@ -1,0 +1,11 @@
+# Fixed seed nodes for the Quicksilver Public Test Network (publictest).
+#
+# Same onion service as nodes_main.txt, on the publictest P2P port: one hidden
+# service directory with two HiddenServicePort lines, so both networks are
+# reachable at one address and there is only one key to keep.
+#
+# Format: <onion>.onion:<port>, one per line. Regenerate the header with:
+#   python3 contrib/seeds/generate-seeds.py contrib/seeds > src/chainparamsseeds.h
+
+# Operator: project maintainer. Added 2026-08-17 (identity reminted with launch genesis).
+z2ban4msenn4at52o42wbaz5aws2fzwyafhme3hmzu2smnammken4sid.onion:19557

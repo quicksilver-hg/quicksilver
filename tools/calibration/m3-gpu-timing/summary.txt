@@ -1,0 +1,9 @@
+gpu-e19.csv: n=1300 mean=0.0034s median=0.0028s sd=0.0020s found=33
+gpu-e22.csv: n=1300 mean=0.0106s median=0.0099s sd=0.0049s found=28
+gpu-e23.csv: n=1300 mean=0.0197s median=0.0190s sd=0.0067s found=29
+gpu-e24.csv: n=1300 mean=0.0381s median=0.0375s sd=0.0086s found=31
+gpu-e25.csv: n=1300 mean=0.0995s median=0.0990s sd=0.0104s found=36
+gpu-e26.csv: n=1300 mean=0.2453s median=0.2450s sd=0.0090s found=33
+gpu-e27.csv: n=1300 mean=0.5472s median=0.5471s sd=0.0036s found=26
+gpu-e28.csv: n=1300 mean=1.1596s median=1.1592s sd=0.0058s found=29
+gpu-e29.csv: n=1300 mean=2.3907s median=2.3900s sd=0.0102s found=32

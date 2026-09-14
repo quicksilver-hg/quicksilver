@@ -1,0 +1,8 @@
+component,bytes_per_block
+blocks_and_undo,998125
+block_index,-35840
+chainstate,2960064
+total,3922349
+block_bytes_consensus,993589
+net_utxos_per_block,22686
+chainstate_bytes_per_utxo_x1000,130480

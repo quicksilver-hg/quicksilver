@@ -1,0 +1,13 @@
+# Fixed seed nodes for the Quicksilver Distributed Ledger System (main).
+#
+# Quicksilver publishes no DNS seeds — there is no domain to own, and a DNS seed
+# is a renewal liability that has to outlive whoever registered it. Peer
+# discovery of last resort is a single Tor onion service on maintainer hardware.
+# doc/bootstrapping.md documents -addnode for anyone who would rather not depend
+# on it.
+#
+# Format: <onion>.onion:<port>, one per line. Regenerate the header with:
+#   python3 contrib/seeds/generate-seeds.py contrib/seeds > src/chainparamsseeds.h
+
+# Operator: project maintainer. Added 2026-08-17 (identity reminted with launch genesis).
+z2ban4msenn4at52o42wbaz5aws2fzwyafhme3hmzu2smnammken4sid.onion:9555

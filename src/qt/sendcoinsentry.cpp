@@ -1,0 +1,226 @@
+// Copyright (c) 2011-2022 The Bitcoin Core developers
+// Copyright (c) 2026 The Quicksilver developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
+#include <qt/sendcoinsentry.h>
+#include <qt/forms/ui_sendcoinsentry.h>
+
+#include <qt/addressbookpage.h>
+#include <qt/addresstablemodel.h>
+#include <qt/guiutil.h>
+#include <qt/optionsmodel.h>
+#include <qt/platformstyle.h>
+#include <qt/quicksilverstyle.h>
+#include <qt/vaultmodel.h>
+
+#include <QApplication>
+#include <QClipboard>
+#include <QDialog>
+
+SendCoinsEntry::SendCoinsEntry(const PlatformStyle *_platformStyle, QWidget *parent) :
+    QWidget(parent),
+    ui(new Ui::SendCoinsEntry),
+    platformStyle(_platformStyle)
+{
+    ui->setupUi(this);
+
+    ui->addressBookButton->setIcon(platformStyle->ColorIcon(":/icons/address-book", QuicksilverStyle::Color(QuicksilverStyle::Token::Teal)));
+    ui->pasteButton->setIcon(platformStyle->ColorIcon(":/icons/editpaste", QuicksilverStyle::Color(QuicksilverStyle::Token::SilverMuted)));
+    ui->deleteButton->setIcon(platformStyle->ColorIcon(":/icons/remove", QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarBright)));
+
+    if (platformStyle->getUseExtraSpacing())
+        ui->payToLayout->setSpacing(4);
+
+    GUIUtil::setupAddressWidget(ui->payTo, this);
+
+    // Connect signals
+    connect(ui->payAmount, &QuicksilverAmountField::valueChanged, this, &SendCoinsEntry::payAmountChanged);
+    connect(ui->deleteButton, &QPushButton::clicked, this, &SendCoinsEntry::deleteClicked);
+    connect(ui->useAvailableBalanceButton, &QPushButton::clicked, this, &SendCoinsEntry::useAvailableBalanceClicked);
+}
+
+SendCoinsEntry::~SendCoinsEntry()
+{
+    delete ui;
+}
+
+void SendCoinsEntry::on_pasteButton_clicked()
+{
+    // Paste text from clipboard into recipient field
+    ui->payTo->setText(QApplication::clipboard()->text());
+}
+
+void SendCoinsEntry::on_addressBookButton_clicked()
+{
+    if(!model)
+        return;
+    auto dlg = new AddressBookPage(platformStyle, AddressBookPage::ForSelection, AddressBookPage::SendingTab, this);
+    dlg->setModel(model->getAddressTableModel());
+    connect(dlg, &QDialog::accepted, this, [this, dlg] {
+        ui->payTo->setText(dlg->getReturnValue());
+        ui->payAmount->setFocus();
+    });
+    GUIUtil::ShowModalDialogAsynchronously(dlg);
+}
+
+void SendCoinsEntry::on_payTo_textChanged(const QString &address)
+{
+    updateLabel(address);
+}
+
+void SendCoinsEntry::setModel(VaultModel *_model)
+{
+    this->model = _model;
+
+    if (_model && _model->getOptionsModel())
+        connect(_model->getOptionsModel(), &OptionsModel::displayUnitChanged, this, &SendCoinsEntry::updateDisplayUnit);
+
+    clear();
+}
+
+void SendCoinsEntry::clear()
+{
+    // clear UI elements for a normal transfer
+    ui->payTo->clear();
+    ui->addAsLabel->clear();
+    ui->payAmount->clear();
+    ui->messageTextLabel->clear();
+    ui->messageTextLabel->hide();
+    ui->messageLabel->hide();
+
+    // update the display unit, to not use the default ("Hg")
+    updateDisplayUnit();
+}
+
+void SendCoinsEntry::deleteClicked()
+{
+    Q_EMIT removeEntry(this);
+}
+
+void SendCoinsEntry::useAvailableBalanceClicked()
+{
+    Q_EMIT useAvailableBalance(this);
+}
+
+bool SendCoinsEntry::validate()
+{
+    if (!model)
+        return false;
+
+    // Check input validity
+    bool retval = true;
+
+    if (!model->validateAddress(ui->payTo->text()))
+    {
+        ui->payTo->setValid(false);
+        retval = false;
+    }
+
+    if (!ui->payAmount->validate())
+    {
+        retval = false;
+    }
+
+    // Sending a zero amount is invalid
+    if (ui->payAmount->value(nullptr) <= 0)
+    {
+        ui->payAmount->setValid(false);
+        retval = false;
+    }
+
+    return retval;
+}
+
+SendCoinsRecipient SendCoinsEntry::getValue()
+{
+    recipient.address = ui->payTo->text();
+    recipient.label = ui->addAsLabel->text();
+    recipient.amount = ui->payAmount->value();
+    recipient.message = ui->messageTextLabel->text();
+
+    return recipient;
+}
+
+QWidget *SendCoinsEntry::setupTabChain(QWidget *prev)
+{
+    QWidget::setTabOrder(prev, ui->payTo);
+    QWidget::setTabOrder(ui->payTo, ui->addAsLabel);
+    QWidget *w = ui->payAmount->setupTabChain(ui->addAsLabel);
+    QWidget::setTabOrder(w, ui->addressBookButton);
+    QWidget::setTabOrder(ui->addressBookButton, ui->pasteButton);
+    QWidget::setTabOrder(ui->pasteButton, ui->deleteButton);
+    return ui->deleteButton;
+}
+
+void SendCoinsEntry::setValue(const SendCoinsRecipient &value)
+{
+    recipient = value;
+    {
+        // message
+        ui->messageTextLabel->setText(recipient.message);
+        ui->messageTextLabel->setVisible(!recipient.message.isEmpty());
+        ui->messageLabel->setVisible(!recipient.message.isEmpty());
+
+        ui->addAsLabel->clear();
+        ui->payTo->setText(recipient.address); // this may set a label from addressbook
+        if (!recipient.label.isEmpty()) // if a label had been set from the addressbook, don't overwrite with an empty label
+            ui->addAsLabel->setText(recipient.label);
+        ui->payAmount->setValue(recipient.amount);
+    }
+}
+
+void SendCoinsEntry::setAddress(const QString &address)
+{
+    ui->payTo->setText(address);
+    ui->payAmount->setFocus();
+}
+
+void SendCoinsEntry::setAmount(const CAmount &amount)
+{
+    ui->payAmount->setValue(amount);
+}
+
+bool SendCoinsEntry::isClear()
+{
+    return ui->payTo->text().isEmpty();
+}
+
+void SendCoinsEntry::setFocus()
+{
+    ui->payTo->setFocus();
+}
+
+void SendCoinsEntry::updateDisplayUnit()
+{
+    if (model && model->getOptionsModel()) {
+        ui->payAmount->setDisplayUnit(model->getOptionsModel()->getDisplayUnit());
+    }
+}
+
+void SendCoinsEntry::changeEvent(QEvent* e)
+{
+    if (e->type() == QEvent::PaletteChange) {
+        ui->addressBookButton->setIcon(platformStyle->ColorIcon(QStringLiteral(":/icons/address-book"), QuicksilverStyle::Color(QuicksilverStyle::Token::Teal)));
+        ui->pasteButton->setIcon(platformStyle->ColorIcon(QStringLiteral(":/icons/editpaste"), QuicksilverStyle::Color(QuicksilverStyle::Token::SilverMuted)));
+        ui->deleteButton->setIcon(platformStyle->ColorIcon(QStringLiteral(":/icons/remove"), QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarBright)));
+    }
+
+    QWidget::changeEvent(e);
+}
+
+bool SendCoinsEntry::updateLabel(const QString &address)
+{
+    if(!model)
+        return false;
+
+    // Fill in label from address book, if address has an associated label
+    QString associatedLabel = model->getAddressTableModel()->labelForAddress(address);
+    if(!associatedLabel.isEmpty())
+    {
+        ui->addAsLabel->setText(associatedLabel);
+        return true;
+    }
+
+    return false;
+}

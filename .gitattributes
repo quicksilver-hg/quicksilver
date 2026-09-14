@@ -1,0 +1,8 @@
+src/clientversion.cpp export-subst
+
+# Preserve inherited/generated data while keeping the public staging whitespace
+# gate strict for first-party source, docs, and scripts.
+depends/patches/** whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+research/tier0-pow/tools/calibration/** whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+src/qt/res/src/*.svg whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+test/functional/test_framework/crypto/*_test_vectors.csv whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

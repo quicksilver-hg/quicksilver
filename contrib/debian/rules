@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@ --buildsystem=cmake
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+	  -DBUILD_GUI=ON \
+	  -DBUILD_DAEMON=ON \
+	  -DBUILD_CLI=ON \
+	  -DBUILD_AGENT=ON \
+	  -DBUILD_TX=ON \
+	  -DBUILD_UTIL=ON \
+	  -DBUILD_VAULT_TOOL=ON \
+	  -DBUILD_TESTS=OFF \
+	  -DQS_DEVELOPER_TOOLS=ON

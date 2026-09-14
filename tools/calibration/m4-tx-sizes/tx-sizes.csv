@@ -1,0 +1,4 @@
+label,vsize,weight,serialized_bytes,txs_per_block,mint_per_block_cinnabar,bytes_per_full_block
+one_in_one_out,280,1119,309,3574,204229082,1104366
+one_in_two_out,323,1291,352,3098,177029014,1090496
+near_max_standard,100000,399999,100029,10,571430,1000290

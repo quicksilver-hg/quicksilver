@@ -1,0 +1,13 @@
+date: 2026-08-28T19:34:33Z
+host: windowsqs2 (Windows 10 Pro 19045, 8 cores, 24 GB)
+NVIDIA GeForce GTX 960, 2048 MiB, 582.66, 00000000:03:00.0
+Cuda compilation tools, release 12.9, V12.9.41
+Build cuda_12.9.r12.9/compiler.35813241_0
+host compiler: MSVC 14.44.35207 (Visual Studio 18 Community), via -vcvars_ver=14.44
+binary: qsgpucalibrate.exe, sm_52, -DEDGEBITS=28, md5 e31f9f0a45ee7ae68f13fd6c860d78a6
+built by: contrib/windows/build-qsgpusolve-windows.ps1 -Target qsgpucalibrate
+order: e28(1300), --device=0, sole GPU, no node running
+gpu topology: one card; it also drives the display (display_active: Enabled)
+TdrDelay: 60 (present in the registry before this run)
+launched by: scheduled task QsGpuCalM9, LogonType Interactive, RunLevel Highest
+run: 15:34:33 -> 17:05:48 EDT (1h31m15s); exit code NOT captured, see README

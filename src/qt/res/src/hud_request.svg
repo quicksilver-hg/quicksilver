@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Quicksilver HUD request icon.
+  Generated from src/qt/res/src/quicksilver.svg by contrib/devtools/gen-qt-hud-icons.py.
+
+  Copyright (c) 2026 The Quicksilver developers
+  Distributed under the MIT software license, see the accompanying file COPYING
+  or https://opensource.org/license/mit/.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <g fill="none" stroke="#000000" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 13 64 H 52"/>
+    <path d="M 35 47 L 52 64 L 35 81"/>
+    <path d="M 42 39 H 56"/>
+    <path d="M 42 89 H 56"/>
+  </g>
+    <g fill="none" stroke="#000000" stroke-width="104"
+       stroke-linecap="round" stroke-linejoin="round"
+       transform="translate(40.992 20.992) scale(0.084)">
+      <path d="M 368 174 A 156 156 0 0 0 656 174"/>
+      <circle cx="512" cy="436" r="158"/>
+      <line x1="512" y1="594" x2="512" y2="856"/>
+      <line x1="350" y1="742" x2="674" y2="742"/>
+    </g>
+</svg>

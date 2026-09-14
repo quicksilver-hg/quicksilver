@@ -1,0 +1,94 @@
+[
+    [
+        "5120eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        {
+            "asm": "1 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "address": "shg1pamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhq8g87ka",
+            "desc": "rawtr(eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee)#jk7c6kys",
+            "type": "witness_v1_taproot"
+        }
+    ],
+    [
+        "5102eeee",
+        {
+            "asm": "1 -28398",
+            "address": "shg1pamhqa2fl64",
+            "desc": "addr(shg1pamhqa2fl64)#zn6r0gsd",
+            "type": "witness_unknown"
+        }
+    ],
+    [
+        "0020eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        {
+            "asm": "0 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "address": "shg1qamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhqdl8hwp",
+            "desc": "addr(shg1qamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhqdl8hwp)#mtf5vr5t",
+            "type": "witness_v0_scripthash"
+        }
+    ],
+    [
+        "a914eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee87",
+        {
+            "asm": "OP_HASH160 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee OP_EQUAL",
+            "address": "sg2m8cGgYigwTX2SgZt18np1Prr4KsowUA",
+            "desc": "addr(sg2m8cGgYigwTX2SgZt18np1Prr4KsowUA)#006pe6gt",
+            "type": "scripthash"
+        }
+    ],
+    [
+        "6a00",
+        {
+            "asm": "OP_RETURN 0",
+            "desc": "raw(6a00)#ncfmkl43",
+            "type": "nulldata"
+        }
+    ],
+    [
+        "6aee",
+        {
+            "asm": "OP_RETURN OP_UNKNOWN",
+            "desc": "raw(6aee)#vsyzgqdt",
+            "type": "nonstandard"
+        }
+    ],
+    [
+        "6a02ee",
+        {
+            "asm": "OP_RETURN [error]",
+            "desc": "raw(6a02ee)#gvdwnlzl",
+            "type": "nonstandard"
+        }
+    ],
+    [
+        "02eeee",
+        {
+            "asm": "-28398",
+            "desc": "raw(02eeee)#5xzck7pr",
+            "type": "nonstandard",
+            "p2sh": "sU4toZe24wbEKwgRiUAgJGgPjLAYzLchJB",
+            "witness": {
+                "asm": "0 96c2368fc30514a438a8bd909f93c49a1549d77198ccbdb792043b666cb24f42",
+                "desc": "addr(shg1qjmprdr7rq522gw9ghkgfly7yng25n4m3nrxtmdujqsakvm9jfapqnv3xk7)#r0ndtfkn",
+                "hex": "002096c2368fc30514a438a8bd909f93c49a1549d77198ccbdb792043b666cb24f42",
+                "address": "shg1qjmprdr7rq522gw9ghkgfly7yng25n4m3nrxtmdujqsakvm9jfapqnv3xk7",
+                "type": "witness_v0_scripthash"
+            }
+        }
+    ],
+    [
+        "ba",
+        {
+            "asm": "OP_CHECKSIGADD",
+            "desc": "raw(ba)#yy0eg44l",
+            "type": "nonstandard"
+        }
+    ],
+    [
+        "50",
+        {
+            "asm": "OP_RESERVED",
+            "desc": "raw(50)#a7tu03xf",
+            "type": "nonstandard"
+        }
+    ]
+]

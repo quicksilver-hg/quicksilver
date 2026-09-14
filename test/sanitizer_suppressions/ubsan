@@ -1,0 +1,135 @@
+# Suppressions should use `sanitize-type:ClassName::MethodName`.
+
+# -fsanitize=undefined suppressions
+# =================================
+
+# -fsanitize=integer suppressions
+# ===============================
+# Dependencies
+# ------------
+# Suppressions in dependencies that are developed outside this repository.
+unsigned-integer-overflow:*/include/c++/
+unsigned-integer-overflow:FuzzedDataProvider::ConsumeIntegralInRange
+unsigned-integer-overflow:leveldb/
+unsigned-integer-overflow:secp256k1/
+unsigned-integer-overflow:test/fuzz/crypto_diff_fuzz_chacha20.cpp
+implicit-integer-sign-change:*/include/boost/
+implicit-integer-sign-change:*/include/c++/
+implicit-integer-sign-change:*/new_allocator.h
+implicit-integer-sign-change:crc32c/
+implicit-integer-sign-change:secp256k1/
+implicit-signed-integer-truncation:*/include/c++/
+implicit-signed-integer-truncation:leveldb/
+implicit-signed-integer-truncation:secp256k1/
+implicit-signed-integer-truncation,implicit-integer-sign-change:secp256k1_modinv64_posdivsteps_62_var
+implicit-unsigned-integer-truncation:*/include/c++/
+implicit-unsigned-integer-truncation:leveldb/
+implicit-unsigned-integer-truncation:secp256k1/
+implicit-unsigned-integer-truncation:test/fuzz/crypto_diff_fuzz_chacha20.cpp
+shift-base:*/include/c++/
+shift-base:leveldb/
+shift-base:secp256k1/
+shift-base:test/fuzz/crypto_diff_fuzz_chacha20.cpp
+# Unsigned integer overflow occurs when the result of an unsigned integer
+# computation cannot be represented in its type. Unlike signed integer overflow,
+# this is not undefined behavior, but it is often unintentional. The list below
+# contains files in which we expect unsigned integer overflows to occur. The
+# list is used to suppress -fsanitize=integer warnings when running our CI UBSan
+# job.
+unsigned-integer-overflow:arith_uint256.h
+unsigned-integer-overflow:CRollingBloomFilter::insert
+unsigned-integer-overflow:RollingBloomHash
+unsigned-integer-overflow:CCoinsViewCache::AddCoin
+unsigned-integer-overflow:CCoinsViewCache::BatchWrite
+unsigned-integer-overflow:CCoinsViewCache::DynamicMemoryUsage
+unsigned-integer-overflow:CCoinsViewCache::SpendCoin
+unsigned-integer-overflow:CCoinsViewCache::Uncache
+unsigned-integer-overflow:CompressAmount
+unsigned-integer-overflow:DecompressAmount
+# Hash primitives use wrapping unsigned arithmetic. Do not write a bare
+# `crypto/` prefix: that also matches first-party src/crypto/cuckatoo/
+# (dispatch, verify, the GPU bridge). Vendored Cuckatoo is listed as
+# crypto/cuckatoo/vendor. The fee estimator is gone; do not restore
+# TxConfirmStats suppressions.
+unsigned-integer-overflow:crypto/sha
+unsigned-integer-overflow:crypto/hmac
+unsigned-integer-overflow:crypto/hkdf
+unsigned-integer-overflow:crypto/ripemd
+unsigned-integer-overflow:crypto/chacha
+unsigned-integer-overflow:crypto/poly1305
+unsigned-integer-overflow:crypto/siphash.cpp
+unsigned-integer-overflow:crypto/muhash
+unsigned-integer-overflow:crypto/aes
+unsigned-integer-overflow:crypto/hex_base
+unsigned-integer-overflow:crypto/common.h
+unsigned-integer-overflow:crypto/ctaes
+unsigned-integer-overflow:crypto/cuckatoo/vendor
+unsigned-integer-overflow:MurmurHash3
+unsigned-integer-overflow:prevector.h
+unsigned-integer-overflow:InsecureRandomContext::rand64
+unsigned-integer-overflow:InsecureRandomContext::SplitMix64
+unsigned-integer-overflow:bitset_detail::PopCount
+implicit-integer-sign-change:SetStdinEcho
+implicit-integer-sign-change:compressor.h
+implicit-integer-sign-change:crypto/sha
+implicit-integer-sign-change:crypto/hmac
+implicit-integer-sign-change:crypto/hkdf
+implicit-integer-sign-change:crypto/ripemd
+implicit-integer-sign-change:crypto/chacha
+implicit-integer-sign-change:crypto/poly1305
+implicit-integer-sign-change:crypto/siphash.cpp
+implicit-integer-sign-change:crypto/muhash
+implicit-integer-sign-change:crypto/aes
+implicit-integer-sign-change:crypto/hex_base
+implicit-integer-sign-change:crypto/common.h
+implicit-integer-sign-change:crypto/ctaes
+implicit-integer-sign-change:crypto/cuckatoo/vendor
+implicit-integer-sign-change:prevector.h
+implicit-integer-sign-change:verify_flags
+implicit-integer-sign-change:EvalScript
+implicit-integer-sign-change:serialize.h
+implicit-signed-integer-truncation:crypto/sha
+implicit-signed-integer-truncation:crypto/hmac
+implicit-signed-integer-truncation:crypto/hkdf
+implicit-signed-integer-truncation:crypto/ripemd
+implicit-signed-integer-truncation:crypto/chacha
+implicit-signed-integer-truncation:crypto/poly1305
+implicit-signed-integer-truncation:crypto/siphash.cpp
+implicit-signed-integer-truncation:crypto/muhash
+implicit-signed-integer-truncation:crypto/aes
+implicit-signed-integer-truncation:crypto/hex_base
+implicit-signed-integer-truncation:crypto/common.h
+implicit-signed-integer-truncation:crypto/ctaes
+implicit-signed-integer-truncation:crypto/cuckatoo/vendor
+implicit-unsigned-integer-truncation:crypto/sha
+implicit-unsigned-integer-truncation:crypto/hmac
+implicit-unsigned-integer-truncation:crypto/hkdf
+implicit-unsigned-integer-truncation:crypto/ripemd
+implicit-unsigned-integer-truncation:crypto/chacha
+implicit-unsigned-integer-truncation:crypto/poly1305
+implicit-unsigned-integer-truncation:crypto/siphash.cpp
+implicit-unsigned-integer-truncation:crypto/muhash
+implicit-unsigned-integer-truncation:crypto/aes
+implicit-unsigned-integer-truncation:crypto/hex_base
+implicit-unsigned-integer-truncation:crypto/common.h
+implicit-unsigned-integer-truncation:crypto/ctaes
+implicit-unsigned-integer-truncation:crypto/cuckatoo/vendor
+shift-base:arith_uint256.cpp
+shift-base:crypto/sha
+shift-base:crypto/hmac
+shift-base:crypto/hkdf
+shift-base:crypto/ripemd
+shift-base:crypto/chacha
+shift-base:crypto/poly1305
+shift-base:crypto/siphash.cpp
+shift-base:crypto/muhash
+shift-base:crypto/aes
+shift-base:crypto/hex_base
+shift-base:crypto/common.h
+shift-base:crypto/ctaes
+shift-base:crypto/cuckatoo/vendor
+shift-base:streams.h
+shift-base:FormatHDKeypath
+shift-base:InsecureRandomContext::rand64
+shift-base:RandomMixin<*>::randbits
+shift-base:RandomMixin<*>::randbits<*>

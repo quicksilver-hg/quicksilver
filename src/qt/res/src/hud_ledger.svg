@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Quicksilver HUD ledger icon.
+  Generated from src/qt/res/src/quicksilver.svg by contrib/devtools/gen-qt-hud-icons.py.
+
+  Copyright (c) 2026 The Quicksilver developers
+  Distributed under the MIT software license, see the accompanying file COPYING
+  or https://opensource.org/license/mit/.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <g fill="none" stroke="#000000" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 28 81 A 43 43 0 1 1 101 46"/>
+    <path d="M 100 46 L 104 29"/>
+    <path d="M 100 46 L 84 41"/>
+    <path d="M 24 96 H 48"/>
+    <path d="M 80 96 H 104"/>
+  </g>
+    <g fill="none" stroke="#000000" stroke-width="104"
+       stroke-linecap="round" stroke-linejoin="round"
+       transform="translate(26.624 26.624) scale(0.073)">
+      <path d="M 368 174 A 156 156 0 0 0 656 174"/>
+      <circle cx="512" cy="436" r="158"/>
+      <line x1="512" y1="594" x2="512" y2="856"/>
+      <line x1="350" y1="742" x2="674" y2="742"/>
+    </g>
+</svg>

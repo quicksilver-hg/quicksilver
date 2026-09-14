@@ -1,0 +1,11 @@
+# Copyright (c) The Bitcoin Core developers
+# Copyright (c) 2026 The Quicksilver developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
+[package]
+name = "deterministic-fuzz-coverage"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]

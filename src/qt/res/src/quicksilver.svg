@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Quicksilver brand mark: the alchemical Mercury glyph (U+263F, "quicksilver")
+  knocked out of a Cinnabar disc.
+
+  Traced as vector primitives (no font glyph) so the mark renders identically on
+  any build machine. Palette is Direction-C: Cinnabar #d2402d disc, transparent
+  mark. Regenerate the raster set with contrib/devtools/gen-brand-icons.sh.
+
+  Copyright (c) 2026 The Quicksilver developers
+  Distributed under the MIT software license, see the accompanying file COPYING
+  or http://www.opensource.org/licenses/mit-license.php.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <mask id="mercury-knockout" maskUnits="userSpaceOnUse">
+      <rect width="1024" height="1024" fill="white"/>
+      <!-- Mercury glyph knockout, stroked primitives (round caps/joins) -->
+      <g fill="none" stroke="black" stroke-width="104"
+         stroke-linecap="round" stroke-linejoin="round">
+        <!-- Crescent (horns up): shallow cup arc, opening upward -->
+        <path d="M 368 174 A 156 156 0 0 0 656 174"/>
+        <!-- Ring (head) -->
+        <circle cx="512" cy="436" r="158"/>
+        <!-- Cross: vertical stem below the ring -->
+        <line x1="512" y1="594" x2="512" y2="856"/>
+        <!-- Cross: horizontal bar -->
+        <line x1="350" y1="742" x2="674" y2="742"/>
+      </g>
+    </mask>
+  </defs>
+
+  <!-- Cinnabar disc with transparent Mercury glyph knockout -->
+  <circle cx="512" cy="512" r="480" fill="#d2402d" mask="url(#mercury-knockout)"/>
+</svg>

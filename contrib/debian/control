@@ -1,0 +1,42 @@
+Source: quicksilver
+Section: utils
+Priority: optional
+Maintainer: The Quicksilver developers <quicksilver.maintainers@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               cmake (>= 3.22),
+               g++,
+               pkgconf,
+               libevent-dev,
+               libboost-dev,
+               libsqlite3-dev,
+               qtbase5-dev,
+               libqrencode-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/quicksilver-hg/quicksilver
+Rules-Requires-Root: no
+
+Package: quicksilver-qt
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: feeless per-transaction proof-of-work currency
+ Quicksilver is a feeless, per-transaction proof-of-work cryptocurrency built
+ for autonomous agents and the humans who run them.
+ .
+ This package provides the Quicksilver application for vault management,
+ transfers, and optional consensus or mining, together with quicksilver-agent,
+ the client an agent runs. Nothing else is needed to use Quicksilver.
+
+Package: quicksilver-devtools
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: feeless per-transaction proof-of-work currency - developer tools
+ Quicksilver is a feeless, per-transaction proof-of-work cryptocurrency built
+ for autonomous agents and the humans who run them.
+ .
+ This package provides the headless daemon (quicksilverd) and the command-line
+ tools quicksilver-cli, quicksilver-tx, quicksilver-vault and quicksilver-util.
+ None of them is needed to use Quicksilver: the application provisions consensus
+ itself. They are for development, scripting and headless operation.
+ .
+ See /usr/share/doc/quicksilver-devtools/developer-tools.md for what each one is
+ for.

@@ -1,0 +1,65 @@
+# Local agent/session metadata
+.agents/
+.claude/
+.codex/
+.grok/
+.remember/
+.superpowers/
+.worktrees/
+
+# Local agent planning/history archives retained outside the public repo.
+# No trailing slash: this path is a symlink to the private planning repository,
+# and a directory-only rule would not match a symlink. Listing the parent rather
+# than each subdirectory also means a new kind of planning document cannot appear
+# in the public tree just because nobody added a rule for it -- which is how nine
+# plans and specs came to be tracked here contrary to this very policy.
+docs/superpowers
+
+# Frozen research generated inputs and outputs
+research/tier0-pow/.mypy_cache/
+research/tier0-pow/.pytest_cache/
+research/tier0-pow/**/__pycache__/
+research/tier0-pow/**/*.pyc
+research/tier0-pow/third_party/
+research/tier0-pow/repos/
+
+# Repository-wide transient Python output
+.mypy_cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Build subdirectories.
+/*build*
+!/build-aux
+!/build_msvc
+
+*.pyc
+
+# Only ignore unexpected patches
+*.patch
+!depends/patches/**/*.patch
+
+/CMakeUserPresets.json
+
+# Previous releases
+/releases
+
+#build tests
+test/lint/test_runner/target/
+
+# Functional test framework datadir cache (regenerated on demand)
+/test/cache/
+
+
+/ci/scratch/
+
+# AppImage build tooling cache and output
+/contrib/appimage/.tools/
+*.AppImage
+
+# Local private-testrun harness (untracked)
+test/testrun/
+
+# clangd index cache
+.cache/

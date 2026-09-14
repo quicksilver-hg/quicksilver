@@ -1,0 +1,98 @@
+// Copyright (c) 2026 The Quicksilver developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+//
+// GENERATED from solve_one.cpp.in — do not edit the generated file.
+// Calibration-only single-graph lean solver at EDGEBITS=@QS_EDGEBITS@.
+// NEVER on a validation path and never linked into a node binary.
+
+#include <crypto/cuckatoo/cuckatoo.h>
+#include <crypto/cuckatoo/bench/registry.h>
+#include <crypto/cuckatoo/vendor_prelude_solve.h>
+
+#define EDGEBITS @QS_EDGEBITS@
+#define PROOFSIZE 42
+#define NSIPHASH 1        // scalar siphash (compiles out the AVX paths)
+#define ATOMIC            // atomic edge bitmap (matches the validated lean build)
+#define SQUASH_OUTPUT 1   // silence the solver's stdout chatter
+#define CUCKATOO_NO_MAIN  // drop the standalone CLI main()
+namespace cuckatoo_bench_e@QS_EDGEBITS@ {
+#include "vendor/lean.cpp"  // run_solver/create_solver_ctx/... + verify/setheader
+}
+#undef EDGEBITS
+#undef PROOFSIZE
+#undef NSIPHASH
+#undef ATOMIC
+#undef SQUASH_OUTPUT
+#undef CUCKATOO_NO_MAIN
+
+#include <cstring>
+#include <vector>
+
+namespace {
+
+namespace E = cuckatoo_bench_e@QS_EDGEBITS@;
+
+//! Write `nonce` as the trailing 4 little-endian bytes of a copy of `prepow`.
+//! Mirrors solve_28.cpp's placement so a bench measurement keys the same graph
+//! the production grinder would.
+std::vector<char> KeyedPrepow(const unsigned char* prepow, size_t len, uint32_t nonce)
+{
+    std::vector<char> buf(prepow, prepow + len);
+    buf[len - 4] = (char)(nonce & 0xff);
+    buf[len - 3] = (char)((nonce >> 8) & 0xff);
+    buf[len - 2] = (char)((nonce >> 16) & 0xff);
+    buf[len - 1] = (char)((nonce >> 24) & 0xff);
+    return buf;
+}
+
+void* BenchCreate(unsigned nthreads)
+{
+    E::SolverParams params;
+    E::fill_default_params(&params);
+    params.mutate_nonce = 0;  // solve_one places the nonce itself
+    params.nthreads = nthreads == 0 ? 1 : nthreads;
+    return E::create_solver_ctx(&params);
+}
+
+void BenchDestroy(void* ctx)
+{
+    if (ctx != nullptr) E::destroy_solver_ctx(static_cast<E::SolverCtx*>(ctx));
+}
+
+bool BenchSolveOne(void* ctx, const unsigned char* prepow, size_t len,
+                   uint32_t nonce, cuckatoo::Cycle& out)
+{
+    if (ctx == nullptr || len < 4) return false;
+    std::vector<char> buf = KeyedPrepow(prepow, len, nonce);
+
+    E::SolverSolutions sols;
+    std::memset(&sols, 0, sizeof(sols));
+    // range=1: exactly one graph. This is the whole point of the harness.
+    E::run_solver(static_cast<E::SolverCtx*>(ctx), buf.data(), (E::u32)len, nonce,
+                  /*range=*/1, &sols, nullptr);
+    if (sols.num_sols <= 0) return false;
+    for (int j = 0; j < cuckatoo::PROOFSIZE; ++j) {
+        out[j] = static_cast<uint32_t>(sols.sols[0].proof[j]);
+    }
+    return true;
+}
+
+//! The vendored verifier compiled at this same EDGEBITS. `prepow` must already
+//! carry the nonce at its tail. cuckatoo::CuckatooVerify cannot serve here: it
+//! dispatches over {19, 29} only, and widening it is a consensus change.
+bool BenchVerifyOne(const cuckatoo::Cycle& cycle, const unsigned char* prepow, size_t len)
+{
+    if (len < 4) return false;
+    E::siphash_keys keys;
+    E::setheader(reinterpret_cast<const char*>(prepow), (E::u32)len, &keys);
+    E::word_t edges[cuckatoo::PROOFSIZE];
+    for (int i = 0; i < cuckatoo::PROOFSIZE; ++i) edges[i] = cycle[i];
+    return E::verify(edges, &keys) == E::POW_OK;
+}
+
+[[maybe_unused]] const bool registered = cuckatoo::bench::Register(
+    @QS_EDGEBITS@, cuckatoo::bench::SolverVTable{&BenchCreate, &BenchDestroy,
+                                                 &BenchSolveOne, &BenchVerifyOne});
+
+} // namespace

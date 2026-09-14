@@ -1,0 +1,32 @@
+// Copyright (c) 2011-2020 The Bitcoin Core developers
+// Copyright (c) 2026 The Quicksilver developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
+#ifndef QUICKSILVER_QT_QVALUECOMBOBOX_H
+#define QUICKSILVER_QT_QVALUECOMBOBOX_H
+
+#include <QComboBox>
+#include <QVariant>
+
+/* QComboBox that can be used with QDataWidgetMapper to select ordinal values from a model. */
+class QValueComboBox : public QComboBox
+{
+    Q_OBJECT
+
+    Q_PROPERTY(QVariant value READ value WRITE setValue NOTIFY valueChanged USER true)
+
+public:
+    explicit QValueComboBox(QWidget *parent = nullptr);
+
+    QVariant value() const;
+    void setValue(const QVariant &value);
+
+Q_SIGNALS:
+    void valueChanged();
+
+private Q_SLOTS:
+    void handleSelectionChanged(int idx);
+};
+
+#endif // QUICKSILVER_QT_QVALUECOMBOBOX_H

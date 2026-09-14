@@ -1,0 +1,154 @@
+NVIDIA P104-100 with 8109MB @ 256 bits x 5005MHz
+Looking for 42-cycle on cuckatoo29("",0-49) with 50% edges, 4096 buckets, and 31 trims.
+Using 2468MB of global memory.
+nonce 0 k0 k1 k2 k3 a34c6a2bdaa03a14 d736650ae53eee9e 9a22f05e3bffed5e b8d55478fa3a606d
+31 trims 102 ms 700 edges 699 dupes 1 ms total 103 ms
+Time: 103 ms
+nonce 1 k0 k1 k2 k3 be6c0ae25622e409 ede28d78411671d4 74ffaa51c7aa70ac 2ab552193088c87a
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 2 k0 k1 k2 k3 543485efe8555e24 2d56d531df445967 821a4361f6f57e4 2eefbb55f1490553
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 3 k0 k1 k2 k3 5d869ae27494696c cbd3d38a013269 ba7c8d12fef80ffc 955b4761ba671c90
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 4 k0 k1 k2 k3 8f593cc09c669cb9 8f050519b946b0a 51e5183ef55c246f e2c928f1b6fcd8c0
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 5 k0 k1 k2 k3 799e44a827e86345 2fb8339b6210d9ae bc1499774d8b80d5 672972b5c29e3401
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 6 k0 k1 k2 k3 848726caa726cb62 99ef1cb697424e37 7a588cccbdf97a19 d2322df1b4982e77
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 7 k0 k1 k2 k3 e1a9db0a3c0febde 5217c17370e90996 876375a3b56f19cc 288821230e8bc959
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 8 k0 k1 k2 k3 e887f5b75a21ee32 93f2db86af87b9ce c4effacacf573e88 5a41208f467f8e41
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 9 k0 k1 k2 k3 5952591849c8c5f7 fdf6b4aa3335fad5 fb11814cb76c01b4 c7405dbe8c2433a3
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 10 k0 k1 k2 k3 50cd9537ee7e3f1b 9299be7d6b10265c 1bbb9d6d02052843 49a8745b1c44114f
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 11 k0 k1 k2 k3 14498a04ab61ba29 35c1be898b05164e d60dfe52c2fcb7dc 63f15e4f2104faf0
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 12 k0 k1 k2 k3 5c0348cfc71b5ce6 bf4141b92a45e49 7282d7893f658b88 61525294db9b617f
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 13 k0 k1 k2 k3 9c760327148859e7 ce7befd5d5fe3430 92b29e3de729230f 9800515fa67163a9
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 14 k0 k1 k2 k3 d1c1abcd6ac15c3a 35ebfc1fbc62389b e3df86c5924d6c16 3d6d03e581a5598f
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 15 k0 k1 k2 k3 e2f917b2d79492ed f51088eaaa3a07a0 af4d4288d36a4fa8 c8cdfd30a54e0581
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 16 k0 k1 k2 k3 c049475e9d1b36b1 94b638179e6c6f5e 1bc26e23c05abe01 78cc4676925497c4
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 17 k0 k1 k2 k3 fd0724533e254344 e92d57cae433da09 fae2a33585783146 dff11f10fd83c908
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 18 k0 k1 k2 k3 6085f431d6490443 79e6ecd104d543f8 f8fecc003705f5a2 8ef5e6472ce30e93
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 19 k0 k1 k2 k3 188067202779d9dc 9052126e0fef5a65 a86bbb1a86ba09e9 eb7edf9ecf31c16e
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 20 k0 k1 k2 k3 27580576fe290177 f9ea9b2031f4e76e 1663308c8607868f b88839b0fa180d0e
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 21 k0 k1 k2 k3 cd8d939e30c76a8b 4c1afdc827437ddf 52918b22ab22467c 9a7888f4c19a746b
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 22 k0 k1 k2 k3 c74177187ef62f74 6f9fc1962bfed225 b6851441f139c64c d39962f75bb8d1dd
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 23 k0 k1 k2 k3 9702ee7bb004034d 94b2c859a419cda8 4bdd42838336fb89 bb0c94f65e0aa86a
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 24 k0 k1 k2 k3 cf13b526241dc3b2 5e9cf5124ac5658c 4050b75a0ca84b24 f811d2782ec8f032
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 25 k0 k1 k2 k3 21db62abf2643353 f6603de05b29eab 39f8a2ef108188ae c86d7bdc6e6ab040
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 26 k0 k1 k2 k3 b86a8956cc1c1c7f 6b3409db79920b 9d0303f4b1af415a e674b80c192ea6d3
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 27 k0 k1 k2 k3 89720762384fdbd7 999dbca8fa803bf2 c58c99a3911b80ba f517253f1c9232ca
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 28 k0 k1 k2 k3 a213c316f3186bbd cd6f9ccc655e0c4 b0ebd161892c66b0 ffb2a9cc88370a0c
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 29 k0 k1 k2 k3 52b84043685c243f 32c6e41d3621e0e3 5e206747525a6ce0 f527a98249b489c8
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 30 k0 k1 k2 k3 6d660478e5fe14a 2d96514691e0541a 32ab055d56e7eb8f 3a45365650f57cca
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 31 k0 k1 k2 k3 b159209e7cef76a1 d213f0f79a2b7d92 d7dade1a73873408 99797d01ef38485e
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 32 k0 k1 k2 k3 196782ee9cfd90c1 96072a65d1f5b14 3c3fef35cd7065d9 6527021509e5e6c3
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 33 k0 k1 k2 k3 739511434e781d38 afcd1a80a53ca205 5f88f46ea7914f07 f72ac8c92f44609a
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 34 k0 k1 k2 k3 9e2622b0f2b01f7 19c3e9e61a255833 b7daa47d0a11538c e1a6bc1f6af39a03
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 35 k0 k1 k2 k3 4daeb9a44716f1a7 ad1bab2e2c73767a 3f6ee5338f625b36 4674a9dd71738766
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 36 k0 k1 k2 k3 f96de6faa1ee663e ea41d2dd2d04a5ba 458bd5b08eaee47e b766541028255e06
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 37 k0 k1 k2 k3 db7896f799c76dab 352e8bf25df7a723 f0aa29cbb1150ea6 3206c2759f41cbd5
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 38 k0 k1 k2 k3 2476f8b08036a134 207651548105bdeb d822a149e93e3e88 6f8d7fef3f671fdd
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 39 k0 k1 k2 k3 3710b8cabe2ab117 5ae6ce0086725b5a 528aa34b0125e62e 123a8d5a6dfab0e1
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 40 k0 k1 k2 k3 510fe3e0a8c994d7 a9964b8563967659 6b5dcbb56b75350f 53a38c48112d02b0
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 41 k0 k1 k2 k3 c02833ea1156f476 66aaff166e958ebf c111dffcd103cf74 37a3e226bab796eb
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 42 k0 k1 k2 k3 d591eedb0bdaefb2 b58984c6fe0fe573 8f49324f5cf1ed1a 4fa789d19c399174
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 43 k0 k1 k2 k3 24dcd7dc8203841f d8396bfccb0df818 9cfed85f7be63790 7f92909431978806
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 44 k0 k1 k2 k3 826087ef671f9619 9307428addaa0f6c 88a2f91044822f9f da97551c07cead3d
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 45 k0 k1 k2 k3 5d8aec519c1cfa01 a3c6fe77608adcd6 cddd39b8be840292 a0ac200481d6fbf2
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 46 k0 k1 k2 k3 9ac9ad082a63c518 f2ecb123e1d7a58a 9f95eb0824f58cbc dec2632c6043dfd6
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 47 k0 k1 k2 k3 2ba1611949f31cf 44bc9b79c42bc3b7 2562667179f5f73b d9379355d4a1ea53
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 48 k0 k1 k2 k3 89970121bb1ea7b f709cbca0aed9b23 4ea74390bf5a43b5 e0691c2c5d5f646f
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+nonce 49 k0 k1 k2 k3 5502d4f9e3cd91b0 f24158e33dbfbf7a 5d4a136880e93714 81504222f9211c85
+31 trims 0 ms 46 edges 45 dupes 0 ms total 0 ms
+Time: 0 ms
+0 total solutions

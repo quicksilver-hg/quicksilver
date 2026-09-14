@@ -1,0 +1,343 @@
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Quicksilver
+Upstream-Contact: The Quicksilver developers <quicksilver.maintainers@gmail.com>
+Source: https://github.com/quicksilver-hg/quicksilver
+
+Files: *
+Copyright: 2009-2025, Bitcoin Core Developers
+           2026, The Quicksilver developers
+License: Expat
+Comment: Quicksilver support and packaging contact is provided by the Quicksilver
+         project.
+
+Files: debian/*
+Copyright: 2010-2011, Jonas Smedegaard <dr@jones.dk>
+           2011, Matt Corallo <matt@bluematt.me>
+License: GPL-2+
+
+Files: src/qt/res/icons/add.png
+       src/qt/res/icons/address-book.png
+       src/qt/res/icons/chevron.png
+       src/qt/res/icons/edit.png
+       src/qt/res/icons/editcopy.png
+       src/qt/res/icons/editpaste.png
+       src/qt/res/icons/export.png
+       src/qt/res/icons/eye.png
+       src/qt/res/icons/history.png
+       src/qt/res/icons/lock_*.png
+       src/qt/res/icons/overview.png
+       src/qt/res/icons/receive.png
+       src/qt/res/icons/remove.png
+       src/qt/res/icons/send.png
+       src/qt/res/icons/synced.png
+       src/qt/res/icons/transaction*.png
+       src/qt/res/icons/tx_output.png
+       src/qt/res/icons/warning.png
+       src/qt/res/src/transaction0.svg
+Copyright: Stephen Hutchings (and more)
+           http://typicons.com
+License: Expat
+Comment: Site: https://github.com/stephenhutchings/typicons.font
+         src/qt/res/src/transaction0.svg is the vector source of
+         transaction0.png and carries the same terms; upstream listed the PNG
+         only, so the SVG fell through to Files: * until 2026-08-25.
+
+Files: src/qt/res/icons/connect*.png
+       src/qt/res/src/connect-*.svg
+       src/qt/res/icons/network_disabled.png
+       src/qt/res/src/network_disabled.svg
+Copyright: Marco Falke
+           Luke Dashjr
+License: Expat
+Comment: Inspired by Stephen Hutchings' Typicons
+
+Files: src/qt/res/icons/tx_mined.png
+       src/qt/res/src/mine.svg
+       src/qt/res/icons/fontbigger.png
+       src/qt/res/icons/fontsmaller.png
+       src/qt/res/icons/hd_disabled.png
+       src/qt/res/src/hd_disabled.svg
+       src/qt/res/icons/hd_enabled.png
+       src/qt/res/src/hd_enabled.svg
+Copyright: Jonas Schnelli
+License: Expat
+
+Files: src/qt/res/icons/clock*.png
+       src/qt/res/icons/tx_in*.png
+       src/qt/res/src/clock_*.svg
+       src/qt/res/src/tx_*.svg
+Copyright: Stephen Hutchings, Jonas Schnelli
+License: Expat
+Comment: Modifications of Stephen Hutchings' Typicons
+
+Files: src/qt/res/icons/quicksilver.*
+       src/qt/res/icons/quicksilver_publictest.ico
+       share/pixmaps/quicksilver*
+       src/qt/res/src/quicksilver.svg
+       doc/quicksilver_logo_doxygen.png
+Copyright: 2026, The Quicksilver developers
+License: Expat
+Comment: Original artwork (the Quicksilver Mercury brand mark and its
+         desaturated public-test variant); not derived from Bitcoin Core's logo.
+         See src/qt/res/src/quicksilver.svg for the design and
+         contrib/devtools/gen-brand-icons.sh for regeneration.
+
+Files: src/qt/res/icons/agent.png
+       src/qt/res/src/hud_agent.svg
+       src/qt/res/src/hud_ledger.svg
+       src/qt/res/src/hud_request.svg
+       src/qt/res/src/hud_transfer.svg
+Copyright: 2026, The Quicksilver developers
+License: Expat
+Comment: Original artwork (the Quicksilver GUI heads-up-display glyph set).
+         See contrib/devtools/gen-qt-hud-icons.py for regeneration.
+
+Files: src/qt/res/animation/spinner-*.png
+       src/qt/res/src/spinner.svg
+Copyright: 2026, The Quicksilver developers
+License: Expat
+Comment: Original artwork (the Quicksilver sync spinner: a 270-degree arc led
+         by a head dot). spinner.svg is frame 0 and the reviewable source; the
+         36 PNG frames are rotations of it about the canvas centre. Regenerate
+         with contrib/devtools/gen-qt-spinner.py. This replaces the upstream
+         spinner inherited from Bitcoin Core, whose own provenance upstream
+         never recorded and which therefore fell through to Files: *.
+
+Files: src/qt/res/icons/proxy.png
+       src/qt/res/src/proxy.svg
+Copyright: Cristian Mircea Messel
+License: public-domain
+
+Files: src/crypto/cuckatoo/vendor/barrier.hpp
+       src/crypto/cuckatoo/vendor/bitmap.hpp
+       src/crypto/cuckatoo/vendor/compress.hpp
+       src/crypto/cuckatoo/vendor/cuckatoo.h
+       src/crypto/cuckatoo/vendor/graph.hpp
+       src/crypto/cuckatoo/vendor/lean.cpp
+       src/crypto/cuckatoo/vendor/lean.cu
+       src/crypto/cuckatoo/vendor/lean.hpp
+       src/crypto/cuckatoo/vendor/siphash.cuh
+       src/crypto/cuckatoo/vendor/siphash.hpp
+       src/crypto/cuckatoo/vendor/siphashxN.h
+       src/crypto/cuckatoo/vendor/LICENSE.txt
+Copyright: 2013-2023, John Tromp
+License: FAIR-MINING
+Comment: Cuckoo Cycle, from https://github.com/tromp/cuckoo. Upstream offers
+         FAIR MINING or GPL-2+ at the recipient's option; Quicksilver elects
+         FAIR MINING for its own distribution, and offers its modifications to
+         these files under the same two options, so a recipient of this copy is
+         not offered less than upstream offers. Verbatim upstream licence text
+         and a record of the local modifications are in
+         src/crypto/cuckatoo/vendor/.
+
+Files: src/crypto/cuckatoo/vendor/README.md
+Copyright: 2026, The Quicksilver developers
+License: Expat
+Comment: Provenance record for this directory, written for Quicksilver.
+
+Files: src/crypto/cuckatoo/vendor/blake2.h
+       src/crypto/cuckatoo/vendor/blake2-impl.h
+       src/crypto/cuckatoo/vendor/blake2b-ref.c
+Copyright: 2012, Samuel Neves <sneves@dei.uc.pt>
+License: Apache-2.0
+Comment: BLAKE2 reference implementation, bundled by upstream Cuckoo Cycle.
+         Tri-licensed CC0 / OpenSSL / Apache-2.0 at the recipient's option;
+         Quicksilver elects Apache-2.0.
+
+Files: src/leveldb/*
+Copyright: 2011, The LevelDB Authors
+License: BSD-3-clause
+Comment: Full text and contributor list in src/leveldb/LICENSE and
+         src/leveldb/AUTHORS.
+
+Files: src/crc32c/*
+Copyright: 2017, The CRC32C Authors
+License: BSD-3-clause
+Comment: Full text and contributor list in src/crc32c/LICENSE and
+         src/crc32c/AUTHORS.
+
+Files: src/secp256k1/*
+Copyright: 2013, Pieter Wuille
+License: Expat
+Comment: Full text in src/secp256k1/COPYING.
+
+Files: src/univalue/*
+Copyright: 2014, BitPay Inc.
+           2014-present, The Bitcoin Core developers
+           2016, Wladimir J. van der Laan
+License: Expat
+
+Files: src/crypto/ctaes/*
+Copyright: 2016, Pieter Wuille
+License: Expat
+
+Files: src/tinyformat.h
+Copyright: 2011, Chris Foster
+License: BSL-1.0
+Comment: Full text in the file header.
+
+Files: src/bench/nanobench.h
+Copyright: 2019-2023, Martin Leitner-Ankerl <martin.ankerl@gmail.com>
+License: Expat
+
+Files: src/util/subprocess.h
+Copyright: 2016-2018, Arun Muralidharan
+License: Expat
+
+Files: src/cuckoocache.h
+Copyright: 2016, Jeremy Rubin
+License: Expat
+
+Files: src/test/fuzz/FuzzedDataProvider.h
+Copyright: The LLVM Project contributors
+License: Apache-2.0-with-LLVM-exception
+Comment: SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception.
+         See https://llvm.org/LICENSE.txt.
+
+Files: src/qt/res/fonts/RobotoMono-Bold.ttf
+License: Apache-2.0
+Comment: Site: https://fonts.google.com/specimen/Roboto+Mono
+
+
+License: Expat
+ Permission is hereby granted, free of charge, to any person obtaining a
+ copy of this software and associated documentation files (the
+ "Software"), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish,
+ distribute, sublicense, and/or sell copies of the Software, and to
+ permit persons to whom the Software is furnished to do so, subject to
+ the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included
+ in all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+License: GPL-2+
+ This program is free software; you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the
+ Free Software Foundation; either version 2, or (at your option) any
+ later version.
+ .
+ This program is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ General Public License for more details.
+Comment:
+ On Debian systems the GNU General Public License (GPL) version 2 is
+ located in '/usr/share/common-licenses/GPL-2'.
+ .
+ You should have received a copy of the GNU General Public License along
+ with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+License: FAIR-MINING
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+ .
+ FAIR MINING
+ Any derived miner that charges a developer fee for mining a fair coin
+ ---one with no premine or other form of developer compensation---
+ shall offer to share half the fee revenue with the coin developers.
+ .
+ The above copyright notice, FAIR MINING condition, and this permission notice
+ shall be included in all copies or substantial portions of the Software.
+ .
+ ALTERNATIVELY, this software may be distributed under the terms of the
+ GNU General Public License ("GPL") version 2 or later, as published by
+ the Free Software Foundation.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.
+
+License: BSD-3-clause
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are
+ met:
+ .
+    * Redistributions of source code must retain the above copyright
+ notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above
+ copyright notice, this list of conditions and the following disclaimer
+ in the documentation and/or other materials provided with the
+ distribution.
+    * Neither the name of the copyright holder nor the names of its
+ contributors may be used to endorse or promote products derived from
+ this software without specific prior written permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+License: BSL-1.0
+ Boost Software License - Version 1.0 - August 17th, 2003
+ .
+ Permission is hereby granted, free of charge, to any person or organization
+ obtaining a copy of the software and accompanying documentation covered by
+ this license (the "Software") to use, reproduce, display, distribute,
+ execute, and transmit the Software, and to prepare derivative works of the
+ Software, and to permit third-parties to whom the Software is furnished to
+ do so, all subject to the following:
+ .
+ The copyright notices in the Software and this entire statement, including
+ the above license grant, this restriction and the following disclaimer,
+ must be included in all copies of the Software, in whole or in part, and
+ all derivative works of the Software, unless such copies or derivative
+ works are solely in the form of machine-executable object code generated by
+ a source language processor.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT
+ SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE
+ FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
+ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ DEALINGS IN THE SOFTWARE.
+
+License: Apache-2.0-with-LLVM-exception
+ Licensed under the Apache License, Version 2.0 (the "License") with the LLVM
+ exception; you may not use these files except in compliance with the License.
+ You may obtain a copy of the License, including the LLVM exception, at
+ https://llvm.org/LICENSE.txt
+ .
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+
+License: public-domain
+ This work is in the public domain.
+
+License: Apache-2.0
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+ http://www.apache.org/licenses/LICENSE-2.0
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.

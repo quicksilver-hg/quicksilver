@@ -1,0 +1,10 @@
+date: 2026-08-28T18:11:47Z
+host: linuxqs1 (Linux Mint 22.3, kernel 6.14.0-37-generic, 4 cores, 23 GB)
+NVIDIA P104-100, 8192 MiB, 580.178.04
+Cuda compilation tools, release 12.0, V12.0.140
+Build cuda_12.0.r12.0/compiler.32267302_0
+binary: qsgpucalibrate, sm_61, -DEDGEBITS=28, md5 e7edd57facf32ec6728c9964501b6855
+order: e28(1300), --device=0, card idle, no node running
+gpu topology: device 0 = P104-100 (03:00.0, no display outputs); device 1 = GTX 1050 Ti (04:00.0, drives Xorg)
+persistence mode: Disabled during this run; enabled afterwards
+run: 14:11:47 -> 14:43:42 EDT (31m55s), calibrate_rc=0

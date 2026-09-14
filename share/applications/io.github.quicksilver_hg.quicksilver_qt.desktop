@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Name=Quicksilver
+Comment=Connect to the Quicksilver peer-to-peer network
+Exec=quicksilver-qt %u
+Terminal=false
+Type=Application
+Icon=quicksilver
+MimeType=x-scheme-handler/quicksilver;
+Categories=Office;Finance;
+StartupWMClass=quicksilver-qt
+Keywords=quicksilver;cryptocurrency;

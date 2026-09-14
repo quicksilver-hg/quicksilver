@@ -1,0 +1,20 @@
+=== mean-r Volta+ gate — RUN 1 (2026-07-08) ===
+GPU: NVIDIA L40S, 46068 MiB, compute_cap 8.9 (Ada), CUDA 13.0, sm_89
+Fix applied: mean.cu E29 built with -DBUCKBITS=11 (Seed shared-mem OOB fix);
+             E31 part0 BUCKBITS=12 (correct); single-pass both sizes.
+
+mean E29:  min 0.099s  median 0.100s  (n=600, 18 cycles ~14 expected)
+mean E31:  min 0.268s  median 0.273s  (n=600, 11 cycles ~14 expected)
+lean E29:  min 0.436s  median 0.449s  (n=200,  4 cycles  ~4 expected)
+lean E31:  min 4.314s  median 4.332s  (n=40,   0 cycles  ~0 expected)
+
+mean_r = 0.366 (median), 0.369 (min)   vs theoretical 0.25, rig lean-proxy 0.243
+discount: E29 4.4x  E31 16.1x  uniformity 0.27  (mean favors E31 -> safe direction)
+lean_r (measured on L40S): 0.101   (vs rig Pascal 0.243 -> 2.4x hardware spread)
+
+C margin at shipped K=106: 6.05x (designed 4.0x)
+K to restore exactly 4x margin for this mean_r: 160
+VERDICT: MEASURED-AND-HELD (mean_r >= 0.25; no consensus change)
+
+Supersedes run2 (r=0.182 -> K=80): that used the corrupt pre-BUCKBITS-fix mean
+solver and is VOID. Shipped K=106 was never actually changed, so nothing to revert.

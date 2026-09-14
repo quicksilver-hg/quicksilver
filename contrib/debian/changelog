@@ -1,0 +1,5 @@
+quicksilver (0.1.0-1) unstable; urgency=low
+
+  * Initial Quicksilver packaging for the public pre-1.0 0.1.x source tree.
+
+ -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Mon, 13 Jul 2026 00:00:00 +0000

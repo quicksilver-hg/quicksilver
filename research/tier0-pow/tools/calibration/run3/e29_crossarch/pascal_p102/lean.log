@@ -1,0 +1,498 @@
+NVIDIA P102-100 with 10144MB @ 320 bits x 5505MHz
+Looking for 42-cycle on cuckatoo29("",0-99) with 50% edges, 128 trims, 16384 threads 128 per block
+Using 64MB edge and 64MB node memory.
+nonce 0 k0 k1 k2 k3 a34c6a2bdaa03a14 d736650ae53eee9e 9a22f05e3bffed5e b8d55478fa3a606d
+  4-cycle found
+128 trims 3169 ms 126984 edges 112 ms total 3281 ms
+Time: 3282 ms
+nonce 1 k0 k1 k2 k3 be6c0ae25622e409 ede28d78411671d4 74ffaa51c7aa70ac 2ab552193088c87a
+  2-cycle found
+128 trims 2229 ms 114853 edges 92 ms total 2321 ms
+Time: 2321 ms
+nonce 2 k0 k1 k2 k3 543485efe8555e24 2d56d531df445967 821a4361f6f57e4 2eefbb55f1490553
+  4-cycle found
+  38-cycle found
+128 trims 2231 ms 122999 edges 98 ms total 2329 ms
+Time: 2330 ms
+nonce 3 k0 k1 k2 k3 5d869ae27494696c cbd3d38a013269 ba7c8d12fef80ffc 955b4761ba671c90
+128 trims 2227 ms 110233 edges 89 ms total 2316 ms
+Time: 2317 ms
+nonce 4 k0 k1 k2 k3 8f593cc09c669cb9 8f050519b946b0a 51e5183ef55c246f e2c928f1b6fcd8c0
+128 trims 2231 ms 124855 edges 99 ms total 2330 ms
+Time: 2330 ms
+nonce 5 k0 k1 k2 k3 799e44a827e86345 2fb8339b6210d9ae bc1499774d8b80d5 672972b5c29e3401
+  18-cycle found
+128 trims 2232 ms 122040 edges 97 ms total 2329 ms
+Time: 2329 ms
+nonce 6 k0 k1 k2 k3 848726caa726cb62 99ef1cb697424e37 7a588cccbdf97a19 d2322df1b4982e77
+  4-cycle found
+  4-cycle found
+  8-cycle found
+  12-cycle found
+  26-cycle found
+128 trims 2231 ms 124549 edges 99 ms total 2330 ms
+Time: 2330 ms
+nonce 7 k0 k1 k2 k3 e1a9db0a3c0febde 5217c17370e90996 876375a3b56f19cc 288821230e8bc959
+  32-cycle found
+128 trims 2232 ms 128589 edges 101 ms total 2333 ms
+Time: 2334 ms
+nonce 8 k0 k1 k2 k3 e887f5b75a21ee32 93f2db86af87b9ce c4effacacf573e88 5a41208f467f8e41
+  2-cycle found
+  8-cycle found
+  16-cycle found
+  20-cycle found
+  18-cycle found
+128 trims 2236 ms 137041 edges 107 ms total 2343 ms
+Time: 2344 ms
+nonce 9 k0 k1 k2 k3 5952591849c8c5f7 fdf6b4aa3335fad5 fb11814cb76c01b4 c7405dbe8c2433a3
+128 trims 2232 ms 128631 edges 101 ms total 2333 ms
+Time: 2334 ms
+nonce 10 k0 k1 k2 k3 50cd9537ee7e3f1b 9299be7d6b10265c 1bbb9d6d02052843 49a8745b1c44114f
+  2-cycle found
+128 trims 2234 ms 136997 edges 107 ms total 2341 ms
+Time: 2342 ms
+nonce 11 k0 k1 k2 k3 14498a04ab61ba29 35c1be898b05164e d60dfe52c2fcb7dc 63f15e4f2104faf0
+  2-cycle found
+128 trims 2231 ms 126395 edges 100 ms total 2331 ms
+Time: 2331 ms
+nonce 12 k0 k1 k2 k3 5c0348cfc71b5ce6 bf4141b92a45e49 7282d7893f658b88 61525294db9b617f
+  2-cycle found
+  36-cycle found
+128 trims 2228 ms 121390 edges 97 ms total 2325 ms
+Time: 2325 ms
+nonce 13 k0 k1 k2 k3 9c760327148859e7 ce7befd5d5fe3430 92b29e3de729230f 9800515fa67163a9
+  6-cycle found
+128 trims 2234 ms 130119 edges 102 ms total 2336 ms
+Time: 2337 ms
+nonce 14 k0 k1 k2 k3 d1c1abcd6ac15c3a 35ebfc1fbc62389b e3df86c5924d6c16 3d6d03e581a5598f
+  2-cycle found
+128 trims 2229 ms 117445 edges 94 ms total 2323 ms
+Time: 2324 ms
+nonce 15 k0 k1 k2 k3 e2f917b2d79492ed f51088eaaa3a07a0 af4d4288d36a4fa8 c8cdfd30a54e0581
+  2-cycle found
+  4-cycle found
+128 trims 2230 ms 124348 edges 98 ms total 2328 ms
+Time: 2329 ms
+nonce 16 k0 k1 k2 k3 c049475e9d1b36b1 94b638179e6c6f5e 1bc26e23c05abe01 78cc4676925497c4
+128 trims 2232 ms 124926 edges 99 ms total 2331 ms
+Time: 2331 ms
+nonce 17 k0 k1 k2 k3 fd0724533e254344 e92d57cae433da09 fae2a33585783146 dff11f10fd83c908
+  2-cycle found
+  24-cycle found
+128 trims 2233 ms 126158 edges 100 ms total 2333 ms
+Time: 2334 ms
+nonce 18 k0 k1 k2 k3 6085f431d6490443 79e6ecd104d543f8 f8fecc003705f5a2 8ef5e6472ce30e93
+  2-cycle found
+  6-cycle found
+  22-cycle found
+  4-cycle found
+128 trims 2232 ms 124908 edges 99 ms total 2331 ms
+Time: 2331 ms
+nonce 19 k0 k1 k2 k3 188067202779d9dc 9052126e0fef5a65 a86bbb1a86ba09e9 eb7edf9ecf31c16e
+  4-cycle found
+  2-cycle found
+  4-cycle found
+128 trims 2231 ms 120399 edges 96 ms total 2327 ms
+Time: 2327 ms
+nonce 20 k0 k1 k2 k3 27580576fe290177 f9ea9b2031f4e76e 1663308c8607868f b88839b0fa180d0e
+  16-cycle found
+  42-cycle found
+128 trims 2232 ms 131142 edges 103 ms total 2335 ms
+Time: 2354 ms
+Solution 48a9e2 9cf043 155ca30 18f4783 248f86c 2629a64 5bad752 72e3569 93db760 97d3b37 9e05670 a315d5a a3571a1 a48db46 a7796b6 ac43611 b64912f bb6c71e bcc8be1 c38a43a d4faa99 e018a66 e37e49c fa975fa 11786035 1243b60a 12892da0 141b5453 1483c3a0 1505525e 1607352c 16181fe3 17e3a1da 180b651e 1899d678 1931b0bb 19606448 1b041655 1b2c20ad 1bd7a83c 1c05d5b0 1c0b9caa
+Verified with cyclehash ddeabf544ffe7fbe8864a20ee914a446355f4dc18798ca2b240e15a38fb74f80
+nonce 21 k0 k1 k2 k3 cd8d939e30c76a8b 4c1afdc827437ddf 52918b22ab22467c 9a7888f4c19a746b
+  2-cycle found
+  14-cycle found
+  30-cycle found
+128 trims 2226 ms 120949 edges 96 ms total 2322 ms
+Time: 2323 ms
+nonce 22 k0 k1 k2 k3 c74177187ef62f74 6f9fc1962bfed225 b6851441f139c64c d39962f75bb8d1dd
+  2-cycle found
+128 trims 2230 ms 124220 edges 98 ms total 2328 ms
+Time: 2328 ms
+nonce 23 k0 k1 k2 k3 9702ee7bb004034d 94b2c859a419cda8 4bdd42838336fb89 bb0c94f65e0aa86a
+128 trims 2229 ms 121389 edges 96 ms total 2325 ms
+Time: 2326 ms
+nonce 24 k0 k1 k2 k3 cf13b526241dc3b2 5e9cf5124ac5658c 4050b75a0ca84b24 f811d2782ec8f032
+  8-cycle found
+  4-cycle found
+128 trims 2228 ms 118759 edges 95 ms total 2323 ms
+Time: 2324 ms
+nonce 25 k0 k1 k2 k3 21db62abf2643353 f6603de05b29eab 39f8a2ef108188ae c86d7bdc6e6ab040
+  2-cycle found
+  4-cycle found
+128 trims 2228 ms 123805 edges 98 ms total 2326 ms
+Time: 2327 ms
+nonce 26 k0 k1 k2 k3 b86a8956cc1c1c7f 6b3409db79920b 9d0303f4b1af415a e674b80c192ea6d3
+  2-cycle found
+  2-cycle found
+  30-cycle found
+128 trims 2230 ms 123905 edges 98 ms total 2328 ms
+Time: 2329 ms
+nonce 27 k0 k1 k2 k3 89720762384fdbd7 999dbca8fa803bf2 c58c99a3911b80ba f517253f1c9232ca
+  32-cycle found
+128 trims 2230 ms 124665 edges 99 ms total 2329 ms
+Time: 2330 ms
+nonce 28 k0 k1 k2 k3 a213c316f3186bbd cd6f9ccc655e0c4 b0ebd161892c66b0 ffb2a9cc88370a0c
+  4-cycle found
+  14-cycle found
+128 trims 2229 ms 121419 edges 97 ms total 2326 ms
+Time: 2326 ms
+nonce 29 k0 k1 k2 k3 52b84043685c243f 32c6e41d3621e0e3 5e206747525a6ce0 f527a98249b489c8
+  4-cycle found
+128 trims 2229 ms 124623 edges 99 ms total 2328 ms
+Time: 2328 ms
+nonce 30 k0 k1 k2 k3 6d660478e5fe14a 2d96514691e0541a 32ab055d56e7eb8f 3a45365650f57cca
+  4-cycle found
+  14-cycle found
+128 trims 2231 ms 128986 edges 102 ms total 2333 ms
+Time: 2333 ms
+nonce 31 k0 k1 k2 k3 b159209e7cef76a1 d213f0f79a2b7d92 d7dade1a73873408 99797d01ef38485e
+  4-cycle found
+  30-cycle found
+128 trims 2231 ms 129657 edges 102 ms total 2333 ms
+Time: 2333 ms
+nonce 32 k0 k1 k2 k3 196782ee9cfd90c1 96072a65d1f5b14 3c3fef35cd7065d9 6527021509e5e6c3
+  8-cycle found
+  26-cycle found
+  12-cycle found
+  4-cycle found
+  30-cycle found
+  28-cycle found
+128 trims 2227 ms 120114 edges 96 ms total 2323 ms
+Time: 2323 ms
+nonce 33 k0 k1 k2 k3 739511434e781d38 afcd1a80a53ca205 5f88f46ea7914f07 f72ac8c92f44609a
+  2-cycle found
+128 trims 2230 ms 126918 edges 100 ms total 2330 ms
+Time: 2331 ms
+nonce 34 k0 k1 k2 k3 9e2622b0f2b01f7 19c3e9e61a255833 b7daa47d0a11538c e1a6bc1f6af39a03
+  26-cycle found
+128 trims 2232 ms 131324 edges 103 ms total 2335 ms
+Time: 2335 ms
+nonce 35 k0 k1 k2 k3 4daeb9a44716f1a7 ad1bab2e2c73767a 3f6ee5338f625b36 4674a9dd71738766
+  6-cycle found
+128 trims 2230 ms 128144 edges 101 ms total 2331 ms
+Time: 2332 ms
+nonce 36 k0 k1 k2 k3 f96de6faa1ee663e ea41d2dd2d04a5ba 458bd5b08eaee47e b766541028255e06
+  10-cycle found
+128 trims 2230 ms 126287 edges 100 ms total 2330 ms
+Time: 2330 ms
+nonce 37 k0 k1 k2 k3 db7896f799c76dab 352e8bf25df7a723 f0aa29cbb1150ea6 3206c2759f41cbd5
+  4-cycle found
+128 trims 2232 ms 130561 edges 103 ms total 2335 ms
+Time: 2335 ms
+nonce 38 k0 k1 k2 k3 2476f8b08036a134 207651548105bdeb d822a149e93e3e88 6f8d7fef3f671fdd
+  4-cycle found
+  14-cycle found
+  30-cycle found
+128 trims 2227 ms 116926 edges 94 ms total 2321 ms
+Time: 2321 ms
+nonce 39 k0 k1 k2 k3 3710b8cabe2ab117 5ae6ce0086725b5a 528aa34b0125e62e 123a8d5a6dfab0e1
+  4-cycle found
+  32-cycle found
+128 trims 2227 ms 124009 edges 98 ms total 2325 ms
+Time: 2326 ms
+nonce 40 k0 k1 k2 k3 510fe3e0a8c994d7 a9964b8563967659 6b5dcbb56b75350f 53a38c48112d02b0
+  22-cycle found
+  2-cycle found
+128 trims 2232 ms 130355 edges 103 ms total 2335 ms
+Time: 2335 ms
+nonce 41 k0 k1 k2 k3 c02833ea1156f476 66aaff166e958ebf c111dffcd103cf74 37a3e226bab796eb
+  2-cycle found
+  12-cycle found
+  16-cycle found
+  10-cycle found
+128 trims 2228 ms 124261 edges 98 ms total 2326 ms
+Time: 2327 ms
+nonce 42 k0 k1 k2 k3 d591eedb0bdaefb2 b58984c6fe0fe573 8f49324f5cf1ed1a 4fa789d19c399174
+  8-cycle found
+  28-cycle found
+128 trims 2231 ms 129564 edges 102 ms total 2333 ms
+Time: 2333 ms
+nonce 43 k0 k1 k2 k3 24dcd7dc8203841f d8396bfccb0df818 9cfed85f7be63790 7f92909431978806
+  16-cycle found
+128 trims 2225 ms 115477 edges 93 ms total 2318 ms
+Time: 2318 ms
+nonce 44 k0 k1 k2 k3 826087ef671f9619 9307428addaa0f6c 88a2f91044822f9f da97551c07cead3d
+  2-cycle found
+128 trims 2227 ms 121585 edges 97 ms total 2324 ms
+Time: 2324 ms
+nonce 45 k0 k1 k2 k3 5d8aec519c1cfa01 a3c6fe77608adcd6 cddd39b8be840292 a0ac200481d6fbf2
+  4-cycle found
+128 trims 2229 ms 123118 edges 98 ms total 2327 ms
+Time: 2327 ms
+nonce 46 k0 k1 k2 k3 9ac9ad082a63c518 f2ecb123e1d7a58a 9f95eb0824f58cbc dec2632c6043dfd6
+  2-cycle found
+  2-cycle found
+  4-cycle found
+  10-cycle found
+  34-cycle found
+128 trims 2232 ms 127674 edges 101 ms total 2333 ms
+Time: 2333 ms
+nonce 47 k0 k1 k2 k3 2ba1611949f31cf 44bc9b79c42bc3b7 2562667179f5f73b d9379355d4a1ea53
+  20-cycle found
+  16-cycle found
+128 trims 2229 ms 125774 edges 99 ms total 2328 ms
+Time: 2329 ms
+nonce 48 k0 k1 k2 k3 89970121bb1ea7b f709cbca0aed9b23 4ea74390bf5a43b5 e0691c2c5d5f646f
+  2-cycle found
+  12-cycle found
+  36-cycle found
+128 trims 2231 ms 126447 edges 100 ms total 2331 ms
+Time: 2331 ms
+nonce 49 k0 k1 k2 k3 5502d4f9e3cd91b0 f24158e33dbfbf7a 5d4a136880e93714 81504222f9211c85
+128 trims 2230 ms 128863 edges 101 ms total 2331 ms
+Time: 2332 ms
+nonce 50 k0 k1 k2 k3 5c63896b58ebfa19 2264af895b371547 8f6e1fe2a87d0789 e309cb17b4bbbd9d
+  6-cycle found
+  26-cycle found
+128 trims 2230 ms 124577 edges 99 ms total 2329 ms
+Time: 2330 ms
+nonce 51 k0 k1 k2 k3 7997ebc8454b0c91 8a3d9b0889960871 893fe8767334facf b404b6a8596d284a
+  2-cycle found
+  14-cycle found
+  6-cycle found
+  30-cycle found
+128 trims 2228 ms 121122 edges 96 ms total 2324 ms
+Time: 2325 ms
+nonce 52 k0 k1 k2 k3 ad77e2882ff071eb 90592afb4ca0f4fe 220b5facb372a52c bfaf2e5d187f53c4
+  18-cycle found
+128 trims 2227 ms 116624 edges 93 ms total 2320 ms
+Time: 2321 ms
+nonce 53 k0 k1 k2 k3 dae00432c3483c57 259042902eb25185 854c7e8a284a64c a04dab57e0c6601f
+  28-cycle found
+128 trims 2232 ms 126432 edges 100 ms total 2332 ms
+Time: 2332 ms
+nonce 54 k0 k1 k2 k3 b659dd990d2f6edb bc56bd42921b87be 72e713d00b4577bc 9fda243c9b41e624
+  2-cycle found
+  10-cycle found
+128 trims 2228 ms 125038 edges 99 ms total 2327 ms
+Time: 2328 ms
+nonce 55 k0 k1 k2 k3 878a5cb9e387a1f4 93c50f0228c92bc e813c4bf8534f819 4c2ac98db2335056
+128 trims 2228 ms 121730 edges 97 ms total 2325 ms
+Time: 2325 ms
+nonce 56 k0 k1 k2 k3 d25b645599a6883e 54d8fca13f95693d f469c2dcd888f043 c166a033bab67a46
+  2-cycle found
+128 trims 2227 ms 123271 edges 98 ms total 2325 ms
+Time: 2325 ms
+nonce 57 k0 k1 k2 k3 37e267981604ecf6 f5ee01819b9a0937 a7f0203daf73da37 2950cc0bb1a9c661
+  12-cycle found
+  4-cycle found
+  16-cycle found
+128 trims 2230 ms 129672 edges 102 ms total 2332 ms
+Time: 2333 ms
+nonce 58 k0 k1 k2 k3 cce56c02709f6983 9543ccb000b1ec03 6fcc1275133c99d5 d4aae86c8c861582
+  40-cycle found
+  12-cycle found
+128 trims 2231 ms 131789 edges 103 ms total 2334 ms
+Time: 2335 ms
+nonce 59 k0 k1 k2 k3 a31cd290f3f95c0e 935e1834d76cb5e e4b3343a95afe0d0 8e18a24b29693082
+  8-cycle found
+  12-cycle found
+  12-cycle found
+128 trims 2226 ms 115853 edges 93 ms total 2319 ms
+Time: 2320 ms
+nonce 60 k0 k1 k2 k3 275f9313c78adcec c3dc47d972920e25 41f8c5d51abbf1e7 74da5cc5b52b2a0b
+  4-cycle found
+  36-cycle found
+128 trims 2230 ms 121222 edges 96 ms total 2326 ms
+Time: 2327 ms
+nonce 61 k0 k1 k2 k3 4178123b6607deb3 596e493a0fe04022 685fbcfc1d315fe 7cf66796fc0083c1
+128 trims 2231 ms 131927 edges 103 ms total 2334 ms
+Time: 2335 ms
+nonce 62 k0 k1 k2 k3 544f44b2b17afc97 4ba38ecebc2fa72c 21e2c32bba7f6196 4d8886ccba77435b
+128 trims 2234 ms 130992 edges 103 ms total 2337 ms
+Time: 2337 ms
+nonce 63 k0 k1 k2 k3 7d4f06d5f68dc772 331017080ac63322 e62926ee68af70ed cf2efe7e2f4dbc16
+  4-cycle found
+  20-cycle found
+128 trims 2231 ms 131966 edges 103 ms total 2334 ms
+Time: 2335 ms
+nonce 64 k0 k1 k2 k3 89f81d7da5e674df 7586b93105a5fd13 6fbe212dd4e8c001 8800c93a8431f938
+  2-cycle found
+  2-cycle found
+128 trims 2231 ms 128743 edges 101 ms total 2332 ms
+Time: 2333 ms
+nonce 65 k0 k1 k2 k3 aad9475236944448 af6b3569368015a e032c834e65b9b87 f168dfa67498e7c8
+  2-cycle found
+  2-cycle found
+  20-cycle found
+  4-cycle found
+128 trims 2228 ms 119482 edges 95 ms total 2323 ms
+Time: 2323 ms
+nonce 66 k0 k1 k2 k3 bb8e0d9c86092685 5cc27ab9541d15f 745df9f37b43b2ce 9ebdebee66aa3f74
+  2-cycle found
+  14-cycle found
+  4-cycle found
+  8-cycle found
+  16-cycle found
+128 trims 2232 ms 129582 edges 102 ms total 2334 ms
+Time: 2334 ms
+nonce 67 k0 k1 k2 k3 dc595a58fbe20801 d088788bc84fbd20 addf8c3d0f7c6d1d 82af2c87e55bda06
+  2-cycle found
+128 trims 2230 ms 125634 edges 99 ms total 2329 ms
+Time: 2330 ms
+nonce 68 k0 k1 k2 k3 a4f56c15992bbe01 3116f652f9cba8c6 80cb3befa9e54287 53533d60e0d41298
+  2-cycle found
+  14-cycle found
+  30-cycle found
+128 trims 2229 ms 125441 edges 99 ms total 2328 ms
+Time: 2329 ms
+nonce 69 k0 k1 k2 k3 5757339817aab0af 8ca96059b73dacd7 2cc17ec73813d719 d4c4b2cbde14773e
+  4-cycle found
+  2-cycle found
+  8-cycle found
+128 trims 2225 ms 113887 edges 92 ms total 2317 ms
+Time: 2317 ms
+nonce 70 k0 k1 k2 k3 bba8b47d03eab7bb 6b57b1245b642153 628d1e49dd9d592e b6f34779ada7e367
+  18-cycle found
+  4-cycle found
+  14-cycle found
+  38-cycle found
+128 trims 2229 ms 120892 edges 96 ms total 2325 ms
+Time: 2325 ms
+nonce 71 k0 k1 k2 k3 23796193872092ea f1017d8a68c4b745 d312bd53d2cd307b 840acce5833ddc52
+128 trims 2232 ms 134485 edges 105 ms total 2337 ms
+Time: 2338 ms
+nonce 72 k0 k1 k2 k3 cbfb1fabb37cb6b2 593ade0e5058f3c8 2aeaefbc62abd465 430d73565dcd7bbe
+  28-cycle found
+128 trims 2230 ms 123654 edges 98 ms total 2328 ms
+Time: 2329 ms
+nonce 73 k0 k1 k2 k3 6f9a171d40e977e0 34d049c418758e39 c880ee8696207913 352fd3e9cabe5508
+  4-cycle found
+  16-cycle found
+128 trims 2231 ms 132129 edges 104 ms total 2335 ms
+Time: 2335 ms
+nonce 74 k0 k1 k2 k3 b0c0223e7fb05739 e2848b3c5f040a35 9402f1b1b8fcc5d9 e96a77cae4956b7
+  2-cycle found
+  24-cycle found
+128 trims 2230 ms 122692 edges 97 ms total 2327 ms
+Time: 2328 ms
+nonce 75 k0 k1 k2 k3 d129f63fba4d9a85 457dcb3666c5e09c 45247a2e2ee75f7 1a0f2e1bcb9d93ff
+  20-cycle found
+128 trims 2230 ms 128189 edges 101 ms total 2331 ms
+Time: 2332 ms
+nonce 76 k0 k1 k2 k3 ce88c290dbd269b2 caa5c2788435a35e 8d7aa819217e3592 cc297a2356765a2e
+  2-cycle found
+  2-cycle found
+  22-cycle found
+128 trims 2228 ms 128537 edges 101 ms total 2329 ms
+Time: 2330 ms
+nonce 77 k0 k1 k2 k3 f4956dc403730b01 e6d45de39c2a5a3e cbf626a8afee35f6 4307b94b1a0c9980
+  2-cycle found
+128 trims 2229 ms 125916 edges 100 ms total 2329 ms
+Time: 2329 ms
+nonce 78 k0 k1 k2 k3 3552f73400ffc414 afcaa2a5946e2aa5 ba53ab8d8830e771 b8ce4e4c47038a3c
+  2-cycle found
+  14-cycle found
+128 trims 2228 ms 123212 edges 98 ms total 2326 ms
+Time: 2327 ms
+nonce 79 k0 k1 k2 k3 8c9c604bfbb3c16a abbb59969a3a3135 12ae44d3e2ac3a57 e89e38063ad43da8
+  6-cycle found
+  6-cycle found
+128 trims 2232 ms 126502 edges 100 ms total 2332 ms
+Time: 2333 ms
+nonce 80 k0 k1 k2 k3 9ea2fb25aeff472 689eb28d54cd3f53 1a2ac1b28ba4a74c d6e2f421caeffa9f
+  8-cycle found
+  12-cycle found
+128 trims 2230 ms 122367 edges 97 ms total 2327 ms
+Time: 2327 ms
+nonce 81 k0 k1 k2 k3 4eb690c832a2b3e d74477d7fa7ca72e fc048bf829f7b639 440f3de4fe16c1a2
+128 trims 2231 ms 132925 edges 104 ms total 2335 ms
+Time: 2336 ms
+nonce 82 k0 k1 k2 k3 a58620b7c20efe23 404e8e3590abbe7 acd4b2786fd397ae 3f52c16613fce82b
+  10-cycle found
+128 trims 2227 ms 123897 edges 98 ms total 2325 ms
+Time: 2325 ms
+nonce 83 k0 k1 k2 k3 71eca9a165cd3abf 4ddaf608499d71f8 ab30816ed750ed0f 2194618e920b9659
+128 trims 2226 ms 120086 edges 96 ms total 2322 ms
+Time: 2322 ms
+nonce 84 k0 k1 k2 k3 b44a43b72bf08fdc af8998a9f74dc8a7 f2e6830aa2a55d60 9db8fdab5f94e3b8
+  6-cycle found
+128 trims 2231 ms 127711 edges 101 ms total 2332 ms
+Time: 2332 ms
+nonce 85 k0 k1 k2 k3 f4c8cef34c546ad5 35747a9f67ef010e 3f31c90e6c088d04 e54d0b77353f63f1
+  2-cycle found
+  34-cycle found
+128 trims 2231 ms 125377 edges 99 ms total 2330 ms
+Time: 2330 ms
+nonce 86 k0 k1 k2 k3 d1a6db59dfef4797 3aecfcc680d4b2d3 bbe50a35e8d107ba f8150b38393d15db
+  2-cycle found
+  20-cycle found
+  38-cycle found
+128 trims 2230 ms 130011 edges 102 ms total 2332 ms
+Time: 2333 ms
+nonce 87 k0 k1 k2 k3 59a569fd527011c0 cbd159de92c063e1 e94cdc220ff9fb5a 9789c451c2e1669b
+  4-cycle found
+  12-cycle found
+128 trims 2229 ms 127287 edges 101 ms total 2330 ms
+Time: 2330 ms
+nonce 88 k0 k1 k2 k3 dad676b3e30fad3c ebd2051458c89fe ded2e31281d0c8c5 4d00187536df0d68
+  6-cycle found
+128 trims 2231 ms 121972 edges 97 ms total 2328 ms
+Time: 2328 ms
+nonce 89 k0 k1 k2 k3 52a7d0ab691be6e9 6ecc1c27359678fe dc8eefd8b914653b eacc6d7c617fc977
+  6-cycle found
+  6-cycle found
+  18-cycle found
+  2-cycle found
+  20-cycle found
+128 trims 2230 ms 122968 edges 97 ms total 2327 ms
+Time: 2328 ms
+nonce 90 k0 k1 k2 k3 727311845793a482 26d8ab687f708c7a 232414a3a1150a24 87b191c3ceb506f4
+  2-cycle found
+  10-cycle found
+128 trims 2231 ms 131325 edges 103 ms total 2334 ms
+Time: 2335 ms
+nonce 91 k0 k1 k2 k3 93233e07ad44bdb1 eb5e990fef8fe352 8e4933e5605a588b 51fe642bd43864ab
+  8-cycle found
+  12-cycle found
+  22-cycle found
+  4-cycle found
+128 trims 2233 ms 132838 edges 104 ms total 2337 ms
+Time: 2337 ms
+nonce 92 k0 k1 k2 k3 de7bd4e35f552f3 dbb6889421faf89f 49230e747289c7b3 993f4cb56493e7a7
+  2-cycle found
+  4-cycle found
+  30-cycle found
+  32-cycle found
+128 trims 2235 ms 136843 edges 107 ms total 2342 ms
+Time: 2342 ms
+nonce 93 k0 k1 k2 k3 e0bec566c7819fe7 fd58992b6111242b c247d5e745d1247f b0b70cc1b145ad13
+  2-cycle found
+  4-cycle found
+128 trims 2227 ms 114850 edges 92 ms total 2319 ms
+Time: 2319 ms
+nonce 94 k0 k1 k2 k3 92adc57ea4d23220 872c4bf1a03d7bc8 aad56b76cf5940cd 784f76b63f12d318
+  20-cycle found
+128 trims 2231 ms 126951 edges 100 ms total 2331 ms
+Time: 2332 ms
+nonce 95 k0 k1 k2 k3 e4b4a751f2eac47d 3115d47edfb69267 87de84146d9d609e 7deb20eab6d976a1
+  8-cycle found
+  24-cycle found
+128 trims 2227 ms 121750 edges 97 ms total 2324 ms
+Time: 2325 ms
+nonce 96 k0 k1 k2 k3 2f5953d57aaaf75f 9fd334779726d783 6d91c5afe5239029 8e035d0eb23b81d0
+  4-cycle found
+128 trims 2232 ms 129869 edges 102 ms total 2334 ms
+Time: 2335 ms
+nonce 97 k0 k1 k2 k3 7c3255d79d47b9f8 3da33d578d0730f7 848d913c81a9e067 5052e94686f290c7
+  4-cycle found
+  2-cycle found
+  8-cycle found
+128 trims 2233 ms 134350 edges 105 ms total 2338 ms
+Time: 2339 ms
+nonce 98 k0 k1 k2 k3 18a95d32908bf749 23c395cae77ea9b2 38c2aae4fed971a2 167504e8f5256d1f
+  2-cycle found
+  14-cycle found
+  2-cycle found
+  10-cycle found
+128 trims 2231 ms 126679 edges 100 ms total 2331 ms
+Time: 2331 ms
+nonce 99 k0 k1 k2 k3 8785f61f3e087286 91b57e6072a0cdaa 8035f9ee251a77a0 de03da786148f07
+  14-cycle found
+  10-cycle found
+128 trims 2229 ms 122112 edges 97 ms total 2326 ms
+Time: 2326 ms
+1 total solutions

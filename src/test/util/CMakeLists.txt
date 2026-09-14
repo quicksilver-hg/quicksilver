@@ -1,0 +1,30 @@
+# Copyright (c) 2023-present The Bitcoin Core developers
+# Copyright (c) 2026 The Quicksilver developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or https://opensource.org/license/mit/.
+
+add_library(test_util STATIC EXCLUDE_FROM_ALL
+  blockfilter.cpp
+  coins.cpp
+  index.cpp
+  json.cpp
+  logging.cpp
+  mining.cpp
+  net.cpp
+  random.cpp
+  script.cpp
+  setup_common.cpp
+  str.cpp
+  transaction_utils.cpp
+  txrelaypool.cpp
+  validation.cpp
+  $<$<BOOL:${ENABLE_VAULT}>:${PROJECT_SOURCE_DIR}/src/vault/test/util.cpp>
+)
+
+target_link_libraries(test_util
+  PRIVATE
+    core_interface
+    Boost::headers
+  PUBLIC
+    univalue
+)

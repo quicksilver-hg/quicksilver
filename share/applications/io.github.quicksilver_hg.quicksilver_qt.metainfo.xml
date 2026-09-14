@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 The Quicksilver developers -->
+<component type="desktop-application">
+  <id>io.github.quicksilver_hg.quicksilver_qt</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Quicksilver</name>
+  <summary>Connect to the Quicksilver peer-to-peer network</summary>
+  <description>
+    <p>
+      Quicksilver is a feeless, per-transaction proof-of-work cryptocurrency
+      built for autonomous agents and the humans who run them.
+    </p>
+    <p>
+      The Quicksilver-Qt graphical client lets you run a full node, mint and
+      send coins, and manage a vault.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.quicksilver_hg.quicksilver_qt.desktop</launchable>
+  <url type="homepage">https://github.com/quicksilver-hg/quicksilver</url>
+  <url type="bugtracker">https://github.com/quicksilver-hg/quicksilver/issues</url>
+  <url type="vcs-browser">https://github.com/quicksilver-hg/quicksilver</url>
+  <provides>
+    <mediatype>x-scheme-handler/quicksilver</mediatype>
+  </provides>
+  <developer id="io.github.quicksilver_hg">
+    <name>The Quicksilver developers</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-07-13" type="development"/>
+  </releases>
+</component>

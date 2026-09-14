@@ -1,0 +1,87 @@
+#!/sbin/openrc-run
+
+QUICKSILVERD_DEFAULT_DATADIR="/var/lib/quicksilverd"
+
+QUICKSILVERD_CONFIGFILE=${QUICKSILVERD_CONFIGFILE:-/etc/quicksilver/quicksilver.conf}
+QUICKSILVERD_PIDDIR=${QUICKSILVERD_PIDDIR:-/var/run/quicksilverd}
+QUICKSILVERD_PIDFILE=${QUICKSILVERD_PIDFILE:-${QUICKSILVERD_PIDDIR}/quicksilverd.pid}
+QUICKSILVERD_DATADIR=${QUICKSILVERD_DATADIR:-${QUICKSILVERD_DEFAULT_DATADIR}}
+QUICKSILVERD_USER=${QUICKSILVERD_USER:-${QUICKSILVER_USER:-quicksilver}}
+QUICKSILVERD_GROUP=${QUICKSILVERD_GROUP:-quicksilver}
+QUICKSILVERD_BIN=${QUICKSILVERD_BIN:-/usr/bin/quicksilverd}
+QUICKSILVERD_NICE=${QUICKSILVERD_NICE:-${NICELEVEL:-0}}
+QUICKSILVERD_OPTS="${QUICKSILVERD_OPTS:-${QUICKSILVER_OPTS}}"
+
+name="Quicksilver Daemon"
+description="Quicksilver P2P network daemon"
+
+command="${QUICKSILVERD_BIN}"
+command_args="-pid=\"${QUICKSILVERD_PIDFILE}\" \
+		-conf=\"${QUICKSILVERD_CONFIGFILE}\" \
+		-datadir=\"${QUICKSILVERD_DATADIR}\" \
+		-daemon \
+		${QUICKSILVERD_OPTS}"
+
+required_files="${QUICKSILVERD_CONFIGFILE}"
+start_stop_daemon_args="-u ${QUICKSILVERD_USER} \
+			-N ${QUICKSILVERD_NICE} -w 2000"
+pidfile="${QUICKSILVERD_PIDFILE}"
+
+# The retry schedule to use when stopping the daemon. Could be either
+# a timeout in seconds or multiple signal/timeout pairs (like
+# "SIGKILL/180 SIGTERM/300")
+retry="${QUICKSILVERD_SIGTERM_TIMEOUT}"
+
+depend() {
+	need localmount net
+}
+
+# verify
+# 1) that the datadir exists and is writable (or create it)
+# 2) that a directory for the pid exists and is writable
+# 3) ownership and permissions on the config file
+start_pre() {
+	checkpath \
+	-d \
+	--mode 0750 \
+	--owner "${QUICKSILVERD_USER}:${QUICKSILVERD_GROUP}" \
+	"${QUICKSILVERD_DATADIR}"
+
+	checkpath \
+	-d \
+	--mode 0755 \
+	--owner "${QUICKSILVERD_USER}:${QUICKSILVERD_GROUP}" \
+	"${QUICKSILVERD_PIDDIR}"
+
+	checkpath -f \
+	-o "${QUICKSILVERD_USER}:${QUICKSILVERD_GROUP}" \
+	-m 0660 \
+	"${QUICKSILVERD_CONFIGFILE}"
+
+	checkconfig || return 1
+}
+
+checkconfig()
+{
+	if grep -qs '^rpcuser=' "${QUICKSILVERD_CONFIGFILE}" && \
+		! grep -qs '^rpcpassword=' "${QUICKSILVERD_CONFIGFILE}" ; then
+		eerror ""
+		eerror "ERROR: You must set a secure rpcpassword to run quicksilverd."
+		eerror "The setting must appear in ${QUICKSILVERD_CONFIGFILE}"
+		eerror ""
+		eerror "This password is security critical to securing vaults "
+		eerror "and must not be the same as the rpcuser setting."
+		eerror "You can generate a suitable random password using the following "
+		eerror "command from the shell:"
+		eerror ""
+		eerror "bash -c 'tr -dc a-zA-Z0-9 < /dev/urandom | head -c32 && echo'"
+		eerror ""
+		eerror "It is recommended that you also set alertnotify so you are "
+		eerror "notified of problems:"
+		eerror ""
+		eerror "ie: alertnotify=echo %%s | mail -s \"Quicksilver Alert\"" \
+			"admin@foo.com"
+		eerror ""
+		return 1
+	fi
+}

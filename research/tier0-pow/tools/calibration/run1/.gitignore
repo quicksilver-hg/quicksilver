@@ -1,0 +1,3 @@
+# runtime artifacts — raw CSVs are tracked, progress logs and markers are not
+*.log
+DONE

@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+#
+# Copyright (c) 2026 The Quicksilver developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or https://opensource.org/license/mit/.
+#
+# Check that Quicksilver logo assets are regenerated from the mask-based siurce.
+
+import hashlib
+import re
+import struct
+import subprocess
+import sys
+from pathlib import Path
+
+
+OLD_DOXYGEN_SHA256 = "36a7efe977f7311fb4211c70fe400effa226b2266ade90ea92b2107f377ea45e"
+CRESCENT_ARC_RE = re.compile(
+    r'<path d="M (?P<x1>[0-9.]+) (?P<y1>[0-9.]+) A (?P<rx>[0-9.]+) (?P<ry>[0-9.]+) 0 0 0 (?P<x2>[0-9.]+) (?P<y2>[0-9.]+)"'
+)
+RING_RE = re.compile(r'<circle cx="(?P<cx>[0-9.]+)" cy="(?P<cy>[0-9.]+)" r="(?P<r>[0-9.]+)"/>')
+STROKE_WIDTH_RE = re.compile(r'<g fill="none" stroke="black" stroke-width="(?P<width>[0-9.]+)"')
+HUD_ICON_SOURCES = [
+    Path("src/qt/res/src/hud_transfer.svg"),
+    Path("src/qt/res/src/hud_request.svg"),
+    Path("src/qt/res/src/hud_ledger.svg"),
+    Path("src/qt/res/src/hud_agent.svg"),
+]
+HUD_ICON_OUTPUTS = [
+    Path("src/qt/res/icons/send.png"),
+    Path("src/qt/res/icons/receive.png"),
+    Path("src/qt/res/icons/history.png"),
+    Path("src/qt/res/icons/agent.png"),
+]
+
+
+def repo_root() -> Path:
+    return Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True, encoding="utf8").strip())
+
+
+def png_size(path: Path) -> tuple[int, int]:
+    with path.open("rb") as file:
+        header = file.read(24)
+    if len(header) != 24 or header[:8] != b"\x89PNG\r\n\x1a\n" or header[12:16] != b"IHDR":
+        raise ValueError(f"{path} is not a PNG with an IHDR header")
+    return struct.unpack(">II", header[16:24])
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def mercury_stroke_width(svg_text: str) -> float:
+    match = STROKE_WIDTH_RE.search(svg_text)
+    if not match:
+        raise ValueError("src/qt/res/src/quicksilver.svg is missing the Mercury stroke width")
+    return float(match.group("width"))
+
+
+def mercury_crescent_lower_edge(svg_text: str, stroke_width: float) -> float:
+    match = CRESCENT_ARC_RE.search(svg_text)
+    if not match:
+        raise ValueError("src/qt/res/src/quicksilver.svg is missing the Mercury crescent arc")
+    y1 = float(match.group("y1"))
+    rx = float(match.group("rx"))
+    ry = float(match.group("ry"))
+    y2 = float(match.group("y2"))
+    if y1 != y2 or rx != ry:
+        raise ValueError("Mercury crescent arc must be a horizontal circular arc")
+    return y1 + (stroke_width / 2)
+
+
+def mercury_ring_upper_edge(svg_text: str, stroke_width: float) -> float:
+    match = RING_RE.search(svg_text)
+    if not match:
+        raise ValueError("src/qt/res/src/quicksilver.svg is missing the Mercury ring circle")
+    cy = float(match.group("cy"))
+    radius = float(match.group("r"))
+    return cy - radius - (stroke_width / 2)
+
+
+def main() -> int:
+    root = repo_root()
+    failures: list[str] = []
+
+    doxygen_logo = root / "doc/quicksilver_logo_doxygen.png"
+    if not doxygen_logo.exists():
+        failures.append("doc/quicksilver_logo_doxygen.png is missing")
+    else:
+        try:
+            if png_size(doxygen_logo) != (55, 55):
+                failures.append("doc/quicksilver_logo_doxygen.png must be exactly 55x55")
+        except ValueError as err:
+            failures.append(str(err))
+        if sha256(doxygen_logo) == OLD_DOXYGEN_SHA256:
+            failures.append("doc/quicksilver_logo_doxygen.png is Doxygen logo")
+
+    svg = root / "src/qt/res/src/quicksilver.svg"
+    svg_text = svg.read_text(encoding="utf8")
+    if "<mask" not in svg_text or 'mask="url(#mercury-knockout)"' not in svg_text:
+        failures.append("src/qt/res/src/quicksilver.svg must apply the mercury-knockout mask")
+    if 'stroke="#eef2f6"' in svg_text:
+        failures.append("src/qt/res/src/quicksilver.svg still paints the Mercury glyph instead of knocking it out")
+    try:
+        stroke_width = mercury_stroke_width(svg_text)
+        crescent_lower_edge = mercury_crescent_lower_edge(svg_text, stroke_width)
+        ring_upper_edge = mercury_ring_upper_edge(svg_text, stroke_width)
+        if abs(crescent_lower_edge - ring_upper_edge) > 1.0:
+            failures.append(
+                "src/qt/res/src/quicksilver.svg Mercury crescent must be tangent to the ring "
+                f"(crescent lower edge {crescent_lower_edge:.1f}, ring upper edge {ring_upper_edge:.1f})"
+            )
+    except ValueError as err:
+        failures.append(str(err))
+
+    for source in HUD_ICON_SOURCES:
+        path = root / source
+        if not path.exists():
+            failures.append(f"{source} is missing")
+            continue
+        text = path.read_text(encoding="utf8")
+        if "Generated from src/qt/res/src/quicksilver.svg" not in text and "Generated by contrib/devtools/gen-qt-hud-icons.py" not in text:
+            failures.append(f"{source} must declare its HUD icon generator")
+        if "Adobe Illustrator" in text or "<!DOCTYPE" in text:
+            failures.append(f"{source} must be repo-generated SVG, not inherited designer export residue")
+        if "stroke=\"#000000\"" not in text:
+            failures.append(f"{source} must render as a single-color Qt icon source")
+
+    for output in HUD_ICON_OUTPUTS:
+        path = root / output
+        if not path.exists():
+            failures.append(f"{output} is missing")
+            continue
+        try:
+            if png_size(path) != (128, 128):
+                failures.append(f"{output} must be exactly 128x128")
+        except ValueError as err:
+            failures.append(str(err))
+
+    if failures:
+        print("Logo asset lint failures:")
+        print("\n".join(failures))
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

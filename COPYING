@@ -1,0 +1,41 @@
+The MIT License (MIT)
+
+Copyright (c) 2009-2025 The Bitcoin Core developers
+Copyright (c) 2009-2025 Bitcoin Developers
+Copyright (c) 2026 The Quicksilver developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+---
+
+This licence covers Quicksilver's own source. Parts of the tree are third-party
+code under other terms, and those terms govern those files:
+
+  src/crypto/cuckatoo/vendor/  Cuckoo Cycle, (c) John Tromp, FAIR MINING
+                               License (see LICENSE.txt and README.md there);
+                               the BLAKE2 reference sources bundled with it are
+                               (c) Samuel Neves, CC0 / OpenSSL / Apache-2.0.
+  src/leveldb/                 (c) The LevelDB Authors, BSD-3-clause.
+  src/crc32c/                  (c) The CRC32C Authors, BSD-3-clause.
+  src/tinyformat.h             (c) Chris Foster, Boost Software License 1.0.
+  src/test/fuzz/FuzzedDataProvider.h
+                               The LLVM Project, Apache-2.0 with LLVM exception.
+
+contrib/debian/copyright is the authoritative per-file record, and
+test/lint/lint-debian-copyright.py checks that it stays complete.

@@ -1,0 +1,604 @@
+// Copyright (c) 2009-2010 Satoshi Nakamoto
+// Copyright (c) 2009-present The Bitcoin Core developers
+// Copyright (c) 2026 The Quicksilver developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
+#include <logging.h>
+#include <memusage.h>
+#include <util/check.h>
+#include <util/fs.h>
+#include <util/string.h>
+#include <util/threadnames.h>
+#include <util/time.h>
+
+#include <array>
+#include <cstring>
+#include <map>
+#include <optional>
+#include <utility>
+
+using util::Join;
+using util::RemovePrefixView;
+
+const char * const DEFAULT_DEBUGLOGFILE = "debug.log";
+constexpr auto MAX_USER_SETABLE_SEVERITY_LEVEL{HgLog::Level::Info};
+
+HgLog::Logger& LogInstance()
+{
+/**
+ * NOTE: the logger instances is leaked on exit. This is ugly, but will be
+ * cleaned up by the OS/libc. Defining a logger as a global object doesn't work
+ * since the order of destruction of static/global objects is undefined.
+ * Consider if the logger gets destroyed, and then some later destructor calls
+ * LogInfo, maybe indirectly, and you get a core dump at shutdown trying to
+ * access the logger. When the shutdown sequence is fully audited and tested,
+ * explicit destruction of these objects can be implemented by changing this
+ * from a raw pointer to a std::unique_ptr.
+ * Since the ~Logger() destructor is never called, the Logger class and all
+ * its subclasses must have implicitly-defined destructors.
+ *
+ * This method of initialization was originally introduced in
+ * ee3374234c60aba2cc4c5cd5cac1c0aefc2d817c.
+ */
+    static HgLog::Logger* g_logger{new HgLog::Logger()};
+    return *g_logger;
+}
+
+bool fLogIPs = DEFAULT_LOGIPS;
+
+static int FileWriteStr(std::string_view str, FILE *fp)
+{
+    return fwrite(str.data(), 1, str.size(), fp);
+}
+
+bool HgLog::Logger::StartLogging()
+{
+    StdLockGuard scoped_lock(m_cs);
+
+    assert(m_buffering);
+    assert(m_fileout == nullptr);
+
+    if (m_print_to_file) {
+        assert(!m_file_path.empty());
+        m_fileout = fsbridge::fopen(m_file_path, "a");
+        if (!m_fileout) {
+            return false;
+        }
+
+        setbuf(m_fileout, nullptr); // unbuffered
+
+        // Add newlines to the logfile to distinguish this execution from the
+        // last one.
+        FileWriteStr("\n\n\n\n\n", m_fileout);
+    }
+
+    // dump buffered messages from before we opened the log
+    m_buffering = false;
+    if (m_buffer_lines_discarded > 0) {
+        LogPrintStr_(strprintf("Early logging buffer overflowed, %d log lines discarded.\n", m_buffer_lines_discarded), std::source_location::current(), HgLog::ALL, Level::Info, /*should_ratelimit=*/false);
+    }
+    while (!m_msgs_before_open.empty()) {
+        const auto& buflog = m_msgs_before_open.front();
+        std::string s{buflog.str};
+        FormatLogStrInPlace(s, buflog.category, buflog.level, buflog.source_loc, buflog.threadname, buflog.now, buflog.mocktime);
+        m_msgs_before_open.pop_front();
+
+        if (m_print_to_file) FileWriteStr(s, m_fileout);
+        if (m_print_to_console) fwrite(s.data(), 1, s.size(), stdout);
+        for (const auto& cb : m_print_callbacks) {
+            cb(s);
+        }
+    }
+    m_cur_buffer_memusage = 0;
+    if (m_print_to_console) fflush(stdout);
+
+    return true;
+}
+
+void HgLog::Logger::DisconnectTestLogger()
+{
+    StdLockGuard scoped_lock(m_cs);
+    m_buffering = true;
+    if (m_fileout != nullptr) fclose(m_fileout);
+    m_fileout = nullptr;
+    m_print_callbacks.clear();
+    m_max_buffer_memusage = DEFAULT_MAX_LOG_BUFFER;
+    m_cur_buffer_memusage = 0;
+    m_buffer_lines_discarded = 0;
+    m_msgs_before_open.clear();
+}
+
+void HgLog::Logger::DisableLogging()
+{
+    {
+        StdLockGuard scoped_lock(m_cs);
+        assert(m_buffering);
+        assert(m_print_callbacks.empty());
+    }
+    m_print_to_file = false;
+    m_print_to_console = false;
+    StartLogging();
+}
+
+void HgLog::Logger::EnableCategory(HgLog::LogFlags flag)
+{
+    m_categories |= flag;
+}
+
+bool HgLog::Logger::EnableCategory(std::string_view str)
+{
+    HgLog::LogFlags flag;
+    if (!GetLogCategory(flag, str)) return false;
+    EnableCategory(flag);
+    return true;
+}
+
+void HgLog::Logger::DisableCategory(HgLog::LogFlags flag)
+{
+    m_categories &= ~flag;
+}
+
+bool HgLog::Logger::DisableCategory(std::string_view str)
+{
+    HgLog::LogFlags flag;
+    if (!GetLogCategory(flag, str)) return false;
+    DisableCategory(flag);
+    return true;
+}
+
+bool HgLog::Logger::WillLogCategory(HgLog::LogFlags category) const
+{
+    return (m_categories.load(std::memory_order_relaxed) & category) != 0;
+}
+
+bool HgLog::Logger::WillLogCategoryLevel(HgLog::LogFlags category, HgLog::Level level) const
+{
+    // Log messages at Info, Warning and Error level unconditionally, so that
+    // important troubleshooting information doesn't get lost.
+    if (level >= HgLog::Level::Info) return true;
+
+    if (!WillLogCategory(category)) return false;
+
+    StdLockGuard scoped_lock(m_cs);
+    const auto it{m_category_log_levels.find(category)};
+    return level >= (it == m_category_log_levels.end() ? LogLevel() : it->second);
+}
+
+bool HgLog::Logger::DefaultShrinkDebugFile() const
+{
+    return m_categories == HgLog::NONE;
+}
+
+static const std::map<std::string, HgLog::LogFlags, std::less<>> LOG_CATEGORIES_BY_STR{
+    {"mesh", HgLog::MESH},
+    {"tor", HgLog::TOR},
+    {"relaypool", HgLog::RELAYPOOL},
+    {"http", HgLog::HTTP},
+    {"bench", HgLog::BENCH},
+    {"zmq", HgLog::ZMQ},
+    {"vaultdb", HgLog::VAULTDB},
+    {"rpc", HgLog::RPC},
+    {"forge", HgLog::FORGE},
+    {"peerbook", HgLog::PEERBOOK},
+    {"selectinputs", HgLog::SELECTINPUTS},
+    {"reindex", HgLog::REINDEX},
+    {"cmpctblock", HgLog::CMPCTBLOCK},
+    {"rand", HgLog::RAND},
+    {"prune", HgLog::PRUNE},
+    {"proxy", HgLog::PROXY},
+    {"relaypoolrej", HgLog::RELAYPOOLREJ},
+    {"libevent", HgLog::LIBEVENT},
+    {"coindb", HgLog::COINDB},
+    {"qt", HgLog::QT},
+    {"leveldb", HgLog::LEVELDB},
+    {"ledger", HgLog::LEDGER},
+    {"i2p", HgLog::I2P},
+#ifdef DEBUG_LOCKCONTENTION
+    {"lock", HgLog::LOCK},
+#endif
+    {"blockstore", HgLog::BLOCKSTORE},
+    {"scan", HgLog::SCAN},
+    {"txpackages", HgLog::TXPACKAGES},
+    {"txpow", HgLog::TXPOW},
+    {"vault", HgLog::VAULT},
+    {"init", HgLog::INIT},
+};
+
+static const std::unordered_map<HgLog::LogFlags, std::string> LOG_CATEGORIES_BY_FLAG{
+    // Swap keys and values from LOG_CATEGORIES_BY_STR.
+    [](const auto& in) {
+        std::unordered_map<HgLog::LogFlags, std::string> out;
+        for (const auto& [k, v] : in) {
+            const bool inserted{out.emplace(v, k).second};
+            assert(inserted);
+        }
+        return out;
+    }(LOG_CATEGORIES_BY_STR)
+};
+
+bool GetLogCategory(HgLog::LogFlags& flag, std::string_view str)
+{
+    if (str.empty() || str == "1" || str == "all") {
+        flag = HgLog::ALL;
+        return true;
+    }
+    auto it = LOG_CATEGORIES_BY_STR.find(str);
+    if (it != LOG_CATEGORIES_BY_STR.end()) {
+        flag = it->second;
+        return true;
+    }
+    return false;
+}
+
+std::string HgLog::Logger::LogLevelToStr(HgLog::Level level)
+{
+    switch (level) {
+    case HgLog::Level::Trace:
+        return "trace";
+    case HgLog::Level::Debug:
+        return "debug";
+    case HgLog::Level::Info:
+        return "info";
+    case HgLog::Level::Warning:
+        return "warning";
+    case HgLog::Level::Error:
+        return "error";
+    }
+    assert(false);
+}
+
+static std::string LogCategoryToStr(HgLog::LogFlags category)
+{
+    if (category == HgLog::ALL) {
+        return "all";
+    }
+    auto it = LOG_CATEGORIES_BY_FLAG.find(category);
+    assert(it != LOG_CATEGORIES_BY_FLAG.end());
+    return it->second;
+}
+
+static std::optional<HgLog::Level> GetLogLevel(std::string_view level_str)
+{
+    if (level_str == "trace") {
+        return HgLog::Level::Trace;
+    } else if (level_str == "debug") {
+        return HgLog::Level::Debug;
+    } else if (level_str == "info") {
+        return HgLog::Level::Info;
+    } else if (level_str == "warning") {
+        return HgLog::Level::Warning;
+    } else if (level_str == "error") {
+        return HgLog::Level::Error;
+    } else {
+        return std::nullopt;
+    }
+}
+
+std::vector<LogCategory> HgLog::Logger::LogCategoriesList() const
+{
+    std::vector<LogCategory> ret;
+    ret.reserve(LOG_CATEGORIES_BY_STR.size());
+    for (const auto& [category, flag] : LOG_CATEGORIES_BY_STR) {
+        ret.push_back(LogCategory{.category = category, .active = WillLogCategory(flag)});
+    }
+    return ret;
+}
+
+/** Log severity levels that can be selected by the user. */
+static constexpr std::array<HgLog::Level, 3> LogLevelsList()
+{
+    return {HgLog::Level::Info, HgLog::Level::Debug, HgLog::Level::Trace};
+}
+
+std::string HgLog::Logger::LogLevelsString() const
+{
+    const auto& levels = LogLevelsList();
+    return Join(std::vector<HgLog::Level>{levels.begin(), levels.end()}, ", ", [](HgLog::Level level) { return LogLevelToStr(level); });
+}
+
+std::string HgLog::Logger::LogTimestampStr(SystemClock::time_point now, std::chrono::seconds mocktime) const
+{
+    std::string strStamped;
+
+    if (!m_log_timestamps)
+        return strStamped;
+
+    const auto now_seconds{std::chrono::time_point_cast<std::chrono::seconds>(now)};
+    strStamped = FormatISO8601DateTime(TicksSinceEpoch<std::chrono::seconds>(now_seconds));
+    if (m_log_time_micros && !strStamped.empty()) {
+        strStamped.pop_back();
+        strStamped += strprintf(".%06dZ", Ticks<std::chrono::microseconds>(now - now_seconds));
+    }
+    if (mocktime > 0s) {
+        strStamped += " (mocktime: " + FormatISO8601DateTime(count_seconds(mocktime)) + ")";
+    }
+    strStamped += ' ';
+
+    return strStamped;
+}
+
+namespace HgLog {
+    /** Belts and suspenders: make sure outgoing log messages don't contain
+     * potentially suspicious characters, such as terminal control codes.
+     *
+     * This escapes control characters except newline ('\n') in C syntax.
+     * It escapes instead of removes them to still allow for troubleshooting
+     * issues where they accidentally end up in strings.
+     */
+    std::string LogEscapeMessage(std::string_view str) {
+        std::string ret;
+        for (char ch_in : str) {
+            uint8_t ch = (uint8_t)ch_in;
+            if ((ch >= 32 || ch == '\n') && ch != '\x7f') {
+                ret += ch_in;
+            } else {
+                ret += strprintf("\\x%02x", ch);
+            }
+        }
+        return ret;
+    }
+} // namespace HgLog
+
+std::string HgLog::Logger::GetLogPrefix(HgLog::LogFlags category, HgLog::Level level) const
+{
+    if (category == LogFlags::NONE) category = LogFlags::ALL;
+
+    const bool has_category{m_always_print_category_level || category != LogFlags::ALL};
+
+    // If there is no category, Info is implied
+    if (!has_category && level == Level::Info) return {};
+
+    std::string s{"["};
+    if (has_category) {
+        s += LogCategoryToStr(category);
+    }
+
+    if (m_always_print_category_level || !has_category || level != Level::Debug) {
+        // If there is a category, Debug is implied, so don't add the level
+
+        // Only add separator if we have a category
+        if (has_category) s += ":";
+        s += Logger::LogLevelToStr(level);
+    }
+
+    s += "] ";
+    return s;
+}
+
+static size_t MemUsage(const HgLog::Logger::BufferedLog& buflog)
+{
+    return memusage::DynamicUsage(buflog.str) +
+           memusage::DynamicUsage(buflog.threadname) +
+           memusage::MallocUsage(sizeof(memusage::list_node<HgLog::Logger::BufferedLog>));
+}
+
+HgLog::LogRateLimiter::LogRateLimiter(uint64_t max_bytes, std::chrono::seconds reset_window)
+    : m_max_bytes{max_bytes}, m_reset_window{reset_window} {}
+
+std::shared_ptr<HgLog::LogRateLimiter> HgLog::LogRateLimiter::Create(
+    SchedulerFunction&& scheduler_func, uint64_t max_bytes, std::chrono::seconds reset_window)
+{
+    auto limiter{std::shared_ptr<LogRateLimiter>(new LogRateLimiter(max_bytes, reset_window))};
+    std::weak_ptr<LogRateLimiter> weak_limiter{limiter};
+    auto reset = [weak_limiter] {
+        if (auto shared_limiter{weak_limiter.lock()}) shared_limiter->Reset();
+    };
+    scheduler_func(reset, limiter->m_reset_window);
+    return limiter;
+}
+
+HgLog::LogRateLimiter::Status HgLog::LogRateLimiter::Consume(
+    const std::source_location& source_loc,
+    const std::string& str)
+{
+    StdLockGuard scoped_lock(m_mutex);
+    auto& stats{m_source_locations.try_emplace(source_loc, m_max_bytes).first->second};
+    Status status{stats.m_dropped_bytes > 0 ? Status::STILL_SUPPRESSED : Status::UNSUPPRESSED};
+
+    if (!stats.Consume(str.size()) && status == Status::UNSUPPRESSED) {
+        status = Status::NEWLY_SUPPRESSED;
+        m_suppression_active = true;
+    }
+
+    return status;
+}
+
+void HgLog::Logger::FormatLogStrInPlace(std::string& str, HgLog::LogFlags category, HgLog::Level level, const std::source_location& source_loc, std::string_view threadname, SystemClock::time_point now, std::chrono::seconds mocktime) const
+{
+    if (!str.ends_with('\n')) str.push_back('\n');
+
+    str.insert(0, GetLogPrefix(category, level));
+
+    if (m_log_sourcelocations) {
+        str.insert(0, strprintf("[%s:%d] [%s] ", RemovePrefixView(source_loc.file_name(), "./"), source_loc.line(), source_loc.function_name()));
+    }
+
+    if (m_log_threadnames) {
+        str.insert(0, strprintf("[%s] ", (threadname.empty() ? "unknown" : threadname)));
+    }
+
+    str.insert(0, LogTimestampStr(now, mocktime));
+}
+
+void HgLog::Logger::LogPrintStr(std::string_view str, std::source_location&& source_loc, HgLog::LogFlags category, HgLog::Level level, bool should_ratelimit)
+{
+    StdLockGuard scoped_lock(m_cs);
+    return LogPrintStr_(str, std::move(source_loc), category, level, should_ratelimit);
+}
+
+// NOLINTNEXTLINE(misc-no-recursion)
+void HgLog::Logger::LogPrintStr_(std::string_view str, std::source_location&& source_loc, HgLog::LogFlags category, HgLog::Level level, bool should_ratelimit)
+{
+    std::string str_prefixed = LogEscapeMessage(str);
+
+    if (m_buffering) {
+        {
+            BufferedLog buf{
+                .now = SystemClock::now(),
+                .mocktime = GetMockTime(),
+                .str = str_prefixed,
+                .threadname = util::ThreadGetInternalName(),
+                .source_loc = std::move(source_loc),
+                .category = category,
+                .level = level,
+            };
+            m_cur_buffer_memusage += MemUsage(buf);
+            m_msgs_before_open.push_back(std::move(buf));
+        }
+
+        while (m_cur_buffer_memusage > m_max_buffer_memusage) {
+            if (m_msgs_before_open.empty()) {
+                m_cur_buffer_memusage = 0;
+                break;
+            }
+            m_cur_buffer_memusage -= MemUsage(m_msgs_before_open.front());
+            m_msgs_before_open.pop_front();
+            ++m_buffer_lines_discarded;
+        }
+
+        return;
+    }
+
+    FormatLogStrInPlace(str_prefixed, category, level, source_loc, util::ThreadGetInternalName(), SystemClock::now(), GetMockTime());
+    bool ratelimit{false};
+    if (should_ratelimit && m_limiter) {
+        auto status{m_limiter->Consume(source_loc, str_prefixed)};
+        if (status == LogRateLimiter::Status::NEWLY_SUPPRESSED) {
+            // NOLINTNEXTLINE(misc-no-recursion)
+            LogPrintStr_(strprintf(
+                             "Excessive logging detected from %s:%d (%s): >%d bytes logged during "
+                             "the last time window of %is. Suppressing logging to disk from this "
+                             "source location until time window resets. Console logging "
+                             "unaffected. Last log entry.",
+                             source_loc.file_name(), source_loc.line(), source_loc.function_name(),
+                             m_limiter->m_max_bytes,
+                             Ticks<std::chrono::seconds>(m_limiter->m_reset_window)),
+                         std::source_location::current(), LogFlags::ALL, Level::Warning, /*should_ratelimit=*/false); // with should_ratelimit=false, this cannot lead to infinite recursion
+        } else if (status == LogRateLimiter::Status::STILL_SUPPRESSED) {
+            ratelimit = true;
+        }
+    }
+
+    // To avoid confusion caused by dropped log messages when debugging an issue,
+    // we prefix log lines with "[*]" when there are any suppressed source locations.
+    if (m_limiter && m_limiter->SuppressionsActive()) {
+        str_prefixed.insert(0, "[*] ");
+    }
+
+    if (m_print_to_console) {
+        // print to console
+        fwrite(str_prefixed.data(), 1, str_prefixed.size(), stdout);
+        fflush(stdout);
+    }
+    for (const auto& cb : m_print_callbacks) {
+        cb(str_prefixed);
+    }
+    if (m_print_to_file && !ratelimit) {
+        assert(m_fileout != nullptr);
+
+        // reopen the log file, if requested
+        if (m_reopen_file) {
+            m_reopen_file = false;
+            FILE* new_fileout = fsbridge::fopen(m_file_path, "a");
+            if (new_fileout) {
+                setbuf(new_fileout, nullptr); // unbuffered
+                fclose(m_fileout);
+                m_fileout = new_fileout;
+            }
+        }
+        FileWriteStr(str_prefixed, m_fileout);
+    }
+}
+
+void HgLog::Logger::ShrinkDebugFile()
+{
+    // Amount of debug.log to save at end when shrinking (must fit in memory)
+    constexpr size_t RECENT_DEBUG_HISTORY_SIZE = 10 * 1000000;
+
+    assert(!m_file_path.empty());
+
+    // Scroll debug.log if it's getting too big
+    FILE* file = fsbridge::fopen(m_file_path, "r");
+
+    // Special files (e.g. device nodes) may not have a size.
+    size_t log_size = 0;
+    try {
+        log_size = fs::file_size(m_file_path);
+    } catch (const fs::filesystem_error&) {}
+
+    // If debug.log file is more than 10% bigger the RECENT_DEBUG_HISTORY_SIZE
+    // trim it down by saving only the last RECENT_DEBUG_HISTORY_SIZE bytes
+    if (file && log_size > 11 * (RECENT_DEBUG_HISTORY_SIZE / 10))
+    {
+        // Restart the file with some of the end
+        std::vector<char> vch(RECENT_DEBUG_HISTORY_SIZE, 0);
+        if (fseek(file, -((long)vch.size()), SEEK_END)) {
+            LogInfo(HgLog::INIT, "Failed to shrink debug log file: fseek(...) failed\n");
+            fclose(file);
+            return;
+        }
+        int nBytes = fread(vch.data(), 1, vch.size(), file);
+        fclose(file);
+
+        file = fsbridge::fopen(m_file_path, "w");
+        if (file)
+        {
+            fwrite(vch.data(), 1, nBytes, file);
+            fclose(file);
+        }
+    }
+    else if (file != nullptr)
+        fclose(file);
+}
+
+void HgLog::LogRateLimiter::Reset()
+{
+    decltype(m_source_locations) source_locations;
+    {
+        StdLockGuard scoped_lock(m_mutex);
+        source_locations.swap(m_source_locations);
+        m_suppression_active = false;
+    }
+    for (const auto& [source_loc, stats] : source_locations) {
+        if (stats.m_dropped_bytes == 0) continue;
+        LogPrintLevel_(
+            LogFlags::ALL, Level::Warning, /*should_ratelimit=*/false,
+            "Restarting logging from %s:%d (%s): %d bytes were dropped during the last %ss.",
+            source_loc.file_name(), source_loc.line(), source_loc.function_name(),
+            stats.m_dropped_bytes, Ticks<std::chrono::seconds>(m_reset_window));
+    }
+}
+
+bool HgLog::LogRateLimiter::Stats::Consume(uint64_t bytes)
+{
+    if (bytes > m_available_bytes) {
+        m_dropped_bytes += bytes;
+        m_available_bytes = 0;
+        return false;
+    }
+
+    m_available_bytes -= bytes;
+    return true;
+}
+
+bool HgLog::Logger::SetLogLevel(std::string_view level_str)
+{
+    const auto level = GetLogLevel(level_str);
+    if (!level.has_value() || level.value() > MAX_USER_SETABLE_SEVERITY_LEVEL) return false;
+    m_log_level = level.value();
+    return true;
+}
+
+bool HgLog::Logger::SetCategoryLogLevel(std::string_view category_str, std::string_view level_str)
+{
+    HgLog::LogFlags flag;
+    if (!GetLogCategory(flag, category_str)) return false;
+
+    const auto level = GetLogLevel(level_str);
+    if (!level.has_value() || level.value() > MAX_USER_SETABLE_SEVERITY_LEVEL) return false;
+
+    StdLockGuard scoped_lock(m_cs);
+    m_category_log_levels[flag] = level.value();
+    return true;
+}

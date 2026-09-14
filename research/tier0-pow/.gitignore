@@ -1,0 +1,15 @@
+.claude/
+.remember/
+.worktrees/
+third_party/
+__pycache__/
+*.pyc
+.pytest_cache/
+cuckoo-master.zip
+equihash-master.zip
+drivers/**/driver
+results/
+repos/
+stderr.txt
+
+.superpowers/

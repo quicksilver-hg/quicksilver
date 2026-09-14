@@ -1,0 +1,10 @@
+usr/bin/quicksilverd
+usr/bin/quicksilver-cli
+usr/bin/quicksilver-tx
+usr/bin/quicksilver-vault
+usr/bin/quicksilver-util
+usr/share/man/man1/quicksilverd.1
+usr/share/man/man1/quicksilver-cli.1
+usr/share/man/man1/quicksilver-tx.1
+usr/share/man/man1/quicksilver-vault.1
+usr/share/man/man1/quicksilver-util.1
