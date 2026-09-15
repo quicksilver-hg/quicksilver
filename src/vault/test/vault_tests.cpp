@@ -172,7 +172,7 @@ struct VaultTxPowTestSetup : TestChain100Setup {
         const_cast<Consensus::Params&>(Params().GetConsensus()).fTxPowNoCycle = true;
     }
 
-    void ProveTxPowAtTip(CMutableTransaction& tx) EXCLUSIVE_LOCKS_REQUIRED(!::cs_main)
+    void ProveTxPowAtTip(CMutableTransaction& tx)
     {
         LOCK(::cs_main);
         ProveTxPowForTest(tx, *Assert(m_node.chainman->ActiveChain().Tip()), Params().GetConsensus());
@@ -1538,7 +1538,7 @@ BOOST_FIXTURE_TEST_CASE(load_confirmed_tx_with_chainstate_resolves_stored_block,
     BOOST_REQUIRE(m_node.chainman);
     BOOST_REQUIRE(m_node.chain->hasChainstate());
 
-    const CBlockIndex* tip = m_node.chainman->ActiveChain().Tip();
+    const CBlockIndex* tip{WITH_LOCK(m_node.chainman->GetMutex(), return m_node.chainman->ActiveChain().Tip())};
     BOOST_REQUIRE(tip);
     CVaultTx stored{m_coinbase_txns.back(),
                     TxStateConfirmed{tip->GetBlockHash(), tip->nHeight, /*index=*/0}};

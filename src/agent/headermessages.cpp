@@ -92,7 +92,13 @@ HeaderMessageDecodeResult DecodeHeadersMessage(const CSerializedNetMsg& message,
         }
 
         if (!stream.empty()) {
-            return DecodeResult(HeaderMessageResultCode::TRAILING_DATA, std::move(headers), announced_count, headers.size());
+            // Read the count into a local first. As sibling arguments to one call,
+            // std::move(headers) and headers.size() are unsequenced, so a compiler that
+            // builds the moved-from parameter first reports zero decoded. GCC evaluated
+            // right-to-left and happened to be right; clang evaluates left-to-right and
+            // reported decoded_headers=0 for a message whose header had in fact decoded.
+            const size_t decoded_count{headers.size()};
+            return DecodeResult(HeaderMessageResultCode::TRAILING_DATA, std::move(headers), announced_count, decoded_count);
         }
 
         return DecodeResult(HeaderMessageResultCode::DECODED, std::move(headers), announced_count, announced_count);

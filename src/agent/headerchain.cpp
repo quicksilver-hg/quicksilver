@@ -49,7 +49,6 @@ HeaderChain::HeaderChain(const Consensus::Params& params, const CBlockHeader& ge
 {
     Assume(genesis.GetHash() == m_params.hashGenesisBlock);
     HeaderEntry& entry{Append(genesis, nullptr)};
-    entry.index->nStatus = BLOCK_VALID_TREE;
     m_tip = entry.index.get();
     // m_congestion is no longer seeded here: it is a header field, so CBlockIndex's
     // header constructor carries it for genesis and for every Append()ed header alike.
@@ -63,7 +62,14 @@ HeaderChain::HeaderEntry& HeaderChain::Append(const CBlockHeader& header, CBlock
     index.nHeight = prev ? prev->nHeight + 1 : 0;
     index.nChainWork = (prev ? prev->nChainWork : arith_uint256{}) + GetBlockProof(index);
     index.nTimeMax = prev ? std::max<unsigned int>(prev->nTimeMax, index.nTime) : index.nTime;
-    index.nStatus = BLOCK_VALID_TREE;
+    // nStatus is deliberately left at its default. It is GUARDED_BY(::cs_main) because it
+    // describes an entry in the node's global block index; these CBlockIndex objects are
+    // private to this HeaderChain, never published there, and the agent never takes
+    // cs_main. Nothing reads the field on this path -- headerstore serializes plain
+    // CBlockHeaders, not CDiskBlockIndex -- so writing it was a dead store that only
+    // clang's thread-safety analysis had any opinion about. Do not reinstate it: a write
+    // here is either a lie about a lock we do not hold, or a sign this chain has started
+    // to need real block-index state and should say so explicitly.
     index.BuildSkip();
 
     HeaderEntry& stored{*entry};

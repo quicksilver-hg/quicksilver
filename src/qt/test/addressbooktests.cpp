@@ -97,7 +97,7 @@ void TestAddAddressesToSendBook(interfaces::Node& node)
         vault->SetupDescriptorScriptPubKeyMans();
     }
 
-    auto build_address = [&vault]() {
+    auto build_address = []() {
         CKey key = GenerateRandomKey();
         CTxDestination dest{WitnessV0KeyHash(key.GetPubKey())};
 

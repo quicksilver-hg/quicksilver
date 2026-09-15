@@ -48,7 +48,7 @@ public:
     static constexpr int64_t WINDOW_SECONDS{120};
 
     //! Record one solver attempt observed at `now`.
-    void Record(SteadySeconds now);
+    void Record(SteadySeconds now) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
     //! Attempts per second at `now`, or nullopt when no attempt has ever been
     //! observed -- the genuinely unknown case, which callers must render as a
@@ -60,10 +60,10 @@ public:
     //! decays towards zero instead of snapping to it, which keeps a legitimately
     //! slow solver (CPU fallback at E28 runs ~52 s per graph) distinguishable from
     //! a stopped one.
-    std::optional<double> Rate(SteadySeconds now) const;
+    std::optional<double> Rate(SteadySeconds now) const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
     //! Forget every recorded attempt; called when a mining session starts.
-    void Reset();
+    void Reset() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
 private:
     static size_t Index(int64_t second) { return static_cast<size_t>(((second % WINDOW_SECONDS) + WINDOW_SECONDS) % WINDOW_SECONDS); }
@@ -118,20 +118,21 @@ public:
     MiningService& operator=(const MiningService&) = delete;
 
     //! Launch the worker with the given payout target. Returns false if already active.
-    bool Start(const CScript& payout_script, const std::string& payout_address);
+    bool Start(const CScript& payout_script, const std::string& payout_address)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_thread_mutex, !m_stats_mutex);
     //! Signal the worker to stop and join it. Safe to call when already stopped.
-    void Stop();
+    void Stop() EXCLUSIVE_LOCKS_REQUIRED(!m_thread_mutex);
     //! Signal-only stop (no join); used to order shutdown before joining elsewhere.
-    void Interrupt();
+    void Interrupt() EXCLUSIVE_LOCKS_REQUIRED(!m_thread_mutex);
 
     bool IsActive() const { return m_active.load(); }
-    MiningStatus GetStatus() const;
+    MiningStatus GetStatus() const EXCLUSIVE_LOCKS_REQUIRED(!m_stats_mutex);
     //! Solver attempts per second over the trailing window, or nullopt when no
     //! attempt has been observed this session. See AttemptRateWindow.
     std::optional<double> RecentAttemptRate() const;
 
 private:
-    void Run(CScript payout_script);
+    void Run(CScript payout_script) EXCLUSIVE_LOCKS_REQUIRED(!m_stats_mutex);
 
     ChainstateManager& m_chainman;
     interfaces::Mining& m_mining;

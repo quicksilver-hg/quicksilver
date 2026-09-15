@@ -183,7 +183,7 @@ BOOST_AUTO_TEST_CASE(base58_address_beginning_with_the_bech32_hrp_still_decodes)
         for (uint32_t i = 0; i < 200000 && !found; ++i) {
             uint160 h;
             std::memcpy(h.begin(), &i, sizeof(i));
-            for (const CTxDestination dest : {CTxDestination{ScriptHash(h)}, CTxDestination{PKHash(h)}}) {
+            for (const CTxDestination& dest : {CTxDestination{ScriptHash(h)}, CTxDestination{PKHash(h)}}) {
                 const std::string addr{EncodeDestination(dest)};
                 if (ToLower(addr.substr(0, params.Bech32HRP().size())) != params.Bech32HRP()) continue;
                 found = true;

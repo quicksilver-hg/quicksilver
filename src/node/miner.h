@@ -107,7 +107,8 @@ private:
       *
       * @pre BlockAssembler::m_relaypool must not be nullptr
     */
-    void addPackageTxs(int& nPackagesSelected, int& nDescendantsUpdated) EXCLUSIVE_LOCKS_REQUIRED(!m_relaypool->cs);
+    void addPackageTxs(int& nPackagesSelected, int& nDescendantsUpdated)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_relaypool->cs);
 
     // helper functions for addPackageTxs()
     /** Remove confirmed (inBlock) entries from given set */

@@ -178,6 +178,7 @@ std::optional<fs::path> LocateTor(const fs::path& override_path)
 } // namespace
 
 util::Result<std::string> StartBundledTor(const fs::path& datadir, const fs::path& override_path)
+    EXCLUSIVE_LOCKS_REQUIRED(!g_bundled_tor_mutex)
 {
     {
         LOCK(g_bundled_tor_mutex);
@@ -272,6 +273,7 @@ util::Result<std::string> StartBundledTor(const fs::path& datadir, const fs::pat
 }
 
 void StopBundledTor()
+    EXCLUSIVE_LOCKS_REQUIRED(!g_bundled_tor_mutex)
 {
     std::unique_ptr<util::ContainedChild> child;
     {

@@ -131,7 +131,7 @@ static bool CreateSocketPair(SOCKET s[2])
         return false;
     };
 
-    const SOCKET listener{socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)};
+    const SOCKET listener{static_cast<SOCKET>(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))};
     if (listener == INVALID_SOCKET) return fail("socket()");
     // Owns the listener for the rest of this function: Sock's destructor is the
     // portable close, and the listener is never handed back to the caller.
@@ -152,14 +152,14 @@ static bool CreateSocketPair(SOCKET s[2])
         return fail("getsockname()");
     }
 
-    const SOCKET client{socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)};
+    const SOCKET client{static_cast<SOCKET>(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))};
     if (client == INVALID_SOCKET) return fail("socket()");
     if (connect(client, reinterpret_cast<sockaddr*>(&addr), addr_len) == SOCKET_ERROR) {
         (void)Sock{client}; // close it; a temporary Sock is the portable closesocket
         return fail("connect()");
     }
 
-    const SOCKET server{accept(listener, nullptr, nullptr)};
+    const SOCKET server{static_cast<SOCKET>(accept(listener, nullptr, nullptr))};
     if (server == INVALID_SOCKET) {
         (void)Sock{client};
         return fail("accept()");
