@@ -36,6 +36,7 @@ The conf half is a byte comparison, because that generator only prefixes
 """
 
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -113,6 +114,20 @@ class GeneratedDocsTest(QuicksilverTestFramework):
         return options
 
     def check_man_pages(self):
+        if platform.system() == "Windows":
+            # The checked-in pages are generated from a POSIX build and describe
+            # one. -daemon and -daemonwait are registered only #if HAVE_DECL_FORK
+            # (src/init.cpp), so on Windows they are hidden args and never reach
+            # --help, and the set comparison below reports them as stale. They are
+            # not stale: regenerating on Windows would only move the failure to
+            # every other platform. This half of the test compares one platform's
+            # documentation against another platform's binary, which is not a
+            # property the project holds. The conf half below still runs.
+            self.log.warning(
+                "doc/man/*.1 describes a POSIX build; man pages are NOT verified on Windows"
+            )
+            return
+
         checked = 0
         for name in DOCUMENTED_BINARIES:
             binary = self.binary_path(name)

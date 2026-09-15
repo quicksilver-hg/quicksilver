@@ -1300,7 +1300,10 @@ util::Result<CreatedTransactionResult> CreateTransaction(
     // The grind does not need the lock. It reads the chain, not the vault, and
     // writes only nAnchorHeight, nCycle and nPowNonce on a transaction that is by
     // then entirely local to this call.
-    const auto trace_result = [&vault](bool ok, const std::optional<unsigned int>& pos) {
+    // A default capture, not [&vault]: vault is read only by the tracepoint below,
+    // and TRACEPOINT expands to nothing where USDT is unavailable (util/trace.h), so
+    // naming the capture makes it unused and -Wunused-lambda-capture fatal on macOS.
+    const auto trace_result = [&](bool ok, const std::optional<unsigned int>& pos) {
         TRACEPOINT(coin_selection, normal_create_tx_internal,
                vault.GetName().c_str(),
                ok,
