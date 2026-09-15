@@ -127,6 +127,11 @@ target_link_libraries(quicksilver_qt
     leveldb
     univalue
     Boost::headers
+    # quicksilver.cpp includes torcontrol.h for DEFAULT_LISTEN_ONION, and that
+    # header includes <event2/util.h>. On Linux libevent lives in a default
+    # include directory, so the omission compiled anyway; on macOS it is under
+    # the Homebrew prefix and only reaches targets that declare the dependency.
+    $<TARGET_NAME_IF_EXISTS:libevent::core>
     $<TARGET_NAME_IF_EXISTS:QRencode::QRencode>
     $<$<PLATFORM_ID:Darwin>:-framework\ AppKit>
     $<$<CXX_COMPILER_ID:MSVC>:shlwapi>

@@ -166,11 +166,36 @@ class GeneratedDocsTest(QuicksilverTestFramework):
         # it claims to.
         assert checked >= 5, f"only {checked} man pages were checked, expected at least 5"
 
+    def usable_bash(self):
+        """Return a bash that actually runs, or None.
+
+        shutil.which("bash") is a presence probe, and presence is not the
+        question. On a Windows runner it finds C:\\Windows\\System32\\bash.exe --
+        the WSL launcher, which exists on every modern Windows and exits
+        non-zero with "Windows Subsystem for Linux has no installed
+        distributions" the moment it is asked to run anything. The guard below
+        therefore passed and the generator then failed, which reads as a broken
+        generator rather than a missing interpreter. Run the interpreter to find
+        out whether it interprets.
+        """
+        bash = shutil.which("bash")
+        if bash is None:
+            return None
+        try:
+            probe = subprocess.run(
+                [bash, "-c", "printf ok"],
+                capture_output=True, text=True, timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return bash if probe.returncode == 0 and probe.stdout.strip() == "ok" else None
+
     def check_example_conf(self):
         generator = self.srcdir_path("contrib", "devtools", "gen-quicksilver-conf.sh")
-        if shutil.which("bash") is None:
+        bash = self.usable_bash()
+        if bash is None:
             self.log.warning(
-                "bash is unavailable; share/examples/quicksilver.conf is NOT verified by this run"
+                "no working bash; share/examples/quicksilver.conf is NOT verified by this run"
             )
             return
 
@@ -178,7 +203,7 @@ class GeneratedDocsTest(QuicksilverTestFramework):
         with tempfile.TemporaryDirectory() as tmpdir:
             regenerated = os.path.join(tmpdir, "quicksilver.conf")
             subprocess.run(
-                ["bash", generator],
+                [bash, generator],
                 check=True,
                 capture_output=True,
                 text=True,
