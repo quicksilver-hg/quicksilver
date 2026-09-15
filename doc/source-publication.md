@@ -4,6 +4,13 @@ Quicksilver's public source release is the tracked file tree of a reviewed
 commit. It is not a publication of local development history, worktrees,
 reflogs, ignored planning material, or build output.
 
+`export-public-source.sh` **initializes** a public repository and is for the
+first publication only. For every publication after that, use
+`publish-source.sh` and the [Publishing an update](#publishing-an-update)
+section below. The two are not interchangeable: the exporter runs `git init`, so
+running it again produces a fresh unrelated root, which forces the push,
+destroys the public history, and orphans existing CI runs and commit references.
+
 Do not push an existing development checkout to initialize the public
 repository. Create a fresh root history from `git archive` instead:
 
@@ -84,3 +91,59 @@ git push --force-with-lease=refs/heads/main:"$expected_remote_main" origin main:
 
 The lease makes the update fail if the remote changed after inspection. Never
 push the development checkout or its branches to the public remote.
+
+## Publishing an update
+
+Keep one long-lived clone of the public repository -- a publication repository --
+and publish from there. It contains public commits only, so no development
+history can leave through it even by accident. The development checkout should
+not have the public remote configured at all; a repository with no remote cannot
+be mispushed.
+
+```bash
+contrib/devtools/publish-source.sh -m "MESSAGE" /path/to/publication-repo [SOURCE_COMMIT]
+```
+
+The script syncs the reviewed tree into the publication repository and commits it
+onto the checked-out branch, so the push is a fast-forward and the public history
+becomes a readable record of what changed. It refuses a dirty source tree, a
+tracked private path, a dirty or build-dirtied publication repository, and a
+branch that has diverged from its remote. Omit `-m` to stage and verify without
+committing, so the diff can be reviewed first. It never pushes.
+
+What makes an update safe is one comparison, which the script performs and
+refuses to continue without:
+
+```
+staged tree hash == git rev-parse <source commit>^{tree}
+```
+
+If those match, every published byte is a byte of the reviewed commit and nothing
+rode along. Do not substitute a file count or a visual review. Two earlier hand
+exports produced plausible trees that this check rejects:
+
+- `git add -A` without `--force` silently drops tracked files that the tree's own
+  `.gitignore` matches -- three of them here, leaving 2600 files instead of 2603.
+- `git archive` expands `export-subst`, baking a development commit hash into
+  `src/clientversion.cpp` where a clone has the literal `$Format:%H$`.
+
+`publish-source.sh` avoids both -- it stages with `--force` and materializes the
+tree with `checkout-index` from a scratch index rather than `git archive` -- but
+the tree check is what proves it on every run.
+
+### Sending a change to CI without publishing it
+
+CI runs on every pushed branch, so a branch in the publication repository gets a
+full CI result, on every platform, without touching the published branch:
+
+```bash
+git -C /path/to/publication-repo push origin HEAD:ci/<name>
+```
+
+Because the commit's parent is the published branch, the public diff is exactly
+the change under test, and a green branch fast-forwards into it with no forced
+push.
+
+Deleting such a branch afterwards does not unpublish it: the objects remain
+fetchable by commit hash. Use this for a change intended to ship, not as a
+scratch pad.

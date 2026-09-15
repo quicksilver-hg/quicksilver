@@ -171,7 +171,8 @@ void MinerTestingSetup::TestNoPackageBoost(const CScript& scriptPubKey, const st
     // Build a tx spending `prevhash:prevn`, forwarding `in_value` unchanged (feeless),
     // with a real anchored proof and the given surplus override. Returns its txid.
     auto add_tx = [&](const Txid& prevhash, uint32_t prevn, CAmount in_value,
-                      uint64_t surplus, bool spends_coinbase) -> Txid {
+                      uint64_t surplus, bool spends_coinbase)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main) -> Txid {
         CMutableTransaction tx;
         tx.vin.resize(1);
         tx.vin[0].scriptSig = CScript() << OP_1;
@@ -630,7 +631,7 @@ void MinerTestingSetup::TestSurplusWorkMining(const CScript& scriptPubKey, const
     TestRelayPoolEntryHelper entry;
 
     // Independent feeless tx spending txFirst[idx], with a real proof and surplus override.
-    auto add_tx = [&](size_t idx, uint64_t surplus) -> Txid {
+    auto add_tx = [&](size_t idx, uint64_t surplus) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) -> Txid {
         CMutableTransaction tx;
         tx.vin.resize(1);
         tx.vin[0].scriptSig = CScript() << OP_1;

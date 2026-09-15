@@ -24,7 +24,7 @@ struct Dersig100Setup : public TestChain100Setup {
         const_cast<Consensus::Params&>(Params().GetConsensus()).fTxPowNoCycle = true;
     }
 
-    void ProveTxPowAtTip(CMutableTransaction& tx) EXCLUSIVE_LOCKS_REQUIRED(!::cs_main)
+    void ProveTxPowAtTip(CMutableTransaction& tx)
     {
         LOCK(::cs_main);
         ProveTxPowForTest(tx, *Assert(m_node.chainman->ActiveChain().Tip()), Params().GetConsensus());

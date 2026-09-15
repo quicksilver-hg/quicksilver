@@ -12,6 +12,7 @@ import hashlib
 import inspect
 import json
 import logging
+import glob
 import os
 import pathlib
 import platform
@@ -55,6 +56,24 @@ def summarise_dict_differences(thing1, thing2):
         if k not in thing1:
             d2[k] = thing2[k]
     return d1, d2
+
+
+def resolve_binary_path(builddir, name, exeext):
+    """Locate a built binary under builddir/bin.
+
+    Single-config generators (Ninja, Make) put binaries directly in bin/.
+    Multi-config generators (MSBuild, Xcode) put them in bin/<CONFIG>/, so a
+    plain bin/<name> lookup silently finds nothing there -- which reads as
+    "not built" rather than "looked in the wrong place".
+    """
+    direct = os.path.join(builddir, "bin", name + exeext)
+    if os.path.isfile(direct):
+        return direct
+    for candidate in sorted(glob.glob(os.path.join(builddir, "bin", "*", name + exeext))):
+        if os.path.isfile(candidate):
+            return candidate
+    return direct  # report the conventional path when nothing was found
+
 
 def assert_equal(thing1, thing2, *args):
     if thing1 != thing2 and not args and isinstance(thing1, dict) and isinstance(thing2, dict):

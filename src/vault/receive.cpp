@@ -279,7 +279,7 @@ bool CachedTxIsTrusted(const CVault& vault, const CVaultTx& wtx)
 }
 
 //! The scripts of every agent funding address this vault has reserved.
-static std::set<CScript> AgentFundingScripts(const CVault& vault)
+static std::set<CScript> AgentFundingScripts(const CVault& vault) EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault)
 {
     AssertLockHeld(vault.cs_vault);
     std::set<CScript> scripts;
@@ -296,6 +296,7 @@ static std::set<CScript> AgentFundingScripts(const CVault& vault)
 //! subtracted from it: an output counted as delegated but not as available would make the
 //! spendable balance too small, and one counted as neither would vanish from both.
 static CAmount TxGetDelegatedCredit(const CVault& vault, const CVaultTx& wtx, const std::set<CScript>& funding_scripts, const isminefilter& filter)
+    EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault)
 {
     AssertLockHeld(vault.cs_vault);
     if (vault.IsTxImmatureCoinBase(wtx)) return 0;

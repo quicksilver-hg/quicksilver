@@ -21,6 +21,7 @@ contrib/devtools/export-public-source.sh
 contrib/devtools/gen-brand-icons.sh
 contrib/devtools/gen-qt-hud-icons.py
 contrib/devtools/gen-qt-spinner.py
+contrib/devtools/publish-source.sh
 contrib/genesis/derive-genesis.py
 src/agent/agentclient.cpp
 src/agent/agentclient.h

@@ -6,6 +6,7 @@
 """Test quicksilver-vault."""
 
 import os
+import platform
 import stat
 import subprocess
 import textwrap
@@ -174,7 +175,16 @@ class ToolVaultTest(QuicksilverTestFramework):
         self.log.info('Calling vault tool info, testing output')
         self.log.debug('Setting vault file permissions to 400 (read-only)')
         os.chmod(self.vault_path, stat.S_IRUSR)
-        assert self.vault_permissions() in ['400', '666']  # Sanity check. 666 because Appveyor.
+        # Sanity check that the chmod above actually made the vault read-only.
+        # Windows has no POSIX mode bits: os.chmod can only clear the write
+        # attribute, and stat then reports 444 -- measured on the MSVC build box,
+        # where this assertion failed with a bare AssertionError that named no
+        # value. 666 is the historical Appveyor reading, kept for older runners.
+        expected = ['444', '666'] if platform.system() == 'Windows' else ['400']
+        assert self.vault_permissions() in expected, (
+            f'vault mode {self.vault_permissions()} is not one of {expected}; '
+            'the read-only chmod did not take effect'
+        )
         shasum_before = self.vault_shasum()
         timestamp_before = self.vault_timestamp()
         self.log.debug('Vault file timestamp before calling info: {}'.format(timestamp_before))

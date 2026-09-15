@@ -54,8 +54,6 @@ SpawnFault SpawnFaultFromEnv(const char* env_var)
     return SpawnFault::kNone;
 }
 
-ContainedChild::ContainedChild(std::unique_ptr<Impl> impl) : m_impl(std::move(impl)) {}
-
 } // namespace util
 
 // The per-platform half. Guarded exactly as the solver bridge guarded it: the
@@ -432,3 +430,15 @@ ContainedChild::~ContainedChild()
 } // namespace util
 
 #endif
+
+// Defined here, below both platform sections, and not up in the platform-neutral half:
+// the parameter is a unique_ptr<Impl> by value, so its destructor is instantiated at the
+// point of definition, and that needs Impl to be complete. GCC and MSVC happen to defer
+// that instantiation to the end of the translation unit and so accept the definition
+// where Impl is still only forward-declared; clang instantiates it eagerly and rejects it
+// (`invalid application of sizeof to an incomplete type`). Keep this after the #endif.
+namespace util {
+
+ContainedChild::ContainedChild(std::unique_ptr<Impl> impl) : m_impl(std::move(impl)) {}
+
+} // namespace util

@@ -213,17 +213,19 @@ struct ByTimeViewExtractor
     }
 };
 
-struct Announcement_Indices final : boost::multi_index::indexed_by<
-    boost::multi_index::ordered_unique<boost::multi_index::tag<ByPeer>, ByPeerViewExtractor>,
-    boost::multi_index::ordered_non_unique<boost::multi_index::tag<ByTxHash>, ByTxHashViewExtractor>,
-    boost::multi_index::ordered_non_unique<boost::multi_index::tag<ByTime>, ByTimeViewExtractor>
->
-{};
-
-/** Data type for the main data structure (Announcement objects with ByPeer/ByTxHash/ByTime indexes). */
+/** Data type for the main data structure (Announcement objects with ByPeer/ByTxHash/ByTime indexes).
+ *
+ * The index list is spelled out inline, rather than pulled up into a named struct that
+ * derives from indexed_by<>. Boost 1.92 turned indexed_by into a forward declaration
+ * only -- an Mp11 type list with no definition -- so deriving from it no longer compiles.
+ * Naming it bought nothing but shorter symbols; do not reintroduce the struct. */
 using Index = boost::multi_index_container<
     Announcement,
-    Announcement_Indices
+    boost::multi_index::indexed_by<
+        boost::multi_index::ordered_unique<boost::multi_index::tag<ByPeer>, ByPeerViewExtractor>,
+        boost::multi_index::ordered_non_unique<boost::multi_index::tag<ByTxHash>, ByTxHashViewExtractor>,
+        boost::multi_index::ordered_non_unique<boost::multi_index::tag<ByTime>, ByTimeViewExtractor>
+    >
 >;
 
 /** Helper type to simplify syntax of iterator types. */

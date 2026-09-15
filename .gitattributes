@@ -6,3 +6,9 @@ depends/patches/** whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
 research/tier0-pow/tools/calibration/** whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
 src/qt/res/src/*.svg whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
 test/functional/test_framework/crypto/*_test_vectors.csv whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+
+# Vendored test vectors are compared byte-for-byte against their upstream
+# publication (blockfilter_tests digests blockfilters.json to prove it was never
+# re-minted), so a platform checkout must not rewrite their line endings. Without
+# this, a Windows clone converts them to CRLF and the provenance digest fails.
+src/test/data/** -text

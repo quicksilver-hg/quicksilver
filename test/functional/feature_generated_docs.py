@@ -42,7 +42,7 @@ import subprocess
 import tempfile
 
 from test_framework.test_framework import QuicksilverTestFramework
-from test_framework.util import assert_equal
+from test_framework.util import assert_equal, resolve_binary_path
 
 # Options are indented two spaces in --help output; the name runs to the first
 # "=" or whitespace.
@@ -77,10 +77,10 @@ class GeneratedDocsTest(QuicksilverTestFramework):
         pass
 
     def binary_path(self, name):
-        return os.path.join(
+        return resolve_binary_path(
             self.config["environment"]["BUILDDIR"],
-            "bin",
-            name + self.config["environment"]["EXEEXT"],
+            name,
+            self.config["environment"]["EXEEXT"],
         )
 
     def srcdir_path(self, *parts):

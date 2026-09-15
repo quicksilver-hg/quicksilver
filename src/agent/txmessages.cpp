@@ -60,10 +60,13 @@ TxInventoryMessageDecodeResult DecodeTxInventoryMessage(const CSerializedNetMsg&
         }
 
         if (!stream.empty()) {
+            // See DecodeHeadersMessage: inventory.size() must not be a sibling argument
+            // of std::move(inventory) -- their evaluation order is unspecified.
+            const size_t decoded_count{inventory.size()};
             return InventoryDecodeResult(TxMessageResultCode::TRAILING_DATA,
                                          std::move(inventory),
                                          announced_count,
-                                         inventory.size());
+                                         decoded_count);
         }
 
         return InventoryDecodeResult(TxMessageResultCode::DECODED,

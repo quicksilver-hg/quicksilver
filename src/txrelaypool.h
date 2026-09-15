@@ -239,7 +239,14 @@ protected:
 
 public:
 
-    struct CTxRelayPoolEntry_Indices final : boost::multi_index::indexed_by<
+    // The index list is spelled out inline, rather than pulled up into a named
+    // struct that derives from indexed_by<>. Boost 1.92 turned indexed_by into a
+    // forward declaration only -- an Mp11 type list with no definition -- so
+    // deriving from it no longer compiles. Naming it bought nothing but shorter
+    // symbols; do not reintroduce the struct.
+    using indexed_transaction_set = boost::multi_index_container<
+        CTxRelayPoolEntry,
+        boost::multi_index::indexed_by<
             // sorted by txid
             boost::multi_index::hashed_unique<relaypoolentry_txid, SaltedTxidHasher>,
             // sorted by wtxid
@@ -261,11 +268,7 @@ public:
                 CompareTxRelayPoolEntryByTxWorkRate
             >
         >
-        {};
-    typedef boost::multi_index_container<
-        CTxRelayPoolEntry,
-        CTxRelayPoolEntry_Indices
-    > indexed_transaction_set;
+    >;
 
     /**
      * This mutex needs to be locked when accessing `mapTx` or other members

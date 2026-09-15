@@ -882,8 +882,11 @@ bool BlockManager::FindUndoPos(BlockValidationState& state, int nFile, FlatFileP
 bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationState& state, CBlockIndex& block)
 {
     AssertLockHeld(::cs_main);
-    // Parentheses keep decltype(auto) as a reference to the member, not a copy.
-    auto& cursor = *Assert(WITH_LOCK(cs_LastBlockFile, return (m_blockfile_cursor)));
+    // A copy, deliberately. This used to bind a reference to the guarded member and
+    // let it outlive the WITH_LOCK that produced it, so every use below -- including
+    // the undo_height update -- touched cs_LastBlockFile-guarded state with the lock
+    // released. clang's -Wthread-safety-reference-return is what named it.
+    const BlockfileCursor cursor{*Assert(WITH_LOCK(cs_LastBlockFile, return m_blockfile_cursor))};
 
     // Write undo information to disk
     if (block.GetUndoPos().IsNull()) {
@@ -927,7 +930,14 @@ bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationSt
                 LogPrintLevel(HgLog::BLOCKSTORE, HgLog::Level::Warning, "Failed to flush undo file %05i\n", pos.nFile);
             }
         } else if (pos.nFile == cursor.file_num && block.nHeight > cursor.undo_height) {
-            cursor.undo_height = block.nHeight;
+            // Re-test under the lock rather than writing through the snapshot: the
+            // condition was evaluated against a copy, and the member is what has to
+            // change. Re-testing also removes the window the old code raced in.
+            LOCK(cs_LastBlockFile);
+            if (m_blockfile_cursor && m_blockfile_cursor->file_num == pos.nFile &&
+                block.nHeight > m_blockfile_cursor->undo_height) {
+                m_blockfile_cursor->undo_height = block.nHeight;
+            }
         }
         // update nUndoPos in block index
         block.nUndoPos = pos.nPos;

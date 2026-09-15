@@ -25,6 +25,7 @@ from .address import create_deterministic_address_shg1_p2tr_op_true
 from .p2p import NetworkThread
 from .test_node import TestNode
 from .util import (
+    resolve_binary_path,
     MAX_NODES,
     PortSeed,
     assert_equal,
@@ -236,10 +237,10 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
             "quicksilver-agent": ("quicksilveragent", "QUICKSILVERAGENT"),
         }
         for binary, [attribute_name, env_variable_name] in binaries.items():
-            default_filename = os.path.join(
+            default_filename = resolve_binary_path(
                 self.config["environment"]["BUILDDIR"],
-                "bin",
-                binary + self.config["environment"]["EXEEXT"],
+                binary,
+                self.config["environment"]["EXEEXT"],
             )
             setattr(self.options, attribute_name, os.getenv(env_variable_name, default=default_filename))
 
