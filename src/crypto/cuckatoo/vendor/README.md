@@ -55,6 +55,8 @@ in-tree and are recorded in the git history:
   removal of the redundant `portable_endian.h` in favour of `compat/endian.h`.
 - `b689ae2f` — fix the CPU lean solver writing `Solution` structs past the end
   of its caller's stack buffer.
+- `4b1f28c5` — free the `compressor` objects both `graph` constructors allocate;
+  the vendored destructor freed neither, leaking 112 bytes per solver context.
 
 Include paths were flattened to be path-local when the closure was vendored
 (`c6ec788f`). Do not re-stamp these files with a Quicksilver copyright line;

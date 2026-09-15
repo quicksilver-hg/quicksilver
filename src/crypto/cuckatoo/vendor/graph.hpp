@@ -50,6 +50,13 @@ public:
       delete[] adjlist;
       delete[] links;
     }
+    // Quicksilver: both constructors `new` these and the vendored destructor
+    // freed neither, leaking one compressor object per partition per graph.
+    // `sharedmem` covers this graph's own adjlist/links only -- compressor's
+    // destructor already knows whether its node array was placement-new'd into
+    // borrowed memory, so deleting here is correct for both constructors.
+    delete compressu;
+    delete compressv;
     delete[] sols;
   }
 

@@ -215,8 +215,14 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
     mapper->setItemDelegate(delegate);
 
     /* setup/change UI elements when proxy IPs are invalid/valid */
-    ui->proxyIp->setCheckValidator(new ProxyAddressValidator(parent));
-    ui->proxyIpTor->setCheckValidator(new ProxyAddressValidator(parent));
+    // Parented to this dialog, not to `parent`: QValidatedLineEdit::setCheckValidator
+    // stores a raw pointer and takes no ownership, so the QObject parent is the only
+    // owner. Parenting to `parent` leaked both validators outright whenever the dialog
+    // was built parentless, and otherwise accumulated a pair on the parent for every
+    // time the user opened Settings. The validators are used only by this dialog's own
+    // line edits, so this dialog is the right owner.
+    ui->proxyIp->setCheckValidator(new ProxyAddressValidator(this));
+    ui->proxyIpTor->setCheckValidator(new ProxyAddressValidator(this));
     connect(ui->proxyIp, &QValidatedLineEdit::validationDidChange, this, &OptionsDialog::updateProxyValidationState);
     connect(ui->proxyIpTor, &QValidatedLineEdit::validationDidChange, this, &OptionsDialog::updateProxyValidationState);
     connect(ui->proxyPort, &QLineEdit::textChanged, this, &OptionsDialog::updateProxyValidationState);

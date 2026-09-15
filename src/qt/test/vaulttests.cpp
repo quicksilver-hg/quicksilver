@@ -327,8 +327,16 @@ uint256 SendCoins(CVault& vault, SendCoinsDialog& sendCoinsDialog, const CTxDest
 
     QSignalSpy prepare_finished(&sendCoinsDialog, &SendCoinsDialog::sendPreparationFinishedForTesting);
     QSignalSpy confirmation_ready(&sendCoinsDialog, &SendCoinsDialog::prepareSendConfirmationReadyForTesting);
-    QObject::connect(&sendCoinsDialog, &SendCoinsDialog::prepareSendConfirmationReadyForTesting, [&]() {
-        QTimer::singleShot(0, [&]() {
+    // `sendCoinsDialog` outlives this function, so a connection made directly to it
+    // survives the call. Every SendCoins() added another one, and the next call's
+    // signal then re-entered every stale handler with references into a frame that
+    // had already returned -- ASan: stack-use-after-return on `confirmation_text`,
+    // reached through the deferred single-shot below. Scoping both to a local
+    // context object severs them on every exit path, including the early returns,
+    // the same way the scoped_connection above bounds the vault signal.
+    QObject confirmation_scope;
+    QObject::connect(&sendCoinsDialog, &SendCoinsDialog::prepareSendConfirmationReadyForTesting, &confirmation_scope, [&]() {
+        QTimer::singleShot(0, &confirmation_scope, [&]() {
             QVERIFY(ConfirmOpenSendDialog(confirmation_text, confirm_type));
         });
     });
