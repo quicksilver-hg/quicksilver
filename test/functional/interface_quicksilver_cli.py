@@ -7,6 +7,8 @@
 
 from decimal import Decimal
 import re
+import subprocess
+import tempfile
 
 from test_framework.blocktools import COINBASE_MATURITY, quicksilver_sandbox_subsidy
 from test_framework.netutil import test_ipv6_local
@@ -106,6 +108,23 @@ class TestQuicksilverCli(QuicksilverTestFramework):
         self.log.info("Test -stdinrpcpass option")
         assert_equal(BLOCKS, self.nodes[0].cli(f'-rpcuser={user}', '-stdinrpcpass', input=password).getblockcount())
         assert_raises_process_error(1, 'Incorrect rpcuser or rpcpassword', self.nodes[0].cli(f'-rpcuser={user}', '-stdinrpcpass', input='foo').echo)
+
+        self.log.info("Test that -stdinrpcpass refuses stdin redirected from a regular file")
+        # TemporaryFile gives the child the same regular-file stdin as `bash < script.sh`.
+        with tempfile.TemporaryFile(mode='w+', encoding='utf-8') as stdin_file:
+            stdin_file.write(f'{password}\necho next-script-line\n')
+            stdin_file.seek(0)
+            assert_raises_process_error(
+                1,
+                '-stdinrpcpass refuses standard input redirected from a regular file',
+                subprocess.run,
+                [self.nodes[0].cli.binary, f'-datadir={self.nodes[0].cli.datadir}', f'-rpcuser={user}', '-stdinrpcpass', 'getblockcount'],
+                stdin=stdin_file,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=True,
+            )
 
         self.log.info("Test -stdin and -stdinrpcpass")
         assert_equal(['foo', 'bar'], self.nodes[0].cli(f'-rpcuser={user}', '-stdin', '-stdinrpcpass', input=f'{password}\nfoo\nbar').echo())

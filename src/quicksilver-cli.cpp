@@ -104,8 +104,8 @@ static void SetupCliArgs(ArgsManager& argsman)
     argsman.AddArg("-rpcwaittimeout=<n>", strprintf("Timeout in seconds to wait for the RPC server to start, or 0 for no timeout. (default: %d)", DEFAULT_WAIT_CLIENT_TIMEOUT), ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-rpcvault=<vaultname>", strprintf("Send RPC for non-default vault on RPC server (needs to exactly match corresponding -vault option passed to quicksilverd). This changes the RPC endpoint used, e.g. http://127.0.0.1:%u/vault/<vaultname>", defaultBaseParams->RPCPort()), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-stdin", "Read extra arguments from standard input, one per line until EOF/Ctrl-D (recommended for sensitive information such as passphrases). When combined with -stdinrpcpass, the first line from standard input is used for the RPC password.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-stdinrpcpass", "Read RPC password from standard input as a single line. When combined with -stdin, the first line from standard input is used for the RPC password. When combined with -stdinvaultpassphrase, -stdinrpcpass consumes the first line, and -stdinvaultpassphrase consumes the second.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-stdinvaultpassphrase", "Read vault passphrase from standard input as a single line. When combined with -stdin, the first line from standard input is used for the vault passphrase.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-stdinrpcpass", "Read RPC password from standard input as a single line. When combined with -stdin, the first line from standard input is used for the RPC password. When combined with -stdinvaultpassphrase, -stdinrpcpass consumes the first line, and -stdinvaultpassphrase consumes the second. Regular-file stdin and already-buffered terminal input are rejected.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-stdinvaultpassphrase", "Read vault passphrase from standard input as a single line. When combined with -stdin, the first line from standard input is used for the vault passphrase. Regular-file stdin and already-buffered terminal input are rejected.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
 }
 
 std::optional<std::string> RpcVaultName(const ArgsManager& args)
@@ -1207,8 +1207,14 @@ static int CommandLineRPC(int argc, char *argv[])
         }
         std::string rpcPass;
         if (gArgs.GetBoolArg("-stdinrpcpass", false)) {
+            if (StdinIsRegularFile()) {
+                throw std::runtime_error("-stdinrpcpass refuses standard input redirected from a regular file; pipe the RPC password to the command instead");
+            }
             NO_STDIN_ECHO();
-            if (!StdinReady()) {
+            if (StdinTerminal()) {
+                if (StdinHasBufferedInput()) {
+                    throw std::runtime_error("-stdinrpcpass refuses input that was already buffered on a terminal; run the command separately and enter the RPC password at the prompt");
+                }
                 fputs("RPC password> ", stderr);
                 fflush(stderr);
             }
@@ -1222,12 +1228,18 @@ static int CommandLineRPC(int argc, char *argv[])
         }
         std::vector<std::string> args = std::vector<std::string>(&argv[1], &argv[argc]);
         if (gArgs.GetBoolArg("-stdinvaultpassphrase", false)) {
-            NO_STDIN_ECHO();
             std::string vaultPass;
             if (args.size() < 1 || args[0].substr(0, 16) != "vaultpassphrase") {
                 throw std::runtime_error("-stdinvaultpassphrase is only applicable for vaultpassphrase(change)");
             }
-            if (!StdinReady()) {
+            if (StdinIsRegularFile()) {
+                throw std::runtime_error("-stdinvaultpassphrase refuses standard input redirected from a regular file; pipe the vault passphrase to the command instead");
+            }
+            NO_STDIN_ECHO();
+            if (StdinTerminal()) {
+                if (StdinHasBufferedInput()) {
+                    throw std::runtime_error("-stdinvaultpassphrase refuses input that was already buffered on a terminal; run the command separately and enter the vault passphrase at the prompt");
+                }
                 fputs("Vault passphrase> ", stderr);
                 fflush(stderr);
             }

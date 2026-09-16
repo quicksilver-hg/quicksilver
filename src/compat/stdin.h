@@ -14,6 +14,7 @@ struct NoechoInst {
 #define NO_STDIN_ECHO() NoechoInst _no_echo
 
 bool StdinTerminal();
-bool StdinReady();
+bool StdinHasBufferedInput();
+bool StdinIsRegularFile();
 
 #endif // QUICKSILVER_COMPAT_STDIN_H
