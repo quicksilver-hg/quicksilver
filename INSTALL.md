@@ -3,7 +3,7 @@
 Quicksilver 0.1.x is distributed as source. Choose the guide for your platform:
 
 - [Unix and Linux](doc/build-unix.md)
-- [macOS](doc/build-osx.md)
+- [macOS support status (unsupported)](doc/build-osx.md)
 - [Windows with Visual Studio](doc/build-windows-msvc.md)
 - [Windows cross-compilation](doc/build-windows.md)
 - [FreeBSD](doc/build-freebsd.md)
@@ -45,8 +45,8 @@ CMake silently builds the headless profile anyway.
 Always pass `-j`. Without it CMake compiles one file at a time, and a cold
 serial build of this tree took 53 minutes on an 8-core machine. With `-j` a
 cold GUI build took 20 minutes on 4 cores, so expect tens of minutes rather
-than minutes. `nproc` is Linux; use `$(sysctl -n hw.ncpu)` on macOS and the
-BSDs, or an explicit count such as `-j 8` anywhere else.
+than minutes. `nproc` is Linux; use `$(sysctl -n hw.ncpu)` on the BSDs, or an
+explicit count such as `-j 8` anywhere else.
 
 `ctest --test-dir build` runs serially and takes about 9 minutes for the GUI
 profile. A good run ends `100% tests passed, 0 tests failed out of 146`. On a

@@ -37,10 +37,10 @@ generated executable from the build directory:
 Build Quicksilver from source with the Windows build notes below, then run
 `quicksilver-qt.exe` or `quicksilverd.exe` from the generated build output.
 
-### macOS
+### macOS (unsupported)
 
-Build Quicksilver from source with the macOS build notes below, then run the
-generated app bundle or command-line executable from the build output.
+macOS is not a supported Quicksilver 0.1.x platform. See the macOS support
+status below for the technical blockers and the limits of the current CI jobs.
 
 ### Need Help?
 
@@ -56,7 +56,7 @@ Building
 The following are developer notes on how to build Quicksilver on your native platform. They are not complete guides, but include notes on the necessary libraries, compile flags, etc.
 
 - [Dependencies](dependencies.md)
-- [macOS Build Notes](build-osx.md)
+- [macOS Support Status (unsupported)](build-osx.md)
 - [Unix Build Notes](build-unix.md)
 - [Windows Build Notes (Visual Studio)](build-windows-msvc.md)
 - [Windows Build Notes (cross-compilation)](build-windows.md)

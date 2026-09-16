@@ -1,5 +1,10 @@
 # Fuzzing Quicksilver using libFuzzer
 
+macOS is not a supported Quicksilver 0.1.x platform. The macOS-specific notes
+below document the toolchain used by the non-gating CI portability jobs; they
+are not a supported build recipe. See the
+[macOS support status](build-osx.md) for the current arm64 blocker.
+
 ## Quickstart guide
 
 To quickly get started fuzzing Quicksilver using [libFuzzer](https://llvm.org/docs/LibFuzzer.html):
@@ -8,8 +13,7 @@ To quickly get started fuzzing Quicksilver using [libFuzzer](https://llvm.org/do
 $ git clone https://github.com/quicksilver-hg/quicksilver.git
 $ cd quicksilver/
 $ cmake --preset=libfuzzer
-# macOS users: If you have a problem with this step then make sure to read
-# "macOS hints for libFuzzer" below.
+# macOS CI maintainers: see "macOS CI toolchain notes for libFuzzer" below.
 $ cmake --build build_fuzz
 $ FUZZ=process_message build_fuzz/bin/fuzz
 # abort fuzzing using ctrl-c
@@ -124,7 +128,7 @@ Patience is useful; even with improved throughput, libFuzzer may need days and
 If you find coverage increasing inputs when fuzzing Quicksilver, keep them with
 the Quicksilver change under test.
 
-## macOS hints for libFuzzer
+## macOS CI toolchain notes for libFuzzer
 
 The default Clang/LLVM version supplied by Apple on macOS does not include
 fuzzing libraries, so macOS users will need to install a full version, for

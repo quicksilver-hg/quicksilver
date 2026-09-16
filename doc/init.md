@@ -1,6 +1,11 @@
 Sample init scripts and service configuration for quicksilverd
 ==========================================================
 
+macOS is not a supported Quicksilver 0.1.x platform. The macOS sections below
+only record runtime paths and launch-agent setup for an experimental self-built
+binary; they are not a supported build or deployment recipe. See the
+[macOS support status](build-osx.md).
+
 Sample scripts and configuration files for systemd, Upstart and OpenRC
 can be found in the contrib/init folder.
 

@@ -4,7 +4,7 @@ The current precise version for Qt 5 is specified in [qt.mk](../../depends/packa
 
 ## Compile and run
 
-See build instructions: [Unix](../../doc/build-unix.md), [macOS](../../doc/build-osx.md), [Windows](../../doc/build-windows-msvc.md), [FreeBSD](../../doc/build-freebsd.md), [NetBSD](../../doc/build-netbsd.md), [OpenBSD](../../doc/build-openbsd.md)
+See build instructions: [Unix](../../doc/build-unix.md), [macOS support status (unsupported)](../../doc/build-osx.md), [Windows](../../doc/build-windows-msvc.md), [FreeBSD](../../doc/build-freebsd.md), [NetBSD](../../doc/build-netbsd.md), [OpenBSD](../../doc/build-openbsd.md)
 
 When following your systems build instructions, make sure to install the `Qt` dependencies.
 
@@ -72,6 +72,11 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for general guidelines.
 ## Using Qt Creator as an IDE
 
 [Qt Creator](https://www.qt.io/product/development-tools) is a powerful tool which packages a UI designer tool (Qt Designer) and a C++ IDE into one application. This is especially useful if you want to change the UI layout.
+
+The macOS notes in this section describe Qt Creator itself, not a supported
+Quicksilver build. Quicksilver 0.1.x has never been built, run, or gated on
+macOS, and its GUI has never been launched there; see the
+[macOS support status](../../doc/build-osx.md).
 
 #### Download Qt Creator
 

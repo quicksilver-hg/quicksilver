@@ -70,7 +70,7 @@ ctest --test-dir build
 Build in parallel. Without `-j`, CMake compiles one file at a time: a cold
 serial build of this tree took 53 minutes on an 8-core machine. With `-j` it
 took 20 minutes on 4 cores. `nproc` is Linux; use `$(sysctl -n hw.ncpu)` on
-macOS and the BSDs, or an explicit count such as `-j 8` anywhere else.
+the BSDs, or an explicit count such as `-j 8` anywhere else.
 
 The GUI is opt-in for ordinary CMake builds:
 
