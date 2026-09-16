@@ -1223,6 +1223,24 @@ Upgrading LevelDB
 Extra care must be taken when upgrading LevelDB. This section explains issues
 you must be aware of.
 
+### Local modifications
+
+`src/leveldb` is **not** pristine upstream. There is no subtree tooling to warn
+you, and the linters skip the directory entirely, so this list is the only
+record:
+
+- `db/db_impl.cc` — `CompactionState::Output` gained a default constructor
+  zeroing `number` and `file_size`. `OpenCompactionOutputFile` pushes an
+  `Output` before `FinishCompactionOutputFile` writes `file_size`, so a failed
+  open left `DoCompactionWork`'s `bytes_written` loop reading an uninitialised
+  field. Upstream works around this by patching the loop out at CI time; we fix
+  the read instead, because the CI patch leaves the undefined behaviour in every
+  binary that is not built by CI and dirties the tree the version stamp is taken
+  from.
+
+Re-apply these when merging upstream changes, and extend the list if you add
+more.
+
 ### File Descriptor Counts
 
 In most configurations, we use the default LevelDB value for `max_open_files`,

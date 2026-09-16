@@ -11,6 +11,12 @@ FROM ${CI_IMAGE_NAME_TAG}
 ARG FILE_ENV
 ENV FILE_ENV=${FILE_ENV}
 
+# docker build does not inherit the GHA job env. 02_run_container.sh passes
+# this as --build-arg so 00_setup_env_native_asan.sh can install bpfcc without
+# rewriting the env file in the checkout (F-236).
+ARG INSTALL_BCC_TRACING_TOOLS
+ENV INSTALL_BCC_TRACING_TOOLS=${INSTALL_BCC_TRACING_TOOLS}
+
 COPY ./ci/retry/retry /usr/bin/retry
 COPY ./ci/test/00_setup_env.sh ./${FILE_ENV} ./ci/test/01_base_install.sh /ci_container_base/ci/test/
 

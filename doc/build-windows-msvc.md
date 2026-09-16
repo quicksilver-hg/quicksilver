@@ -39,15 +39,17 @@ Windows has no package manager to delegate to, so fetch the Tor Project's
 Expert Bundle:
 
 ```
-powershell -NoProfile -File contrib\tor\fetch-tor.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File contrib\tor\fetch-tor.ps1
 ```
 
 Windows PowerShell 5.1 — the one that ships with Windows — is enough; PowerShell
-7 (`pwsh`) is not required and is not present on a stock machine. Run it as a
-**file**, as above: a script whose text is piped in has no `$PSScriptRoot`, so
-the `-OutDir` default cannot resolve and it fails before it does anything, and
-the error names `Join-Path` rather than the transport. Pass `-OutDir <path>` if
-you want it somewhere other than `build\tor`.
+7 (`pwsh`) is not required and is not present on a stock machine.
+`-ExecutionPolicy Bypass` applies only to this PowerShell process; it does not
+change the policy for the user or machine. Run the script as a **file**, as
+above: a script whose text is piped in has no `$PSScriptRoot`, so the `-OutDir`
+default cannot resolve and it fails before it does anything, and the error names
+`Join-Path` rather than the transport. Pass `-OutDir <path>` if you want it
+somewhere other than `build\tor`.
 
 The script verifies a pinned SHA-256 **before** extracting, and deletes the
 download on a mismatch. It extracts into `build\tor\` and prints where

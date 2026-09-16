@@ -34,27 +34,10 @@ echo "=== BEGIN env ==="
 env
 echo "=== END env ==="
 
-(
-  # compact->outputs[i].file_size is uninitialized memory, so reading it is UB.
-  # The statistic bytes_written is only used for logging, which is disabled in
-  # CI, so as a temporary minimal fix to work around UB and CI failures, leave
-  # bytes_written unmodified.
-  # Tee patch to stdout to make it clear CI is testing modified code.
-  tee >(patch -p1) <<'EOF'
---- a/src/leveldb/db/db_impl.cc
-+++ b/src/leveldb/db/db_impl.cc
-@@ -1028,9 +1028,6 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
-       stats.bytes_read += compact->compaction->input(which, i)->file_size;
-     }
-   }
--  for (size_t i = 0; i < compact->outputs.size(); i++) {
--    stats.bytes_written += compact->outputs[i].file_size;
--  }
-
-   mutex_.Lock();
-   stats_[compact->compaction->level() + 1].Add(stats);
-EOF
-)
+# Do not patch the source tree here. GenerateBuildInfo.cmake runs
+# `git diff-index --quiet HEAD` during the build, so a working-tree edit is
+# stamped -dirty onto the binary (F-236). CompactionState::Output now
+# initialises file_size; that was the uninitialised read this patch hid.
 
 if [ "$USE_BUSY_BOX" = "true" ]; then
   echo "Setup to use BusyBox utils"

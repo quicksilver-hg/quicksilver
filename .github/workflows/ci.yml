@@ -257,6 +257,11 @@ jobs:
     env:
       FILE_ENV: "./ci/test/00_setup_env_native_asan.sh"
       DANGER_CI_ON_HOST_FOLDERS: 1
+      # 00_setup_env_native_asan.sh already honours this. Passing it as a job
+      # env (and as a docker --build-arg in 02_run_container.sh) is what lets
+      # the image build install bpfcc without sed-ing a tracked file, which
+      # GenerateBuildInfo.cmake would otherwise stamp as -dirty (F-236).
+      INSTALL_BCC_TRACING_TOOLS: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -274,11 +279,6 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ github.job }}-ccache-${{ github.run_id }}
           restore-keys: ${{ github.job }}-ccache-
-
-      - name: Enable bpfcc script
-        # In the image build step, no external environment variables are available,
-        # so any settings will need to be written to the settings env file:
-        run: sed -i "s|\${INSTALL_BCC_TRACING_TOOLS}|true|g" ./ci/test/00_setup_env_native_asan.sh
 
       - name: CI script
         run: ./ci/test_run_all.sh

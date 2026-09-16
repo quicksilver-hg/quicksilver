@@ -55,6 +55,10 @@ struct DBImpl::Writer {
 struct DBImpl::CompactionState {
   // Files produced by compaction
   struct Output {
+    // OpenCompactionOutputFile pushes an Output before FinishCompactionOutputFile
+    // writes file_size. Default both so DoCompactionWork's bytes_written loop
+    // cannot read an uninitialised field if that open fails (UBSan, F-236).
+    Output() : number(0), file_size(0) {}
     uint64_t number;
     uint64_t file_size;
     InternalKey smallest, largest;

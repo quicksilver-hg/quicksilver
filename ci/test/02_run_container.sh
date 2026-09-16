@@ -52,6 +52,7 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
       --file "${BASE_READ_ONLY_DIR}/ci/test_imagefile" \
       --build-arg "CI_IMAGE_NAME_TAG=${CI_IMAGE_NAME_TAG}" \
       --build-arg "FILE_ENV=${FILE_ENV}" \
+      --build-arg "INSTALL_BCC_TRACING_TOOLS=${INSTALL_BCC_TRACING_TOOLS}" \
       $MAYBE_CPUSET \
       --platform="${CI_IMAGE_PLATFORM}" \
       --label="${CI_IMAGE_LABEL}" \

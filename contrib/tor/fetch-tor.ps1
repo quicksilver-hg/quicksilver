@@ -17,7 +17,7 @@
 # digest from that release's own sha256sums-unsigned-build.txt:
 #   https://dist.torproject.org/torbrowser/<version>/sha256sums-unsigned-build.txt
 #
-# Usage:  powershell -NoProfile -File contrib\tor\fetch-tor.ps1 [-OutDir <path>]
+# Usage:  powershell -NoProfile -ExecutionPolicy Bypass -File contrib\tor\fetch-tor.ps1 [-OutDir <path>]
 #
 # Windows PowerShell 5.1 is enough -- pwsh is NOT required. But it must be run
 # as a FILE: piped in, or passed with -Command, $PSScriptRoot is empty and the
@@ -44,7 +44,8 @@ if (-not $OutDir) { $OutDir = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '.
 
 $Version = '15.0.22'
 $Archive = "tor-expert-bundle-windows-x86_64-$Version.tar.gz"
-$Url     = "https://dist.torproject.org/torbrowser/$Version/$Archive"
+$DistUrl = "https://dist.torproject.org/torbrowser/$Version/$Archive"
+$ArchiveUrl = "https://archive.torproject.org/tor-package-archive/torbrowser/$Version/$Archive"
 # From that release's sha256sums-unsigned-build.txt, and independently recomputed
 # over the downloaded archive on 2026-09-09.
 $Sha256  = '231dad6b9cb401a54c260db7046965ef04e4f72ff071b140d423fb5da281ab1e'
@@ -53,8 +54,17 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $Download = Join-Path $OutDir $Archive
 
 if (-not (Test-Path $Download)) {
-    Write-Host "Downloading $Url"
-    Invoke-WebRequest -Uri $Url -OutFile $Download -UseBasicParsing
+    try {
+        Write-Host "Downloading $DistUrl"
+        Invoke-WebRequest -Uri $DistUrl -OutFile $Download -UseBasicParsing
+    } catch {
+        # Tor rotates old releases from dist to archive. The pinned digest below
+        # is the integrity boundary, so using the official archive as a mirror
+        # does not weaken verification.
+        Write-Warning "The release is no longer available from dist; trying $ArchiveUrl"
+        Remove-Item -Force $Download -ErrorAction SilentlyContinue
+        Invoke-WebRequest -Uri $ArchiveUrl -OutFile $Download -UseBasicParsing
+    }
 }
 
 $Actual = (Get-FileHash -Path $Download -Algorithm SHA256).Hash.ToLowerInvariant()

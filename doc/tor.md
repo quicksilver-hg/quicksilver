@@ -108,6 +108,18 @@ The node's Tor exits with the node.
 - `-bundledtorpath=<path>` names the `tor` executable. By default the desktop
   looks for one beside its own executable, then on `PATH`.
 
+On Windows, a source checkout can fetch the pinned Tor Expert Bundle and print
+the resulting executable path with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File contrib\tor\fetch-tor.ps1
+```
+
+The bypass applies only to that PowerShell process; it does not change the
+user's or machine's execution policy. The script verifies the archive's pinned
+SHA-256 before extracting it under `build\tor`. See the
+[Windows build guide](build-windows-msvc.md#4-tor-desktop-only) for details.
+
 **Where things are:** `<datadir>/tor/torrc` (regenerated at every start — edits
 are lost), `<datadir>/tor/data` (Tor's own state), `<datadir>/tor/tor.log`
 (Tor's log, and the first place to look when startup fails),
