@@ -191,6 +191,20 @@ class GeneratedDocsTest(QuicksilverTestFramework):
         return bash if probe.returncode == 0 and probe.stdout.strip() == "ok" else None
 
     def check_example_conf(self):
+        if platform.system() == "Windows":
+            # Same reason check_man_pages() skips: the committed conf is
+            # generated from quicksilverd --help on a POSIX build, and -daemon /
+            # -daemonwait are registered only #if HAVE_DECL_FORK (src/init.cpp),
+            # so a Windows binary never prints them. The diff that produces is
+            # the platform's, not a stale file -- regenerating here would only
+            # move the failure to every other platform. The POSIX assertion
+            # below keeps its full strength.
+            self.log.warning(
+                "share/examples/quicksilver.conf describes a POSIX build; "
+                "it is NOT verified on Windows"
+            )
+            return
+
         generator = self.srcdir_path("contrib", "devtools", "gen-quicksilver-conf.sh")
         bash = self.usable_bash()
         if bash is None:
