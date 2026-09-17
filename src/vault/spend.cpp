@@ -957,6 +957,11 @@ std::optional<bilingual_str> GrindTransactionPow(CVault& vault, CMutableTransact
 
     cuckatoo::Cycle cyc{};
     uint32_t won = 0;
+    // F-253: cycles the solver produced that did not verify and were swept past. The
+    // transfer still gets a sound proof, so this is not an error path -- it is reported
+    // only when non-zero, below, because otherwise a solver emitting false cycles is
+    // indistinguishable from one meeting hard graphs, and the sender just waits longer.
+    uint32_t discarded_cycles = 0;
     // Sandbox remains fast on E19. Live and publictest E28 transfers may also
     // fall back to the CPU so a missing or failed accelerator never strands a
     // user, although that path can take substantially longer.
@@ -968,7 +973,7 @@ std::optional<bilingual_str> GrindTransactionPow(CVault& vault, CMutableTransact
         // misses the target comes back around, and a caller that asked to stop should
         // not be made to wait out another one.
         if (tx_proof_cancel && tx_proof_cancel()) return _("Transfer proof-of-work canceled");
-        if (!cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), cp.nTxEdgeBits, start_nonce, 1u << 24, cyc, won, cpu_ok, tx_proof_progress, tx_proof_cancel)) {
+        if (!cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), cp.nTxEdgeBits, start_nonce, 1u << 24, cyc, won, cpu_ok, tx_proof_progress, tx_proof_cancel, /*gpu_status=*/nullptr, &discarded_cycles)) {
             // A cancelled solve also returns false, so ask before blaming the hardware:
             // reporting a missing GPU solver to someone who pressed Cancel sends them
             // looking for a fault that is not there.
@@ -989,6 +994,12 @@ std::optional<bilingual_str> GrindTransactionPow(CVault& vault, CMutableTransact
             return _("Could not produce per-tx proof-of-work");
         }
         start_nonce = won + 1;
+    }
+    if (discarded_cycles > 0) {
+        // Not a failure: the proof below is sound and the transfer proceeds. Recorded
+        // because the alternative is a grind that is simply slower for no stated reason.
+        vault.VaultLogPrintf("tx-pow: solver produced %u cycle(s) that failed verification; swept past\n",
+                             discarded_cycles);
     }
     txNew.nCycle = cyc;
     txNew.nPowNonce = won;

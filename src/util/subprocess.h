@@ -1085,9 +1085,11 @@ inline void Popen::execute_process() noexcept(false)
     command_line += L" ";
   }
 
-  // CreateProcessW can modify szCmdLine so we allocate needed memory
-  wchar_t *szCmdline = new wchar_t[command_line.size() + 1];
-  wcscpy_s(szCmdline, command_line.size() + 1, command_line.c_str());
+  // CreateProcessW can modify szCmdLine so we allocate a writable,
+  // null-terminated copy. Own it so both the success path and the
+  // CalledProcessError throw below release the buffer.
+  std::vector<wchar_t> szCmdline(command_line.size() + 1);
+  wcscpy_s(szCmdline.data(), szCmdline.size(), command_line.c_str());
   PROCESS_INFORMATION piProcInfo;
   STARTUPINFOW siStartInfo;
   BOOL bSuccess = FALSE;
@@ -1110,7 +1112,7 @@ inline void Popen::execute_process() noexcept(false)
 
   // Create the child process.
   bSuccess = CreateProcessW(NULL,
-                            szCmdline,    // command line
+                            szCmdline.data(), // command line
                             NULL,         // process security attributes
                             NULL,         // primary thread security attributes
                             TRUE,         // handles are inherited

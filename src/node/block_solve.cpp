@@ -101,6 +101,13 @@ bool SolveBlockPoW(ChainstateManager& chainman, CBlock& block, uint64_t& max_tri
     cuckatoo::GpuSolveStatus& gpu_status{out_status ? *out_status : local_status};
     bool warned_no_device{false};
 
+    // F-253: a cycle the solver produced that does not verify. The sweep resumes and the
+    // block still gets a sound proof, so this is not a failure -- but it is the same
+    // indistinguishable-from-an-unlucky-grind shape as the two faults above. Without it
+    // the only symptom of a solver emitting false cycles is that mining got slower.
+    uint32_t discarded_cycles{0};
+    uint32_t warned_discarded{0};
+
     while (max_tries > 0 && !cancel()) {
         const uint32_t budget = static_cast<uint32_t>(std::min<uint64_t>(max_tries, 4096));
         const auto pre = block.PrePowBytes();
@@ -108,7 +115,14 @@ bool SolveBlockPoW(ChainstateManager& chainman, CBlock& block, uint64_t& max_tri
         uint32_t won = 0;
         const bool solved = cuckatoo::CuckatooSolve(pre, cparams.nEdgeBits, block.nNonce, budget,
                                                     cyc, won, cpu_fallback,
-                                                    progress, cancel, &gpu_status);
+                                                    progress, cancel, &gpu_status,
+                                                    &discarded_cycles);
+        if (discarded_cycles > warned_discarded) {
+            LogWarning(HgLog::FORGE,
+                       "degraded reason=solver-cycle-failed-verify count=%u edgebits=%d fix=none-work-continues\n",
+                       discarded_cycles, cparams.nEdgeBits);
+            warned_discarded = discarded_cycles;
+        }
         if (!warned_no_device && gpu_status == cuckatoo::GpuSolveStatus::kNoCudaDevice) {
             warned_no_device = true;
             LogWarning(HgLog::FORGE,

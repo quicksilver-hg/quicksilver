@@ -209,6 +209,66 @@ BOOST_AUTO_TEST_CASE(verify_accepts_golden28_rejects_tamper_and_wrong_size)
     BOOST_CHECK(!cuckatoo::CuckatooVerify(GOLDEN28_CYCLE, GOLDEN28_KEYS, 29));  // 29 is not a dispatched graph size
 }
 
+//! F-253: a cycle the solver returns must be one consensus accepts.
+//!
+//! The vendored lean solver computes the cuckatoo check on every cycle it finds and
+//! discards the verdict (its only consumer is print_log, and SQUASH_OUTPUT is 1 in both
+//! solve_*.cpp), so a false cycle used to reach the caller indistinguishable from a sound
+//! one and was rejected later by consensus -- after the work had been paid for.
+//! CuckatooSolveBytes now self-verifies the CPU result the way it always has the GPU's.
+//!
+//! \warning This is a WEAK regression test, and deliberately recorded as such: before the
+//! fix it fails only on a pre-image that happens to produce a false cycle, which is rare.
+//! It locks in the invariant; it does not prove the bug is gone. The strong evidence is
+//! structural -- SweepVerified cannot return a cycle it has not verified.
+BOOST_AUTO_TEST_CASE(solve_bytes_never_returns_a_cycle_consensus_rejects)
+{
+    uint32_t discarded_total{0};
+    for (unsigned char seed = 0; seed < 24; ++seed) {
+        // Vary length as well as content: the tx pre-image is variable-length and its
+        // trailing 4 bytes are the nonce slot, so alignment is part of what is exercised.
+        std::vector<unsigned char> pre(33 + (seed % 7), static_cast<unsigned char>(0x40 + seed));
+        cuckatoo::Cycle cyc{};
+        uint32_t won{0};
+        uint32_t discarded{0};
+        const bool ok = cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), /*edgebits=*/19,
+                                                     /*start=*/0, /*max=*/1u << 20, cyc, won,
+                                                     /*cpu_fallback=*/true, {}, {},
+                                                     /*gpu_status=*/nullptr, &discarded);
+        BOOST_REQUIRE_MESSAGE(ok, "no cycle for seed " << int(seed));
+
+        // Rebuild the keys exactly as consensus does, from the winning nonce.
+        pre[pre.size() - 4] = static_cast<unsigned char>(won & 0xff);
+        pre[pre.size() - 3] = static_cast<unsigned char>((won >> 8) & 0xff);
+        pre[pre.size() - 2] = static_cast<unsigned char>((won >> 16) & 0xff);
+        pre[pre.size() - 1] = static_cast<unsigned char>((won >> 24) & 0xff);
+        const cuckatoo::Keys keys = cuckatoo::CuckatooSetHeader(pre.data(), pre.size());
+        BOOST_CHECK_MESSAGE(cuckatoo::CuckatooVerify(cyc, keys, 19),
+                            "solver returned a cycle consensus rejects, seed " << int(seed)
+                            << " nonce " << won);
+        discarded_total += discarded;
+    }
+    // Not an assertion that the count is zero -- a discard is correct behaviour, not a
+    // failure. What matters is that the out-param is usable: a caller can tell a solver
+    // emitting false cycles apart from one merely meeting hard graphs.
+    BOOST_TEST_MESSAGE("cycles discarded across the sweep: " << discarded_total);
+}
+
+//! The counter is an out-param the caller owns; the solver must not touch it when there
+//! is nothing to report, so a caller can accumulate across calls without resetting.
+BOOST_AUTO_TEST_CASE(discarded_cycles_out_param_is_left_alone_on_a_clean_solve)
+{
+    std::vector<unsigned char> pre(37, 0xAB);
+    cuckatoo::Cycle cyc{};
+    uint32_t won{0};
+    uint32_t discarded{7};  // a sentinel the solver has no business clearing
+    BOOST_REQUIRE(cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), /*edgebits=*/19,
+                                               /*start=*/0, /*max=*/1u << 20, cyc, won,
+                                               /*cpu_fallback=*/true, {}, {},
+                                               /*gpu_status=*/nullptr, &discarded));
+    BOOST_CHECK_GE(discarded, 7u);  // only ever incremented, never reset
+}
+
 BOOST_AUTO_TEST_CASE(unsupported_edgebits_29_is_not_dispatched)
 {
     std::array<unsigned char, cuckatoo::PREPOW_BYTES> prepow{};
