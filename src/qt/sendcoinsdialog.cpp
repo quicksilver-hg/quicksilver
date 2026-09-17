@@ -906,9 +906,9 @@ void SendCoinsDialog::clear()
     coinControlUpdateLabels();
 
     // Remove entries until only one left
-    while(ui->entries->count())
-    {
-        ui->entries->takeAt(0)->widget()->deleteLater();
+    while (QLayoutItem* item = ui->entries->takeAt(0)) {
+        item->widget()->deleteLater();
+        delete item;
     }
     addEntry();
 

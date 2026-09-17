@@ -43,6 +43,36 @@ int64_t FindOneCycle(const cuckatoo::bench::SolverVTable& vt, unsigned threads,
     vt.destroy(ctx);
     return winning;
 }
+
+// F-254: trimming must cover every edge-bitmap word even when nthreads does
+// not divide NEDGES/64. The observable contract is thread-count independence:
+// solve_one at 1 thread (always covers the whole bitmap) and at 12 threads
+// (8 words / 512 edges of tail were skipped before the fix at E19) must agree
+// on whether a cycle was found and, if so, on the cycle; any reported cycle
+// must verify. A check that only runs when 12 threads return a cycle is
+// vacuous after the fix, because the pinned tail-cycle graph then reports none.
+void RequireSolveAgreesAt1And12(const cuckatoo::bench::SolverVTable& vt,
+                                const std::vector<unsigned char>& prepow,
+                                uint32_t nonce)
+{
+    cuckatoo::Cycle c1{}, c12{};
+    void* ctx1 = vt.create(1);
+    BOOST_REQUIRE(ctx1 != nullptr);
+    const bool found1 = vt.solve_one(ctx1, prepow.data(), prepow.size(), nonce, c1);
+    vt.destroy(ctx1);
+
+    void* ctx12 = vt.create(12);
+    BOOST_REQUIRE(ctx12 != nullptr);
+    const bool found12 = vt.solve_one(ctx12, prepow.data(), prepow.size(), nonce, c12);
+    vt.destroy(ctx12);
+
+    BOOST_CHECK_EQUAL(found1, found12);
+    if (!found1 || !found12) return;
+    BOOST_CHECK(c1 == c12);
+    const auto keyed = KeyedPrepow(prepow, nonce);
+    BOOST_CHECK_MESSAGE(vt.verify_one(c1, keyed.data(), keyed.size()),
+                        "nondivisor thread count returned a cycle the verifier rejects");
+}
 } // namespace
 
 // Every size the calibration sweep needs must be built and registered, plus E19,
@@ -83,6 +113,39 @@ BOOST_AUTO_TEST_CASE(found_cycle_verifies_against_consensus_at_e19)
     BOOST_CHECK_MESSAGE(cuckatoo::CuckatooVerify(cyc, keys, 19),
                         "bench solver produced a cycle the CONSENSUS verifier "
                         "rejects at E19 — no timing from this harness is usable");
+}
+
+// Pinned E19 graph recovered from the original probe: 38-byte pre-pow
+// 85 1b b7 + c5 * 35, nonce 9. Before the fix, 12 threads return a cycle
+// whose last edges are 524201 and 524209 (both >= tail_start 523776) and
+// 1 thread does not, so the agreement check fails on ce04fc1e. After the
+// fix both thread counts report no cycle.
+BOOST_AUTO_TEST_CASE(nondivisor_thread_count_agrees_on_pinned_tail_graph)
+{
+    const auto* vt = cuckatoo::bench::Lookup(19);
+    BOOST_REQUIRE(vt != nullptr);
+
+    std::vector<unsigned char> prepow(38, 0xc5);
+    prepow[0] = 0x85;
+    prepow[1] = 0x1b;
+    prepow[2] = 0xb7;
+    RequireSolveAgreesAt1And12(*vt, prepow, 9);
+}
+
+// Independent graph that still holds a real 42-cycle after a complete trim,
+// so the verify branch actually executes. Header is the calibration vector
+// used by qscalibrate; nonce 19211. Before the fix, 12 threads also emit
+// three extra tail cycles (last edges 524252..524254) that solve_one does
+// not return (it copies sols[0] only); after the fix both thread counts
+// return the same verifying cycle.
+BOOST_AUTO_TEST_CASE(nondivisor_thread_count_agrees_on_calibration_vector)
+{
+    const auto* vt = cuckatoo::bench::Lookup(19);
+    BOOST_REQUIRE(vt != nullptr);
+
+    std::vector<unsigned char> prepow(80, 0);
+    std::memcpy(prepow.data(), "quicksilver-calibration-vector", 30);
+    RequireSolveAgreesAt1And12(*vt, prepow, 19211);
 }
 
 // The bench verifier must agree with the consensus verifier where both exist,

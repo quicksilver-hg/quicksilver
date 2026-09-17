@@ -43,6 +43,18 @@ sources, bundled by upstream Cuckoo Cycle. They are tri-licensed CC0 / OpenSSL
 / Apache-2.0 at the recipient's option, and each carries its own notice in the
 file header. Quicksilver elects **Apache-2.0**.
 
+## Upstream revision
+
+The CPU-side files in this directory were imported from
+<https://github.com/tromp/cuckoo> commit
+`a69ad1d6beea9b063b89f8ce8b3e3c7af4c90e88` (2026-04-18, "more precise siphash
+bounties"). The original vendoring commit `c6ec788f` carries the upstream
+`cuckoo-master.zip`; that zip's comment is the commit id above. After
+include-path flattening, those 11 CPU-side files match that revision.
+
+The later GPU import (`853e9e2e`) brought `siphash.cuh`, which also matches
+`a69ad1d6`. `lean.cu` does not, and is not pinned to an upstream commit.
+
 ## Local modifications
 
 These files are *not* pristine. Portability and correctness changes were made
@@ -57,6 +69,10 @@ in-tree and are recorded in the git history:
   of its caller's stack buffer.
 - `4b1f28c5` — free the `compressor` objects both `graph` constructors allocate;
   the vendored destructor freed neither, leaking 112 bytes per solver context.
+- `36877a85` — trim every edge-bitmap word in `count_node_deg` and
+  `kill_leaf_edges` when `nthreads` does not divide `NEDGES/64`. The truncated
+  `nloops = NEDGES/64/nthreads` walk left the remainder unvisited, so a
+  non-power-of-two thread count could return a 42-cycle `verify()` rejects.
 
 Include paths were flattened to be path-local when the closure was vendored
 (`c6ec788f`). Do not re-stamp these files with a Quicksilver copyright line;

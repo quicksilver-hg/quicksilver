@@ -47,6 +47,16 @@ def iter_owned_source(cuckatoo: Path) -> list[Path]:
     return sorted(paths)
 
 
+def iter_test_cuckatoo_sources(repo_root: Path) -> list[Path]:
+    # The owned-source scan only walks src/crypto/cuckatoo/. A test TU under
+    # src/test/cuckatoo_*.cpp that includes vendor/cuckatoo.h would otherwise
+    # smuggle a second verifier seam past this policy.
+    test_dir = repo_root / "src/test"
+    if not test_dir.is_dir():
+        return []
+    return sorted(path for path in test_dir.glob("cuckatoo_*.cpp") if path.is_file())
+
+
 def include_lines(path: Path) -> list[tuple[int, str]]:
     lines = []
     for line_number, line in enumerate(read(path).splitlines(), start=1):
@@ -171,6 +181,26 @@ def check_tree(repo_root: Path) -> list[str]:
                 f"{rel(header, repo_root)}: supported edgebits are 19 and 28, not 29"
             )
 
+    # Tokens match any include form (`"vendor/cuckatoo.h"` or
+    # `<crypto/cuckatoo/vendor/cuckatoo.h>`). Allowlist is the filename stem
+    # plus the token it may mention — currently only the F-255 verify-code TU.
+    allowed_test_vendor_includes = {
+        "cuckatoo_verify_codes_tests.cpp": ("vendor/cuckatoo.h",),
+    }
+    test_guarded_tokens = (
+        "vendor/cuckatoo.h",
+        "vendor/lean.cpp",
+        "vendor/lean.cu",
+        "siphashxN.h",
+    )
+    for path in iter_test_cuckatoo_sources(repo_root):
+        allowed = allowed_test_vendor_includes.get(path.name, ())
+        for line_number, line in include_lines(path):
+            for token in test_guarded_tokens:
+                if token in line and token not in allowed:
+                    violations.append(
+                        f"{rel(path, repo_root)}:{line_number}: disallowed direct include {token}")
+
     return violations
 
 
@@ -215,6 +245,15 @@ def create_valid_fixture(repo_root: Path) -> Path:
         "namespace cuckatoo_bench_e@QS_EDGEBITS@ {\n"
         '#include "vendor/lean.cpp"\n'
         "}\n",
+    )
+    write(
+        repo_root / "src/test/cuckatoo_verify_codes_tests.cpp",
+        '#include <crypto/cuckatoo/vendor_prelude.h>\n'
+        '#include <crypto/cuckatoo/vendor/cuckatoo.h>\n',
+    )
+    write(
+        repo_root / "src/test/cuckatoo_tests.cpp",
+        '#include <crypto/cuckatoo/cuckatoo.h>\n',
     )
     return cuckatoo
 
@@ -307,6 +346,18 @@ def run_self_tests() -> int:
         cuckatoo = create_valid_fixture(stale_edgebits)
         write(cuckatoo / "cuckatoo.h", "//! edgebits must be in {19,29}.\n")
         failures.extend(expect_violation("stale edgebits comment", stale_edgebits, "19 and 28, not 29"))
+
+        # An undeclared vendor/cuckatoo.h include in a *different*
+        # src/test/cuckatoo_*.cpp must be caught. The F-255 TU is allowlisted;
+        # cuckatoo_tests.cpp is not.
+        bad_test_include = tmp / "bad_test_include"
+        create_valid_fixture(bad_test_include)
+        write(
+            bad_test_include / "src/test/cuckatoo_tests.cpp",
+            '#include <crypto/cuckatoo/vendor/cuckatoo.h>\n',
+        )
+        failures.extend(expect_violation("undeclared test vendor include", bad_test_include,
+                                         "src/test/cuckatoo_tests.cpp"))
     finally:
         shutil.rmtree(tmp)
 

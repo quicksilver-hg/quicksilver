@@ -172,9 +172,8 @@ public:
   
     memset(hashes, 0, NPREFETCH * sizeof(u64)); // allow many nonleaf.set(0) to reduce branching
     u32 nidx = 0;
-    word_t nloops = NEDGES / 64 / nthreads;
-    for (word_t loop = 0; loop < nloops; loop++) {
-      word_t block = 64 * (id + loop * nthreads);
+    // Stride every bitmap word, including the remainder when nthreads does not divide NEDGES/64.
+    for (u64 block = 64 * (u64)id; block < NEDGES; block += 64 * (u64)nthreads) {
       u64 alive64 = alive.block(block);
       for (word_t nonce = block-1; alive64; ) { // -1 compensates for 1-based ffs
         u32 ffs = (u32)std::countr_zero(alive64) + 1;  // 1-based; alive64 != 0 here (portable __builtin_ffsll)
@@ -202,9 +201,8 @@ public:
     for (int i=0; i < NPREFETCH; i++)
       hashes[i] = 1; // allow many nonleaf.test(0) to reduce branching
     u32 nidx = 0;
-    word_t nloops = NEDGES / 64 / nthreads;
-    for (word_t loop = 0; loop < nloops; loop++) {
-      word_t block = 64 * (id + loop * nthreads);
+    // Match count_node_deg's full-word coverage, with disjoint words per thread.
+    for (u64 block = 64 * (u64)id; block < NEDGES; block += 64 * (u64)nthreads) {
       u64 alive64 = alive.block(block);
       for (word_t nonce = block-1; alive64; ) { // -1 compensates for 1-based ffs
         u32 ffs = (u32)std::countr_zero(alive64) + 1;  // 1-based; alive64 != 0 here (portable __builtin_ffsll)

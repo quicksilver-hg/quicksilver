@@ -130,6 +130,7 @@ src/test/cuckatoo_bench_gpu_csv_tests.cpp
 src/test/cuckatoo_bench_registry_tests.cpp
 src/test/cuckatoo_bench_solve_tests.cpp
 src/test/cuckatoo_tests.cpp
+src/test/cuckatoo_verify_codes_tests.cpp
 src/test/gpu_detection_tests.cpp
 src/test/gpu_parity_tests.cpp
 src/test/gpu_solver_tests.cpp
