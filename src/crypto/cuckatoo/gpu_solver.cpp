@@ -152,6 +152,7 @@ std::optional<std::string> SolverFault(GpuSolveStatus status, bool cpu_fallback)
         return "The GPU solver stopped reporting progress and was killed; see the debug log";
     }
     assert(false);
+    return "The GPU solver reported an unrecognised status; see the debug log";
 }
 
 bool SolverMissing(GpuSolveStatus status, bool cpu_fallback)
