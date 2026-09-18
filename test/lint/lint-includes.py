@@ -43,16 +43,18 @@ EXPECTED_CUCKATOO_CPP_INCLUDES = [
 ]
 
 EXPECTED_CUCKATOO_QUOTE_INCLUDES = [
-    'src/crypto/cuckatoo/keys.cpp:#include "vendor/blake2.h"',
+    'src/crypto/cuckatoo/blake2_prelude.h:#include "vendor/blake2.h"',
+    'src/crypto/cuckatoo/keys.cpp:#include "blake2_prelude.h"',
     'src/crypto/cuckatoo/keys.cpp:#include "vendor/portable_endian.h"',
-    'src/crypto/cuckatoo/proofhash.cpp:#include "vendor/blake2.h"',
+    'src/crypto/cuckatoo/proofhash.cpp:#include "blake2_prelude.h"',
     'src/crypto/cuckatoo/solve_19.cpp:#include "vendor/lean.cpp"',
     'src/crypto/cuckatoo/solve_28.cpp:#include "vendor/lean.cpp"',
     'src/crypto/cuckatoo/vendor/cuckatoo.h:#include "blake2.h"',
     'src/crypto/cuckatoo/vendor/cuckatoo.h:#include "siphash.hpp"',
     'src/crypto/cuckatoo/vendor/lean.cpp:#include "lean.hpp"',
-    'src/crypto/cuckatoo/vendor_prelude.h:#include "vendor/blake2.h"',
+    'src/crypto/cuckatoo/vendor_prelude.h:#include "blake2_prelude.h"',
     'src/crypto/cuckatoo/vendor_prelude.h:#include "vendor/siphash.hpp"',
+    'src/crypto/cuckatoo/vendor_prelude_solve.h:#include "blake2_prelude.h"',
     'src/crypto/cuckatoo/verify_19.cpp:#include "vendor/cuckatoo.h"',
     'src/crypto/cuckatoo/verify_28.cpp:#include "vendor/cuckatoo.h"',
 ]

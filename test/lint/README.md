@@ -154,6 +154,22 @@ Run directly from the repository root:
 python3 test/lint/lint_wrapped_prose.py --self-test
 ```
 
+lint-cuckatoo-blake2-include.py
+===============================
+Checks that the vendored `blake2.h` is only included through the owned
+`blake2_prelude.h` (the header that owns the MSVC C4804 sandwich), that both
+vendor preludes pull that header, and that any first-party include of
+`vendor/cuckatoo.h` is preceded in the same file by `vendor_prelude.h` or
+`vendor_prelude_solve.h`. Skips `src/crypto/cuckatoo/vendor/` — a fix that
+edits a vendored file is the wrong fix.
+
+Run directly from the repository root:
+
+```
+python3 test/lint/lint-cuckatoo-blake2-include.py
+python3 test/lint/lint-cuckatoo-blake2-include.py --self-test
+```
+
 lint-cuckatoo-source-policy.py
 ==============================
 Checks Quicksilver-owned Cuckatoo source policy: locale-neutral bridge code,

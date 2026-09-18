@@ -65,6 +65,7 @@ src/crypto/cuckatoo/bench/qscalibrate.cpp
 src/crypto/cuckatoo/bench/registry.cpp
 src/crypto/cuckatoo/bench/registry.h
 src/crypto/cuckatoo/bench/solve_one.cpp.in
+src/crypto/cuckatoo/blake2_prelude.h
 src/crypto/cuckatoo/cuckatoo.h
 src/crypto/cuckatoo/dispatch.cpp
 src/crypto/cuckatoo/gpu/device_health.cuh
@@ -176,6 +177,7 @@ test/lint/check-doc-links.py
 test/lint/lint-boost-silent-skip.py
 test/lint/lint-branding-residue.py
 test/lint/lint-copyright.py
+test/lint/lint-cuckatoo-blake2-include.py
 test/lint/lint-cuckatoo-solver-filenames.py
 test/lint/lint-cuckatoo-source-policy.py
 test/lint/lint-dangling-script-references.py

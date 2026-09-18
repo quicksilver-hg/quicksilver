@@ -6,7 +6,7 @@
 
 #include <span.h>
 
-#include "vendor/blake2.h"  // self-guarded extern "C"
+#include "blake2_prelude.h"  // self-guarded extern "C"; owns MSVC C4804
 
 namespace cuckatoo {
 
