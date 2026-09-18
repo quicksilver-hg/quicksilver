@@ -271,6 +271,22 @@ namespace util
     return fp;
   }
 
+  struct HandleCloser {
+    void operator()(void* handle) const
+    {
+      if (handle && handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    }
+  };
+  using UniqueHandle = std::unique_ptr<void, HandleCloser>;
+
+  inline void close_handle(HANDLE& handle)
+  {
+    if (handle && handle != INVALID_HANDLE_VALUE) {
+      CloseHandle(handle);
+      handle = nullptr;
+    }
+  }
+
   inline void configure_pipe(HANDLE* read_handle, HANDLE* write_handle, HANDLE* child_handle)
   {
     SECURITY_ATTRIBUTES saAttr;
@@ -285,8 +301,11 @@ namespace util
       throw OSError("CreatePipe", 0);
 
     // Ensure the write handle to the pipe for STDIN is not inherited.
-    if (!SetHandleInformation(*child_handle, HANDLE_FLAG_INHERIT, 0))
+    if (!SetHandleInformation(*child_handle, HANDLE_FLAG_INHERIT, 0)) {
+      close_handle(*read_handle);
+      close_handle(*write_handle);
       throw OSError("SetHandleInformation", 0);
+    }
   }
 #endif
 
@@ -948,6 +967,15 @@ public:
     execute_process();
   }
 
+#ifdef __USING_WINDOWS__
+  // The cleanup lambda captures this; a move would wait on a dangling
+  // this, and a copy would double-close.
+  Popen(const Popen&) = delete;
+  Popen(Popen&&) = delete;
+  Popen& operator=(const Popen&) = delete;
+  Popen& operator=(Popen&&) = delete;
+#endif
+
   int retcode() const noexcept { return retcode_; }
 
   int wait() noexcept(false);
@@ -1000,7 +1028,9 @@ private:
   detail::Streams stream_;
 
 #ifdef __USING_WINDOWS__
-  HANDLE process_handle_;
+  // Declared before cleanup_future_: the future dtor joins a waiter on
+  // this handle, and members are destroyed in reverse order.
+  util::UniqueHandle process_handle_;
   std::future<void> cleanup_future_;
 #endif
 
@@ -1041,12 +1071,12 @@ inline void Popen::populate_c_argv()
 inline int Popen::wait() noexcept(false)
 {
 #ifdef __USING_WINDOWS__
-  if (WaitForSingleObject(process_handle_, INFINITE) == WAIT_FAILED) {
+  if (WaitForSingleObject(process_handle_.get(), INFINITE) == WAIT_FAILED) {
     throw OSError("WaitForSingleObject failed", (int)GetLastError());
   }
 
   DWORD exit_code;
-  if (!GetExitCodeProcess(process_handle_, &exit_code)) {
+  if (!GetExitCodeProcess(process_handle_.get(), &exit_code)) {
     throw OSError("GetExitCodeProcess failed", (int)GetLastError());
   }
 
@@ -1125,6 +1155,9 @@ inline void Popen::execute_process() noexcept(false)
   // If an error occurs, exit the application.
   if (!bSuccess) {
     DWORD errorMessageID = ::GetLastError();
+    util::close_handle(this->stream_.g_hChildStd_ERR_Wr);
+    util::close_handle(this->stream_.g_hChildStd_OUT_Wr);
+    util::close_handle(this->stream_.g_hChildStd_IN_Rd);
     throw CalledProcessError("CreateProcess failed: " + util::get_last_error(errorMessageID), errorMessageID);
   }
 
@@ -1134,10 +1167,10 @@ inline void Popen::execute_process() noexcept(false)
     TODO: use common apis to close linux handles
   */
 
-  this->process_handle_ = piProcInfo.hProcess;
+  this->process_handle_.reset(piProcInfo.hProcess);
 
   this->cleanup_future_ = std::async(std::launch::async, [this] {
-    WaitForSingleObject(this->process_handle_, INFINITE);
+    WaitForSingleObject(this->process_handle_.get(), INFINITE);
 
     CloseHandle(this->stream_.g_hChildStd_ERR_Wr);
     CloseHandle(this->stream_.g_hChildStd_OUT_Wr);
