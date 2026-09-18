@@ -6,6 +6,7 @@
 """Test quicksilver-cli"""
 
 from decimal import Decimal
+import json
 import re
 import subprocess
 import tempfile
@@ -129,6 +130,37 @@ class TestQuicksilverCli(QuicksilverTestFramework):
         self.log.info("Test -stdin and -stdinrpcpass")
         assert_equal(['foo', 'bar'], self.nodes[0].cli(f'-rpcuser={user}', '-stdin', '-stdinrpcpass', input=f'{password}\nfoo\nbar').echo())
         assert_raises_process_error(1, 'Incorrect rpcuser or rpcpassword', self.nodes[0].cli(f'-rpcuser={user}', '-stdin', '-stdinrpcpass', input='foo').echo)
+
+        self.log.info("Test that -stdin accepts a regular file at offset zero")
+        with tempfile.TemporaryFile(mode='w+', encoding='utf-8') as stdin_file:
+            stdin_file.write('foo\nbar\n')
+            stdin_file.seek(0)
+            result = subprocess.run(
+                [self.nodes[0].cli.binary, f'-datadir={self.nodes[0].cli.datadir}', '-stdin', 'echo'],
+                stdin=stdin_file,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True,
+            )
+            assert_equal(['foo', 'bar'], json.loads(result.stdout))
+
+        self.log.info("Test that -stdin refuses a regular file at a non-zero offset")
+        with tempfile.TemporaryFile(mode='w+', encoding='utf-8') as stdin_file:
+            stdin_file.write('already-read\nfoo\nbar\n')
+            stdin_file.seek(0)
+            stdin_file.readline()
+            assert_raises_process_error(
+                1,
+                '-stdin refuses standard input that is a script already being read (a regular file at a non-zero offset)',
+                subprocess.run,
+                [self.nodes[0].cli.binary, f'-datadir={self.nodes[0].cli.datadir}', '-stdin', 'echo'],
+                stdin=stdin_file,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=True,
+            )
 
         self.log.info("Test connecting to a non-existing server")
         assert_raises_process_error(1, "Could not connect to the server", self.nodes[0].cli('-rpcport=1').echo)

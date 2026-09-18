@@ -16,5 +16,6 @@ struct NoechoInst {
 bool StdinTerminal();
 bool StdinHasBufferedInput();
 bool StdinIsRegularFile();
+bool StdinIsMidFile();
 
 #endif // QUICKSILVER_COMPAT_STDIN_H

@@ -103,7 +103,7 @@ static void SetupCliArgs(ArgsManager& argsman)
     argsman.AddArg("-rpcwait", "Wait for RPC server to start", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-rpcwaittimeout=<n>", strprintf("Timeout in seconds to wait for the RPC server to start, or 0 for no timeout. (default: %d)", DEFAULT_WAIT_CLIENT_TIMEOUT), ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-rpcvault=<vaultname>", strprintf("Send RPC for non-default vault on RPC server (needs to exactly match corresponding -vault option passed to quicksilverd). This changes the RPC endpoint used, e.g. http://127.0.0.1:%u/vault/<vaultname>", defaultBaseParams->RPCPort()), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-stdin", "Read extra arguments from standard input, one per line until EOF/Ctrl-D (recommended for sensitive information such as passphrases). When combined with -stdinrpcpass, the first line from standard input is used for the RPC password.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-stdin", "Read extra arguments from standard input, one per line until EOF/Ctrl-D. Use -stdinrpcpass or -stdinvaultpassphrase for secrets. Regular-file stdin at a non-zero offset and already-buffered terminal input are rejected. When combined with -stdinrpcpass, the first line from standard input is used for the RPC password.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-stdinrpcpass", "Read RPC password from standard input as a single line. When combined with -stdin, the first line from standard input is used for the RPC password. When combined with -stdinvaultpassphrase, -stdinrpcpass consumes the first line, and -stdinvaultpassphrase consumes the second. Regular-file stdin and already-buffered terminal input are rejected.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-stdinvaultpassphrase", "Read vault passphrase from standard input as a single line. When combined with -stdin, the first line from standard input is used for the vault passphrase. Regular-file stdin and already-buffered terminal input are rejected.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
 }
@@ -1252,6 +1252,17 @@ static int CommandLineRPC(int argc, char *argv[])
             args.insert(args.begin() + 1, vaultPass);
         }
         if (gArgs.GetBoolArg("-stdin", false)) {
+            if (StdinIsMidFile()) {
+                throw std::runtime_error("-stdin refuses standard input that is a script already being read (a regular file at a non-zero offset); redirect from a separate argument file or pipe the arguments instead");
+            }
+            NO_STDIN_ECHO();
+            if (StdinTerminal()) {
+                if (StdinHasBufferedInput()) {
+                    throw std::runtime_error("-stdin refuses input that was already buffered on a terminal; run the command separately and enter the arguments at the prompt");
+                }
+                fputs("Arguments (one per line, Ctrl-D to end)> ", stderr);
+                fflush(stderr);
+            }
             // Read one arg per line from stdin and append
             std::string line;
             while (std::getline(std::cin, line)) {

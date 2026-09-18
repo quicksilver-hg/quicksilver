@@ -75,5 +75,15 @@ bool StdinIsRegularFile()
 #endif
 }
 
+bool StdinIsMidFile()
+{
+    if (!StdinIsRegularFile()) return false;
+#ifdef WIN32
+    return _telli64(_fileno(stdin)) > 0;
+#else
+    return lseek(fileno(stdin), 0, SEEK_CUR) > 0;
+#endif
+}
+
 NoechoInst::NoechoInst() { SetStdinEcho(false); }
 NoechoInst::~NoechoInst() { SetStdinEcho(true); }
