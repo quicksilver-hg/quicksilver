@@ -51,8 +51,7 @@ bool Solve19(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint32_t sta
         const uint32_t nonce = start_nonce + i;
         if (cancel && cancel()) break;  // shutdown: abandon the sweep between graphs
         if (progress) progress(nonce);
-        E::SolverSolutions sols;
-        std::memset(&sols, 0, sizeof(sols));
+        E::SolverSolutions sols{};
         E::run_solver(ctx, hdr, sizeof(hdr), nonce, /*range=*/1, &sols, nullptr);
         if (sols.num_sols > 0) {
             for (int j = 0; j < cuckatoo::PROOFSIZE; ++j) {
@@ -90,8 +89,7 @@ bool Solve19Bytes(const unsigned char* prepow, size_t len, uint32_t start_nonce,
         buf[len - 3] = (char)((nonce >> 8) & 0xff);
         buf[len - 2] = (char)((nonce >> 16) & 0xff);
         buf[len - 1] = (char)((nonce >> 24) & 0xff);
-        E::SolverSolutions sols;
-        std::memset(&sols, 0, sizeof(sols));
+        E::SolverSolutions sols{};
         E::run_solver(ctx, buf.data(), (E::u32)len, nonce, /*range=*/1, &sols, nullptr);
         if (sols.num_sols > 0) {
             for (int j = 0; j < cuckatoo::PROOFSIZE; ++j) {

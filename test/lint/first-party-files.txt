@@ -23,6 +23,8 @@ contrib/devtools/gen-qt-hud-icons.py
 contrib/devtools/gen-qt-spinner.py
 contrib/devtools/publish-source.sh
 contrib/genesis/derive-genesis.py
+contrib/tor/fetch-tor.ps1
+contrib/windows/build-qsgpusolve-windows.ps1
 src/agent/agentclient.cpp
 src/agent/agentclient.h
 src/agent/agentpeer.cpp

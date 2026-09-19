@@ -66,7 +66,19 @@ in-tree and are recorded in the git history:
   `htole32` helpers, POSIX-only `main()` guarded behind `CUCKATOO_NO_MAIN`, and
   removal of the redundant `portable_endian.h` in favour of `compat/endian.h`.
 - `b689ae2f` — fix the CPU lean solver writing `Solution` structs past the end
-  of its caller's stack buffer.
+  of its caller's stack buffer. Reported upstream privately on 2026-09-17.
+  Upstream's own fix moves `sumnsols += ctx->nsols` out of the per-solution
+  loop, which is the same placement this commit uses, arrived at
+  independently. Upstream **declined** the additional `sumnsols + s <
+  MAX_SOLS` bound that this commit also carries, on the ground that
+  `run_solver` receives no capacity parameter and a hard-coded `MAX_SOLS`
+  would silently truncate results once `range > 1`. That objection is
+  correct. The bound is kept here regardless: every Quicksilver call site
+  passes a plain `SolverSolutions` — whose `sols[]` member is exactly
+  `MAX_SOLS` long — with `range = 1`, so it can never truncate anything in
+  this tree, and it is the only thing standing between a future `range > 1`
+  caller and the same out-of-bounds write. **A re-sync must not read
+  upstream's fix as superseding this commit and drop the bound with it.**
 - `4b1f28c5` — free the `compressor` objects both `graph` constructors allocate;
   the vendored destructor freed neither, leaking 112 bytes per solver context.
 - `36877a85` — trim every edge-bitmap word in `count_node_deg` and

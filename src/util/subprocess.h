@@ -239,7 +239,15 @@ namespace util
     return message;
   }
 
-  inline FILE *file_from_handle(HANDLE h, const char *mode)
+  struct HandleCloser {
+    void operator()(void* handle) const
+    {
+      if (handle && handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    }
+  };
+  using UniqueHandle = std::unique_ptr<void, HandleCloser>;
+
+  inline FILE *file_from_handle(UniqueHandle handle, const char *mode)
   {
     int md;
     if (!mode) {
@@ -256,11 +264,11 @@ namespace util
       throw OSError("file_from_handle", 0);
     }
 
-    int os_fhandle = _open_osfhandle((intptr_t)h, md);
+    int os_fhandle = _open_osfhandle((intptr_t)handle.get(), md);
     if (os_fhandle == -1) {
-      CloseHandle(h);
       throw OSError("_open_osfhandle", 0);
     }
+    handle.release();
 
     FILE *fp = _fdopen(os_fhandle, mode);
     if (fp == 0) {
@@ -271,23 +279,9 @@ namespace util
     return fp;
   }
 
-  struct HandleCloser {
-    void operator()(void* handle) const
-    {
-      if (handle && handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
-    }
-  };
-  using UniqueHandle = std::unique_ptr<void, HandleCloser>;
-
-  inline void close_handle(HANDLE& handle)
-  {
-    if (handle && handle != INVALID_HANDLE_VALUE) {
-      CloseHandle(handle);
-      handle = nullptr;
-    }
-  }
-
-  inline void configure_pipe(HANDLE* read_handle, HANDLE* write_handle, HANDLE* child_handle)
+  inline void configure_pipe(UniqueHandle& read_handle,
+                             UniqueHandle& write_handle,
+                             UniqueHandle& parent_handle)
   {
     SECURITY_ATTRIBUTES saAttr;
 
@@ -296,14 +290,15 @@ namespace util
     saAttr.bInheritHandle = TRUE;
     saAttr.lpSecurityDescriptor = NULL;
 
-    // Create a pipe for the child process's STDIN.
-    if (!CreatePipe(read_handle, write_handle, &saAttr,0))
+    HANDLE raw_read_handle = nullptr;
+    HANDLE raw_write_handle = nullptr;
+    if (!CreatePipe(&raw_read_handle, &raw_write_handle, &saAttr, 0))
       throw OSError("CreatePipe", 0);
+    read_handle.reset(raw_read_handle);
+    write_handle.reset(raw_write_handle);
 
-    // Ensure the write handle to the pipe for STDIN is not inherited.
-    if (!SetHandleInformation(*child_handle, HANDLE_FLAG_INHERIT, 0)) {
-      close_handle(*read_handle);
-      close_handle(*write_handle);
+    // Only the child's end of each pipe may be inherited.
+    if (!SetHandleInformation(parent_handle.get(), HANDLE_FLAG_INHERIT, 0)) {
       throw OSError("SetHandleInformation", 0);
     }
   }
@@ -878,12 +873,12 @@ public:// Yes they are public
   std::shared_ptr<FILE> error_  = nullptr;
 
 #ifdef __USING_WINDOWS__
-  HANDLE g_hChildStd_IN_Rd = nullptr;
-  HANDLE g_hChildStd_IN_Wr = nullptr;
-  HANDLE g_hChildStd_OUT_Rd = nullptr;
-  HANDLE g_hChildStd_OUT_Wr = nullptr;
-  HANDLE g_hChildStd_ERR_Rd = nullptr;
-  HANDLE g_hChildStd_ERR_Wr = nullptr;
+  util::UniqueHandle g_hChildStd_IN_Rd;
+  util::UniqueHandle g_hChildStd_IN_Wr;
+  util::UniqueHandle g_hChildStd_OUT_Rd;
+  util::UniqueHandle g_hChildStd_OUT_Wr;
+  util::UniqueHandle g_hChildStd_ERR_Rd;
+  util::UniqueHandle g_hChildStd_ERR_Wr;
 #endif
 
   // Pipes for communicating with child
@@ -1134,9 +1129,9 @@ inline void Popen::execute_process() noexcept(false)
   ZeroMemory(&siStartInfo, sizeof(STARTUPINFOW));
   siStartInfo.cb = sizeof(STARTUPINFOW);
 
-  siStartInfo.hStdError = this->stream_.g_hChildStd_ERR_Wr;
-  siStartInfo.hStdOutput = this->stream_.g_hChildStd_OUT_Wr;
-  siStartInfo.hStdInput = this->stream_.g_hChildStd_IN_Rd;
+  siStartInfo.hStdError = this->stream_.g_hChildStd_ERR_Wr.get();
+  siStartInfo.hStdOutput = this->stream_.g_hChildStd_OUT_Wr.get();
+  siStartInfo.hStdInput = this->stream_.g_hChildStd_IN_Rd.get();
 
   siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
 
@@ -1155,9 +1150,6 @@ inline void Popen::execute_process() noexcept(false)
   // If an error occurs, exit the application.
   if (!bSuccess) {
     DWORD errorMessageID = ::GetLastError();
-    util::close_handle(this->stream_.g_hChildStd_ERR_Wr);
-    util::close_handle(this->stream_.g_hChildStd_OUT_Wr);
-    util::close_handle(this->stream_.g_hChildStd_IN_Rd);
     throw CalledProcessError("CreateProcess failed: " + util::get_last_error(errorMessageID), errorMessageID);
   }
 
@@ -1172,9 +1164,9 @@ inline void Popen::execute_process() noexcept(false)
   this->cleanup_future_ = std::async(std::launch::async, [this] {
     WaitForSingleObject(this->process_handle_.get(), INFINITE);
 
-    CloseHandle(this->stream_.g_hChildStd_ERR_Wr);
-    CloseHandle(this->stream_.g_hChildStd_OUT_Wr);
-    CloseHandle(this->stream_.g_hChildStd_IN_Rd);
+    this->stream_.g_hChildStd_ERR_Wr.reset();
+    this->stream_.g_hChildStd_OUT_Wr.reset();
+    this->stream_.g_hChildStd_IN_Rd.reset();
   });
 
 /*
@@ -1344,16 +1336,16 @@ namespace detail {
   inline void Streams::setup_comm_channels()
   {
 #ifdef __USING_WINDOWS__
-    util::configure_pipe(&this->g_hChildStd_IN_Rd, &this->g_hChildStd_IN_Wr, &this->g_hChildStd_IN_Wr);
-    this->input(util::file_from_handle(this->g_hChildStd_IN_Wr, "w"));
+    util::configure_pipe(this->g_hChildStd_IN_Rd, this->g_hChildStd_IN_Wr, this->g_hChildStd_IN_Wr);
+    this->input(util::file_from_handle(std::move(this->g_hChildStd_IN_Wr), "w"));
     this->write_to_child_ = _fileno(this->input());
 
-    util::configure_pipe(&this->g_hChildStd_OUT_Rd, &this->g_hChildStd_OUT_Wr, &this->g_hChildStd_OUT_Rd);
-    this->output(util::file_from_handle(this->g_hChildStd_OUT_Rd, "r"));
+    util::configure_pipe(this->g_hChildStd_OUT_Rd, this->g_hChildStd_OUT_Wr, this->g_hChildStd_OUT_Rd);
+    this->output(util::file_from_handle(std::move(this->g_hChildStd_OUT_Rd), "r"));
     this->read_from_child_ = _fileno(this->output());
 
-    util::configure_pipe(&this->g_hChildStd_ERR_Rd, &this->g_hChildStd_ERR_Wr, &this->g_hChildStd_ERR_Rd);
-    this->error(util::file_from_handle(this->g_hChildStd_ERR_Rd, "r"));
+    util::configure_pipe(this->g_hChildStd_ERR_Rd, this->g_hChildStd_ERR_Wr, this->g_hChildStd_ERR_Rd);
+    this->error(util::file_from_handle(std::move(this->g_hChildStd_ERR_Rd), "r"));
     this->err_read_ = _fileno(this->error());
 #else
 

@@ -26,7 +26,6 @@ namespace cuckatoo_bench_e@QS_EDGEBITS@ {
 #undef SQUASH_OUTPUT
 #undef CUCKATOO_NO_MAIN
 
-#include <cstring>
 #include <vector>
 
 namespace {
@@ -66,8 +65,7 @@ bool BenchSolveOne(void* ctx, const unsigned char* prepow, size_t len,
     if (ctx == nullptr || len < 4) return false;
     std::vector<char> buf = KeyedPrepow(prepow, len, nonce);
 
-    E::SolverSolutions sols;
-    std::memset(&sols, 0, sizeof(sols));
+    E::SolverSolutions sols{};
     // range=1: exactly one graph. This is the whole point of the harness.
     E::run_solver(static_cast<E::SolverCtx*>(ctx), buf.data(), (E::u32)len, nonce,
                   /*range=*/1, &sols, nullptr);

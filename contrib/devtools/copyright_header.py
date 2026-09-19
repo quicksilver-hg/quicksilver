@@ -42,6 +42,7 @@ EXCLUDE_DIRS = [
 ]
 
 INCLUDE = ['*.h', '*.cpp', '*.cc', '*.c', '*.cu', '*.cuh', '*.mm', '*.py', '*.sh',
+           '*.ps1',
            '*.bash', '*.bash-completion', '*.cmake', '*.rs',
            '*.toml', '*.yml', '*.txt', '*.in',
            '*/COPYING', '*/ci/test_imagefile', '*/ci/lint_imagefile']
@@ -726,12 +727,12 @@ def insert_cmd(argv):
     if not os.path.isfile(filename):
         sys.exit("*** bad filename: %s" % filename)
     _, extension = os.path.splitext(filename)
-    if extension not in ['.h', '.cpp', '.cc', '.c', '.py', '.sh']:
+    if extension not in ['.h', '.cpp', '.cc', '.c', '.py', '.sh', '.ps1']:
         sys.exit("*** cannot insert for file extension %s" % extension)
 
     if extension == '.py':
         style = 'python'
-    elif extension == '.sh':
+    elif extension in ['.sh', '.ps1']:
         style = 'shell'
     else:
         style = 'cpp'

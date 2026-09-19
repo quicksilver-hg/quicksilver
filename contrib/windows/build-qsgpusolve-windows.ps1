@@ -1,3 +1,6 @@
+# Copyright (c) 2026 The Quicksilver developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or http://www.opensource.org/licenses/mit-license.php.
 param(
     [string]$VsInstallPath = 'C:\Program Files\Microsoft Visual Studio\18\Community',
     [string]$VcVarsVersion = '14.44',

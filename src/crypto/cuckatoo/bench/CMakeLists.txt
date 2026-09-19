@@ -40,7 +40,11 @@ target_include_directories(quicksilver_cuckatoo_bench
 )
 
 find_package(Threads REQUIRED)
-target_link_libraries(quicksilver_cuckatoo_bench PUBLIC Threads::Threads)
+# warn_interface only: WERROR (-Werror / /WX) hangs off core_interface (F-268).
+target_link_libraries(quicksilver_cuckatoo_bench
+  PUBLIC Threads::Threads
+  PRIVATE warn_interface
+)
 
 # The calibration CLI. EXCLUDE_FROM_ALL, but it lands in the same bin/ directory
 # as the node binaries (CMAKE_RUNTIME_OUTPUT_DIRECTORY, set in src/CMakeLists.txt)
@@ -58,4 +62,5 @@ endif()
 target_link_libraries(qscalibrate PRIVATE
   quicksilver_cuckatoo_bench
   quicksilver_cuckatoo
+  warn_interface
 )
