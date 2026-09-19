@@ -9,6 +9,8 @@ include(CheckCXXSourceCompiles)
 #[=[
 Add language-wide flags, which will be passed to all invocations of the compiler.
 This includes invocations that drive compiling and those that drive linking.
+Use CXX_ONLY for a target compile option whose semantics are specific to C++.
+CXX_ONLY does not alter VAR output or link options.
 
 Usage examples:
 
@@ -33,6 +35,12 @@ Usage examples:
   )
 
 
+  try_append_cxx_flags("-Wsuggest-override" TARGET core_interface
+    CXX_ONLY
+    SKIP_LINK
+  )
+
+
 In configuration output, this function prints a string by the following pattern:
 
   -- Performing Test CXX_SUPPORTS_[flags]
@@ -42,7 +50,7 @@ In configuration output, this function prints a string by the following pattern:
 function(try_append_cxx_flags flags)
   cmake_parse_arguments(PARSE_ARGV 1
     TACXXF                            # prefix
-    "SKIP_LINK"                       # options
+    "CXX_ONLY;SKIP_LINK"              # options
     "TARGET;VAR;SOURCE;RESULT_VAR"    # one_value_keywords
     "IF_CHECK_PASSED"                 # multi_value_keywords
   )
@@ -70,7 +78,13 @@ function(try_append_cxx_flags flags)
   if(${compiler_result})
     if(DEFINED TACXXF_IF_CHECK_PASSED)
       if(DEFINED TACXXF_TARGET)
-        target_compile_options(${TACXXF_TARGET} INTERFACE ${TACXXF_IF_CHECK_PASSED})
+        if(TACXXF_CXX_ONLY)
+          foreach(flag IN LISTS TACXXF_IF_CHECK_PASSED)
+            target_compile_options(${TACXXF_TARGET} INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:${flag}>")
+          endforeach()
+        else()
+          target_compile_options(${TACXXF_TARGET} INTERFACE ${TACXXF_IF_CHECK_PASSED})
+        endif()
       endif()
       if(DEFINED TACXXF_VAR)
         list(JOIN TACXXF_IF_CHECK_PASSED " " flags_if_check_passed_as_string)
@@ -78,7 +92,13 @@ function(try_append_cxx_flags flags)
       endif()
     else()
       if(DEFINED TACXXF_TARGET)
-        target_compile_options(${TACXXF_TARGET} INTERFACE ${flags})
+        if(TACXXF_CXX_ONLY)
+          foreach(flag IN LISTS flags)
+            target_compile_options(${TACXXF_TARGET} INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:${flag}>")
+          endforeach()
+        else()
+          target_compile_options(${TACXXF_TARGET} INTERFACE ${flags})
+        endif()
       endif()
       if(DEFINED TACXXF_VAR)
         string(STRIP "${${TACXXF_VAR}} ${flags_as_string}" ${TACXXF_VAR})
@@ -105,6 +125,10 @@ function(try_append_cxx_flags flags)
   set(linker_result LINKER_SUPPORTS_${id_string})
   check_cxx_source_compiles("${source}" ${linker_result})
 
+  # CXX_ONLY is intentionally a compile-option scope. Do not add a
+  # COMPILE_LANGUAGE guard to either target_link_options path below: it has no
+  # useful meaning while evaluating link options, and flags which must reach
+  # the compiler driver at link time must remain unguarded.
   if(${linker_result})
     if(DEFINED TACXXF_IF_CHECK_PASSED)
       if(DEFINED TACXXF_TARGET)

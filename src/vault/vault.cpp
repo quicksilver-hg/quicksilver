@@ -77,10 +77,12 @@
 #include <cassert>
 #include <condition_variable>
 #include <exception>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <variant>
 
 struct KeyOriginInfo;
@@ -3465,6 +3467,9 @@ void CVault::SetupDescriptorScriptPubKeyMans()
         VaultBatch batch(GetDatabase());
         if (!batch.TxnBegin()) throw std::runtime_error("Error: cannot create db transaction for descriptors import");
 
+        // One active ScriptPubKeyMan per (output type, chain). A throw
+        // here is rolled back by SQLiteBatch::Close aborting the txn.
+        std::map<std::pair<OutputType, bool>, std::string> imported;
         for (bool internal : {false, true}) {
             const UniValue& descriptor_vals = signer_res.find_value(internal ? "internal" : "receive");
             if (!descriptor_vals.isArray()) throw std::runtime_error(std::string(__func__) + ": Unexpected result");
@@ -3478,14 +3483,28 @@ void CVault::SetupDescriptorScriptPubKeyMans()
                 }
                 auto& desc = descs.at(0);
                 if (!desc->GetOutputType()) {
-                    continue;
+                    throw std::runtime_error(std::string(__func__) + ": Descriptor \"" + desc_str + "\" has no address type");
                 }
                 OutputType t = *desc->GetOutputType();
+                const auto key = std::make_pair(t, internal);
+                auto it = imported.find(key);
+                if (it != imported.end()) {
+                    throw std::runtime_error(std::string(__func__) + ": Multiple descriptors for output type " + FormatOutputType(t) + " (" + (internal ? "internal" : "receive") + "): \"" + it->second + "\" and \"" + desc_str + "\"");
+                }
                 auto spk_manager = std::unique_ptr<ExternalSignerScriptPubKeyMan>(new ExternalSignerScriptPubKeyMan(*this, m_keypool_size));
                 spk_manager->SetupDescriptor(batch, std::move(desc));
                 uint256 id = spk_manager->GetID();
                 AddScriptPubKeyMan(id, std::move(spk_manager));
                 AddActiveScriptPubKeyManWithDb(batch, id, t, internal);
+                imported.emplace(key, desc_str);
+            }
+        }
+
+        for (bool internal : {false, true}) {
+            for (OutputType t : OUTPUT_TYPES) {
+                if (!imported.contains(std::make_pair(t, internal))) {
+                    VaultLogPrintf("signer missing type=%s internal=%d", FormatOutputType(t), internal);
+                }
             }
         }
 

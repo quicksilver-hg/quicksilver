@@ -16,3 +16,4 @@ preserving private task plans or local workflow history.
 - [Housekeeping verification](housekeeping-verification.md)
 - [Fee-plumbing purge](fee-plumbing-purge.md)
 - [Genesis provenance](genesis-provenance.md)
+- [Compiler flag language classification](compiler-flag-language-classification.md)

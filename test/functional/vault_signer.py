@@ -12,6 +12,7 @@ import os
 import sys
 
 from test_framework.address import QCKS_BECH32_HRP
+from test_framework.authproxy import JSONRPCException
 from test_framework.test_framework import QuicksilverTestFramework
 from test_framework.util import (
     assert_equal,
@@ -33,6 +34,10 @@ class VaultSignerTest(QuicksilverTestFramework):
 
     def mock_multi_signers_path(self):
         path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mocks', 'multi_signers.py')
+        return sys.executable + " " + path
+
+    def mock_colliding_signer_path(self):
+        path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mocks', 'colliding_signer.py')
         return sys.executable + " " + path
 
     def set_test_params(self):
@@ -60,6 +65,8 @@ class VaultSignerTest(QuicksilverTestFramework):
         self.test_invalid_signer()
         self.restart_node(1, [f"-signer={self.mock_multi_signers_path()}", "-keypool=10"])
         self.test_multiple_signers()
+        self.restart_node(1, [f"-signer={self.mock_colliding_signer_path()}", "-keypool=10"])
+        self.test_colliding_signer()
 
     def test_valid_signer(self):
         self.log.debug(f"-signer={self.mock_signer_path()}")
@@ -222,6 +229,25 @@ class VaultSignerTest(QuicksilverTestFramework):
         self.log.info('Test multiple external signers')
 
         assert_raises_rpc_error(-1, "GetExternalSigner: More than one external signer found", self.nodes[1].createvault, vault_name='multi_hww', disable_private_keys=True, external_signer=True)
+
+    def test_colliding_signer(self):
+        self.log.debug(f"-signer={self.mock_colliding_signer_path()}")
+        self.log.info('Test colliding pkh + sh(pkh) descriptors are refused')
+
+        try:
+            self.nodes[1].createvault(vault_name='hww_collide', disable_private_keys=True, external_signer=True)
+            raise AssertionError('createvault succeeded with colliding BASE58 descriptors')
+        except JSONRPCException as e:
+            assert_equal(e.error['code'], -1)
+            msg = e.error['message']
+            if 'Multiple descriptors for output type base58' not in msg:
+                raise AssertionError(f'unexpected error: {msg}') from e
+            if 'pkh(' not in msg or 'sh(pkh(' not in msg:
+                raise AssertionError(f'error did not name both descriptors: {msg}') from e
+            if '(receive)' not in msg:
+                raise AssertionError(f'error did not name the chain: {msg}') from e
+
+        assert 'hww_collide' not in self.nodes[1].listvaults()
 
 if __name__ == '__main__':
     VaultSignerTest(__file__).main()

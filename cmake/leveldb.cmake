@@ -91,7 +91,7 @@ else()
   try_append_cxx_flags("-Wconditional-uninitialized" TARGET nowarn_leveldb_interface SKIP_LINK
     IF_CHECK_PASSED "-Wno-conditional-uninitialized"
   )
-  try_append_cxx_flags("-Wsuggest-override" TARGET nowarn_leveldb_interface SKIP_LINK
+  try_append_cxx_flags("-Wsuggest-override" TARGET nowarn_leveldb_interface CXX_ONLY SKIP_LINK
     IF_CHECK_PASSED "-Wno-suggest-override"
   )
 endif()
