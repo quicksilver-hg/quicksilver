@@ -16,8 +16,8 @@ BOOST_FIXTURE_TEST_SUITE(node_warnings_tests, BasicTestingSetup)
 BOOST_AUTO_TEST_CASE(warnings)
 {
     node::Warnings warnings;
-    // On pre-release builds, a warning is generated automatically
-    warnings.Unset(node::Warning::PRE_RELEASE_TEST_BUILD);
+    // On unreleased builds, a warning is generated automatically
+    warnings.Unset(node::Warning::UNRELEASED_BUILD);
 
     // For these tests, we don't care what the exact warnings are, so
     // just refer to them as warning_1 and warning_2

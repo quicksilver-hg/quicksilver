@@ -506,8 +506,8 @@ static RPCHelpMan startmining()
             {RPCResult::Type::BOOL, "active", "Whether the mining role is now active"},
             {RPCResult::Type::STR, "address", "The payout address in use"},
         }},
-        RPCExamples{HelpExampleCli("startmining", "\"qs1qexampleaddress\"")
-            + HelpExampleRpc("startmining", "\"qs1qexampleaddress\"")},
+        RPCExamples{HelpExampleCli("startmining", "\"" + EXAMPLE_ADDRESS[0] + "\"")
+            + HelpExampleRpc("startmining", "\"" + EXAMPLE_ADDRESS[0] + "\"")},
     [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
     NodeContext& node = EnsureAnyNodeContext(request.context);

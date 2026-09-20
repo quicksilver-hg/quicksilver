@@ -44,6 +44,11 @@ set PYTHONUTF8=1
 
 #### Running the tests
 
+Run `test_runner.py` from the build tree, not the source tree. CMake generates
+the required `config.ini` only in the build tree, so running
+`test/functional/test_runner.py` from the source tree fails because
+`test/config.ini` does not exist.
+
 Individual tests can be run by directly calling the test script, e.g.:
 
 ```

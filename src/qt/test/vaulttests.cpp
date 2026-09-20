@@ -1621,7 +1621,7 @@ void VaultTests::mineMintPageRendersStatus()
     MineMintPage page;
     interfaces::MiningStatus st;
     st.active = true;
-    st.address = "qs1qexample";
+    st.address = "hg1qexample";
     st.blocks_found = 3;
     st.coins_minted_session = 150 * COIN;
     st.attempts_per_second = 0.29;
@@ -1631,7 +1631,7 @@ void VaultTests::mineMintPageRendersStatus()
     page.setStatus(st);
 
     QCOMPARE(page.findChild<QLabel*>("miningStatusValue")->text(), QString("Active"));
-    QCOMPARE(page.findChild<QLabel*>("payoutTargetValue")->text(), QString("qs1qexample"));
+    QCOMPARE(page.findChild<QLabel*>("payoutTargetValue")->text(), QString("hg1qexample"));
     QCOMPARE(page.findChild<QLabel*>("solverStatusValue")->text(), QString("GPU bridge"));
     QCOMPARE(page.findChild<QLabel*>("blocksFoundValue")->text(), QString("3"));
     // S3: the expected text is spelled out here rather than composed by re-invoking the

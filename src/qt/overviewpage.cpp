@@ -313,7 +313,7 @@ void OverviewPage::setClientModel(ClientModel *model)
 {
     this->clientModel = model;
     if (model) {
-        // Show warning, for example if this is a prerelease version
+        // Show warning, for example if this build is not a released version
         connect(model, &ClientModel::alertsChanged, this, &OverviewPage::updateAlerts);
         updateAlerts(model->getStatusBarWarnings());
 

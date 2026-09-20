@@ -35,7 +35,7 @@ const std::string UA_NAME("Quicksilver");
 #define GIT_COMMIT_ID "$Format:%H$"
 
 // A build that knows which commit produced it always says so, release or not.
-// CLIENT_VERSION_IS_RELEASE governs the pre-release warning, not whether the
+// CLIENT_VERSION_IS_RELEASE governs the unreleased-build warning, not whether the
 // binary can identify its own source: the fleet's deploy tooling reads the
 // commit back OUT of the artifact and refuses a tree it cannot identify, which
 // is the whole defence against a hand-typed marker that has drifted (F-157).

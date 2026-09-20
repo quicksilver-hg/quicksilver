@@ -1,3 +1,11 @@
+quicksilver (0.1.1-1) UNRELEASED; urgency=low
+
+  * Development series after the 0.1.0 source release. Not a release: the
+    0.1.0 tag is what a release build identifies itself as, and this tree
+    carries work that has not been tagged.
+
+ -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Sat, 19 Sep 2026 00:00:00 +0000
+
 quicksilver (0.1.0-1) unstable; urgency=low
 
   * Initial Quicksilver packaging for the public pre-1.0 0.1.x source tree.

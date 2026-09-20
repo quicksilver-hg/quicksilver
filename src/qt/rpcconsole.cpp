@@ -695,7 +695,7 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
     vault_enabled = VaultModel::isVaultEnabled();
 #endif // ENABLE_VAULT
     if (model && !vault_enabled) {
-        // Show warning, for example if this is a prerelease version
+        // Show warning, for example if this build is not a released version
         connect(model, &ClientModel::alertsChanged, this, &RPCConsole::updateAlerts);
         updateAlerts(model->getStatusBarWarnings());
     }
