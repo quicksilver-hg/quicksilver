@@ -394,10 +394,12 @@ def heading_slug(text: str) -> str:
         char
         for char in text.lower()
         if char in "-_ "
-        or char.isspace()
-        or not unicodedata.category(char).startswith(("P", "S", "C"))
+        or (
+            not char.isspace()
+            and not unicodedata.category(char).startswith(("P", "S", "C"))
+        )
     )
-    return re.sub(r"\s+", "-", text)
+    return re.sub(r"\s", "-", text)
 
 
 def markdown_anchors(text: str) -> set[str]:
@@ -573,6 +575,12 @@ def orphan_failures(
 
 
 def self_test() -> None:
+    for whitespace in ("\t", "\n", "\v", "\f", "\r", "\xa0"):
+        slug = heading_slug(f"Foo{whitespace}Bar")
+        assert slug == "foobar", (
+            f"U+{ord(whitespace):04X}: expected 'foobar', got {slug!r}"
+        )
+
     source = PurePosixPath("doc/source.md")
     text = """# One / Two!
 ## Repeated
@@ -584,6 +592,8 @@ def self_test() -> None:
 [ignored](missing.md)
 # Not a heading
 ```
+### Ubuntu & Debian
+## Hello world
 """
     found = {(link.line, link.target) for link in extract_links(source, text)}
     assert found == {
@@ -591,7 +601,13 @@ def self_test() -> None:
         (5, "../README.md#quicksilver"),
         (6, "https://example.com/path"),
     }
-    assert markdown_anchors(text) == {"one-two", "repeated", "repeated-1"}
+    assert markdown_anchors(text) == {
+        "one--two",
+        "repeated",
+        "repeated-1",
+        "ubuntu--debian",
+        "hello-world",
+    }
     assert external_error("https://example.com/path") is None
     assert external_error("https:///missing-host") is not None
     assert local_target(source, "../../outside") is None

@@ -30,6 +30,41 @@ while getopts ":m:" opt; do
 done
 shift $((OPTIND - 1))
 
+# ------------------------------------------------------------- message checks
+# A published commit is the project's own work, authored by The Quicksilver
+# developers. Assistant attribution belongs in the development history, which is
+# never pushed. A trailer that crosses this boundary puts a tool's name on the
+# public record permanently: the branch is published, so removing it afterwards
+# means rewriting history every clone already has.
+#
+# Names are deliberately NOT what is matched. The genesis mark itself names the
+# agents (src/kernel/chainparams.cpp), and a legitimate message may quote it.
+# These patterns are attribution markers only.
+#
+# Checked before anything else so a bad message costs nothing: neither
+# repository has been touched at this point.
+attribution_patterns=(
+    '^[[:space:]]*co-authored-by:'
+    '^[[:space:]]*(signed-off-by|assisted-by|generated-by):.*(anthropic|openai|claude|codex|grok)'
+    'noreply@anthropic\.com'
+    'claude\.com/claude-code'
+    'generated with \[?claude'
+)
+
+if [[ -n "$message" ]]; then
+    # One alternation rather than a loop, so a line matching two patterns is
+    # reported once.
+    attribution_re=$(IFS='|'; echo "${attribution_patterns[*]}")
+    offending=$(printf '%s\n' "$message" | grep -inE "$attribution_re" || true)
+    if [[ -n "$offending" ]]; then
+        echo "Refusing to publish: the commit message carries assistant attribution." >&2
+        printf '%s\n' "$offending" >&2
+        echo "Published commits are authored by The Quicksilver developers alone." >&2
+        echo "Strip the trailer and retry. Nothing has been touched." >&2
+        exit 1
+    fi
+fi
+
 if [[ $# -lt 1 || $# -gt 2 ]]; then
     cat >&2 <<'USAGE'
 Usage: publish-source.sh [-m MESSAGE] PUBLICATION_REPO [SOURCE_COMMIT]
@@ -40,6 +75,10 @@ Usage: publish-source.sh [-m MESSAGE] PUBLICATION_REPO [SOURCE_COMMIT]
 
 Without -m the tree is staged and verified but not committed, so the diff can be
 reviewed first. Nothing is ever pushed; the command to run is printed at the end.
+
+A message given with -m is refused if it carries assistant attribution: published
+commits are authored by The Quicksilver developers alone, and a trailer on a
+pushed branch cannot be removed without rewriting published history.
 USAGE
     exit 1
 fi
@@ -155,6 +194,10 @@ if [[ -z "$message" ]]; then
     echo "Review with: git -C $publication diff --cached"
     echo "Then commit, and push with:"
     echo "  git -C $publication push origin $publication_branch"
+    echo
+    echo "⚠ Committing by hand skips the message check this script runs for -m."
+    echo "  A published commit carries no Co-Authored-By trailer and no assistant"
+    echo "  attribution; strip both before committing."
     exit 0
 fi
 

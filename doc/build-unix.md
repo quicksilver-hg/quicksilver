@@ -22,6 +22,13 @@ To Build
 ```bash
 cmake -B build
 ```
+This selects `RelWithDebInfo`, so the binaries carry debug information. A Linux
+build with GCC 13.3 produced a 251.6 MiB unstripped `quicksilverd`, against
+13.1 MiB for `cmake -B build -DCMAKE_BUILD_TYPE=Release` — a factor of 19.
+Exact sizes vary by platform and compiler. Debug information can also be
+dropped from the default build type; see
+[Memory Requirements](#memory-requirements) below.
+
 Run `cmake -B build -LH` to see the full list of available options.
 
 ```bash

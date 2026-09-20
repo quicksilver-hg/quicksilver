@@ -35,10 +35,9 @@ ctest --test-dir build
 ```
 
 The GUI needs Qt, which the default profile does not. Each platform guide gives
-the package names in one line — on Debian and Ubuntu it is `qtbase5-dev` and
-`libqrencode-dev`, in the single command in the "Ubuntu & Debian" part of
-[the distribution instructions](doc/build-unix.md#linux-distribution-specific-instructions).
-Installing them is not
+the package names in one line — on Debian and Ubuntu, `qtbase5-dev` and
+`libqrencode-dev` are both in the single command under
+[Ubuntu & Debian](doc/build-unix.md#ubuntu--debian). Installing them is not
 enough on its own: `-DBUILD_GUI=ON` is what turns the GUI on, and without it
 CMake silently builds the headless profile anyway.
 

@@ -355,8 +355,10 @@ Development tips and tricks
 
 When using the default build configuration by running `cmake -B build`, the
 `-DCMAKE_BUILD_TYPE` is set to `RelWithDebInfo`. This option adds debug symbols
-but also performs some compiler optimizations that may make debugging trickier
-as the code may not correspond directly to the source.
+and can make the unstripped binaries much larger: in one Linux/GCC 13.3
+measurement, `quicksilverd` was 251.6 MiB versus 13.1 MiB for `Release`. It also
+performs some compiler optimizations that may make debugging trickier as the
+code may not correspond directly to the source.
 
 If you need to build exclusively for debugging, set the `-DCMAKE_BUILD_TYPE`
 to `Debug` (i.e. `-DCMAKE_BUILD_TYPE=Debug`). You can always check the cmake
