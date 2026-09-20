@@ -184,12 +184,3 @@ task:
       type: small
   env:
     FILE_ENV: "./ci/test/00_setup_env_native_novault_libquicksilverkernel.sh"
-
-task:
-  name: 'macOS-cross, gui, no tests'
-  << : *GLOBAL_TASK_TEMPLATE
-  persistent_worker:
-    labels:
-      type: small
-  env:
-    FILE_ENV: "./ci/test/00_setup_env_mac_cross.sh"

@@ -15,13 +15,9 @@ export TSAN_OPTIONS="suppressions=${BASE_ROOT_DIR}/test/sanitizer_suppressions/t
 export UBSAN_OPTIONS="suppressions=${BASE_ROOT_DIR}/test/sanitizer_suppressions/ubsan:print_stacktrace=1:halt_on_error=1:report_error_type=1"
 
 echo "Number of available processing units: $(nproc)"
-if [ "$CI_OS_NAME" == "macos" ]; then
-  top -l 1 -s 0 | awk ' /PhysMem/ {print}'
-else
-  free -m -h
-  echo "System info: $(uname --kernel-name --kernel-release)"
-  lscpu
-fi
+free -m -h
+echo "System info: $(uname --kernel-name --kernel-release)"
+lscpu
 echo "Free disk space:"
 df -h
 
@@ -49,11 +45,7 @@ if [ "$USE_BUSY_BOX" = "true" ]; then
 fi
 
 # Make sure default datadir does not exist and is never read by creating a dummy file
-if [ "$CI_OS_NAME" == "macos" ]; then
-  echo > "${HOME}/Library/Application Support/Quicksilver"
-else
-  echo > "${HOME}/.quicksilver"
-fi
+echo > "${HOME}/.quicksilver"
 
 if [ -z "$NO_DEPENDS" ]; then
   if [[ $CI_IMAGE_NAME_TAG == *centos* ]]; then
