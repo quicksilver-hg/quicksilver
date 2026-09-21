@@ -39,8 +39,9 @@ Build Quicksilver from source with the Windows build notes below, then run
 
 ### macOS (unsupported)
 
-macOS is not a supported Quicksilver 0.1.x platform. See the macOS support
-status below for the technical blockers and the limits of the current CI jobs.
+macOS is not a supported platform. See the macOS support status below for
+the technical blockers: Apple Silicon cannot compile, and Intel Macs are
+not gated.
 
 ### Need Help?
 

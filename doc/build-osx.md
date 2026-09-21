@@ -1,9 +1,12 @@
 # macOS
 
-**macOS is not a supported platform for Quicksilver 0.1.x.** There is no build
-recipe on this page because there is no build that has been produced, run, or
-gated on macOS. This page records the technical reasons, so that anyone who is
-about to spend an afternoon on it knows in advance what stops where.
+**macOS is not a supported platform.** There is no build recipe on this page
+because there is no build that has been produced, run, or gated on macOS.
+Apple Silicon cannot compile, and that does not expire with a version
+number. Intel Macs keep the repository; nobody has built one, and we do
+not have the hardware to gate it. This page records the technical reasons,
+so that anyone who is about to spend an afternoon on it knows in advance
+what stops where.
 
 Use [Unix and Linux](build-unix.md) or
 [Windows with Visual Studio](build-windows-msvc.md). Both are mineable and both
@@ -52,19 +55,18 @@ Proof-of-work **verification** is a different translation unit and is portable �
 `verify_19.cpp` and `verify_28.cpp` go through `vendor_prelude.h`, which pulls no
 intrinsics. A non-mining arm64 node is therefore feasible in principle; it needs
 the solver translation units excluded from the build and the mining paths wired
-to say so. That work has not been done and is not scheduled for 0.1.x.
+to say so. That is a contributor port. We do not ship an arm64 binary.
 
 ## Continuous integration
 
-Two macOS jobs run on every push: a GUI build and a fuzz build, both on
-`macos-14`, which is arm64. **They are red**, at the solver include described
-above, and they are **not a release gate** — no released artifact is built from
-them and no release is held on them.
+No macOS job runs on any push. The jobs that used to run on every push —
+a GUI build and a fuzz build, both on `macos-14`, which is arm64 — could
+not pass: the solver is x86 SIMD, every binary that validates a block
+links it, and CUDA does not exist on the platform. They were removed.
 
-They are kept because they are a cheap portability oracle for the platforms that
-*are* supported. Of the defects they have caught so far, most were not macOS
-bugs at all: an undeclared `libevent` dependency that breaks any prefixed
-dependency layout, and a lambda capture that was wrong in every build with
+While they ran they caught defects that were not macOS bugs at all: an
+undeclared `libevent` dependency that breaks any prefixed dependency
+layout, and a lambda capture that was wrong in every build with
 tracing disabled. Both were fixed on Linux and Windows on the strength of a red
 macOS log.
 
