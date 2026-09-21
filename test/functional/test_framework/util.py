@@ -6,6 +6,7 @@
 """Helpful routines for regression testing."""
 
 from base64 import b64encode
+import ctypes
 from decimal import Decimal
 from subprocess import CalledProcessError
 import hashlib
@@ -305,6 +306,12 @@ def bpf_cflags():
         "-Wno-error=implicit-function-declaration",
         "-Wno-duplicate-decl-specifier",
     ]
+
+
+def copy_perf_event(struct_type, data):
+    # The callback's data is borrowed from the perf buffer and is invalid after
+    # bpf.cleanup(). from_buffer_copy on a bytes object cannot alias the ring.
+    return struct_type.from_buffer_copy(ctypes.string_at(data, ctypes.sizeof(struct_type)))
 
 
 def sha256sum_file(filename):

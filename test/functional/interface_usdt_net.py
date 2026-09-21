@@ -21,6 +21,7 @@ from test_framework.test_framework import QuicksilverTestFramework
 from test_framework.util import (
     assert_equal,
     bpf_cflags,
+    copy_perf_event,
 )
 
 # Tor v3 addresses are 62 chars + 6 chars for the port (':12345').
@@ -242,12 +243,6 @@ class MisbehavingConnection(ctypes.Structure):
 
     def __repr__(self):
         return f"MisbehavingConnection(id={self.id}, message={self.message})"
-
-
-def copy_perf_event(struct_type, data):
-    # The callback's data is borrowed from the perf buffer and is invalid after
-    # bpf.cleanup(). from_buffer_copy on a bytes object cannot alias the ring.
-    return struct_type.from_buffer_copy(ctypes.string_at(data, ctypes.sizeof(struct_type)))
 
 
 class NetTracepointTest(QuicksilverTestFramework):

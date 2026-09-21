@@ -19,6 +19,7 @@ from test_framework.test_framework import QuicksilverTestFramework
 from test_framework.util import (
     assert_equal,
     bpf_cflags,
+    copy_perf_event,
 )
 from test_framework.vault import MiniVault
 
@@ -144,7 +145,9 @@ class UTXOCacheTracepointTest(QuicksilverTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = False
         self.num_nodes = 1
-        self.extra_args = [["-txindex"]]
+        # test_uncache rewrites a prevout after transaction construction so
+        # validation reaches the UTXO lookup that the tracepoint exercises.
+        self.extra_args = [["-txindex", "-txpownocycle=1"]]
 
     def skip_test_if_missing_module(self):
         self.skip_if_platform_not_linux()
@@ -173,8 +176,10 @@ class UTXOCacheTracepointTest(QuicksilverTestFramework):
         # in our UTXO cache.
         EARLY_BLOCK_HEIGHT = 1
         block_1_hash = self.nodes[0].getblockhash(EARLY_BLOCK_HEIGHT)
-        block_1 = self.nodes[0].getblock(block_1_hash)
-        block_1_coinbase_txid = block_1["tx"][0]
+        block_1 = self.nodes[0].getblock(block_1_hash, 2)
+        block_1_coinbase = block_1["tx"][0]
+        block_1_coinbase_txid = block_1_coinbase["txid"]
+        block_1_coinbase_value = int(block_1_coinbase["vout"][0]["value"] * COIN)
 
         # Create a transaction and invalidate it by changing the txid of the previous
         # output to the coinbase txid of the block at height 1.
@@ -202,7 +207,7 @@ class UTXOCacheTracepointTest(QuicksilverTestFramework):
                 assert_equal(block_1_coinbase_txid, bytes(event.txid[::-1]).hex())
                 assert_equal(0, event.index)  # prevout index
                 assert_equal(EARLY_BLOCK_HEIGHT, event.height)
-                assert_equal(50 * COIN, event.value)
+                assert_equal(block_1_coinbase_value, event.value)
                 assert_equal(True, event.is_coinbase)
             except AssertionError:
                 self.log.exception("Assertion failed")
@@ -277,12 +282,12 @@ class UTXOCacheTracepointTest(QuicksilverTestFramework):
             assert_equal(utxo["is_coinbase"], event.is_coinbase)
 
         def handle_utxocache_add(_, data, __):
-            event = ctypes.cast(data, ctypes.POINTER(UTXOCacheChange)).contents
+            event = copy_perf_event(UTXOCacheChange, data)
             self.log.info(f"handle_utxocache_add(): {event}")
             actual_utxocache_adds.append(event)
 
         def handle_utxocache_spent(_, data, __):
-            event = ctypes.cast(data, ctypes.POINTER(UTXOCacheChange)).contents
+            event = copy_perf_event(UTXOCacheChange, data)
             self.log.info(f"handle_utxocache_spent(): {event}")
             actual_utxocache_spents.append(event)
 
@@ -299,7 +304,7 @@ class UTXOCacheTracepointTest(QuicksilverTestFramework):
             for vin in tx["vin"]:
                 if "coinbase" not in vin:
                     prevout_tx = self.nodes[0].getrawtransaction(
-                        vin["txid"], True)
+                        vin["txid"], 1)
                     prevout_tx_block = self.nodes[0].getblockheader(
                         prevout_tx["blockhash"])
                     spends_coinbase = "coinbase" in prevout_tx["vin"][0]
