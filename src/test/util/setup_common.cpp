@@ -230,6 +230,9 @@ BasicTestingSetup::~BasicTestingSetup()
         fs::remove_all(m_path_root);
     }
     gArgs.ClearArgs();
+    // ClearArgs() resets the argument registry, not the settings, so without
+    // this the next fixture inherits the previous case's runtime settings.
+    gArgs.LockSettings([](common::Settings& settings) { settings = {}; });
 }
 
 ChainTestingSetup::ChainTestingSetup(const ChainType chainType, TestOpts opts)
