@@ -33,7 +33,7 @@ jobs:
     steps:
       - name: Determine fetch depth
         run: echo "FETCH_DEPTH=$((${{ github.event.pull_request.commits }} + 2))" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: ${{ env.FETCH_DEPTH }}
@@ -101,13 +101,37 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Configure Developer Command Prompt for Microsoft Visual C++
         # Using microsoft/setup-msbuild is not enough.
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+        # ilammy/msvc-dev-cmd last shipped 2024-01-01 (Node 20). Call
+        # vcvarsall.bat directly so this step has no Node runtime.
+        # No -vcvars_ver: the previous action was invoked with only
+        # arch: x64, so it selected the runner's default VS 2022
+        # toolset. Pinning 14.39 here would change the compiler.
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found: $vswhere" }
+          $vsPath = & $vswhere -products * -latest -prerelease -property installationPath
+          if (-not $vsPath) { throw "Visual Studio not found" }
+          $vsPath = ($vsPath -split "`r?`n")[0].Trim()
+          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+          if (-not (Test-Path $vcvars)) { throw "vcvarsall.bat not found: $vcvars" }
+          Write-Host "vcvarsall.bat: $vcvars"
+          $out = & "${env:COMSPEC}" /s /c "`"$vcvars`" x64 && set"
+          if ($LASTEXITCODE -ne 0) { throw "vcvarsall.bat x64 failed: $LASTEXITCODE" }
+          $vcTools = $out | Where-Object { $_ -like "VCToolsVersion=*" }
+          if (-not $vcTools) { throw "vcvarsall.bat did not set VCToolsVersion" }
+          Write-Host $vcTools
+          foreach ($line in $out) {
+            if ($line -notmatch "=") { continue }
+            if ($line -match "^\[") { continue }
+            $name, $value = $line -split "=", 2
+            if ($name -like "GITHUB_*") { continue }
+            echo "$name=$value" >> $env:GITHUB_ENV
+          }
 
       - name: Get tool information
         run: |
@@ -127,13 +151,13 @@ jobs:
           sed -i '1s/^/set(ENV{CMAKE_POLICY_VERSION_MINIMUM} 3.5)\n/' "${VCPKG_INSTALLATION_ROOT}/scripts/ports.cmake"
 
       - name: vcpkg tools cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: C:/vcpkg/downloads/tools
           key: ${{ github.job }}-vcpkg-tools
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         id: vcpkg-binary-cache
         with:
           path: ~/AppData/Local/vcpkg/archives
@@ -144,7 +168,7 @@ jobs:
           cmake -B build --preset vs2022-static -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" ${{ matrix.generate-options }}
 
       - name: Save vcpkg binary cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         if: github.event_name != 'pull_request' && steps.vcpkg-binary-cache.outputs.cache-hit != 'true' && matrix.job-type == 'standard'
         with:
           path: ~/AppData/Local/vcpkg/archives
@@ -188,7 +212,7 @@ jobs:
       INSTALL_BCC_TRACING_TOOLS: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set CI directories
         run: |
@@ -198,7 +222,7 @@ jobs:
 
       - name: Restore Ccache cache
         id: ccache-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ github.job }}-ccache-${{ github.run_id }}
@@ -208,7 +232,7 @@ jobs:
         run: ./ci/test_run_all.sh
 
       - name: Save Ccache cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         if: github.event_name != 'pull_request' && steps.ccache-cache.outputs.cache-hit != 'true'
         with:
           path: ${{ env.CCACHE_DIR }}
