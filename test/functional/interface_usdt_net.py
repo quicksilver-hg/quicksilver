@@ -244,6 +244,12 @@ class MisbehavingConnection(ctypes.Structure):
         return f"MisbehavingConnection(id={self.id}, message={self.message})"
 
 
+def copy_perf_event(struct_type, data):
+    # The callback's data is borrowed from the perf buffer and is invalid after
+    # bpf.cleanup(). from_buffer_copy on a bytes object cannot alias the ring.
+    return struct_type.from_buffer_copy(ctypes.string_at(data, ctypes.sizeof(struct_type)))
+
+
 class NetTracepointTest(QuicksilverTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
@@ -311,11 +317,11 @@ class NetTracepointTest(QuicksilverTestFramework):
                     checked_outbound_version_msg += 1
 
         def handle_inbound(_, data, __):
-            event = ctypes.cast(data, ctypes.POINTER(P2PMessage)).contents
+            event = copy_perf_event(P2PMessage, data)
             events.append((event, True))
 
         def handle_outbound(_, data, __):
-            event = ctypes.cast(data, ctypes.POINTER(P2PMessage)).contents
+            event = copy_perf_event(P2PMessage, data)
             events.append((event, False))
 
         bpf["inbound_messages"].open_perf_buffer(handle_inbound)
@@ -351,7 +357,7 @@ class NetTracepointTest(QuicksilverTestFramework):
 
         def handle_inbound_connection(_, data, __):
             nonlocal inbound_connections
-            event = ctypes.cast(data, ctypes.POINTER(NewConnection)).contents
+            event = copy_perf_event(NewConnection, data)
             self.log.info(f"handle_inbound_connection(): {event}")
             inbound_connections.append(event)
 
@@ -389,7 +395,7 @@ class NetTracepointTest(QuicksilverTestFramework):
         outbound_connections = []
 
         def handle_outbound_connection(_, data, __):
-            event = ctypes.cast(data, ctypes.POINTER(NewConnection)).contents
+            event = copy_perf_event(NewConnection, data)
             self.log.info(f"handle_outbound_connection(): {event}")
             outbound_connections.append(event)
 
@@ -428,7 +434,7 @@ class NetTracepointTest(QuicksilverTestFramework):
         evicted_connections = []
 
         def handle_evicted_inbound_connection(_, data, __):
-            event = ctypes.cast(data, ctypes.POINTER(ClosedConnection)).contents
+            event = copy_perf_event(ClosedConnection, data)
             self.log.info(f"handle_evicted_inbound_connection(): {event}")
             evicted_connections.append(event)
 
@@ -465,7 +471,7 @@ class NetTracepointTest(QuicksilverTestFramework):
         misbehaving_connections = []
 
         def handle_misbehaving_connection(_, data, __):
-            event = ctypes.cast(data, ctypes.POINTER(MisbehavingConnection)).contents
+            event = copy_perf_event(MisbehavingConnection, data)
             self.log.info(f"handle_misbehaving_connection(): {event}")
             misbehaving_connections.append(event)
 
@@ -499,7 +505,7 @@ class NetTracepointTest(QuicksilverTestFramework):
         closed_connections = []
 
         def handle_closed_connection(_, data, __):
-            event = ctypes.cast(data, ctypes.POINTER(ClosedConnection)).contents
+            event = copy_perf_event(ClosedConnection, data)
             self.log.info(f"handle_closed_connection(): {event}")
             closed_connections.append(event)
 

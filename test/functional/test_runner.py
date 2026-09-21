@@ -746,6 +746,19 @@ class TestHandler:
                         skip_reason = re.search(r"Test Skipped: (.*)", stdout).group(1)
                     else:
                         status = "Failed"
+                        # A signal-killed child (POSIX: negative returncode) has
+                        # empty stderr and no traceback. Name the signal here so
+                        # the runner does not print a blank stderr block.
+                        if proc.returncode < 0:
+                            signum = -proc.returncode
+                            try:
+                                signame = signal.Signals(signum).name
+                            except ValueError:
+                                signame = f"signal {signum}"
+                            stderr = (
+                                f"Test process killed by {signame} (signal {signum}); "
+                                f"returncode={proc.returncode}\n"
+                            ) + stderr
                     self.jobs.remove(job)
                     if self.use_term_control:
                         clearline = '\r' + (' ' * dot_count) + '\r'

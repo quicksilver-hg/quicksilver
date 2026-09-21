@@ -33,6 +33,13 @@ from test_framework.vault import MiniVault
 
 OLD_PROVIDER = "mem" + "pool"
 
+
+def copy_perf_event(struct_type, data):
+    # The callback's data is borrowed from the perf buffer and is invalid after
+    # bpf.cleanup(). from_buffer_copy on a bytes object cannot alias the ring.
+    return struct_type.from_buffer_copy(ctypes.string_at(data, ctypes.sizeof(struct_type)))
+
+
 relaypool_added_program = """
 #include <uapi/linux/ptrace.h>
 
@@ -86,7 +93,7 @@ class RelayPoolTracepointTest(QuicksilverTestFramework):
                   cflags=bpf_cflags())
 
         def handle_added(_, data, __):
-            events.append(ctypes.cast(data, ctypes.POINTER(Added)).contents)
+            events.append(copy_perf_event(Added, data))
 
         bpf["relaypool_added"].open_perf_buffer(handle_added)
 
