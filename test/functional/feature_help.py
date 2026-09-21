@@ -5,8 +5,13 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Verify that starting Quicksilver with -h works as expected."""
 
+import os
+import subprocess
+import tempfile
+
 from test_framework.test_framework import QuicksilverTestFramework
-from test_framework.util import assert_equal
+from test_framework.util import assert_equal, resolve_binary_path
+
 
 class HelpTest(QuicksilverTestFramework):
     def set_test_params(self):
@@ -36,6 +41,27 @@ class HelpTest(QuicksilverTestFramework):
         return out, err
 
     def run_test(self):
+        quicksilverd = resolve_binary_path(
+            self.config["environment"]["BUILDDIR"],
+            "quicksilverd",
+            self.config["environment"]["EXEEXT"],
+        )
+        blocked_datadir = tempfile.mkdtemp(prefix="blocked_datadir_", dir=self.options.tmpdir)
+        with open(os.path.join(blocked_datadir, "sandbox"), "w", encoding="utf8"):
+            pass
+        control_datadir = tempfile.mkdtemp(prefix="control_datadir_", dir=self.options.tmpdir)
+
+        self.log.info("Check help and version before data directory initialization")
+        for arg, expected_text in [("--help", "Options"), ("-version", "version")]:
+            for datadir in [control_datadir, blocked_datadir]:
+                result = subprocess.run(
+                    [quicksilverd, "-chain=sandbox", f"-datadir={datadir}", arg],
+                    capture_output=True,
+                    text=True,
+                )
+                assert_equal(result.returncode, 0)
+                assert expected_text in result.stdout
+
         self.log.info("Start Quicksilver with -h for help text")
         self.nodes[0].start(extra_args=['-h'])
         # Node should exit immediately and output help to stdout.
