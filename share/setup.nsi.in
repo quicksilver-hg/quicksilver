@@ -15,11 +15,11 @@ Unicode true
 !define URL @CLIENT_URL@
 
 # MUI Symbol Definitions
-!define MUI_ICON "@abs_top_srcdir@/share/pixmaps/quicksilver.ico"
-!define MUI_WELCOMEFINISHPAGE_BITMAP "@abs_top_srcdir@/share/pixmaps/nsis-wizard.bmp"
+!define MUI_ICON "@nsis_app_icon@"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "@nsis_wizard_bitmap@"
 !define MUI_HEADERIMAGE
 !define MUI_HEADERIMAGE_RIGHT
-!define MUI_HEADERIMAGE_BITMAP "@abs_top_srcdir@/share/pixmaps/nsis-header.bmp"
+!define MUI_HEADERIMAGE_BITMAP "@nsis_header_bitmap@"
 !define MUI_FINISHPAGE_NOAUTOCLOSE
 !define MUI_STARTMENUPAGE_REGISTRY_ROOT HKLM
 !define MUI_STARTMENUPAGE_REGISTRY_KEY ${REGKEY}
@@ -28,7 +28,7 @@ Unicode true
 !define MUI_FINISHPAGE_RUN "$WINDIR\explorer.exe"
 !define MUI_FINISHPAGE_RUN_PARAMETERS $INSTDIR\@QUICKSILVER_GUI_NAME@@EXEEXT@
 !define MUI_UNICON "${NSISDIR}\Contrib\Graphics\Icons\modern-uninstall.ico"
-!define MUI_UNWELCOMEFINISHPAGE_BITMAP "@abs_top_srcdir@/share/pixmaps/nsis-wizard.bmp"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "@nsis_wizard_bitmap@"
 !define MUI_UNFINISHPAGE_NOAUTOCLOSE
 
 # Included files
@@ -73,13 +73,13 @@ ShowUninstDetails show
 Section -Main SEC0000
     SetOutPath $INSTDIR
     SetOverwrite on
-    File @abs_top_builddir@/release/@QUICKSILVER_GUI_NAME@@EXEEXT@
-    File /oname=COPYING.txt @abs_top_srcdir@/COPYING
-    File /oname=readme.txt @abs_top_srcdir@/doc/README_windows.txt
-    File @abs_top_srcdir@/share/examples/quicksilver.conf
-    File @abs_top_builddir@/release/@QUICKSILVER_AGENT_NAME@@EXEEXT@
+    File "@nsis_release_dir@@QUICKSILVER_GUI_NAME@@EXEEXT@"
+    File /oname=COPYING.txt "@nsis_copying@"
+    File /oname=readme.txt "@nsis_readme_windows@"
+    File "@nsis_example_conf@"
+    File "@nsis_release_dir@@QUICKSILVER_AGENT_NAME@@EXEEXT@"
     SetOutPath $INSTDIR\share\rpcauth
-    File @abs_top_srcdir@/share/rpcauth/*.*
+    File "@nsis_rpcauth_dir@*.*"
     SetOutPath $INSTDIR
     WriteRegStr HKCU "${REGKEY}\Components" Main 1
 SectionEnd
@@ -88,12 +88,12 @@ SectionEnd
 # application provisions consensus itself. See doc/developer-tools.md.
 Section /o "Developer tools" SEC0002
     SetOutPath $INSTDIR\developer-tools
-    File @abs_top_builddir@/release/@QUICKSILVER_DAEMON_NAME@@EXEEXT@
-    File @abs_top_builddir@/release/@QUICKSILVER_CLI_NAME@@EXEEXT@
-    File @abs_top_builddir@/release/@QUICKSILVER_TX_NAME@@EXEEXT@
-    File @abs_top_builddir@/release/@QUICKSILVER_VAULT_TOOL_NAME@@EXEEXT@
-    File @abs_top_builddir@/release/@QUICKSILVER_UTIL_NAME@@EXEEXT@
-    File /oname=developer-tools.md @abs_top_srcdir@/doc/developer-tools.md
+    File "@nsis_release_dir@@QUICKSILVER_DAEMON_NAME@@EXEEXT@"
+    File "@nsis_release_dir@@QUICKSILVER_CLI_NAME@@EXEEXT@"
+    File "@nsis_release_dir@@QUICKSILVER_TX_NAME@@EXEEXT@"
+    File "@nsis_release_dir@@QUICKSILVER_VAULT_TOOL_NAME@@EXEEXT@"
+    File "@nsis_release_dir@@QUICKSILVER_UTIL_NAME@@EXEEXT@"
+    File /oname=developer-tools.md "@nsis_developer_tools_doc@"
     SetOutPath $INSTDIR
     WriteRegStr HKCU "${REGKEY}\Components" DeveloperTools 1
 SectionEnd
