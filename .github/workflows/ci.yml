@@ -150,8 +150,9 @@ jobs:
           # Workaround for libevent, which requires CMake 3.1 but is incompatible with CMake >= 4.0.
           sed -i '1s/^/set(ENV{CMAKE_POLICY_VERSION_MINIMUM} 3.5)\n/' "${VCPKG_INSTALLATION_ROOT}/scripts/ports.cmake"
 
-      - name: vcpkg tools cache
-        uses: actions/cache@v6
+      - name: Restore vcpkg tools cache
+        uses: actions/cache/restore@v6
+        id: vcpkg-tools-cache
         with:
           path: C:/vcpkg/downloads/tools
           key: ${{ github.job }}-vcpkg-tools
@@ -166,6 +167,14 @@ jobs:
       - name: Generate build system
         run: |
           cmake -B build --preset vs2022-static -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" ${{ matrix.generate-options }}
+
+      - name: Save vcpkg tools cache
+        uses: actions/cache/save@v6
+        # Preserve PR saves, but do not publish tools from a cancelled vcpkg run.
+        if: ${{ !cancelled() && steps.vcpkg-tools-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: C:/vcpkg/downloads/tools
+          key: ${{ github.job }}-vcpkg-tools
 
       - name: Save vcpkg binary cache
         uses: actions/cache/save@v6
