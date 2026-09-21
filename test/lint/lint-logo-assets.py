@@ -15,6 +15,8 @@ from pathlib import Path
 
 
 OLD_DOXYGEN_SHA256 = "36a7efe977f7311fb4211c70fe400effa226b2266ade90ea92b2107f377ea45e"
+OLD_NSIS_HEADER_SHA256 = "1851d48c1fb1f4e2c7aba186e131960299cf89d0e7d3a1f098bfd4154a8635dc"
+OLD_NSIS_WIZARD_SHA256 = "ebdc22db85bd4601ac32750e7a96f3b86a162e042125e701b36a445ee08a4540"
 CRESCENT_ARC_RE = re.compile(
     r'<path d="M (?P<x1>[0-9.]+) (?P<y1>[0-9.]+) A (?P<rx>[0-9.]+) (?P<ry>[0-9.]+) 0 0 0 (?P<x2>[0-9.]+) (?P<y2>[0-9.]+)"'
 )
@@ -44,6 +46,17 @@ def png_size(path: Path) -> tuple[int, int]:
     if len(header) != 24 or header[:8] != b"\x89PNG\r\n\x1a\n" or header[12:16] != b"IHDR":
         raise ValueError(f"{path} is not a PNG with an IHDR header")
     return struct.unpack(">II", header[16:24])
+
+
+def bmp_size(path: Path) -> tuple[int, int, int, int]:
+    with path.open("rb") as file:
+        header = file.read(34)
+    if len(header) != 34 or header[:2] != b"BM":
+        raise ValueError(f"{path} is not a BMP with a BITMAPINFOHEADER")
+    dib_size, width, height, _planes, bit_count, compression = struct.unpack_from("<IiiHHI", header, 14)
+    if dib_size != 40:
+        raise ValueError(f"{path} is not a BMP with a BITMAPINFOHEADER")
+    return width, abs(height), bit_count, compression
 
 
 def sha256(path: Path) -> str:
@@ -140,6 +153,38 @@ def main() -> int:
                 failures.append(f"{output} must be exactly 128x128")
         except ValueError as err:
             failures.append(str(err))
+
+    nsis_assets = (
+        (
+            Path("share/pixmaps/nsis-header.bmp"),
+            (150, 57),
+            OLD_NSIS_HEADER_SHA256,
+            "inherited Bitcoin Core header wordmark",
+        ),
+        (
+            Path("share/pixmaps/nsis-wizard.bmp"),
+            (164, 314),
+            OLD_NSIS_WIZARD_SHA256,
+            "inherited Bitcoin Core wizard mark",
+        ),
+    )
+    for rel, expected_wh, forbidden, inherited_name in nsis_assets:
+        path = root / rel
+        if not path.exists():
+            failures.append(f"{rel} is missing")
+            continue
+        try:
+            width, height, bit_count, compression = bmp_size(path)
+            if (width, height) != expected_wh:
+                failures.append(f"{rel} must be exactly {expected_wh[0]}x{expected_wh[1]}")
+            if bit_count != 24:
+                failures.append(f"{rel} must be 24 bpp")
+            if compression != 0:
+                failures.append(f"{rel} must be uncompressed (BI_RGB)")
+        except ValueError as err:
+            failures.append(str(err))
+        if sha256(path) == forbidden:
+            failures.append(f"{rel} is the {inherited_name}")
 
     if failures:
         print("Logo asset lint failures:")

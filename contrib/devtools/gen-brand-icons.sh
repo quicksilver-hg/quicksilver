@@ -3,7 +3,7 @@
 #
 # Source of truth: src/qt/res/src/quicksilver.svg (☿ on a Cinnabar disc). Every
 # raster below is derived from it, so edit the SVG and re-run this script rather
-# than touching the generated PNG/ICO/ICNS files by hand.
+# than touching the generated PNG/ICO/ICNS/BMP files by hand.
 #
 # Requires: rsvg-convert (librsvg), ImageMagick `convert`, and python3 (for the
 # self-contained .icns packer — ImageMagick has no ICNS coder here).
@@ -25,15 +25,15 @@ convert -background none "$ICONS/quicksilver.png" -define icon:auto-resize=256,1
 
 # macOS .icns: ImageMagick has no ICNS coder here, so render each size and pack
 # the PNGs into a real ICNS container (macOS 10.7+ reads PNG-based entries).
-TMPICNS="$(mktemp -d)"
-trap 'rm -rf "$TMPICNS"' EXIT
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
 declare -A ICNS_TYPES=( [16]=icp4 [32]=icp5 [128]=ic07 [256]=ic08 [512]=ic09 [1024]=ic10 )
 icns_type_arg=""
 for s in 16 32 128 256 512 1024; do
-  rsvg-convert -w "$s" -h "$s" "$SVG" -o "$TMPICNS/$s.png"
+  rsvg-convert -w "$s" -h "$s" "$SVG" -o "$TMP/$s.png"
   icns_type_arg+="${s}:${ICNS_TYPES[$s]},"
 done
-python3 - "$ICONS/quicksilver.icns" "$TMPICNS" "$icns_type_arg" <<'PY'
+python3 - "$ICONS/quicksilver.icns" "$TMP" "$icns_type_arg" <<'PY'
 import struct, sys
 out, tmp, type_arg = sys.argv[1], sys.argv[2], sys.argv[3]
 types = {}
@@ -57,4 +57,13 @@ convert -background none "$PIX/quicksilver256.png" -define icon:auto-resize=256,
 # Doxygen logo, constrained by Doxyfile.in's 55px maximum height.
 rsvg-convert -w 55 -h 55 "$SVG" -o "$DOCDIR/quicksilver_logo_doxygen.png"
 python3 contrib/devtools/gen-qt-hud-icons.py
+
+# NSIS installer bitmaps (MUI fixes both sizes; 24-bit uncompressed BMP3, no alpha)
+rsvg-convert -w 47 -h 47 "$SVG" -o "$TMP/nsis-mark-47.png"
+convert -size 150x57 xc:white "$TMP/nsis-mark-47.png" -gravity east -geometry +6+0 \
+        -composite -alpha remove -alpha off -type TrueColor "BMP3:$PIX/nsis-header.bmp"
+rsvg-convert -w 120 -h 120 "$SVG" -o "$TMP/nsis-mark-120.png"
+convert -size 164x314 xc:white "$TMP/nsis-mark-120.png" -gravity north -geometry +0+40 \
+        -composite -alpha remove -alpha off -type TrueColor "BMP3:$PIX/nsis-wizard.bmp"
+
 echo "brand icons regenerated"
