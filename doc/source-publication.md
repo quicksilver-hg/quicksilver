@@ -59,6 +59,11 @@ command-line options and cannot affect the man pages, but without it the four
 `interface_usdt_*.py` tests skip silently. Do not drop either flag to make a
 gate quieter -- a skipped test is not a passing one.
 
+Keep the external signer OFF for a full-suite gate because the checked-in man
+pages describe the shipping build, which omits `-signer`. With the signer OFF,
+`vault_signer.py` and `rpc_signer.py` skip visibly. Cover those tests in a
+targeted signer-ON build instead of enabling the signer for the full suite.
+
 ```bash
 cmake -B build -DWITH_ZMQ=ON -DWITH_USDT=ON -DBUILD_GUI=ON -DBUILD_TESTS=ON \
       -DBUILD_BENCH=ON -DBUILD_FUZZ_BINARY=ON
