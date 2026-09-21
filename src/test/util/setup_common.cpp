@@ -232,7 +232,10 @@ BasicTestingSetup::~BasicTestingSetup()
     gArgs.ClearArgs();
     // ClearArgs() resets the argument registry, not the settings, so without
     // this the next fixture inherits the previous case's runtime settings.
-    gArgs.LockSettings([](common::Settings& settings) { settings = {}; });
+    // Only the read-write settings are cleared: the forced settings hold the
+    // -datadir this fixture just pointed at a temporary directory, and erasing
+    // that sends the next consumer to the real home datadir.
+    gArgs.LockSettings([](common::Settings& settings) { settings.rw_settings.clear(); });
 }
 
 ChainTestingSetup::ChainTestingSetup(const ChainType chainType, TestOpts opts)
