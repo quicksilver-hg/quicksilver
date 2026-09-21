@@ -23,24 +23,65 @@ ARCH="$(uname -m)"
 
 mkdir -p "$TOOLS_DIR"
 
+# These pins were independently downloaded and hashed on 2026-09-20. The
+# linuxdeployqt numbered releases are marked "Do not use anymore", so its
+# digest pins the supported continuous asset at upstream build commit
+# 5af5737e72046234daa1c855f1f4397da9979a75. appimagetool publishes 1.9.1 as a
+# versioned release, so both its version and digest are pinned.
+#
+# To re-pin, choose the official release asset, download it, run sha256sum, and
+# update its URL and digest together. The SHA-256 check is the integrity
+# boundary; do not "temporarily" skip it.
+case "$ARCH" in
+  x86_64)
+    LINUXDEPLOYQT_URL="https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage"
+    LINUXDEPLOYQT_SHA256="974a87457ed26241b793bed7841978fcdf84158d13220e53833a06515f173b0b"
+    APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+    APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+    ;;
+  *)
+    echo "ERROR: AppImage helpers are not pinned for architecture: $ARCH" >&2
+    exit 1
+    ;;
+esac
+
 fetch_tool() {
-  local name="$1" url="$2" dest="$TOOLS_DIR/$1"
-  if [ ! -x "$dest" ]; then
+  local name="$1" url="$2" expected_sha256="$3" dest="$TOOLS_DIR/$1"
+  local actual_sha256
+
+  if [ ! -e "$dest" ]; then
     echo ">> fetching $name"
     if ! curl -fL "$url" -o "$dest"; then
+      rm -f "$dest"
       echo "ERROR: could not download $name from:" >&2
       echo "       $url" >&2
-      echo "Place an executable copy at $dest and re-run." >&2
+      echo "Place a copy of the pinned artifact at $dest and re-run." >&2
       exit 1
     fi
-    chmod +x "$dest"
+  else
+    echo ">> using cached $name"
   fi
+
+  actual_sha256="$(sha256sum "$dest" | awk '{print $1}')"
+  if [ "$actual_sha256" != "$expected_sha256" ]; then
+    rm -f "$dest"
+    echo "ERROR: SHA-256 mismatch for $dest" >&2
+    echo "  expected: $expected_sha256" >&2
+    echo "  actual:   $actual_sha256" >&2
+    echo "The file was deleted. Re-run to fetch it again if the copy was" >&2
+    echo "corrupted -- but if upstream moved the release the URL points at," >&2
+    echo "every re-run fetches the same new artifact: re-pin instead." >&2
+    exit 1
+  fi
+
+  echo ">> SHA-256 verified: $dest"
+  chmod +x "$dest"
 }
 
 fetch_tool linuxdeployqt \
-  "https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-${ARCH}.AppImage"
+  "$LINUXDEPLOYQT_URL" "$LINUXDEPLOYQT_SHA256"
 fetch_tool appimagetool \
-  "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage"
+  "$APPIMAGETOOL_URL" "$APPIMAGETOOL_SHA256"
 
 echo ">> configuring (application only)"
 # QS_DEVELOPER_TOOLS=OFF is what keeps the command-line tools out of the
