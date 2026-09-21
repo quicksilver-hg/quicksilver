@@ -1,8 +1,8 @@
 # Quicksilver
 
-Quicksilver is an experimental, independently operated UTXO network for
-exact-value payments. It has no transaction fees: senders provide verifiable
-proof-of-work instead, and recipients receive the full amount sent.
+Quicksilver is an experimental UTXO network for exact-value payments. It has
+no transaction fees: senders provide verifiable proof-of-work instead, and
+recipients receive the full amount sent.
 
 > [!WARNING]
 > Quicksilver is a pre-1.0 development project. The current 0.1.x series is
@@ -14,8 +14,10 @@ proof-of-work instead, and recipients receive the full amount sent.
 
 - **Feeless transactions.** Inputs and outputs balance exactly. Transaction
   proof-of-work provides admission and anti-spam cost.
-- **Cuckatoo proof-of-work.** Blocks and transactions use Quicksilver's Cuckatoo
-  proof format; this is not a SHA256d mining network.
+- **Cuckatoo proof-of-work.** Blocks and transactions are secured by Cuckatoo,
+  the graph-cycle proof-of-work from the Cuckoo Cycle family; this is not a
+  SHA256d mining network. Quicksilver runs it at a 42-edge cycle and uses the
+  same graph size for both the block and the transaction layer.
 - **Vault and agent tooling.** The source tree includes a desktop vault, a
   headless node, developer command-line tools, and an experimental agent client.
 - **Fresh network identity.** Quicksilver has its own genesis blocks, network
