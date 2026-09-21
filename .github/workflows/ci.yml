@@ -233,7 +233,9 @@ jobs:
 
       - name: Save Ccache cache
         uses: actions/cache/save@v6
-        if: github.event_name != 'pull_request' && steps.ccache-cache.outputs.cache-hit != 'true'
+        # Without the status check, this step inherits success() and never saves
+        # the cache on a red run, exactly when the cache is needed.
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.ccache-cache.outputs.cache-hit != 'true' }}
         with:
           path: ${{ env.CCACHE_DIR }}
           # https://github.com/actions/cache/blob/main/tips-and-workarounds.md#update-a-cache
