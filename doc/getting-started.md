@@ -68,11 +68,15 @@ other one. The choice is remembered per network, in that network's Qt settings
 (`Desktop/ConsensusEnabled`) rather than in `quicksilver.conf`, so it is made
 once per network and not per launch.
 
-Once enabled, the node starts, the desktop's own Tor bootstraps, and the
-shipped onion seed is dialled with no further configuration — no Tor install,
-no torrc, no `-addnode`. On a measured first run against a short `publictest`
-chain this reached the seed about 65 seconds after the opt-in and the chain tip
-about 10 seconds after that.
+Before enabling Consensus, provide a `tor` executable: install Tor through your
+package manager on Unix; on Windows, obtain it separately as described in
+[tor.md](tor.md#0-the-desktop-starts-its-own-tor).
+The desktop looks beside its own executable and on `PATH`; `-bundledtorpath`
+can name another location. Once enabled, the node starts, the desktop's own
+Tor bootstraps, and the shipped onion seed is dialled with no further
+configuration — no manual torrc or `-addnode`. On a measured first run against
+a short `publictest` chain this reached the seed about 65 seconds after the
+opt-in and the chain tip about 10 seconds after that.
 
 **Before the opt-in a vault-only desktop can hold a vault and receive an
 address, but it has no validated chain to read balances or history from and no

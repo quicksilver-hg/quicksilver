@@ -34,10 +34,13 @@ The onion seed is reachable **only over Tor**. A node with no Tor available
 cannot use it, and on a default configuration that leaves the node with no
 automatic path to a peer at all.
 
-**On the desktop, nothing — but you must ask for a node.** The desktop starts
-and supervises its own Tor, so it reaches the seed with no Tor installed, no
-torrc and no configuration of any kind. See [tor.md](tor.md) §0, which also
-covers `-bundledtor=0` for anyone who would rather run their own.
+**On the desktop, provide Tor and ask for a node.** The desktop starts and
+supervises its own Tor process, but needs a `tor` executable beside the
+Quicksilver executable, on `PATH`, or at `-bundledtorpath=<path>`. Install Tor
+through your package manager on Unix; on Windows, obtain it separately as
+described in [tor.md](tor.md#0-the-desktop-starts-its-own-tor). The desktop's
+Tor needs no manual torrc or proxy configuration. That section also covers
+`-bundledtor=0` for anyone who would rather run their own.
 
 What it does *not* do is start a node unasked. A desktop first run is
 vault-only: no node, no Tor and no peer until **Consensus** is enabled from

@@ -35,14 +35,14 @@ Quicksilver requires one of the following compilers.
 | [SQLite](../depends/packages/sqlite.mk) (vault) | [link](https://sqlite.org) | [3.46.1] | [3.7.17] | No |
 | Python (scripts, tests) | [link](https://www.python.org) | N/A | [3.10] | No |
 | [systemtap](../depends/packages/systemtap.mk) ([tracing](tracing.md)) | [link](https://sourceware.org/systemtap/) | [4.8]| N/A | No |
-| Tor ([tor.md](tor.md)) (gui) | [link](https://www.torproject.org/download/tor/) | N/A | [0.2.7] | Yes |
+| Tor ([tor.md](tor.md)) (onion) | [link](https://www.torproject.org/download/tor/) | N/A | [0.2.7] | Yes |
 
 Tor is a **runtime** dependency, and nothing links against it: the desktop
-starts and supervises `tor` as a child process. It is supplied
-by the platform package manager on Unix, and by `contrib/tor/fetch-tor.ps1` —
-which pins a SHA-256 — on Windows. The version floor is whatever supports
-`ControlPort auto`, which Tor has since 0.2.7; every packaged Tor since 2015
-satisfies it, so there is no practical floor to police. `quicksilverd` defaults
-to `-bundledtor=0`. It needs a Tor proxy to reach the onion seed unless it is
-given an explicit peer, and needs Tor's control port additionally to host an
-onion service (see [Bootstrapping](bootstrapping.md)).
+starts and supervises `tor` as a child process. Install it through the platform
+package manager on Unix. On Windows, the operator can run
+`contrib/tor/fetch-tor.ps1`, which pins a SHA-256, to obtain it. The version
+floor is whatever supports `ControlPort auto`, which Tor has since 0.2.7; every
+packaged Tor since 2015 satisfies it, so there is no practical floor to police.
+`quicksilverd` defaults to `-bundledtor=0`. It needs a Tor proxy to reach the
+onion seed unless given an explicit peer. Hosting an onion service additionally
+requires Tor's control port (see [Bootstrapping](bootstrapping.md)).

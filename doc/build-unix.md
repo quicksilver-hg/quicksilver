@@ -242,10 +242,14 @@ Setup and Build Example: Arch Linux
 -----------------------------------
 This example lists the steps necessary to setup and build a command line only distribution of the latest changes on Arch Linux:
 
-    pacman --sync --needed cmake boost gcc git libevent make python sqlite
+    sudo pacman --sync --needed cmake boost gcc git libevent make python sqlite tor
     git clone https://github.com/quicksilver-hg/quicksilver.git
     cd quicksilver/
     cmake -B build
     cmake --build build -j "$(nproc)"
     ctest --test-dir build
-    ./build/bin/quicksilverd
+    sudo systemctl start tor.service
+    ./build/bin/quicksilverd -proxy=127.0.0.1:9050
+
+The Tor service provides the local SOCKS proxy the daemon needs to reach the
+onion seed. Tor is needed at runtime, not to compile the command-line node.
