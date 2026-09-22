@@ -68,7 +68,9 @@ bool CuckatooVerify(const Cycle& cycle, const Keys& keys, uint8_t edgebits);
 //! Reuses one multi-threaded solver context across the sweep. edgebits in {19,28}
 //! (block PoW shares the per-tx E28 graph size; a single E28 solver serves both).
 //! When cpu_fallback is false, a failed GPU attempt returns false WITHOUT running
-//! the CPU solver (used where a CPU grind is infeasible; see SP1b design).
+//! the CPU solver. The caller declined the CPU path at this graph size; see
+//! node::CpuBlockMiningAllowed and vault::AllowsTxPowCpuFallback. This layer
+//! does not know why.
 //! A GPU cycle that fails self-verify is reported as kSolverError, not kSolved.
 //! `discarded_cycles`, when non-null, is incremented for each cycle the solver produced
 //! that failed CuckatooVerify and was therefore swept past (F-253). Such a cycle is not an
@@ -90,7 +92,9 @@ bool CuckatooSolve(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint8_
 //! keyed by each until a 42-cycle is found. On success fills `out`, sets `out_nonce`,
 //! returns true. edgebits in {19,28}.
 //! When cpu_fallback is false, a failed GPU attempt returns false WITHOUT running
-//! the CPU solver (used where a CPU grind is infeasible; see SP1b design).
+//! the CPU solver. The caller declined the CPU path at this graph size; see
+//! node::CpuBlockMiningAllowed and vault::AllowsTxPowCpuFallback. This layer
+//! does not know why.
 //! A GPU cycle that fails self-verify is reported as kSolverError, not kSolved.
 //! A CPU cycle that fails self-verify is swept past; see `discarded_cycles` below.
 //! `discarded_cycles`, when non-null, is incremented for each cycle the solver produced

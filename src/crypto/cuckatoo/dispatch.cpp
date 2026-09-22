@@ -128,7 +128,7 @@ bool CuckatooSolve(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint8_
             out = gpu_cyc; out_nonce = gpu_nonce; return true;
         }
     }
-    if (!cpu_fallback) return false;  // CPU grind infeasible at this graph size per caller policy
+    if (!cpu_fallback) return false;  // caller declined the CPU path (node::CpuBlockMiningAllowed, vault::AllowsTxPowCpuFallback)
     if (cancel && cancel()) return false;  // cancelled during the GPU attempt: do not start a CPU sweep
     if (edgebits != 19 && edgebits != 28) return false;  // no solver built for this graph size
     // mutate_nonce=1 here: the vendored setheadernonce writes the nonce into the pre-pow's
@@ -163,7 +163,7 @@ bool CuckatooSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebit
             out = gpu_cyc; out_nonce = gpu_nonce; return true;
         }
     }
-    if (!cpu_fallback) return false;  // CPU grind infeasible at this graph size per caller policy
+    if (!cpu_fallback) return false;  // caller declined the CPU path (node::CpuBlockMiningAllowed, vault::AllowsTxPowCpuFallback)
     if (cancel && cancel()) return false;  // cancelled during the GPU attempt: do not start a CPU sweep
     if (edgebits != 19 && edgebits != 28) {
         assert(false && "CuckatooSolveBytes: unsupported edgebits");

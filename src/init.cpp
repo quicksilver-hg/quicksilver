@@ -472,7 +472,7 @@ void SetupServerArgs(ArgsManager& argsman)
     argsman.AddArg("-blocksdir=<dir>", "Specify directory to hold blocks subdirectory for *.dat files (default: <datadir>)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-cuckatoosolver=<path>", "Path to an external GPU Cuckatoo solver binary (mining/test only; never consensus). Returned proofs are self-verified before use, falling back to the CPU solver on any failure.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-cuckatoosolvertimeout=<sec>", "No-progress watchdog window for the external GPU solver, in seconds (mining/test only). The bridge kills a solver subprocess that emits no output for this long and falls back per policy.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-allowcpumining", "Permit CPU block mining at the real graph size when no GPU solver is configured (default: false). CPU mining is orders of magnitude slower than GPU and unlikely to find blocks; intended for bootstrap/testing.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-allowcpumining", "Permit CPU block mining at the real graph size when no GPU solver is configured (default: false). CPU mining is orders of magnitude slower than a GPU on the same graph, so on main and publictest it is a losing race against GPU miners rather than an impossible one. It exists for operators who choose to run without a GPU.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-blocksxor",
                    strprintf("Whether an XOR-key applies to blocksdir *.dat files. "
                              "The created XOR-key will be zeros for an existing blocksdir or when `-blocksxor=0` is "

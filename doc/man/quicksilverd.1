@@ -26,8 +26,9 @@ message)
 .IP
 Permit CPU block mining at the real graph size when no GPU solver is
 configured (default: false). CPU mining is orders of magnitude
-slower than GPU and unlikely to find blocks; intended for
-bootstrap/testing.
+slower than a GPU on the same graph, so on main and publictest it
+is a losing race against GPU miners rather than an impossible
+one. It exists for operators who choose to run without a GPU.
 .HP
 \fB\-assumevalid=\fR<hex>
 .IP
