@@ -20,7 +20,7 @@ To Build
 ---------------------
 
 ```bash
-cmake -B build
+cmake -B build   # headless profile: command-line node and vault, not the GUI
 ```
 This selects `RelWithDebInfo`, so the binaries carry debug information. A Linux
 build with GCC 13.3 produced a 251.6 MiB unstripped `quicksilverd`, against
@@ -80,24 +80,29 @@ than its own version number.
 #### Dependency Build Instructions
 
 To install everything the GUI build recommended by [README.md](../README.md)
-and [INSTALL.md](../INSTALL.md) needs, in one command:
+and [INSTALL.md](../INSTALL.md) needs, update the package index and then:
 
+    sudo apt-get update
     sudo apt-get install build-essential cmake pkgconf python3 git \
         libevent-dev libboost-dev libsqlite3-dev qtbase5-dev libqrencode-dev tor
 
-Add `qtwayland5` on a Wayland desktop. For a headless node, drop `qtbase5-dev`,
-`libqrencode-dev` and `tor`. The itemized lists below say what each package is
-for and cover the optional features.
+Add `qtwayland5` on a Wayland desktop. For a headless node, drop `qtbase5-dev`
+and `libqrencode-dev`. Keep `tor`: without it, and without an explicit peer, a
+headless node cannot reach the only seed (see
+[Bootstrapping](bootstrapping.md)). The itemized lists below say what each
+package is for and cover the optional features.
 
-Two things that command does which are worth knowing:
+Two things the install command does which are worth knowing:
 
 - It installs `git`, so it also works on a machine that does not have it yet —
   but you then need it *before* cloning, which is why the dependencies come
   first here.
-- The `tor` package installs a system Tor service and starts it on port 9050.
-  That is what `quicksilverd` needs. The desktop does not use it: it starts a
-  Tor of its own on ports Tor picks, so the two never collide. Drop `tor` from
-  the line if you only ever run the desktop.
+- The `tor` package installs a system Tor service and starts it on port 9050,
+  and it installs the `tor` binary the desktop execs. The service is what
+  `quicksilverd` needs. The desktop does not use that service: it starts a Tor
+  of its own, on ports Tor picks, so the two never collide. Keep `tor` on the
+  line even if you only run the desktop; what the desktop does not use is the
+  system service on 9050.
 
 Build requirements:
 
@@ -112,9 +117,13 @@ SQLite is required for the vault:
     sudo apt install libsqlite3-dev
 
 `tor` is a **runtime** dependency of the desktop, not a build-time one: the
-desktop starts and supervises it, so a first run reaches the onion-only seed
-without you configuring anything (see [doc/tor.md](tor.md)). `quicksilverd` does
-not need it unless you are running an onion service yourself.
+desktop starts and supervises it, and needs no Tor configuration — no torrc,
+no proxy setting — once Consensus is enabled. It is the opt-in, not
+configuration, that stands between a first run and the seed (see
+[Getting Started](getting-started.md#a-first-run-is-vault-only-it-runs-no-node-until-you-enable-consensus)).
+`quicksilverd` needs a Tor proxy to reach the onion seed unless it is given an
+explicit peer, and needs Tor's control port additionally to host an onion
+service (see [Bootstrapping](bootstrapping.md)).
 
     sudo apt-get install tor
 
@@ -157,8 +166,10 @@ and [INSTALL.md](../INSTALL.md) needs, in one command:
         libevent-devel boost-devel sqlite-devel qt5-qtbase-devel qrencode-devel tor
 
 Add `qt5-qtwayland` on a Wayland desktop. For a headless node, drop
-`qt5-qtbase-devel`, `qrencode-devel` and `tor`. The itemized lists below say what
-each package is for and cover the optional features.
+`qt5-qtbase-devel` and `qrencode-devel`. Keep `tor`: without it, and without an
+explicit peer, a headless node cannot reach the only seed (see
+[Bootstrapping](bootstrapping.md)). The itemized lists below say what each
+package is for and cover the optional features.
 
 Build requirements:
 
@@ -173,9 +184,13 @@ SQLite is required for the vault:
     sudo dnf install sqlite-devel
 
 `tor` is a **runtime** dependency of the desktop, not a build-time one: the
-desktop starts and supervises it, so a first run reaches the onion-only seed
-without you configuring anything (see [doc/tor.md](tor.md)). `quicksilverd` does
-not need it unless you are running an onion service yourself.
+desktop starts and supervises it, and needs no Tor configuration — no torrc,
+no proxy setting — once Consensus is enabled. It is the opt-in, not
+configuration, that stands between a first run and the seed (see
+[Getting Started](getting-started.md#a-first-run-is-vault-only-it-runs-no-node-until-you-enable-consensus)).
+`quicksilverd` needs a Tor proxy to reach the onion seed unless it is given an
+explicit peer, and needs Tor's control port additionally to host an onion
+service (see [Bootstrapping](bootstrapping.md)).
 
     sudo dnf install tor
 
@@ -231,6 +246,6 @@ This example lists the steps necessary to setup and build a command line only di
     git clone https://github.com/quicksilver-hg/quicksilver.git
     cd quicksilver/
     cmake -B build
-    cmake --build build
+    cmake --build build -j "$(nproc)"
     ctest --test-dir build
     ./build/bin/quicksilverd

@@ -37,11 +37,12 @@ Quicksilver requires one of the following compilers.
 | [systemtap](../depends/packages/systemtap.mk) ([tracing](tracing.md)) | [link](https://sourceware.org/systemtap/) | [4.8]| N/A | No |
 | Tor ([tor.md](tor.md)) (gui) | [link](https://www.torproject.org/download/tor/) | N/A | [0.2.7] | Yes |
 
-Tor is a **runtime** dependency of the desktop only, and nothing links against
-it: the desktop starts and supervises `tor` as a child process. It is supplied
+Tor is a **runtime** dependency, and nothing links against it: the desktop
+starts and supervises `tor` as a child process. It is supplied
 by the platform package manager on Unix, and by `contrib/tor/fetch-tor.ps1` —
 which pins a SHA-256 — on Windows. The version floor is whatever supports
 `ControlPort auto`, which Tor has since 0.2.7; every packaged Tor since 2015
-satisfies it, so there is no practical floor to police. `quicksilverd` does not
-need Tor unless its operator is running an onion service, and defaults to
-`-bundledtor=0`.
+satisfies it, so there is no practical floor to police. `quicksilverd` defaults
+to `-bundledtor=0`. It needs a Tor proxy to reach the onion seed unless it is
+given an explicit peer, and needs Tor's control port additionally to host an
+onion service (see [Bootstrapping](bootstrapping.md)).
