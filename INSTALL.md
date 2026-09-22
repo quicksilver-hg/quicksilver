@@ -48,10 +48,12 @@ than minutes. `nproc` is Linux; use `$(sysctl -n hw.ncpu)` on the BSDs, or an
 explicit count such as `-j 8` anywhere else.
 
 `ctest --test-dir build` runs serially and takes about 9 minutes for the GUI
-profile. A good run ends `100% tests passed, 0 tests failed out of 146`. On a
-machine with no CUDA device `gpu_parity_tests` is skipped, and a skipped test
-is still counted in that `100%` — see [GPU Solver](doc/gpu-solver.md) for what
-that test needs. Add `-j` to `ctest` as well if you want it to finish sooner.
+profile. A good GUI run ends `100% tests passed, 0 tests failed out of 147`;
+a headless build without `-DBUILD_GUI=ON` ends at `146`. If
+`CUCKATOO_GPU_SOLVER` is unset, `gpu_parity_tests` is skipped; set it to a
+`qsgpusolve` binary to run the test. A skipped test is still counted in that
+`100%` — see [GPU Solver](doc/gpu-solver.md) for what that test needs. Add `-j`
+to `ctest` as well if you want it to finish sooner.
 
 Useful focused configurations include:
 
