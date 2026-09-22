@@ -18,7 +18,7 @@ recipes. There are only two jobs, and they have separate requirements:
 
 | Goal | What it needs | What it does not need |
 |---|---|---|
-| **Reach the onion seed and sync** — what a new node needs | A SOCKS proxy, normally `127.0.0.1:9050`, given to the node as `-proxy=` or `-onion=` | The control port, cookie authentication, group membership, any torrc edit |
+| **Reach the onion seed and sync** — what a new node needs | A SOCKS proxy, normally `127.0.0.1:9050`, given to the node as `-proxy=` or `-onion=`. For `quicksilverd`, `-proxy=` also routes clearnet peers through Tor and switches address discovery off, so the node does not advertise its routable host addresses; `-onion=` leaves clearnet peers direct and discovery on unless `-discover=0` is given. | The control port, cookie authentication, group membership, any torrc edit |
 | **Host an onion service of your own** — accept inbound Tor peers | All of the above, plus Tor's control port, its authentication, and read access to the cookie | — |
 
 A stock `tor` package on most distributions gives you the first with no
@@ -54,6 +54,10 @@ autodetection.
    SOCKS5 proxy at `127.0.0.1:9050` in **Controls > Options > Network** and
    restart Quicksilver.
 
+On `quicksilverd`, `-onion=` alone leaves address discovery on, so the node
+still advertises this machine's routable addresses beside its onion address.
+Add `-discover=0` to stop that; `-proxy=` switches discovery off by itself.
+
 The two ports have different jobs: `9050` is the SOCKS5 proxy used to reach
 onion peers; `9051` is the authenticated control API used to create the local
 onion service. A working SOCKS port does not prove that the control port is
@@ -84,6 +88,10 @@ things Quicksilver needs are the same, but they are configured differently.
 3. Start Quicksilver with `-onion=127.0.0.1:9050`, or enable the separate Tor
    SOCKS5 proxy at `127.0.0.1:9050` in **Controls > Options > Network** and
    restart Quicksilver.
+
+On `quicksilverd`, `-onion=` alone leaves address discovery on, so the node
+still advertises this machine's routable addresses beside its onion address.
+Add `-discover=0` to stop that; `-proxy=` switches discovery off by itself.
 
 Tor Browser can be used instead of the Expert Bundle, but its SOCKS5 proxy
 listens on `127.0.0.1:9150`, not `9050`, and it only runs while the browser is
@@ -350,6 +358,14 @@ listen on all devices and another node could establish a clearnet connection, wh
 your address. To mitigate this, additionally bind the address of your Tor proxy:
 
     quicksilverd ... -bind=127.0.0.1:9556=onion
+
+For Tor-only inbound reachability without advertising the host's routable
+addresses, use these settings together in `quicksilver.conf` (the bind target
+must match the Tor service target above):
+
+    onion=127.0.0.1:9050
+    discover=0
+    bind=127.0.0.1:9556=onion
 
 If you don't care too much about hiding your node, and want to be reachable on IPv4
 as well, use `discover` instead:

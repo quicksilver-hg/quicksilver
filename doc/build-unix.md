@@ -253,3 +253,6 @@ This example lists the steps necessary to setup and build a command line only di
 
 The Tor service provides the local SOCKS proxy the daemon needs to reach the
 onion seed. Tor is needed at runtime, not to compile the command-line node.
+
+With `-proxy=`, `quicksilverd` also turns address discovery off, so it does not
+advertise the machine's routable addresses.

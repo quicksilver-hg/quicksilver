@@ -109,6 +109,9 @@ For `publictest`:
 ./build/bin/quicksilverd -publictest -proxy=127.0.0.1:9050
 ```
 
+With `-proxy=`, `quicksilverd` also turns address discovery off, so it does not
+advertise the machine's routable addresses.
+
 A SOCKS proxy is the whole requirement for *reaching* the seed. The control
 port, cookie authentication and group membership in [tor.md](tor.md) are needed
 only to *host* an onion service of your own; skipping them does not stop a node

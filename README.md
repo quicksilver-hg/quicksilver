@@ -93,6 +93,9 @@ Add `-publictest` to both commands for the public test network. The daemon does
 not start a Tor of its own, which is why it is given a proxy here; the desktop
 does, and is not.
 
+For `quicksilverd`, `-proxy=` also turns address discovery off, so it does not
+advertise the machine's routable addresses.
+
 The [Getting Started](doc/getting-started.md) guide continues from build output
 to network selection, peer discovery, and first health checks.
 
