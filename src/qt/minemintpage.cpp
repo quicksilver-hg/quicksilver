@@ -107,9 +107,8 @@ MineMintPage::MineMintPage(QWidget* parent)
     // Fault sentences are long -- the Windows device-fault one names a registry key,
     // a value and an event ID -- and an unwrapped label stretches the whole page.
     m_solver_health_value->setWordWrap(true);
-    // Of every state this row can report, exactly one is fixable from inside the app,
-    // and the setting for it is two clicks away in Options. Put the control here
-    // rather than a sentence describing where the control lives.
+    // The halted state is fixable from Options: a solver path, or processor
+    // block mining. One button opens that screen; the health sentence names both.
     m_configure_solver_button = new QPushButton(tr("Choose solver…"), group);
     m_configure_solver_button->setObjectName(QStringLiteral("configureSolverButton"));
     m_configure_solver_button->setProperty("class", QStringLiteral("secondaryActionButton"));
@@ -195,45 +194,74 @@ void MineMintPage::refreshIsolationState()
         : QString::number(m_blocks_found));
 }
 
-void MineMintPage::setStatus(const interfaces::MiningStatus& s)
+MineMintPage::StatusText MineMintPage::statusText(const interfaces::MiningStatus& s)
 {
-    m_status_value->setText(s.active ? tr("Active") : tr("Idle"));
-    m_payout_value->setText(s.address.empty() ? tr("None") : QString::fromStdString(s.address));
-    m_solver_value->setText(s.gpu_solver ? tr("GPU bridge") : tr("CPU"));
-    m_minted_value->setText(QuicksilverUnits::formatWithUnit(
-        QuicksilverUnits::Unit::HG, s.coins_minted_session));
-    m_blocks_found = s.blocks_found;
-    refreshIsolationState();
+    // Armed with nothing permitted to run is not "warming up" and not "CPU".
+    // The other three branches are the ones this page already got right.
+    const bool halted{s.active && !s.block_solving_possible};
+    StatusText rows;
+    rows.block_mining = !s.active ? tr("Idle") : (halted ? tr("Halted") : tr("Active"));
+    if (s.gpu_solver) {
+        rows.solver = tr("GPU bridge");
+    } else if (halted) {
+        rows.solver = tr("None");
+    } else {
+        rows.solver = tr("CPU");
+    }
     // No rate yet is not a rate of zero: printing 0.000 here is what made an
     // armed miner look identical to a dead one for the whole of its first graph.
-    const QString rate = s.attempts_per_second
+    // Halted is the terminal case of that same trap: a graph is never attempted.
+    const QString rate{s.attempts_per_second
         ? QString::number(*s.attempts_per_second, 'f', 3)
-        : (s.active ? tr("Warming up") : tr("None"));
+        : (!s.active ? tr("None") : (halted ? tr("Not solving") : tr("Warming up")))};
     // Singular and plural as separate strings rather than the "%n graph(s)" idiom, for
     // the reason set out in qt/maturity.cpp: no app catalogue is installed, so %n is
     // never resolved and the literal "(s)" ships.
-    const qlonglong graphs = static_cast<qlonglong>(s.graphs_attempted);
-    const QString graph_count = graphs == 1 ? tr("1 graph attempted")
-                                            : tr("%1 graphs attempted").arg(graphs);
-    m_rate_value->setText(rate + QStringLiteral(" (") + graph_count + QStringLiteral(")"));
-    // The three-way branch is the whole point: "armed but nothing finished yet"
-    // must not read the same as "armed with a dead card".
+    const qlonglong graphs{static_cast<qlonglong>(s.graphs_attempted)};
+    const QString graph_count{graphs == 1 ? tr("1 graph attempted")
+                                          : tr("%1 graphs attempted").arg(graphs)};
+    rows.attempts = rate + QStringLiteral(" (") + graph_count + QStringLiteral(")");
     if (!s.active) {
-        m_solver_health_value->setText(tr("Not running"));
+        rows.health = tr("Not running");
+    } else if (halted) {
+        rows.health = tr("No graphics solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Controls > Options > Main.");
+        rows.show_configure_solver = true;
     } else if (s.solver_ok) {
-        m_solver_health_value->setText(s.graphs_attempted == 0
+        // "armed but nothing finished yet" must not read the same as "armed
+        // with a dead card". Halted was split out above; it is not this branch.
+        rows.health = s.graphs_attempted == 0
             ? tr("Working — no graph finished yet")
-            : tr("Working"));
+            : tr("Working");
     } else if (s.solver_missing) {
         // The core message names -cuckatoosolver, which is right for quicksilverd and
         // useless here: this window owns the setting. Sending a desktop user after a
         // command-line flag pointed them away from a control two clicks away.
-        m_solver_health_value->setText(
-            tr("No GPU solver is configured. Choose one in Controls > Options > Main."));
+        rows.health = tr("No GPU solver is configured. Choose one in Controls > Options > Main.");
+        rows.show_configure_solver = true;
     } else {
-        m_solver_health_value->setText(QString::fromStdString(s.last_solver_error));
+        rows.health = QString::fromStdString(s.last_solver_error);
     }
-    m_configure_solver_button->setVisible(s.active && !s.solver_ok && s.solver_missing);
+    return rows;
+}
+
+MineMintPage::StatusText MineMintPage::statusTextForTesting(const interfaces::MiningStatus& status)
+{
+    return statusText(status);
+}
+
+void MineMintPage::setStatus(const interfaces::MiningStatus& s)
+{
+    const StatusText rows{statusText(s)};
+    m_status_value->setText(rows.block_mining);
+    m_payout_value->setText(s.address.empty() ? tr("None") : QString::fromStdString(s.address));
+    m_solver_value->setText(rows.solver);
+    m_minted_value->setText(QuicksilverUnits::formatWithUnit(
+        QuicksilverUnits::Unit::HG, s.coins_minted_session));
+    m_blocks_found = s.blocks_found;
+    refreshIsolationState();
+    m_rate_value->setText(rows.attempts);
+    m_solver_health_value->setText(rows.health);
+    m_configure_solver_button->setVisible(rows.show_configure_solver);
     m_congestion_value->setText(QString::number(s.congestion_multiplier, 'f', 2) + QStringLiteral("×"));
     m_stop_button->setEnabled(s.active);
     m_start_button->setEnabled(!s.active);

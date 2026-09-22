@@ -81,6 +81,16 @@ void AttemptRateWindow::Reset()
     m_last.reset();
 }
 
+bool CpuBlockFallbackEnabled(uint8_t edgebits)
+{
+    return CpuBlockMiningAllowed(edgebits, gArgs.GetBoolArg("-allowcpumining", false));
+}
+
+bool BlockSolvingPossible(uint8_t edgebits)
+{
+    return cuckatoo::GpuSolverPath().has_value() || CpuBlockFallbackEnabled(edgebits);
+}
+
 MiningService::MiningService(ChainstateManager& chainman, interfaces::Mining& mining)
     : m_chainman(chainman), m_mining(mining) {}
 
@@ -104,6 +114,10 @@ bool MiningService::Start(const CScript& payout_script, const std::string& payou
         m_status.active = true;
         m_status.address = payout_address;
         m_status.start_time = GetTime();
+        // Publish the permit before the thread is observable. Run() reads it
+        // again for the solve itself; both reads are live args, so a change
+        // made after the previous arming is already in this snapshot.
+        m_status.block_solving_possible = BlockSolvingPossible(m_chainman.GetConsensus().nEdgeBits);
         m_attempts.store(0, std::memory_order_relaxed);
         m_rate.Reset();
     }
@@ -170,9 +184,15 @@ void MiningService::Run(CScript payout_script)
     // before this thread becomes observable; see the race note there.
 
     const Consensus::Params& cparams = m_chainman.GetConsensus();
-    const bool allow_cpu = gArgs.GetBoolArg("-allowcpumining", false);
-    const bool cpu_fallback = node::CpuBlockMiningAllowed(cparams.nEdgeBits, allow_cpu);
+    // Once per arming, from the live args. Not cached at process start: the
+    // desktop writes -allowcpumining into rw settings without restarting, and
+    // the next Start() runs this again.
+    const bool cpu_fallback = CpuBlockFallbackEnabled(cparams.nEdgeBits);
     const bool gpu_configured = cuckatoo::GpuSolverPath().has_value();
+    {
+        LOCK(m_stats_mutex);
+        m_status.block_solving_possible = gpu_configured || cpu_fallback;
+    }
     if (cparams.nEdgeBits != 19 && !gpu_configured) {
         if (cpu_fallback) {
             LogInfo(HgLog::FORGE, "up solver=cpu edgebits=%d warn=cpu-mining-far-slower-than-gpu\n", cparams.nEdgeBits);
@@ -306,6 +326,7 @@ interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateM
     out.solver_ok = s.solver_ok;
     out.last_solver_error = s.last_solver_error;
     out.solver_missing = s.solver_missing;
+    out.block_solving_possible = s.block_solving_possible;
     out.template_height = s.template_height;
     out.template_transactions = s.template_transactions;
     {

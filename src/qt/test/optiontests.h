@@ -30,6 +30,7 @@ private Q_SLOTS:
     void gpuSolverDialogRejectsInvalidPath();
     void externalSignerSurfacesAreHiddenNotGreyedOut();
     void cpuFallbackWarningPreferencePersists();
+    void allowCpuBlockMiningPersistsWithoutRestart();
     void parametersInteraction();
     void extractFilter();
     void openConfDoesNotNestEventLoop();

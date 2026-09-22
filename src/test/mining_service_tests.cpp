@@ -191,6 +191,84 @@ BOOST_AUTO_TEST_CASE(mining_status_reports_runtime_solver_after_setting_change)
     BOOST_CHECK(node::BuildMiningStatus(svc, *m_node.chainman).gpu_solver);
 }
 
+BOOST_AUTO_TEST_CASE(block_solving_possible_rereads_allowcpumining_without_restart)
+{
+    // Run() calls CpuBlockFallbackEnabled once per arming. This is that read,
+    // against the same gArgs a running process already holds. The fixture chain
+    // is sandbox (edgebits 19), where CPU block mining is always permitted, so
+    // arming it cannot show the E28 refusal. The edgebits argument is what the
+    // call passes through.
+    std::optional<common::SettingsValue> original_rw;
+    std::optional<common::SettingsValue> original_forced;
+    std::optional<std::vector<common::SettingsValue>> original_cli;
+    gArgs.LockSettings([&](common::Settings& settings) {
+        const auto rw = settings.rw_settings.find("allowcpumining");
+        if (rw != settings.rw_settings.end()) original_rw = rw->second;
+        const auto forced = settings.forced_settings.find("allowcpumining");
+        if (forced != settings.forced_settings.end()) original_forced = forced->second;
+        const auto cli = settings.command_line_options.find("allowcpumining");
+        if (cli != settings.command_line_options.end()) original_cli = cli->second;
+        settings.rw_settings["allowcpumining"] = false;
+        settings.forced_settings.erase("allowcpumining");
+        settings.command_line_options.erase("allowcpumining");
+    });
+    const char* original_solver = std::getenv("CUCKATOO_GPU_SOLVER");
+    const std::optional<std::string> original_env = original_solver
+        ? std::optional<std::string>{original_solver}
+        : std::nullopt;
+    struct Restore {
+        std::optional<common::SettingsValue> rw;
+        std::optional<common::SettingsValue> forced;
+        std::optional<std::vector<common::SettingsValue>> cli;
+        std::optional<std::string> environment;
+        ~Restore()
+        {
+            gArgs.LockSettings([&](common::Settings& settings) {
+                if (rw) settings.rw_settings["allowcpumining"] = *rw;
+                else settings.rw_settings.erase("allowcpumining");
+                if (forced) settings.forced_settings["allowcpumining"] = *forced;
+                else settings.forced_settings.erase("allowcpumining");
+                if (cli) settings.command_line_options["allowcpumining"] = *cli;
+                else settings.command_line_options.erase("allowcpumining");
+            });
+            if (environment) SetSolverEnv(*environment);
+            else UnsetSolverEnv();
+        }
+    } restore{original_rw, original_forced, original_cli, original_env};
+    UnsetSolverEnv();
+
+    BOOST_CHECK(!node::CpuBlockFallbackEnabled(28));
+    BOOST_CHECK(!node::BlockSolvingPossible(28));
+    BOOST_CHECK(node::CpuBlockFallbackEnabled(19));
+    BOOST_CHECK(node::BlockSolvingPossible(19));
+
+    gArgs.LockSettings([&](common::Settings& settings) {
+        settings.rw_settings["allowcpumining"] = true;
+    });
+    BOOST_CHECK(node::CpuBlockFallbackEnabled(28));
+    BOOST_CHECK(node::BlockSolvingPossible(28));
+
+    // Command line beats the settings file. The desktop must not be able to
+    // write a persistent true over an explicit -allowcpumining=0.
+    gArgs.LockSettings([&](common::Settings& settings) {
+        settings.command_line_options["allowcpumining"] = {common::SettingsValue{"0"}};
+    });
+    BOOST_CHECK(!node::CpuBlockFallbackEnabled(28));
+    BOOST_CHECK(!node::BlockSolvingPossible(28));
+
+    // Sandbox arming publishes the same read before the thread has solved
+    // anything. edgebits 19 stays permitted with the opt-in off.
+    BOOST_CHECK_EQUAL(static_cast<int>(m_node.chainman->GetConsensus().nEdgeBits), 19);
+    auto mining = interfaces::MakeMining(m_node);
+    MiningService svc(*m_node.chainman, *mining);
+    const CScript payout = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
+    BOOST_REQUIRE(svc.Start(payout, "permit-read"));
+    BOOST_CHECK(svc.GetStatus().block_solving_possible);
+    BOOST_CHECK(node::BuildMiningStatus(svc, *m_node.chainman).block_solving_possible);
+    svc.Stop();
+    BOOST_CHECK(!svc.GetStatus().active);
+}
+
 //! The window is fed explicit instants rather than a clock so every case below is
 //! an exact expected value, not a tolerance around whatever the machine did.
 static SteadySeconds At(int64_t s) { return SteadySeconds{std::chrono::seconds{s}}; }

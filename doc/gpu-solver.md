@@ -19,6 +19,14 @@ of the node or vault build.
 - Running or synchronizing a node, validating blocks, and receiving funds do
   not require a GPU.
 
+`main` and `publictest` use one graph size for a transfer and for a block.
+CPU solving is allowed for a transfer because it is one bounded search the
+sender waits out once. It is opt-in for blocks because block mining is a
+continuous race against GPU cards: a CPU can run the graph, but an unbounded
+grind at near-zero odds would look like a broken miner. The opt-in is
+`-allowcpumining`, and the same switch is the checkbox in the desktop's
+Controls > Options > Main that allows this computer's processor to mine blocks.
+
 The measured times are calibration results, not performance guarantees. GPU,
 CPU, driver, and current network work requirements all affect completion time.
 

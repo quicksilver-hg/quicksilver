@@ -302,6 +302,90 @@ void OptionTests::cpuFallbackWarningPreferencePersists()
     }
 }
 
+void OptionTests::allowCpuBlockMiningPersistsWithoutRestart()
+{
+    // The mining thread reads -allowcpumining from the live args at each
+    // arming. updateRwSetting writes those args in this process, so the
+    // checkbox must not claim a restart. A command-line value still wins:
+    // the dialog may store a different persistent value, and must say so.
+    auto restore_allowcpu = [] {
+        gArgs.LockSettings([&](common::Settings& settings) {
+            settings.command_line_options.erase("allowcpumining");
+            settings.rw_settings.erase("allowcpumining");
+        });
+        gArgs.WriteSettingsFile();
+    };
+    restore_allowcpu();
+
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    // Effective value before the checkbox is the default, false.
+    QCOMPARE(gArgs.GetBoolArg("-allowcpumining", false), false);
+    QVERIFY(!options.getOption(OptionsModel::AllowCpuBlockMining).toBool());
+
+    OptionsDialog dialog(nullptr, /*enableVault=*/true);
+    dialog.setModel(&options);
+    auto* box = dialog.findChild<QCheckBox*>(QStringLiteral("allowCpuBlockMining"));
+    auto* solver_status = dialog.findChild<QLabel*>(QStringLiteral("gpuSolverStatusLabel"));
+    auto* ok_button = dialog.findChild<QPushButton*>(QStringLiteral("okButton"));
+    QVERIFY(box);
+    QVERIFY(solver_status);
+    QVERIFY(ok_button);
+    QVERIFY(!box->isChecked());
+    QVERIFY(box->text().contains(QStringLiteral("very unlikely")));
+    QVERIFY(box->text().contains(QStringLiteral("next time mining starts")));
+    QVERIFY(!box->text().contains(QStringLiteral("-allowcpumining")));
+    QVERIFY(solver_status->text().contains(QStringLiteral("may take many minutes")));
+    QVERIFY(solver_status->text().contains(QStringLiteral("processor block mining is enabled above")));
+    QVERIFY(!solver_status->text().contains(QStringLiteral("Live transfers and mining need one")));
+    QVERIFY(!solver_status->text().contains(QStringLiteral("-allowcpumining")));
+
+    box->setChecked(true);
+    QTest::mouseClick(ok_button, Qt::LeftButton);
+    QVERIFY(options.getOption(OptionsModel::AllowCpuBlockMining).toBool());
+    QCOMPARE(gArgs.GetBoolArg("-allowcpumining", false), true);
+    QVERIFY(!options.isRestartRequired());
+    auto* restart_label = dialog.findChild<QLabel*>(QStringLiteral("statusLabel"));
+    QVERIFY(restart_label);
+    QVERIFY(!restart_label->text().contains(QStringLiteral("restart"), Qt::CaseInsensitive));
+
+    OptionsModel reloaded{m_node};
+    QVERIFY(reloaded.Init(error));
+    QVERIFY(reloaded.getOption(OptionsModel::AllowCpuBlockMining).toBool());
+    QVERIFY(!reloaded.isRestartRequired());
+
+    restore_allowcpu();
+
+    gArgs.LockSettings([&](common::Settings& settings) {
+        settings.command_line_options["allowcpumining"] = {UniValue("0")};
+        settings.rw_settings.erase("allowcpumining");
+    });
+    OptionsModel overridden{m_node};
+    QVERIFY(overridden.Init(error));
+    QVERIFY(overridden.getOverriddenByCommandLine().contains(QStringLiteral("-allowcpumining=0")));
+    QCOMPARE(gArgs.GetBoolArg("-allowcpumining", true), false);
+    QVERIFY(!overridden.getOption(OptionsModel::AllowCpuBlockMining).toBool());
+
+    OptionsDialog overridden_dialog(nullptr, /*enableVault=*/true);
+    overridden_dialog.setModel(&overridden);
+    auto* overridden_label = overridden_dialog.findChild<QLabel*>(QStringLiteral("overriddenByCommandLineLabel"));
+    auto* overridden_box = overridden_dialog.findChild<QCheckBox*>(QStringLiteral("allowCpuBlockMining"));
+    auto* overridden_ok = overridden_dialog.findChild<QPushButton*>(QStringLiteral("okButton"));
+    QVERIFY(overridden_label);
+    QVERIFY(overridden_box);
+    QVERIFY(overridden_ok);
+    QVERIFY(overridden_label->text().contains(QStringLiteral("-allowcpumining=0")));
+    overridden_box->setChecked(true);
+    QTest::mouseClick(overridden_ok, Qt::LeftButton);
+    // The checkbox did store a persistent true. The command line still wins.
+    QVERIFY(overridden.getOption(OptionsModel::AllowCpuBlockMining).toBool());
+    QCOMPARE(gArgs.GetBoolArg("-allowcpumining", true), false);
+    QVERIFY(!overridden.isRestartRequired());
+
+    restore_allowcpu();
+}
+
 void OptionTests::parametersInteraction()
 {
     // With -listen=false, parameter interaction should also set -listenonion

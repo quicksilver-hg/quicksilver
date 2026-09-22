@@ -39,9 +39,15 @@ bool SolveBlockPoW(ChainstateManager& chainman, CBlock& block, uint64_t& max_tri
                    cuckatoo::GpuSolveStatus* out_status = nullptr);
 
 //! Policy: may the block miner fall back to the CPU solver at this graph size?
-//! True for the tiny sandbox graph (edgebits 19, always feasible) or when the
-//! operator opts in via -allowcpumining. At the real graph sizes CPU mining is
-//! possible but non-competitive; see the SP1b design.
+//!
+//! True for the sandbox graph (edgebits 19), or when the operator opts in.
+//! Mainnet and publictest use the same E28 graph a transfer uses, and
+//! vault::AllowsTxPowCpuFallback allows the CPU there: a transfer is one
+//! bounded solve the sender waits out. Block mining is a continuous race
+//! against GPU cards, so this refuses that same graph unless
+//! `allow_cpu_mining` is set (`-allowcpumining`, or the desktop checkbox that
+//! writes it). The refusal is economic. The CPU can solve the graph; an
+//! unbounded grind at near-zero odds would read as a broken miner.
 bool CpuBlockMiningAllowed(uint8_t edgebits, bool allow_cpu_mining);
 
 } // namespace node

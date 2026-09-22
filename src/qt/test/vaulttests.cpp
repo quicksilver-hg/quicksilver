@@ -61,6 +61,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 
@@ -1701,6 +1702,95 @@ void VaultTests::mineMintPageRendersStatus()
     // Nothing on this page fixes a dead card, so the button must go away again
     // rather than offer a setting that is already correct.
     QVERIFY(!configure->isVisibleTo(&page));
+}
+
+//! Four inputs, four row sets. The halted input is the one the page used to
+//! render as Active / CPU / Warming up: armed, no solver, fallback not permitted.
+//! Checked on the pure helper, then applied to a page so a missed wiring fails too.
+void VaultTests::mineMintPageNamesAnArmedMinerWithNoPermittedSolver()
+{
+    const auto rows = [](bool active, bool gpu, bool possible, bool solver_ok, bool missing,
+                         uint64_t graphs, std::optional<double> rate, const char* error) {
+        interfaces::MiningStatus st;
+        st.active = active;
+        st.gpu_solver = gpu;
+        st.block_solving_possible = possible;
+        st.solver_ok = solver_ok;
+        st.solver_missing = missing;
+        st.graphs_attempted = graphs;
+        st.attempts_per_second = rate;
+        if (error) st.last_solver_error = error;
+        return MineMintPage::statusTextForTesting(st);
+    };
+
+    const auto idle = rows(false, false, true, true, false, 0, std::nullopt, nullptr);
+    QCOMPARE(idle.block_mining, QStringLiteral("Idle"));
+    QCOMPARE(idle.solver, QStringLiteral("CPU"));
+    QCOMPARE(idle.attempts, QStringLiteral("None (0 graphs attempted)"));
+    QCOMPARE(idle.health, QStringLiteral("Not running"));
+    QVERIFY(!idle.show_configure_solver);
+
+    const auto warming = rows(true, true, true, true, false, 0, std::nullopt, nullptr);
+    QCOMPARE(warming.block_mining, QStringLiteral("Active"));
+    QCOMPARE(warming.solver, QStringLiteral("GPU bridge"));
+    QCOMPARE(warming.attempts, QStringLiteral("Warming up (0 graphs attempted)"));
+    QCOMPARE(warming.health, QStringLiteral("Working — no graph finished yet"));
+    QVERIFY(!warming.show_configure_solver);
+
+    const auto dead = rows(true, true, true, false, false, 4, 0.29,
+                           "The GPU solver exited with an error; see the debug log");
+    QCOMPARE(dead.block_mining, QStringLiteral("Active"));
+    QCOMPARE(dead.solver, QStringLiteral("GPU bridge"));
+    QCOMPARE(dead.attempts, QStringLiteral("0.290 (4 graphs attempted)"));
+    QCOMPARE(dead.health, QStringLiteral("The GPU solver exited with an error; see the debug log"));
+    QVERIFY(!dead.show_configure_solver);
+
+    // Before the first solve attempt the node has already refused the
+    // configuration, and solver_ok is still the default. This is the reading
+    // that used to say the miner was warming up on the CPU.
+    const auto halted = rows(true, false, false, true, false, 0, std::nullopt, nullptr);
+    QCOMPARE(halted.block_mining, QStringLiteral("Halted"));
+    QCOMPARE(halted.solver, QStringLiteral("None"));
+    QCOMPARE(halted.attempts, QStringLiteral("Not solving (0 graphs attempted)"));
+    QCOMPARE(halted.health, QStringLiteral("No graphics solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Controls > Options > Main."));
+    QVERIFY(!halted.health.contains(QStringLiteral("-cuckatoosolver")));
+    QVERIFY(!halted.health.contains(QStringLiteral("-allowcpumining")));
+    QVERIFY(halted.show_configure_solver);
+
+    // After the attempt that never ran, solver_missing becomes true. Same rows:
+    // the page must not fall through to the older "choose a solver" sentence
+    // or back to Warming up.
+    const auto halted_after = rows(true, false, false, false, true, 0, std::nullopt,
+                                   "No GPU solver is configured; set -cuckatoosolver=<path>");
+    QCOMPARE(halted_after.block_mining, halted.block_mining);
+    QCOMPARE(halted_after.solver, halted.solver);
+    QCOMPARE(halted_after.attempts, halted.attempts);
+    QCOMPARE(halted_after.health, halted.health);
+    QVERIFY(!halted_after.health.contains(QStringLiteral("-cuckatoosolver")));
+    QVERIFY(halted_after.show_configure_solver);
+
+    MineMintPage page;
+    interfaces::MiningStatus st;
+    st.active = true;
+    st.gpu_solver = false;
+    st.block_solving_possible = false;
+    st.solver_ok = true;
+    st.graphs_attempted = 0;
+    page.setStatus(st);
+    QCOMPARE(page.findChild<QLabel*>(QStringLiteral("miningStatusValue"))->text(), halted.block_mining);
+    QCOMPARE(page.findChild<QLabel*>(QStringLiteral("solverStatusValue"))->text(), halted.solver);
+    QCOMPARE(page.findChild<QLabel*>(QStringLiteral("attemptsRateValue"))->text(), halted.attempts);
+    QCOMPARE(page.findChild<QLabel*>(QStringLiteral("solverHealthValue"))->text(), halted.health);
+    QPushButton* configure = page.findChild<QPushButton*>(QStringLiteral("configureSolverButton"));
+    QVERIFY(configure);
+    QVERIFY(configure->isVisibleTo(&page));
+    QSignalSpy solver_settings_spy(&page, &MineMintPage::solverSettingsRequested);
+    QVERIFY(solver_settings_spy.isValid());
+    configure->click();
+    QCOMPARE(solver_settings_spy.count(), 1);
+    // Still armed: the user can stop the halted role. Start stays disabled.
+    QVERIFY(!page.findChild<QPushButton*>(QStringLiteral("startMiningButton"))->isEnabled());
+    QVERIFY(page.findChild<QPushButton*>(QStringLiteral("stopMiningButton"))->isEnabled());
 }
 
 //! F-108: a node with no peers mines onto a chain of its own, and every reading on

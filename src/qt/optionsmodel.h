@@ -69,6 +69,7 @@ public:
         PruneSize,              // int
         DatabaseCache,          // int
         GpuSolverPath,          // QString
+        AllowCpuBlockMining,    // bool
         ShowCpuFallbackWarning, // bool
         ExternalSignerPath,     // QString
         SpendZeroConfChange,    // bool

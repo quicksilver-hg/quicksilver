@@ -323,6 +323,7 @@ void OptionsDialog::setMapper()
     mapper->addMapping(ui->threadsScriptVerif, OptionsModel::ThreadsScriptVerif);
     mapper->addMapping(ui->databaseCache, OptionsModel::DatabaseCache);
     mapper->addMapping(ui->gpuSolverPath, OptionsModel::GpuSolverPath);
+    mapper->addMapping(ui->allowCpuBlockMining, OptionsModel::AllowCpuBlockMining);
     mapper->addMapping(ui->prune, OptionsModel::Prune);
     mapper->addMapping(ui->pruneSize, OptionsModel::PruneSize);
 
@@ -401,7 +402,7 @@ void OptionsDialog::validateGpuSolverPath()
     if (path.isEmpty()) {
         m_gpu_solver_probe_status = SendCoinsDialog::GpuSolverProbeStatus::Unchecked;
         m_gpu_solver_valid = true;
-        ui->gpuSolverStatusLabel->setText(tr("No GPU solver is configured. Live transfers and mining need one."));
+        ui->gpuSolverStatusLabel->setText(tr("No graphics solver is configured. Transfers fall back to this computer's processor and may take many minutes; block mining stays off unless processor block mining is enabled above."));
         updateOkButtonState();
         return;
     }

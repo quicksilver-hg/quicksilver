@@ -225,6 +225,18 @@
         </layout>
        </item>
        <item>
+        <widget class="QCheckBox" name="allowCpuBlockMining">
+         <property name="toolTip">
+          <string>Block mining is a continuous race. This computer's processor can run it, but a graphics card will almost always find the block first. The change applies the next time you start mining, not to a search that is already running.</string>
+         </property>
+         <property name="text">
+          <string>&amp;Allow this computer's processor to mine blocks when no graphics solver is configured.
+It keeps searching and is very unlikely to find a block before a graphics card does.
+Applies the next time mining starts.</string>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="QLabel" name="gpuSolverStatusLabel">
          <property name="text">
           <string/>

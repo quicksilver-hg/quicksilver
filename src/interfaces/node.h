@@ -95,6 +95,11 @@ struct MiningStatus {
     //! last_solver_error is written for quicksilverd and names the -cuckatoosolver
     //! flag; the GUI has the setting as a control and must say so instead.
     bool solver_missing{false};
+    //! Whether block solving can run at all in this configuration. The node
+    //! decides (GPU solver configured, or CPU block mining permitted); the GUI
+    //! must not re-derive the policy. False is armed-and-halted. Not published
+    //! on getminingstatus — same precedent as solver_missing.
+    bool block_solving_possible{true};
     //! The block this node is grinding right now. Distinct from getmininginfo's
     //! currentblocktx, which reports whatever was assembled last by any caller.
     int64_t template_height{0};          //!< 0 when nothing is being ground

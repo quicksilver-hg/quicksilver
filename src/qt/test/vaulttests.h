@@ -27,6 +27,7 @@ private Q_SLOTS:
     void agentAllotmentRelaysInBackgroundWithPeerFallback();
     void vaultTests();
     void mineMintPageRendersStatus();
+    void mineMintPageNamesAnArmedMinerWithNoPermittedSolver();
     void mineMintPageRefusesToPresentIsolatedMiningAsSuccess();
     void networkPageFormatsStatus();
     void networkPageDiagnosesBootstrapAndAddsPeers();

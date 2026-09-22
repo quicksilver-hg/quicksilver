@@ -95,6 +95,12 @@ struct MiningStatus {
     //! The GUI substitutes its own wording for this case and points at the control it
     //! actually has, so it needs the fault's identity, not its prose.
     bool solver_missing{false};
+    //! Whether a block can be solved in this configuration: a GPU solver is
+    //! configured, or CPU block mining is permitted. False is the halted state
+    //! — armed, with no solver and no permitted fallback — and it is known at
+    //! arming, not after the first solve attempt. Default true so an idle
+    //! snapshot is not reported as halted.
+    bool block_solving_possible{true};
     //! The block the worker is grinding right now, as opposed to the last block
     //! anybody assembled. BlockAssembler's currentblocktx/currentblockweight are
     //! process-wide static variables stamped by whichever caller assembled last -- an RPC
@@ -162,6 +168,15 @@ private:
 
 //! Compute a GUI/RPC-facing status snapshot from the live service + chain tip.
 interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateManager& chainman);
+
+//! Live read of -allowcpumining through CpuBlockMiningAllowed.
+//! MiningService calls this once per arming, at the start of the mining
+//! thread, not at process start. A settings change is visible on the next call.
+bool CpuBlockFallbackEnabled(uint8_t edgebits);
+
+//! True when this process can solve a block at `edgebits`: a GPU solver is
+//! configured, or CpuBlockFallbackEnabled. Same live read as the fallback bit.
+bool BlockSolvingPossible(uint8_t edgebits);
 
 //! Decode an address and start the service on it. Idempotent when the service
 //! is already active on the SAME address; errors when active on a different one.

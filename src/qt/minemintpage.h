@@ -21,6 +21,17 @@ class MineMintPage : public QWidget
 public:
     explicit MineMintPage(QWidget* parent = nullptr);
 
+    struct StatusText {
+        QString block_mining;
+        QString solver;
+        QString attempts;
+        QString health;
+        bool show_configure_solver{false};
+    };
+    //! The four Mine/Mint readings that depend on whether solving can run.
+    //! Pure: no widget. setStatus applies this and nothing else decides those rows.
+    static StatusText statusTextForTesting(const interfaces::MiningStatus& status);
+
     void setStatus(const interfaces::MiningStatus& status);
     //! Connection count from the client model, or -1 while it is not yet known.
     //!
@@ -45,6 +56,7 @@ Q_SIGNALS:
 private:
     void handleStartClicked();
     void refreshIsolationState();
+    static StatusText statusText(const interfaces::MiningStatus& status);
 
     QWidget* m_isolation_panel{nullptr};
     QLabel* m_isolation_banner{nullptr};

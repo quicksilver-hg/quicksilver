@@ -94,6 +94,7 @@ static const char* SettingName(OptionsModel::OptionID option)
     switch (option) {
     case OptionsModel::DatabaseCache: return "dbcache";
     case OptionsModel::GpuSolverPath: return "cuckatoosolver";
+    case OptionsModel::AllowCpuBlockMining: return "allowcpumining";
     case OptionsModel::ThreadsScriptVerif: return "par";
     case OptionsModel::SpendZeroConfChange: return "spendzeroconfchange";
     case OptionsModel::ExternalSignerPath: return "signer";
@@ -250,7 +251,7 @@ bool OptionsModel::Init(bilingual_str& error)
 
     // These are shared with the core or have a command-line parameter
     // and we want command-line parameters to overwrite the GUI settings.
-    for (OptionID option : {DatabaseCache, ThreadsScriptVerif, SpendZeroConfChange, GpuSolverPath, ExternalSignerPath,
+    for (OptionID option : {DatabaseCache, ThreadsScriptVerif, SpendZeroConfChange, GpuSolverPath, AllowCpuBlockMining, ExternalSignerPath,
                             MapPortNatpmp, Listen, Server, Prune, ProxyUse, ProxyUseTor, Language}) {
         std::string setting = SettingName(option);
         if (node().isSettingIgnored(setting)) addOverriddenOption("-" + setting);
@@ -493,6 +494,8 @@ QVariant OptionsModel::getOption(OptionID option, const std::string& suffix) con
         return qlonglong(SettingToInt(setting(), DEFAULT_DB_CACHE >> 20));
     case GpuSolverPath:
         return QString::fromStdString(SettingToString(setting(), ""));
+    case AllowCpuBlockMining:
+        return SettingToBool(setting(), false);
     case ShowCpuFallbackWarning:
         return settings.value("show_cpu_fallback_warning", true).toBool();
     case ThreadsScriptVerif:
@@ -694,6 +697,16 @@ bool OptionsModel::setOption(OptionID option, const QVariant& value, const std::
         if (changed()) {
             update(value.toString().trimmed().toStdString());
             setRestartRequired(true);
+        }
+        break;
+    case AllowCpuBlockMining:
+        // Not restart-required. MiningService::Run reads -allowcpumining from
+        // the live args once, at the start of each mining thread, and
+        // updateRwSetting writes those args in this process. The next arming
+        // observes the new value; a thread already running does not. A restart
+        // warning here would be the false one.
+        if (changed()) {
+            update(value.toBool());
         }
         break;
     case ShowCpuFallbackWarning:
