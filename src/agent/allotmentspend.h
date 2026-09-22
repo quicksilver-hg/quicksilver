@@ -28,6 +28,21 @@ struct Params;
 
 namespace agent {
 
+//! Policy: may an agent spend fall back to the built-in CPU solver at this graph size?
+//!
+//! True for the sandbox graph (edgebits 19), or when the operator opts in. Mainnet and
+//! publictest use the E28 graph, and vault::AllowsTxPowCpuFallback allows the CPU there
+//! because a transfer is one bounded solve the sender chose and waits out. An agent spend
+//! is not: it starts on the agent's schedule, on a machine whose owner may be doing
+//! something else, and the grind is long enough to be felt. So this refuses that graph
+//! unless the operator has opted in (-allowcputxpow, or the desktop checkbox that sets it).
+//! The refusal is not about capability -- the CPU can solve the graph -- it is about
+//! consent to spend someone's machine while they are using it.
+constexpr bool AllowsAllotmentCpuFallback(uint8_t edgebits, bool allow_cpu_txpow)
+{
+    return edgebits == 19 || (edgebits == 28 && allow_cpu_txpow);
+}
+
 struct AllotmentSpendContext {
     AllotmentPolicyBundleArtifact bundle;
     FlatSigningProvider signing_provider;
@@ -47,6 +62,10 @@ struct AllotmentSpendRequest {
     //! loop is otherwise unbounded -- each iteration starts a fresh 2^24-attempt
     //! budget -- so without this there is no way to stop it at all.
     cuckatoo::SolverCancelCallback cancel{};
+    //! Operator opt-in to CPU proving at a real graph size. Defaults to refusing: an agent
+    //! spend starts without a human present, so the machine's owner has to have said yes
+    //! first. See AllowsAllotmentCpuFallback.
+    bool allow_cpu_txpow{false};
 };
 
 struct AllotmentBundleSpendRequest {
@@ -59,6 +78,10 @@ struct AllotmentBundleSpendRequest {
     //! loop is otherwise unbounded -- each iteration starts a fresh 2^24-attempt
     //! budget -- so without this there is no way to stop it at all.
     cuckatoo::SolverCancelCallback cancel{};
+    //! Operator opt-in to CPU proving at a real graph size. Defaults to refusing: an agent
+    //! spend starts without a human present, so the machine's owner has to have said yes
+    //! first. See AllowsAllotmentCpuFallback.
+    bool allow_cpu_txpow{false};
 };
 
 struct AllotmentSpendInput {

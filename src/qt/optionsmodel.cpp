@@ -496,6 +496,10 @@ QVariant OptionsModel::getOption(OptionID option, const std::string& suffix) con
         return QString::fromStdString(SettingToString(setting(), ""));
     case AllowCpuBlockMining:
         return SettingToBool(setting(), false);
+    case AllowCpuAgentTxPow:
+        // Qt-only. The command-line agent has its own -allowcputxpow and cannot
+        // see this; a node arg would publish a string the node never reads.
+        return settings.value("allow_cpu_agent_txpow", false).toBool();
     case ShowCpuFallbackWarning:
         return settings.value("show_cpu_fallback_warning", true).toBool();
     case ThreadsScriptVerif:
@@ -708,6 +712,10 @@ bool OptionsModel::setOption(OptionID option, const QVariant& value, const std::
         if (changed()) {
             update(value.toBool());
         }
+        break;
+    case AllowCpuAgentTxPow:
+        // Not restart-required. Each desktop agent spend reads it when it starts.
+        settings.setValue("allow_cpu_agent_txpow", value.toBool());
         break;
     case ShowCpuFallbackWarning:
         settings.setValue("show_cpu_fallback_warning", value.toBool());

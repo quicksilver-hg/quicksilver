@@ -11,9 +11,13 @@
 
 #include <QWidget>
 
+#include <atomic>
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <vector>
+
+struct LocalAgentSpendOutcome;
 
 class QuicksilverAmountField;
 
@@ -39,6 +43,7 @@ public:
 
     explicit AgentAllotmentPage(QWidget* parent = nullptr);
     AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_relay);
+    ~AgentAllotmentPage() override;
 
     void setModel(VaultModel* model);
     void setDisplayUnit(QuicksilverUnit unit);
@@ -54,6 +59,8 @@ private:
     void savePaymentReceiptToAgentInbox();
     void copyAgentSpendSignCommand();
     void signAgentSpendLocally();
+    void cancelAgentSpendLocally();
+    void finishLocalAgentSpend(const std::shared_ptr<LocalAgentSpendOutcome>& outcome, quint64 generation);
     void reviewSignedAgentSpend();
     void copySignedSpendRelayPayloads();
     void copyRelayPeerAddCommand();
@@ -101,6 +108,7 @@ private:
     QLabel* m_spend_command_state{nullptr};
     QPushButton* m_copy_spend_command_button{nullptr};
     QPushButton* m_sign_spend_button{nullptr};
+    QPushButton* m_cancel_spend_button{nullptr};
     QPlainTextEdit* m_signed_spend_edit{nullptr};
     QLineEdit* m_relay_peer_edit{nullptr};
     QLabel* m_signed_spend_state{nullptr};
@@ -119,6 +127,11 @@ private:
     bool m_signed_spend_review_valid{false};
     bool m_peer_relay_in_flight{false};
     quint64 m_peer_relay_generation{0};
+    bool m_spend_in_flight{false};
+    quint64 m_spend_generation{0};
+    //! Set from the GUI thread; polled by the prove loop on the worker. Shared
+    //! so the worker can outlive this page long enough to observe the stop.
+    std::shared_ptr<std::atomic<bool>> m_spend_cancel;
 };
 
 #endif // QUICKSILVER_QT_AGENTALLOTMENTPAGE_H

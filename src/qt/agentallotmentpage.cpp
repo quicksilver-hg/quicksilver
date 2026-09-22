@@ -4,6 +4,7 @@
 
 #include <qt/agentallotmentpage.h>
 
+#include <qt/optionsmodel.h>
 #include <qt/quicksilveramountfield.h>
 #include <qt/quicksilverunits.h>
 #include <qt/vaultmodel.h>
@@ -17,6 +18,7 @@
 #include <chainparams.h>
 #include <common/args.h>
 #include <consensus/amount.h>
+#include <consensus/params.h>
 #include <core_io.h>
 #include <interfaces/node.h>
 #include <key_io.h>
@@ -51,8 +53,11 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <atomic>
+#include <cstdlib>
 #include <exception>
 #include <memory>
+#include <string>
 #include <optional>
 #include <span>
 #include <utility>
@@ -173,15 +178,18 @@ QString AgentPaymentReceiptScanCommand(const fs::path& receipt_dir)
 QString AgentSpendSignCommand(const fs::path& policy_bundle_path,
                               const QString& destination,
                               CAmount spend_amount,
-                              std::optional<CAmount> spent_today)
+                              std::optional<CAmount> spent_today,
+                              bool allow_cpu_txpow)
 {
     const QString spent_today_arg = spent_today.has_value() ? QStringLiteral(" -spenttoday=%1").arg(QString::fromStdString(util::ToString(*spent_today))) : QString();
-    return QStringLiteral("quicksilver-agent -chain=%1 -policybundle=\"$(cat %2)\" -destination=%3 -spendamount=%4%5 signbundle")
+    const QString allow_cpu_arg = allow_cpu_txpow ? QStringLiteral(" -allowcputxpow") : QString();
+    return QStringLiteral("quicksilver-agent -chain=%1 -policybundle=\"$(cat %2)\" -destination=%3 -spendamount=%4%5%6 signbundle")
         .arg(QString::fromStdString(Params().GetChainTypeString()),
              ShellQuote(QString::fromStdString(fs::PathToString(policy_bundle_path))),
              ShellQuote(destination),
              QString::fromStdString(util::ToString(spend_amount)),
-             spent_today_arg);
+             spent_today_arg,
+             allow_cpu_arg);
 }
 
 fs::path AgentPaymentReceiptInboxPath(const agent::AllotmentPaymentReceiptArtifact& receipt)
@@ -534,6 +542,25 @@ void ClearLayout(QLayout* layout)
 
 } // namespace
 
+static bool AgentGpuSolverConfigured()
+{
+    const char* solver{std::getenv("CUCKATOO_GPU_SOLVER")};
+    return solver != nullptr && solver[0] != '\0';
+}
+
+struct LocalAgentSpendOutcome {
+    agent::AllotmentSpendContext spend_context;
+    CAmount spend_amount{0};
+    uint256 anchor_hash;
+    // util::Result is move-only and not assignable, so the worker constructs it in place.
+    std::unique_ptr<util::Result<agent::AllotmentSignedSpend>> signed_spend;
+};
+
+AgentAllotmentPage::~AgentAllotmentPage()
+{
+    if (m_spend_cancel) m_spend_cancel->store(true);
+}
+
 AgentAllotmentPage::AgentAllotmentPage(QWidget* parent)
     : AgentAllotmentPage(parent, agent::SendTransactionToOnePeer)
 {
@@ -869,6 +896,13 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_r
     m_sign_spend_button->setToolTip(tr("Signs the requested agent spend locally from the pasted bundle and fills the signed-spend reviewer."));
     spend_command_action_row->addWidget(m_sign_spend_button);
 
+    m_cancel_spend_button = new QPushButton(tr("Stop"), spend_command_panel);
+    m_cancel_spend_button->setObjectName(QStringLiteral("agentAllotmentCancelSpendButton"));
+    m_cancel_spend_button->setProperty("class", QStringLiteral("secondaryActionButton"));
+    m_cancel_spend_button->setToolTip(tr("Stops the agent spend preparation running on this computer. The spend stays unsigned."));
+    m_cancel_spend_button->setEnabled(false);
+    spend_command_action_row->addWidget(m_cancel_spend_button);
+
     m_spend_command_state = new QLabel(spend_command_panel);
     m_spend_command_state->setObjectName(QStringLiteral("agentAllotmentSpendCommandState"));
     m_spend_command_state->setProperty("class", QStringLiteral("muted"));
@@ -1009,6 +1043,7 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_r
     connect(m_spent_today, &QuicksilverAmountField::valueChanged, this, &AgentAllotmentPage::updateAgentSpendCommandState);
     connect(m_copy_spend_command_button, &QPushButton::clicked, this, &AgentAllotmentPage::copyAgentSpendSignCommand);
     connect(m_sign_spend_button, &QPushButton::clicked, this, &AgentAllotmentPage::signAgentSpendLocally);
+    connect(m_cancel_spend_button, &QPushButton::clicked, this, &AgentAllotmentPage::cancelAgentSpendLocally);
     connect(m_signed_spend_edit, &QPlainTextEdit::textChanged, this, &AgentAllotmentPage::updateSignedSpendReviewState);
     connect(m_relay_peer_edit, &QLineEdit::textChanged, this, &AgentAllotmentPage::updatePeerRelayCommandState);
     connect(m_signed_spend_review_button, &QPushButton::clicked, this, &AgentAllotmentPage::reviewSignedAgentSpend);
@@ -1186,7 +1221,11 @@ void AgentAllotmentPage::copyAgentSpendSignCommand()
         return;
     }
 
-    QApplication::clipboard()->setText(AgentSpendSignCommand(*bundle_path, destination, spend_amount, spent_today));
+    bool allow_cpu_txpow{false};
+    if (m_model && m_model->getOptionsModel()) {
+        allow_cpu_txpow = m_model->getOptionsModel()->getOption(OptionsModel::AllowCpuAgentTxPow).toBool();
+    }
+    QApplication::clipboard()->setText(AgentSpendSignCommand(*bundle_path, destination, spend_amount, spent_today, allow_cpu_txpow));
 
     SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewValid"));
     m_spend_command_state->setText(tr("Agent spend command copied for %1 using saved bundle %2.")
@@ -1280,46 +1319,117 @@ void AgentAllotmentPage::signAgentSpendLocally()
         m_spend_command_state->setText(tr("No consensus anchor is available for the agent spend."));
         return;
     }
-    const uint256 anchor_hash{anchor->GetBlockHash()};
-    auto signed_spend{agent::CreateSignedAllotmentSpendFromBundleOutputs(
-        *spend_context,
-        agent::AllotmentBundleSpendRequest{
-            .destination = destination,
-            .spend_amount = spend_amount,
-            .spent_today = spent_today,
-            .prove = true,
-            .anchor = anchor,
-        },
-        Params().GetConsensus())};
-    if (!signed_spend) {
+    if (m_spend_in_flight) return;
+
+    bool allow_cpu_txpow{false};
+    if (m_model->getOptionsModel()) {
+        allow_cpu_txpow = m_model->getOptionsModel()->getOption(OptionsModel::AllowCpuAgentTxPow).toBool();
+    }
+    const bool processor_grind{Params().GetConsensus().nTxEdgeBits == 28 && allow_cpu_txpow && !AgentGpuSolverConfigured()};
+
+    auto outcome{std::make_shared<LocalAgentSpendOutcome>()};
+    outcome->spend_context = std::move(*spend_context);
+    outcome->spend_amount = spend_amount;
+    outcome->anchor_hash = anchor->GetBlockHash();
+
+    m_spend_in_flight = true;
+    const quint64 generation{++m_spend_generation};
+    m_spend_cancel = std::make_shared<std::atomic<bool>>(false);
+    updateAgentSpendCommandState();
+    SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewReady"));
+    m_spend_command_state->setText(processor_grind
+                                       ? tr("Preparing this agent spend on the processor. It takes many minutes and uses every core. Stop leaves it unsigned.")
+                                       : tr("Preparing this agent spend. Stop leaves it unsigned."));
+
+    const auto cancel_flag{m_spend_cancel};
+    const Consensus::Params consensus{Params().GetConsensus()};
+    // Same shape as the peer-relay worker below: the grind must not run on the
+    // GUI thread, and a generation check drops a result the user already stopped.
+    QThread* thread{QThread::create([outcome, destination, spend_amount, spent_today, anchor, consensus, allow_cpu_txpow, cancel_flag] {
+        try {
+            outcome->signed_spend = std::make_unique<util::Result<agent::AllotmentSignedSpend>>(agent::CreateSignedAllotmentSpendFromBundleOutputs(
+                outcome->spend_context,
+                agent::AllotmentBundleSpendRequest{
+                    .destination = destination,
+                    .spend_amount = spend_amount,
+                    .spent_today = spent_today,
+                    .prove = true,
+                    .anchor = anchor,
+                    .cancel = [cancel_flag] { return cancel_flag && cancel_flag->load(); },
+                    .allow_cpu_txpow = allow_cpu_txpow,
+                },
+                consensus));
+        } catch (const std::exception& e) {
+            outcome->signed_spend = std::make_unique<util::Result<agent::AllotmentSignedSpend>>(util::Error{Untranslated(std::string{e.what()})});
+        } catch (...) {
+            outcome->signed_spend = std::make_unique<util::Result<agent::AllotmentSignedSpend>>(util::Error{Untranslated("Agent spend preparation failed.")});
+        }
+    })};
+    connect(thread, &QThread::finished, this, [this, outcome, generation] {
+        finishLocalAgentSpend(outcome, generation);
+    });
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+}
+
+void AgentAllotmentPage::cancelAgentSpendLocally()
+{
+    if (!m_spend_in_flight) return;
+    if (m_spend_cancel) m_spend_cancel->store(true);
+    ++m_spend_generation;
+    m_spend_in_flight = false;
+    updateAgentSpendCommandState();
+    SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
+    m_spend_command_state->setText(tr("Agent spend preparation was stopped. Nothing was signed."));
+}
+
+void AgentAllotmentPage::finishLocalAgentSpend(const std::shared_ptr<LocalAgentSpendOutcome>& outcome, quint64 generation)
+{
+    if (generation != m_spend_generation || !m_spend_in_flight || !outcome || !m_spend_command_state) return;
+
+    m_spend_in_flight = false;
+    m_spend_cancel.reset();
+    updateAgentSpendCommandState();
+
+    if (!outcome->signed_spend || !*outcome->signed_spend) {
         SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(QString::fromStdString(util::ErrorString(signed_spend).translated));
+        const std::string message{outcome->signed_spend ? util::ErrorString(*outcome->signed_spend).translated
+                                                        : std::string{"Agent spend preparation did not finish."}};
+        m_spend_command_state->setText(QString::fromStdString(message));
+        return;
+    }
+    const agent::AllotmentSignedSpend& signed_spend{outcome->signed_spend->value()};
+
+    auto receipt_store{LoadAgentPaymentReceiptStore()};
+    if (!receipt_store) {
+        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
+        m_spend_command_state->setText(QString::fromStdString(util::ErrorString(receipt_store).translated));
         return;
     }
 
-    const QString txid{QString::fromStdString(signed_spend->transaction.GetHash().ToString())};
+    const QString txid{QString::fromStdString(signed_spend.transaction.GetHash().ToString())};
     std::optional<agent::AllotmentPaymentReceiptArtifact> change_receipt;
     size_t stored_spent_receipts_removed{0};
     size_t stored_change_receipts_added{0};
     bool receipt_store_saved{false};
     const int64_t activity_time{QDateTime::currentSecsSinceEpoch()};
     std::vector<agent::AllotmentPaymentReceiptArtifact> spent_receipts;
-    const std::vector<agent::AllotmentFundingOutputArtifact> spent_outputs{FundingOutputsFromSpendInputs(signed_spend->inputs)};
+    const std::vector<agent::AllotmentFundingOutputArtifact> spent_outputs{FundingOutputsFromSpendInputs(signed_spend.inputs)};
     stored_spent_receipts_removed = agent::RemoveSpentReceipts(receipt_store->receipts, spent_outputs, &spent_receipts);
-    agent::AppendSpentActivities(*receipt_store, spend_context->bundle.funding_address, spent_outputs, spent_receipts, activity_time, txid.toStdString());
-    if (signed_spend->change_amount > 0) {
+    agent::AppendSpentActivities(*receipt_store, outcome->spend_context.bundle.funding_address, spent_outputs, spent_receipts, activity_time, txid.toStdString());
+    if (signed_spend.change_amount > 0) {
         change_receipt = agent::AllotmentPaymentReceiptArtifact{
             .chain = Params().GetChainTypeString(),
             .genesis_hash = Params().GenesisBlock().GetHash().ToString(),
-            .funding_address = spend_context->bundle.funding_address,
+            .funding_address = outcome->spend_context.bundle.funding_address,
             .funding_output = {
                 .txid = txid.toStdString(),
                 .vout = 1,
-                .amount = signed_spend->change_amount,
+                .amount = signed_spend.change_amount,
             },
             .received_time = activity_time,
-            .payment_id = spend_context->bundle.policy_request.id + ":change:" + txid.toStdString() + ":1",
-            .label = spend_context->bundle.policy_request.label,
+            .payment_id = outcome->spend_context.bundle.policy_request.id + ":change:" + txid.toStdString() + ":1",
+            .label = outcome->spend_context.bundle.policy_request.label,
             .memo = "agent spend change",
             .payer = "desktop vault",
         };
@@ -1345,16 +1455,16 @@ void AgentAllotmentPage::signAgentSpendLocally()
         receipt_store_saved = true;
     }
 
-    const CSerializedNetMsg tx_message{agent::MakeTxMessage(signed_spend->transaction)};
-    const CInv inventory{MSG_WTX, signed_spend->transaction.GetWitnessHash()};
+    const CSerializedNetMsg tx_message{agent::MakeTxMessage(signed_spend.transaction)};
+    const CInv inventory{MSG_WTX, signed_spend.transaction.GetWitnessHash()};
     const CSerializedNetMsg inv_message{agent::MakeTxInvMessage(std::span{&inventory, 1})};
 
     QStringList output;
-    output << QStringLiteral("policy_id=%1").arg(QString::fromStdString(spend_context->bundle.policy_request.id));
-    output << QStringLiteral("funding_address=%1").arg(QString::fromStdString(spend_context->bundle.funding_address));
-    output << QStringLiteral("selected_input_count=%1").arg(QString::number(signed_spend->inputs.size()));
-    for (size_t i{0}; i < signed_spend->inputs.size(); ++i) {
-        const agent::AllotmentSpendInput& input{signed_spend->inputs[i]};
+    output << QStringLiteral("policy_id=%1").arg(QString::fromStdString(outcome->spend_context.bundle.policy_request.id));
+    output << QStringLiteral("funding_address=%1").arg(QString::fromStdString(outcome->spend_context.bundle.funding_address));
+    output << QStringLiteral("selected_input_count=%1").arg(QString::number(signed_spend.inputs.size()));
+    for (size_t i{0}; i < signed_spend.inputs.size(); ++i) {
+        const agent::AllotmentSpendInput& input{signed_spend.inputs[i]};
         output << QStringLiteral("selected_input_%1=%2:%3")
                       .arg(QString::number(i),
                            QString::fromStdString(input.prevout.hash.ToString()),
@@ -1363,14 +1473,14 @@ void AgentAllotmentPage::signAgentSpendLocally()
                       .arg(QString::number(i),
                            QString::fromStdString(util::ToString(input.amount)));
     }
-    output << QStringLiteral("input_amount_cinnabar=%1").arg(QString::fromStdString(util::ToString(signed_spend->input_amount)));
-    output << QStringLiteral("spend_amount_cinnabar=%1").arg(QString::fromStdString(util::ToString(spend_amount)));
-    output << QStringLiteral("change_amount_cinnabar=%1").arg(QString::fromStdString(util::ToString(signed_spend->change_amount)));
-    output << QStringLiteral("policy_result=%1").arg(QString::fromStdString(agent::AllotmentPolicyResultCodeString(signed_spend->policy_check.code)));
+    output << QStringLiteral("input_amount_cinnabar=%1").arg(QString::fromStdString(util::ToString(signed_spend.input_amount)));
+    output << QStringLiteral("spend_amount_cinnabar=%1").arg(QString::fromStdString(util::ToString(outcome->spend_amount)));
+    output << QStringLiteral("change_amount_cinnabar=%1").arg(QString::fromStdString(util::ToString(signed_spend.change_amount)));
+    output << QStringLiteral("policy_result=%1").arg(QString::fromStdString(agent::AllotmentPolicyResultCodeString(signed_spend.policy_check.code)));
     output << QStringLiteral("proved=true");
-    output << QStringLiteral("anchor_height=%1").arg(QString::number(signed_spend->transaction.nAnchorHeight));
-    output << QStringLiteral("anchor_hash=%1").arg(QString::fromStdString(anchor_hash.ToString()));
-    output << QStringLiteral("hex=%1").arg(QString::fromStdString(EncodeHexTx(signed_spend->transaction)));
+    output << QStringLiteral("anchor_height=%1").arg(QString::number(signed_spend.transaction.nAnchorHeight));
+    output << QStringLiteral("anchor_hash=%1").arg(QString::fromStdString(outcome->anchor_hash.ToString()));
+    output << QStringLiteral("hex=%1").arg(QString::fromStdString(EncodeHexTx(signed_spend.transaction)));
     output << QStringLiteral("tx_payload=%1").arg(QString::fromStdString(agent::AgentMessagePayloadHex(tx_message)));
     output << QStringLiteral("inv_payload=%1").arg(QString::fromStdString(agent::AgentMessagePayloadHex(inv_message)));
     if (change_receipt.has_value()) {
@@ -1388,7 +1498,7 @@ void AgentAllotmentPage::signAgentSpendLocally()
 
     SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewValid"));
     m_spend_command_state->setText(tr("Agent spend signed locally for %1 and loaded into signed-spend review.")
-                                       .arg(QString::fromStdString(spend_context->bundle.policy_request.id)));
+                                       .arg(QString::fromStdString(outcome->spend_context.bundle.policy_request.id)));
 }
 
 void AgentAllotmentPage::reviewSignedAgentSpend()
@@ -2281,8 +2391,14 @@ void AgentAllotmentPage::updateAgentSpendCommandState()
     const bool has_destination = !m_spend_destination_edit->text().trimmed().isEmpty();
     const bool ready = has_bundle && has_destination && spend_valid && spend_amount > 0 && spent_today_valid;
 
-    m_copy_spend_command_button->setEnabled(ready);
-    m_sign_spend_button->setEnabled(ready);
+    m_copy_spend_command_button->setEnabled(ready && !m_spend_in_flight);
+    m_sign_spend_button->setEnabled(ready && !m_spend_in_flight);
+    if (m_cancel_spend_button) m_cancel_spend_button->setEnabled(m_spend_in_flight);
+    if (m_spend_bundle_edit) m_spend_bundle_edit->setReadOnly(m_spend_in_flight);
+    if (m_spend_destination_edit) m_spend_destination_edit->setReadOnly(m_spend_in_flight);
+    if (m_spend_amount) m_spend_amount->setEnabled(!m_spend_in_flight);
+    if (m_spent_today) m_spent_today->setEnabled(!m_spend_in_flight);
+    if (m_spend_in_flight) return;
     if (ready) {
         SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewReady"));
         m_spend_command_state->setText(tr("Ready to sign locally or copy a signbundle command."));

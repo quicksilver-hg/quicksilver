@@ -26,6 +26,7 @@
 #include <memory>
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QDataWidgetMapper>
 #include <QFileInfo>
 #include <QFrame>
@@ -324,6 +325,7 @@ void OptionsDialog::setMapper()
     mapper->addMapping(ui->databaseCache, OptionsModel::DatabaseCache);
     mapper->addMapping(ui->gpuSolverPath, OptionsModel::GpuSolverPath);
     mapper->addMapping(ui->allowCpuBlockMining, OptionsModel::AllowCpuBlockMining);
+    mapper->addMapping(ui->allowCpuAgentTxPow, OptionsModel::AllowCpuAgentTxPow);
     mapper->addMapping(ui->prune, OptionsModel::Prune);
     mapper->addMapping(ui->pruneSize, OptionsModel::PruneSize);
 
@@ -534,11 +536,61 @@ void OptionsDialog::on_openQuicksilverConfButton_clicked()
 
 void OptionsDialog::on_okButton_clicked()
 {
-    model->setData(model->index(OptionsModel::FontForMoney, 0), ui->moneyFont->itemData(ui->moneyFont->currentIndex()));
+    auto submit = [this] {
+        model->setData(model->index(OptionsModel::FontForMoney, 0), ui->moneyFont->itemData(ui->moneyFont->currentIndex()));
+        mapper->submit();
+        accept();
+        updateDefaultProxyNets();
+    };
 
-    mapper->submit();
-    accept();
-    updateDefaultProxyNets();
+    // The mapper writes the widget on submit, so a tick that the user then
+    // refuses would be stored unless this returns before submit and unticks
+    // the widget. The question is asked here, once, because an agent spend
+    // can start with nobody present to answer a later dialog.
+    const bool turning_on{ui->allowCpuAgentTxPow->isChecked() && !model->getOption(OptionsModel::AllowCpuAgentTxPow).toBool()};
+    if (!turning_on || property("agentTxPowConfirmOpen").toBool()) {
+        if (!property("agentTxPowConfirmOpen").toBool()) submit();
+        return;
+    }
+
+    auto* box = new QMessageBox{QMessageBox::Warning,
+                                 tr("Let agent spends use this computer's processor?"),
+                                 tr("Agent spends will be prepared by this computer's processor whenever no graphics solver is available."),
+                                 QMessageBox::NoButton,
+                                 this};
+    box->setObjectName(QStringLiteral("cpuAgentTxPowWarning"));
+    box->setInformativeText(tr(
+        "An agent decides for itself when to spend. It can begin while you are working, playing, or away from the computer, and it will not ask first.\n\n"
+        "Preparing a single spend on a processor takes many minutes. A measured reference for this kind of work is about 16 minutes on an eight-thread desktop; a slower computer or a larger spend takes longer. That figure is a calibration result, not a promise.\n\n"
+        "While that work runs it uses every processor core. The rest of the computer will feel slow, and video, calls, and games may stutter until it finishes.\n\n"
+        "A graphics solver does the same work in a fraction of the time. This setting is for computers that do not have one."));
+    auto* acknowledge = new QCheckBox{tr("I understand that an agent may start a long job that slows this computer."), box};
+    acknowledge->setObjectName(QStringLiteral("cpuAgentTxPowAcknowledge"));
+    box->setCheckBox(acknowledge);
+    QPushButton* cancel_button{box->addButton(QMessageBox::Cancel)};
+    QPushButton* proceed_button{box->addButton(tr("Allow processor spends"), QMessageBox::AcceptRole)};
+    proceed_button->setObjectName(QStringLiteral("cpuAgentTxPowProceedButton"));
+    proceed_button->setEnabled(false);
+    proceed_button->setAutoDefault(false);
+    cancel_button->setAutoDefault(true);
+    box->setDefaultButton(cancel_button);
+    connect(acknowledge, &QCheckBox::toggled, box, [box, proceed_button, cancel_button](bool checked) {
+        proceed_button->setEnabled(checked);
+        box->setDefaultButton(cancel_button);
+    });
+    setProperty("agentTxPowConfirmOpen", true);
+    connect(box, &QMessageBox::finished, this, [this, submit, box, proceed_button] {
+        const bool allowed{box->clickedButton() == proceed_button};
+        setProperty("agentTxPowConfirmOpen", false);
+        QTimer::singleShot(0, this, [this, submit, allowed] {
+            if (!allowed) {
+                ui->allowCpuAgentTxPow->setChecked(false);
+                return;
+            }
+            submit();
+        });
+    });
+    GUIUtil::ShowModalDialogAsynchronously(box);
 }
 
 void OptionsDialog::on_cancelButton_clicked()

@@ -1145,7 +1145,19 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Paste signed spend output")));
     QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewIdle"));
     agent_sign_spend_button->click();
-    QVERIFY(agent_spend_command_state->text().contains(QStringLiteral("Agent spend signed locally")));
+    // The spend is prepared off the GUI thread. The signed result is the same
+    // string as before; it arrives on a later turn instead of inside the click.
+    //
+    // The wait is long on purpose, and is not a tolerance on the assertion. What
+    // it bounds is a real sandbox Cuckatoo grind: the prove loop searches nonces
+    // until a cycle beats the target, so its cost is a random variable, not a
+    // fixed one. Before this test went asynchronous the click() blocked and no
+    // time bound existed at all, so any duration passed; QTRY_VERIFY's 5 s
+    // default introduced one that the work has always exceeded -- it was
+    // measured at 11.4 s under `ctest -j10`. A tight bound here would fail on an
+    // unlucky nonce or a loaded box while the code was correct. A genuine hang
+    // still fails, in finite time.
+    QTRY_VERIFY_WITH_TIMEOUT(agent_spend_command_state->text().contains(QStringLiteral("Agent spend signed locally")), 120000);
     QCOMPARE(agent_spend_command_state->property("class").toString(), QStringLiteral("policyReviewValid"));
     QVERIFY(agent_signed_spend_edit->toPlainText().contains(QStringLiteral("tx_payload=")));
     QVERIFY(agent_signed_spend_edit->toPlainText().contains(QStringLiteral("inv_payload=")));

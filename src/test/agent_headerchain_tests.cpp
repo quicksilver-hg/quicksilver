@@ -50,6 +50,8 @@
 
 #include <atomic>
 #include <csignal>
+#include <cstdlib>
+#include <string>
 
 #include <chrono>
 #include <cstdint>
@@ -203,6 +205,27 @@ std::string AgentAllotmentPaymentReceiptJson(const std::string& funding_address,
         util::ToString(funding_output.amount),
         util::ToString(received_time),
         metadata_json);
+}
+
+// Portable overwrite-clear of an env var: POSIX unsetenv() is unavailable under
+// MSVC, where assigning an empty value removes the variable. Kept outside any
+// test case so both platforms run the same assertions.
+void ClearEnvVar(const char* name)
+{
+#ifdef WIN32
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+}
+
+void SetEnvVar(const char* name, const char* value)
+{
+#ifdef WIN32
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
 }
 
 } // namespace
@@ -3077,6 +3100,67 @@ BOOST_AUTO_TEST_CASE(spent_today_sums_spend_amount_not_consumed_input)
     auto other_address{agent::SpentTodayFromActivities(activities, "other-address", 1'700'000'000)};
     BOOST_REQUIRE_MESSAGE(other_address, util::ErrorString(other_address).original);
     BOOST_CHECK_EQUAL(*other_address, 0);
+}
+
+BOOST_AUTO_TEST_CASE(agent_allotment_cpu_fallback_requires_opt_in_past_sandbox)
+{
+    // Sandbox never needed the opt-in. The real graph does, and an unshipped
+    // size must not inherit a CPU policy the way the vault predicate refuses 29.
+    BOOST_CHECK(agent::AllowsAllotmentCpuFallback(19, false));
+    BOOST_CHECK(!agent::AllowsAllotmentCpuFallback(28, false));
+    BOOST_CHECK(agent::AllowsAllotmentCpuFallback(28, true));
+    BOOST_CHECK(!agent::AllowsAllotmentCpuFallback(29, true));
+}
+
+BOOST_AUTO_TEST_CASE(agent_allotment_e28_spend_without_opt_in_names_the_missing_solver)
+{
+    // The refusal that exists today: E28, no opt-in, no solver. It must stay a
+    // SolverFault, not the generic "could not produce" line, or an operator
+    // with a dead card and one with no solver configured read the same error.
+    struct RestoreGpuSolverEnv {
+        std::optional<std::string> previous;
+        RestoreGpuSolverEnv()
+        {
+            if (const char* value{std::getenv("CUCKATOO_GPU_SOLVER")}) previous = value;
+            ClearEnvVar("CUCKATOO_GPU_SOLVER");
+        }
+        ~RestoreGpuSolverEnv()
+        {
+            if (previous) SetEnvVar("CUCKATOO_GPU_SOLVER", previous->c_str());
+            else ClearEnvVar("CUCKATOO_GPU_SOLVER");
+        }
+    } restore_env;
+
+    Consensus::Params consensus{Params().GetConsensus()};
+    consensus.nTxEdgeBits = 28;
+    agent::HeaderChain chain{Params().GetConsensus(), Params().GenesisBlock()};
+    const CBlockHeader anchor_header{NextHeader(chain)};
+    BOOST_REQUIRE(chain.AcceptHeader(anchor_header).accepted());
+
+    const CKey funding_key{GenerateRandomKey()};
+    auto context{agent::ImportAllotmentBundle(
+        AgentAllotmentBundleJson(funding_key),
+        Params().GetChainTypeString(),
+        Params().GenesisBlock().GetHash().ToString())};
+    BOOST_REQUIRE_MESSAGE(context, util::ErrorString(context).original);
+
+    const CKey destination_key{GenerateRandomKey()};
+    auto signed_spend{agent::CreateSignedAllotmentSpend(
+        *context,
+        agent::AllotmentSpendRequest{
+            .prevout = COutPoint{Txid::FromUint256(ArithToUint256(91)), 0},
+            .prevout_value = COIN,
+            .destination = PKHash(destination_key.GetPubKey()),
+            .spend_amount = COIN / 4,
+            .spent_today = 0,
+            .prove = true,
+            .anchor = &chain.Tip(),
+            .allow_cpu_txpow = false,
+        },
+        consensus)};
+    BOOST_REQUIRE(!signed_spend);
+    BOOST_CHECK_EQUAL(util::ErrorString(signed_spend).original,
+                      "Per-transaction proof-of-work failed. No GPU solver is configured; set -cuckatoosolver=<path>");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

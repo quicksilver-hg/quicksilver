@@ -13,19 +13,31 @@ of the node or vault build.
 - The desktop vault can fall back to the built-in CPU solver on `main` and
   `publictest`, but the measured reference workload takes about 16 minutes on
   an 8-thread desktop. An external GPU is strongly recommended.
-- The current `quicksilver-agent` does not enable CPU fallback on `main` or
-  `publictest`; configure the helper before proving an agent spend.
+- An agent spend falls back to the built-in CPU solver on `main` or
+  `publictest` only when the operator opts in. The command-line agent takes
+  `-allowcputxpow`. The desktop stores the same choice as a checkbox under
+  Controls > Options > Main. That checkbox does not reach the command-line
+  agent, which does not read desktop settings, so the sign command the desktop
+  copies includes the flag when the checkbox is on. The default is off because
+  an agent starts the work on its own schedule, while the computer may be in
+  use, and the grind uses every core for many minutes. Configure the helper
+  before proving an agent spend unless that opt-in is deliberate.
 - `sandbox` uses a small built-in graph and does not need GPU acceleration.
 - Running or synchronizing a node, validating blocks, and receiving funds do
   not require a GPU.
 
 `main` and `publictest` use one graph size for a transfer and for a block.
 CPU solving is allowed for a transfer because it is one bounded search the
-sender waits out once. It is opt-in for blocks because block mining is a
-continuous race against GPU cards: a CPU can run the graph, but an unbounded
-grind at near-zero odds would look like a broken miner. The opt-in is
-`-allowcpumining`, and the same switch is the checkbox in the desktop's
-Controls > Options > Main that allows this computer's processor to mine blocks.
+sender waits out once. An agent spend is that same bounded search, but the
+agent starts it on its own schedule, so the processor is refused unless the
+operator opts in. The command-line opt-in is `-allowcputxpow`. The desktop
+checkbox next to the mining one is a separate setting, because the
+command-line agent does not read desktop settings. It is opt-in for blocks
+because block mining is a continuous race against GPU cards: a CPU can run
+the graph, but an unbounded grind at near-zero odds would look like a broken
+miner. The block opt-in is `-allowcpumining`, and the same switch is the
+checkbox in the desktop's Controls > Options > Main that allows this
+computer's processor to mine blocks.
 
 The measured times are calibration results, not performance guarantees. GPU,
 CPU, driver, and current network work requirements all affect completion time.

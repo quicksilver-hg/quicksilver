@@ -396,7 +396,9 @@ Both of this document's former open problems now have answers.
   delegatable — the pre-image excludes `scriptSig` and the witness and the grind
   runs before signing — but no in-protocol reward exists, so a grind market needs a
   payment mechanism designed from scratch. v1 treats a GPU as the practical
-  transfer path, and the command-line agent requires one on live networks. See
+  transfer path. The command-line agent uses one on live networks unless the
+  operator passes `-allowcputxpow`, which is off by default because an agent
+  spend can start while the computer is in use. See
   [delegation.md](delegation.md).
 
 What v1 deliberately does not build, with trigger conditions, is in

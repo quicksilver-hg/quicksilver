@@ -63,7 +63,8 @@ util::Result<void> AddFundingKey(AllotmentSpendContext& context, const std::stri
 util::Result<void> ProveAgentSpend(CMutableTransaction& transaction,
                                    const CBlockIndex* anchor,
                                    const Consensus::Params& consensus,
-                                   const cuckatoo::SolverCancelCallback& cancel)
+                                   const cuckatoo::SolverCancelCallback& cancel,
+                                   bool allow_cpu_txpow)
 {
     if (anchor == nullptr || anchor->nHeight < 0) {
         return util::Error{Untranslated("Per-transaction proof-of-work requires a validated anchor.")};
@@ -88,7 +89,7 @@ util::Result<void> ProveAgentSpend(CMutableTransaction& transaction,
     const std::vector<unsigned char> preimage{CTransaction(transaction).PowPreimage(anchor->GetBlockHash())};
     cuckatoo::Cycle cycle{};
     uint32_t nonce{0};
-    const bool cpu_fallback{consensus.nTxEdgeBits == 19};
+    const bool cpu_fallback{AllowsAllotmentCpuFallback(consensus.nTxEdgeBits, allow_cpu_txpow)};
     uint32_t start_nonce{0};
     while (true) {
         // Checked at the top of every iteration, not only inside the solver: this
@@ -139,7 +140,8 @@ util::Result<AllotmentSignedSpend> CreateSignedAllotmentSpendWithInputs(const Al
                                                                             bool prove,
                                                                             const CBlockIndex* anchor,
                                                                             const Consensus::Params& consensus,
-                                                                            const cuckatoo::SolverCancelCallback& cancel)
+                                                                            const cuckatoo::SolverCancelCallback& cancel,
+                                                                            bool allow_cpu_txpow)
 {
     if (inputs.empty()) {
         return util::Error{Untranslated("Agent allotment spend requires at least one funding output.")};
@@ -207,7 +209,7 @@ util::Result<AllotmentSignedSpend> CreateSignedAllotmentSpendWithInputs(const Al
     // outside the proof pre-image. Grinding here charges the true final size instead
     // of an estimate, and cannot invalidate the signatures just made.
     if (prove) {
-        auto proof_result{ProveAgentSpend(transaction, anchor, consensus, cancel)};
+        auto proof_result{ProveAgentSpend(transaction, anchor, consensus, cancel, allow_cpu_txpow)};
         if (!proof_result) return util::Error{util::ErrorString(proof_result)};
     }
 
@@ -296,7 +298,8 @@ util::Result<AllotmentSignedSpend> CreateSignedAllotmentSpend(const AllotmentSpe
         request.prove,
         request.anchor,
         consensus,
-        request.cancel);
+        request.cancel,
+        request.allow_cpu_txpow);
 }
 
 util::Result<AllotmentSignedSpend> CreateSignedAllotmentSpendFromBundleOutputs(const AllotmentSpendContext& context,
@@ -315,7 +318,8 @@ util::Result<AllotmentSignedSpend> CreateSignedAllotmentSpendFromBundleOutputs(c
         request.prove,
         request.anchor,
         consensus,
-        request.cancel);
+        request.cancel,
+        request.allow_cpu_txpow);
 }
 
 } // namespace agent

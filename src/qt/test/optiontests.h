@@ -31,6 +31,8 @@ private Q_SLOTS:
     void externalSignerSurfacesAreHiddenNotGreyedOut();
     void cpuFallbackWarningPreferencePersists();
     void allowCpuBlockMiningPersistsWithoutRestart();
+    void allowCpuAgentTxPowPersists();
+    void allowCpuAgentTxPowCancelLeavesTheSettingOff();
     void parametersInteraction();
     void extractFilter();
     void openConfDoesNotNestEventLoop();

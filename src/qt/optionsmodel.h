@@ -70,6 +70,7 @@ public:
         DatabaseCache,          // int
         GpuSolverPath,          // QString
         AllowCpuBlockMining,    // bool
+        AllowCpuAgentTxPow,     // bool
         ShowCpuFallbackWarning, // bool
         ExternalSignerPath,     // QString
         SpendZeroConfChange,    // bool

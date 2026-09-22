@@ -296,8 +296,9 @@ that accepts it, never after.
   making the delay legible as progress rather than as a hang. Nothing is deducted:
   the full amount arrives. The screen states that live and public-test transfers
   are practical with the external GPU solver and may take many minutes on the
-  desktop's CPU fallback. The current command-line agent requires that solver on
-  those networks. See [delegation.md](delegation.md).
+  desktop's CPU fallback. The command-line agent uses that solver on those
+  networks unless `-allowcputxpow` is set. The flag is off by default because an
+  agent can start the work while the computer is in use. See [delegation.md](delegation.md).
 - **Consensus** costs about 26 GB per year pruned, which is the default, or 154 GB
   per year to keep full history. Both figures are shown, because a user who is
   offered only the larger one will decline for the wrong reason. It is framed as

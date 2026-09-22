@@ -104,6 +104,7 @@ static void SetupAgentArgs(ArgsManager& argsman)
     argsman.AddArg("-prevamount=<cinnabar>", "Optional funding transaction output amount in cinnabar for signbundle. If omitted, signbundle selects from funding_outputs in the bundle.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-destination=<address>", "Spend destination address for signbundle.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-cuckatoosolver=<path>", "Path to an external GPU Cuckatoo solver binary for proving agent spends on non-sandbox networks.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
+    argsman.AddArg("-allowcputxpow", "Permit this computer's processor to produce the per-transaction proof when no GPU solver is configured (default: false). Proving one spend on a processor takes many minutes and uses every core, and an agent spend can start at any time, including while the computer is in use. A GPU solver is strongly preferred.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-cuckatoosolvertimeout=<sec>", "No-progress watchdog window for the external GPU solver, in seconds.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-prove=<0|1>", "Create per-tx proof-of-work for signbundle. Proving reads the anchor's congestion multiplier from the header store, so -prove=1 works at any synced header, not only at genesis. Set -prove=0 for offline tests only; the transaction will not relay. (default: 1)", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
 
@@ -284,6 +285,12 @@ static void SetEnvVarOverwrite(const char* name, const std::string& value)
 #else
     setenv(name, value.c_str(), 1);
 #endif
+}
+
+static bool GpuSolverConfigured()
+{
+    const char* solver{std::getenv("CUCKATOO_GPU_SOLVER")};
+    return solver != nullptr && solver[0] != '\0';
 }
 
 static void ConfigureCuckatooSolverEnvironment(const ArgsManager& args)
@@ -1165,6 +1172,13 @@ static int SignBundle(const ArgsManager& args)
     if (!spent_today.has_value()) return EXIT_FAILURE;
 
     const bool prove{args.GetBoolArg("-prove", true)};
+    const bool allow_cpu_txpow{args.GetBoolArg("-allowcputxpow", false)};
+    // Only when the processor is about to be used. Sandbox never needs the opt-in,
+    // a configured GPU solver is tried first, and -prove=0 does not grind at all.
+    // Printed before the call: the message is useless once the minutes are gone.
+    if (allow_cpu_txpow && prove && Params().GetConsensus().nTxEdgeBits == 28 && !GpuSolverConfigured()) {
+        tfm::format(std::cerr, "Notice: no GPU solver is configured, so this spend will be proved on the processor. This takes many minutes and will use every core.\n");
+    }
 
     // Ctrl-C during a grind used to kill the agent outright and leave qsgpusolve
     // running with the card pinned: the solver sits in its own process group, so
@@ -1187,6 +1201,7 @@ static int SignBundle(const ArgsManager& args)
                     .prove = prove,
                     .anchor = &client.HeaderTip(),
                     .cancel = cancel,
+                    .allow_cpu_txpow = allow_cpu_txpow,
                 },
                 Params().GetConsensus());
         }
@@ -1212,6 +1227,7 @@ static int SignBundle(const ArgsManager& args)
                 .prove = prove,
                 .anchor = &client.HeaderTip(),
                 .cancel = cancel,
+                .allow_cpu_txpow = allow_cpu_txpow,
             },
             Params().GetConsensus());
     }()};

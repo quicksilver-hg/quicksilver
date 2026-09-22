@@ -17,6 +17,8 @@
 #include <test/util/setup_common.h>
 
 #include <QSettings>
+#include <QAbstractButton>
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QGroupBox>
@@ -24,6 +26,7 @@
 #include <QFileInfo>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QTest>
 
@@ -299,6 +302,125 @@ void OptionTests::cpuFallbackWarningPreferencePersists()
         settings.setValue(SETTING_KEY, previous_value);
     } else {
         settings.remove(SETTING_KEY);
+    }
+}
+
+void OptionTests::allowCpuAgentTxPowPersists()
+{
+    constexpr auto SETTING_KEY{"allow_cpu_agent_txpow"};
+    QSettings settings;
+    const bool had_previous_value{settings.contains(SETTING_KEY)};
+    const QVariant previous_value{settings.value(SETTING_KEY)};
+    const bool had_restart{settings.contains("fRestartRequired")};
+    const QVariant previous_restart{settings.value("fRestartRequired")};
+    settings.remove(SETTING_KEY);
+    settings.setValue("fRestartRequired", false);
+
+    OptionsModel first{m_node};
+    QVERIFY(!first.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
+    QVERIFY(first.setOption(OptionsModel::AllowCpuAgentTxPow, true));
+    QVERIFY(!first.isRestartRequired());
+
+    OptionsModel second{m_node};
+    QVERIFY(second.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
+    QVERIFY(second.setOption(OptionsModel::AllowCpuAgentTxPow, false));
+    QVERIFY(!second.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
+    QVERIFY(!second.isRestartRequired());
+
+    if (had_previous_value) {
+        settings.setValue(SETTING_KEY, previous_value);
+    } else {
+        settings.remove(SETTING_KEY);
+    }
+    if (had_restart) {
+        settings.setValue("fRestartRequired", previous_restart);
+    } else {
+        settings.remove("fRestartRequired");
+    }
+}
+
+void OptionTests::allowCpuAgentTxPowCancelLeavesTheSettingOff()
+{
+    constexpr auto SETTING_KEY{"allow_cpu_agent_txpow"};
+    QSettings settings;
+    const bool had_previous_value{settings.contains(SETTING_KEY)};
+    const QVariant previous_value{settings.value(SETTING_KEY)};
+    const bool had_restart{settings.contains("fRestartRequired")};
+    const QVariant previous_restart{settings.value("fRestartRequired")};
+    settings.remove(SETTING_KEY);
+    settings.setValue("fRestartRequired", false);
+
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    QVERIFY(!options.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
+
+    OptionsDialog dialog(nullptr, /*enableVault=*/true);
+    dialog.setModel(&options);
+    dialog.show();
+    auto* box = dialog.findChild<QCheckBox*>(QStringLiteral("allowCpuAgentTxPow"));
+    auto* ok_button = dialog.findChild<QPushButton*>(QStringLiteral("okButton"));
+    QVERIFY(box);
+    QVERIFY(ok_button);
+    QVERIFY(!box->isChecked());
+    QVERIFY(box->text().contains(QStringLiteral("processor")));
+    QVERIFY(box->text().contains(QStringLiteral("every core")));
+    QVERIFY(!box->text().contains(QStringLiteral("infeasible"), Qt::CaseInsensitive));
+    QVERIFY(!box->text().contains(QStringLiteral("impossible"), Qt::CaseInsensitive));
+    QVERIFY(!box->text().contains(QStringLiteral("not supported"), Qt::CaseInsensitive));
+
+    box->setChecked(true);
+    QTest::mouseClick(ok_button, Qt::LeftButton);
+    auto* warning = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+    QVERIFY(warning);
+    QCOMPARE(warning->objectName(), QStringLiteral("cpuAgentTxPowWarning"));
+    QVERIFY(warning->isVisible());
+    auto* acknowledge = warning->findChild<QCheckBox*>(QStringLiteral("cpuAgentTxPowAcknowledge"));
+    auto* proceed = warning->findChild<QPushButton*>(QStringLiteral("cpuAgentTxPowProceedButton"));
+    QVERIFY(acknowledge);
+    QVERIFY(proceed);
+    QVERIFY(!proceed->isEnabled());
+    QVERIFY(!acknowledge->isChecked());
+    QAbstractButton* cancel = warning->button(QMessageBox::Cancel);
+    QVERIFY(cancel);
+    QVERIFY(warning->defaultButton() == cancel);
+    QVERIFY(!warning->text().contains(QStringLiteral("infeasible"), Qt::CaseInsensitive));
+    QVERIFY(!warning->informativeText().contains(QStringLiteral("impossible"), Qt::CaseInsensitive));
+    QVERIFY(warning->informativeText().contains(QStringLiteral("calibration result")));
+    QVERIFY(warning->informativeText().contains(QStringLiteral("16 minutes")));
+
+    cancel->click();
+    QTRY_VERIFY(!box->isChecked());
+    QVERIFY(!options.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
+    QVERIFY(dialog.isVisible());
+
+    box->setChecked(true);
+    QTest::mouseClick(ok_button, Qt::LeftButton);
+    warning = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+    QVERIFY(warning);
+    QCOMPARE(warning->objectName(), QStringLiteral("cpuAgentTxPowWarning"));
+    acknowledge = warning->findChild<QCheckBox*>(QStringLiteral("cpuAgentTxPowAcknowledge"));
+    proceed = warning->findChild<QPushButton*>(QStringLiteral("cpuAgentTxPowProceedButton"));
+    QVERIFY(acknowledge);
+    QVERIFY(proceed);
+    acknowledge->setChecked(true);
+    QVERIFY(proceed->isEnabled());
+    proceed->click();
+    QTRY_VERIFY(options.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
+    QVERIFY(!options.isRestartRequired());
+
+    OptionsModel reloaded{m_node};
+    QVERIFY(reloaded.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
+
+    if (had_previous_value) {
+        settings.setValue(SETTING_KEY, previous_value);
+    } else {
+        settings.remove(SETTING_KEY);
+    }
+    if (had_restart) {
+        settings.setValue("fRestartRequired", previous_restart);
+    } else {
+        settings.remove("fRestartRequired");
     }
 }
 

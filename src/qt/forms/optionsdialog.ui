@@ -237,6 +237,17 @@ Applies the next time mining starts.</string>
         </widget>
        </item>
        <item>
+        <widget class="QCheckBox" name="allowCpuAgentTxPow">
+         <property name="toolTip">
+          <string>An agent decides for itself when to spend and does not ask first. Preparing one spend on this computer's processor takes many minutes and uses every core. A graphics solver does the same work much faster. Applies to the next agent spend prepared here, not to one already running.</string>
+         </property>
+         <property name="text">
+          <string>Allow a&amp;gent spends to be prepared by this computer's processor when no graphics solver is configured.
+An agent can start one at any time, and it will use every core for several minutes.</string>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="QLabel" name="gpuSolverStatusLabel">
          <property name="text">
           <string/>
