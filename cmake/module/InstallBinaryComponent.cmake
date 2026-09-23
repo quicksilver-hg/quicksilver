@@ -6,11 +6,11 @@
 include_guard(GLOBAL)
 include(GNUInstallDirs)
 
-# Mark a component DEVELOPER_TOOL when it is a command-line tool a person using
-# Quicksilver never needs. Such a component is still built and still tested --
-# only its install() rules are skipped when QS_DEVELOPER_TOOLS is OFF, which is
-# how a release package ends up placing one application on a user's system
-# rather than eleven executables they have to choose between.
+# Mark the optional command-line tools DEVELOPER_TOOL. The desktop application
+# provisions consensus itself; headless operators use the daemon and RPC client.
+# These components are still built and tested when QS_DEVELOPER_TOOLS is OFF;
+# only their install() rules are skipped. Debian sets the option ON and splits
+# the staged tree into packages with .install files.
 function(install_binary_component component)
   cmake_parse_arguments(PARSE_ARGV 1
     IC                              # prefix

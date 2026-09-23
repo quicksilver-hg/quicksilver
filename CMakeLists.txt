@@ -179,10 +179,9 @@ option(INSTALL_MAN "Install man pages." ON)
 
 # Whether `cmake --install` places the developer command-line tools -- the
 # daemon, the RPC client, and the tx/util/vault helpers -- on the
-# system alongside the application. ON for a source build so a contributor
-# loses nothing; a release configuration sets it OFF so the package installs
-# one launchable application rather than a directory of executables the user
-# has to pick between. Targets are always built and tested either way.
+# system alongside the application. ON by default for source builds. Debian
+# packaging also sets it ON, then splits the staged tree with .install files.
+# Targets are always built and tested either way.
 option(QS_DEVELOPER_TOOLS "Install the developer command-line tools." ON)
 
 set(APPEND_CPPFLAGS "" CACHE STRING "Preprocessor flags that are appended to the command line after all other flags added by the build system. This variable is intended for debugging and special builds.")

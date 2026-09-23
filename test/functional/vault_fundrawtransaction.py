@@ -43,7 +43,17 @@ class RawTransactionsTest(QuicksilverTestFramework):
 
     def set_test_params(self):
         self.num_nodes = 4
-        self.extra_args = [[] for i in range(self.num_nodes)]
+        # This file grinds two near-maximum-weight transactions as fixtures:
+        # `test_transaction_too_large` sends 1500 outputs and `test_weight_limits`
+        # sends 1472. Per-tx work scales with serialized bytes and with net UTXOs
+        # created, so a 46 kB, 1473-output transaction is charged ~40x the base
+        # work of an ordinary spend -- ~40 expected Cuckatoo cycle solves for one
+        # setup transaction. Neither fixture asserts anything about cycle
+        # validity; GrindTransactionPow names this exact case as what
+        # -txpownocycle is for. The proof-hash target check stays live, so the
+        # size-scaled difficulty is still exercised, without solving E19 cycles
+        # for it.
+        self.extra_args = [["-txpownocycle=1"] for i in range(self.num_nodes)]
         self.setup_clean_chain = True
         # whitelist peers to speed up tx relay / relaypool sync
         self.noban_tx_relay = True

@@ -276,6 +276,11 @@ private:
 
     std::atomic<bool> fAbortRescan{false};
     std::atomic<bool> fScanningVault{false}; // controlled by VaultRescanReserver
+    // Serializes the best-block write with the decision to ignore
+    // chainStateFlushed. A shutdown-interrupted import rescan rewinds the
+    // locator under this lock; the flush Shutdown() runs after the RPC returns
+    // then cannot put that locator back at the tip.
+    Mutex m_best_block_mutex;
     std::atomic<bool> m_attaching_chain{false};
     std::atomic<bool> m_scanning_with_passphrase{false};
     std::atomic<SteadyClock::time_point> m_scanning_start{SteadyClock::time_point{}};

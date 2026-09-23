@@ -595,6 +595,7 @@ void CVault::chainStateFlushed(const CBlockLocator& loc)
 {
     // Don't update the best block until the chain is attached so that in case of a shutdown,
     // the rescan will be restarted at next startup.
+    LOCK(m_best_block_mutex);
     if (m_attaching_chain) {
         return;
     }
@@ -1625,7 +1626,8 @@ void CVault::MaybeUpdateBirthTime(int64_t time)
  * creation time.
  *
  * @return Earliest timestamp that could be successfully scanned from. Timestamp
- * returned will be higher than startTime if relevant blocks could not be read.
+ * returned will be higher than startTime if relevant blocks could not be read
+ * or the scan stopped before it reached them.
  */
 int64_t CVault::RescanFromTime(int64_t startTime, const VaultRescanReserver& reserver, bool update)
 {
@@ -1638,11 +1640,50 @@ int64_t CVault::RescanFromTime(int64_t startTime, const VaultRescanReserver& res
     VaultLogPrintf("rescanning blocks=%i", start ? WITH_LOCK(cs_vault, return GetLastBlockHeight()) - start_height + 1 : 0);
 
     if (start) {
-        // TODO: this should take into account failure by ScanResult::USER_ABORT
         ScanResult result = ScanForVaultTransactions(start_block, start_height, /*max_height=*/{}, reserver, /*fUpdate=*/update, /*save_progress=*/false);
         if (result.status == ScanResult::FAILURE) {
             int64_t time_max;
             CHECK_NONFATAL(chain().findBlock(result.last_failed_block, FoundBlock().maxTime(time_max)));
+            return time_max + TIMESTAMP_WINDOW + 1;
+        }
+        if (result.status == ScanResult::USER_ABORT) {
+            // last_failed_block may be unset here. The first block that was not
+            // scanned is the one after last_scanned, or start_block when none
+            // was. Matching the synced height means the requested range was
+            // scanned and the abort only raced the completion check.
+            const int synced_height = WITH_LOCK(cs_vault, return GetLastBlockHeight());
+            uint256 unscanned_block = start_block;
+            int unscanned_height = start_height;
+            if (result.last_scanned_height.has_value()) {
+                if (*result.last_scanned_height >= synced_height) {
+                    return startTime;
+                }
+                unscanned_height = *result.last_scanned_height + 1;
+                unscanned_block = chain().getBlockHash(unscanned_height);
+            }
+            int64_t time_max = 0;
+            CHECK_NONFATAL(chain().findBlock(unscanned_block, FoundBlock().maxTime(time_max)));
+
+            // A user abort leaves the sync point alone. Shutdown does not set
+            // fAbortRescan, and a synced vault skips its startup rescan, so
+            // record the first unscanned block unless the stored locator is
+            // already there or behind it. Ignore later flushes, including the
+            // one Shutdown() runs after this RPC returns. No stored locator
+            // already makes startup scan from genesis; do not write a later one.
+            if (!IsAbortingRescan() && chain().shutdownRequested()) {
+                CBlockLocator replacement = chain().getActiveChainLocator(unscanned_block);
+                LOCK(m_best_block_mutex);
+                m_attaching_chain = true;
+                CBlockLocator existing;
+                const bool had_locator = VaultBatch{GetDatabase()}.ReadBestBlock(existing);
+                const std::optional<int> fork = had_locator ? chain().findLocatorFork(existing) : std::nullopt;
+                if (had_locator && (!fork || *fork > unscanned_height)) {
+                    if (replacement.IsNull() || !VaultBatch{GetDatabase()}.WriteBestBlock(replacement)) {
+                        m_attaching_chain = false;
+                        VaultLogPrintf("rescanned ok=0 reason=shutdown-requested best_block_write=failed");
+                    }
+                }
+            }
             return time_max + TIMESTAMP_WINDOW + 1;
         }
     }

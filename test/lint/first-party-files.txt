@@ -1,19 +1,19 @@
-#
-#
-#
-#
-#     accident, which is the defect this pin exists to catch;
-#     either deliberately (then justify it and add the path here) or by
-#     is stale and must be removed.
-#   * a file that ENTERS this set has had its upstream attribution removed --
-#   * a path listed here that is no longer in that set, or no longer tracked,
-# Every file listed here carries a Quicksilver copyright line and NO upstream
 # First-party Quicksilver files: originals, not derived from Bitcoin Core.
-# One path per line. Repo-relative. Sorted.
+#
+# Every file listed here carries a Quicksilver copyright line and NO upstream
+# holder line. That is a claim of sole authorship, so the list is pinned and
+# checked in both directions by `copyright_header.py verify`:
+#
+#   * a file that ENTERS this set has had its upstream attribution removed --
+#     either deliberately (then justify it and add the path here) or by
+#     accident, which is the defect this pin exists to catch;
+#   * a path listed here that is no longer in that set, or no longer tracked,
+#     is stale and must be removed.
+#
 # The one-sided rule -- "carries a Bitcoin Core line, therefore must also carry
 # a Quicksilver line" -- cannot see either failure.
-# checked in both directions by `copyright_header.py verify`:
-# holder line. That is a claim of sole authorship, so the list is pinned and
+#
+# One path per line. Repo-relative. Sorted.
 contrib/calibration/mainnet_floor_model.py
 contrib/calibration/test_mainnet_floor_model.py
 contrib/devtools/export-public-source.sh

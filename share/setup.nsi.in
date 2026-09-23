@@ -87,8 +87,9 @@ Section -Main SEC0000
     WriteRegStr HKCU "${REGKEY}\Components" Main 1
 SectionEnd
 
-# Unchecked by default. None of these is needed to use Quicksilver -- the
-# application provisions consensus itself. See doc/developer-tools.md.
+# Unchecked by default. The desktop application provisions consensus itself;
+# headless operators can select the daemon and RPC client here. See
+# doc/developer-tools.md.
 Section /o "Developer tools" SEC0002
     SetOutPath $INSTDIR\developer-tools
     File "@nsis_release_dir@@QUICKSILVER_DAEMON_NAME@@EXEEXT@"

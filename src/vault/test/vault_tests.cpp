@@ -6,12 +6,14 @@
 #include <vault/vault.h>
 
 #include <chrono>
+#include <functional>
 #include <future>
 #include <memory>
 #include <stdint.h>
 #include <vector>
 
 #include <addresstype.h>
+#include <chain.h>
 #include <chainparams.h>
 #include <interfaces/chain.h>
 #include <interfaces/vault.h>
@@ -46,8 +48,8 @@ namespace vault {
 class RejectingChain final : public interfaces::Chain
 {
 public:
-    RejectingChain(interfaces::Chain& chain, node::TransactionError error, std::string reason)
-        : m_chain{chain}, m_error{error}, m_reason{std::move(reason)}
+    RejectingChain(interfaces::Chain& chain, node::TransactionError error, std::string reason, std::function<bool()> shutdown = {})
+        : m_chain{chain}, m_error{error}, m_reason{std::move(reason)}, m_shutdown{std::move(shutdown)}
     {
     }
 
@@ -81,7 +83,11 @@ public:
     std::optional<int> getPruneHeight() override { return m_chain.getPruneHeight(); }
     bool isReadyToBroadcast() override { return m_chain.isReadyToBroadcast(); }
     bool isInitialBlockDownload() override { return m_chain.isInitialBlockDownload(); }
-    bool shutdownRequested() override { return m_chain.shutdownRequested(); }
+    bool shutdownRequested() override
+    {
+        if (m_shutdown) return m_shutdown();
+        return m_chain.shutdownRequested();
+    }
     void initMessage(const std::string& message) override { m_chain.initMessage(message); }
     void initWarning(const bilingual_str& message) override { m_chain.initWarning(message); }
     void initError(const bilingual_str& message) override { m_chain.initError(message); }
@@ -101,6 +107,7 @@ private:
     interfaces::Chain& m_chain;
     node::TransactionError m_error;
     std::string m_reason;
+    std::function<bool()> m_shutdown;
 };
 
 BOOST_FIXTURE_TEST_SUITE(vault_tests, VaultTestingSetup)
@@ -371,6 +378,137 @@ BOOST_FIXTURE_TEST_CASE(scan_for_vault_transactions, TestChain100Setup)
         BOOST_CHECK(!result.last_scanned_height);
         BOOST_CHECK_EQUAL(GetBalance(vault).m_mine_immature, 0);
     }
+}
+
+static int64_t BlockMaxTime(interfaces::Chain& chain, int height)
+{
+    int64_t time_max = 0;
+    BOOST_REQUIRE(chain.findBlock(chain.getBlockHash(height), interfaces::FoundBlock().maxTime(time_max)));
+    return time_max;
+}
+
+// startTime whose first scanned block is `height`. RescanFromTime subtracts
+// TIMESTAMP_WINDOW before it searches.
+static int64_t ImportTimeForHeight(interfaces::Chain& chain, int height)
+{
+    int64_t block_time = 0;
+    BOOST_REQUIRE(chain.findBlock(chain.getBlockHash(height), interfaces::FoundBlock().time(block_time)));
+    int found_height = -1;
+    BOOST_REQUIRE(chain.findFirstBlockWithTimeAndHeight(block_time, 0, interfaces::FoundBlock().height(found_height)));
+    BOOST_REQUIRE_EQUAL(found_height, height);
+    return block_time + TIMESTAMP_WINDOW;
+}
+
+static std::unique_ptr<CVault> MakeVaultSyncedToTip(interfaces::Chain& chain, node::NodeContext& node, const CKey& key)
+{
+    auto vault = std::make_unique<CVault>(&chain, "", CreateMockableVaultDatabase());
+    {
+        LOCK(vault->cs_vault);
+        LOCK(Assert(node.chainman)->GetMutex());
+        vault->SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
+        vault->SetLastBlockProcessed(node.chainman->ActiveChain().Height(), node.chainman->ActiveChain().Tip()->GetBlockHash());
+    }
+    AddKey(*vault, key);
+    BOOST_REQUIRE(VaultBatch{vault->GetDatabase()}.WriteBestBlock(chain.getTipLocator()));
+    return vault;
+}
+
+static int StoredBestBlockHeight(CVault& vault, interfaces::Chain& chain)
+{
+    CBlockLocator locator;
+    BOOST_REQUIRE(VaultBatch{vault.GetDatabase()}.ReadBestBlock(locator));
+    BOOST_REQUIRE(!locator.IsNull());
+    const std::optional<int> fork = chain.findLocatorFork(locator);
+    BOOST_REQUIRE(fork.has_value());
+    return *fork;
+}
+
+// RescanFromTime, not a live importdescriptors RPC. A shutdown stub stands in
+// for chain().shutdownRequested(). The import caller reports "Rescan aborted."
+// when this returns a time above the request, shutdown is set, and the user
+// did not call abortrescan.
+BOOST_FIXTURE_TEST_CASE(shutdown_interrupted_rescan_is_not_finished, TestChain100Setup)
+{
+    const int tip_height = WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Height());
+    constexpr int start_height = 10;
+    BOOST_REQUIRE_GT(tip_height, start_height + 5);
+    const int64_t start_time = ImportTimeForHeight(*m_node.chain, start_height);
+
+    {
+        auto vault = MakeVaultSyncedToTip(*m_node.chain, m_node, coinbaseKey);
+        VaultRescanReserver reserver(*vault);
+        BOOST_REQUIRE(reserver.reserve());
+        BOOST_CHECK_EQUAL(vault->RescanFromTime(start_time, reserver, /*update=*/false), start_time);
+        BOOST_CHECK_EQUAL(StoredBestBlockHeight(*vault, *m_node.chain), tip_height);
+        BOOST_CHECK(!vault->IsAbortingRescan());
+    }
+
+    {
+        int calls = 0;
+        RejectingChain chain{*m_node.chain, node::TransactionError::CONSENSUS_INVALID, "unused", [&] {
+                                 ++calls;
+                                 return true;
+                             }};
+        auto vault = MakeVaultSyncedToTip(chain, m_node, coinbaseKey);
+        VaultRescanReserver reserver(*vault);
+        BOOST_REQUIRE(reserver.reserve());
+        const int64_t scanned = vault->RescanFromTime(start_time, reserver, /*update=*/false);
+        BOOST_CHECK_GT(calls, 0);
+        BOOST_CHECK(!vault->IsAbortingRescan());
+        BOOST_CHECK_EQUAL(scanned, BlockMaxTime(chain, start_height) + TIMESTAMP_WINDOW + 1);
+        BOOST_CHECK_EQUAL(StoredBestBlockHeight(*vault, chain), start_height);
+        vault->chainStateFlushed(chain.getTipLocator());
+        BOOST_CHECK_EQUAL(StoredBestBlockHeight(*vault, chain), start_height);
+    }
+
+    // shutdownRequested() is polled at the top of each scan iteration and once
+    // more after the loop. Two false answers enter two blocks; the third aborts
+    // before the next block. That call count is what this test is coupled to.
+    {
+        int calls = 0;
+        constexpr int blocks_entered = 2;
+        RejectingChain chain{*m_node.chain, node::TransactionError::CONSENSUS_INVALID, "unused", [&] {
+                                 ++calls;
+                                 return calls > blocks_entered;
+                             }};
+        auto vault = MakeVaultSyncedToTip(chain, m_node, coinbaseKey);
+        VaultRescanReserver reserver(*vault);
+        BOOST_REQUIRE(reserver.reserve());
+        const int64_t scanned = vault->RescanFromTime(start_time, reserver, /*update=*/false);
+        const int unscanned_height = start_height + blocks_entered;
+        BOOST_CHECK(!vault->IsAbortingRescan());
+        BOOST_CHECK_EQUAL(scanned, BlockMaxTime(chain, unscanned_height) + TIMESTAMP_WINDOW + 1);
+        BOOST_CHECK_EQUAL(StoredBestBlockHeight(*vault, chain), unscanned_height);
+        vault->chainStateFlushed(chain.getTipLocator());
+        BOOST_CHECK_EQUAL(StoredBestBlockHeight(*vault, chain), unscanned_height);
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(user_abort_rescan_keeps_the_sync_point, TestChain100Setup)
+{
+    const int tip_height = WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Height());
+    constexpr int start_height = 10;
+    BOOST_REQUIRE_GT(tip_height, start_height + 5);
+    const int64_t start_time = ImportTimeForHeight(*m_node.chain, start_height);
+
+    auto vault = MakeVaultSyncedToTip(*m_node.chain, m_node, coinbaseKey);
+    VaultRescanReserver reserver(*vault);
+    int now_calls = 0;
+    reserver.setNow([&] {
+        ++now_calls;
+        // now() runs twice before the loop and then at the start of each
+        // iteration, before that block is read. The iteration still finishes
+        // its block; the next loop check observes the abort.
+        if (now_calls == 3) vault->AbortRescan();
+        return std::chrono::steady_clock::time_point{};
+    });
+    BOOST_REQUIRE(reserver.reserve());
+    const int64_t scanned = vault->RescanFromTime(start_time, reserver, /*update=*/false);
+    BOOST_CHECK(vault->IsAbortingRescan());
+    BOOST_CHECK_EQUAL(scanned, BlockMaxTime(*m_node.chain, start_height + 1) + TIMESTAMP_WINDOW + 1);
+    BOOST_CHECK_EQUAL(StoredBestBlockHeight(*vault, *m_node.chain), tip_height);
+    vault->chainStateFlushed(m_node.chain->getActiveChainLocator(m_node.chain->getBlockHash(0)));
+    BOOST_CHECK_EQUAL(StoredBestBlockHeight(*vault, *m_node.chain), 0);
 }
 
 // This test verifies that vault settings can be added and removed

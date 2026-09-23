@@ -1,9 +1,9 @@
 # Developer tools
 
-**None of these is needed to use Quicksilver.** The application provisions
-consensus itself, keeps your vault, and mines if you ask it to. If you
-downloaded Quicksilver to hold or send it, you already have everything you
-need and can stop reading here.
+The desktop application provisions consensus itself, keeps your vault, and
+mines if you ask it to. You do not need a separate node to hold or send
+Quicksilver from the application. Headless operation and scripting use the
+command-line tools described below.
 
 These are the command-line programs for development, scripting and headless
 operation. They are packaged separately on purpose. A release install places
@@ -22,10 +22,9 @@ cmake --build build -j"$(nproc)"
 ```
 
 `QS_DEVELOPER_TOOLS` controls only whether `cmake --install` copies them onto
-the system. It defaults `ON` for a source build, and release packaging sets it
-`OFF`. The targets are always built and always tested either way, so a
-contributor loses nothing and a test can never silently stop running because of
-a packaging switch.
+the system. It defaults `ON` for a source build. Debian packaging also sets it
+`ON`, then splits the staged installation into packages using `.install` files.
+The targets are always built and always tested either way.
 
 **Debian and derivatives.**
 
@@ -43,7 +42,7 @@ default. They install to `developer-tools\` beside the application.
 | `quicksilverd` | The headless node. Run this on a server, or where you want consensus without a desktop. The application runs its own node, so you do not need both. |
 | `quicksilver-cli` | Sends RPC calls to a running node. The tool you use to script against `quicksilverd`. |
 | `quicksilver-tx` | Builds and modifies raw transactions offline. No node required. |
-| `quicksilver-util` | Odd jobs that need no node — currently proof-of-work and hashing helpers. |
+| `quicksilver-util` | Runs `grind`, which performs proof of work on a hex block header. No node required. |
 | `quicksilver-vault` | Offline vault file maintenance: inspect, salvage or dump a vault without starting a node. |
 
 One more is built only when explicitly enabled, and is experimental:

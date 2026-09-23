@@ -389,6 +389,11 @@ RPCHelpMan importdescriptors()
         if (pvault->IsAbortingRescan()) {
             throw JSONRPCError(RPC_MISC_ERROR, "Rescan aborted by user.");
         }
+        if (scanned_time > lowest_timestamp && pvault->chain().shutdownRequested()) {
+            // Same string rescanblockchain uses for USER_ABORT. "by user" is
+            // false when the cause is a shutdown.
+            throw JSONRPCError(RPC_MISC_ERROR, "Rescan aborted.");
+        }
 
         if (scanned_time > lowest_timestamp) {
             std::vector<UniValue> results = response.getValues();
