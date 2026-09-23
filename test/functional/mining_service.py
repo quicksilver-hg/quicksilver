@@ -121,7 +121,16 @@ class MiningServiceTest(QuicksilverTestFramework):
         self.log.info("-mine with -mineaddress auto-starts")
         # Chain already has blocks (recent tips), so the node is past IBD and the
         # auto-started role mines immediately.
+        log_offset = node.debug_log_path.stat().st_size
         self.start_node(0, ["-mine", f"-mineaddress={addr}"])
+        # Coupled to the construction log in init.cpp: if RPC is callable,
+        # the service must already exist, even while its worker is starting.
+        # Read only this startup's log because earlier restarts reuse debug.log.
+        self.wait_until(lambda: b"mining service constructed" in node.debug_log_path.read_bytes()[log_offset:], timeout=30)
+        startup_log = node.debug_log_path.read_bytes()[log_offset:]
+        assert b"init message: Node online" in startup_log
+        assert startup_log.index(b"mining service constructed") < startup_log.index(b"init message: Node online"), \
+            "mining service was constructed after RPC became callable"
         self.wait_until(lambda: node.getminingstatus()["blocks_found"] >= 1, timeout=30)
         assert_equal(node.getminingstatus()["active"], True)
         node.stopmining()

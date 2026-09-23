@@ -1987,7 +1987,15 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     // At this point, the RPC is "started", but still in warmup, which means it
     // cannot yet be called. Before we make it callable, we need to make sure
     // that the RPC's view of the best block is valid and consistent with
-    // ChainstateManager's active tip.
+    // ChainstateManager's active tip, and that services used by callable RPCs
+    // and the GUI have been constructed. The mining worker itself starts below.
+    Assert(node.mining);
+    node.mining_service = std::make_unique<node::MiningService>(*node.chainman, *node.mining);
+    // test/functional/mining_service.py asserts this line precedes "Node online".
+    // It is the only externally visible proof that the service exists before RPC
+    // becomes callable; reword or drop it and that assertion silently stops
+    // testing anything. Move the log with the construction, not separately.
+    LogInfo(HgLog::INIT, "mining service constructed\n");
     SetRPCWarmupFinished();
 
     uiInterface.InitMessage(_("Node online"));
@@ -2008,8 +2016,6 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 #endif
 
     // Quicksilver: opt-in background block-mining role (off by default).
-    Assert(node.mining);
-    node.mining_service = std::make_unique<node::MiningService>(*node.chainman, *node.mining);
     if (args.GetBoolArg("-mine", false)) {
         const std::string mine_addr = args.GetArg("-mineaddress", "");
         if (mine_addr.empty()) {
