@@ -54,10 +54,6 @@ test/lint/test_runner/target/
 
 /ci/scratch/
 
-# AppImage build tooling cache and output
-/contrib/appimage/.tools/
-*.AppImage
-
 # Local private-testrun harness (untracked)
 test/testrun/
 

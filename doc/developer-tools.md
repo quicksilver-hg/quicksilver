@@ -36,8 +36,6 @@ apt install quicksilver-devtools
 **Windows.** Tick "Developer tools" in the installer, which is unchecked by
 default. They install to `developer-tools\` beside the application.
 
-**AppImage.** Not included. Build from source or use the Debian package.
-
 ## What each one is
 
 | Program | What it is for |

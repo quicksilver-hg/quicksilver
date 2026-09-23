@@ -14,7 +14,6 @@
 # a Quicksilver line" -- cannot see either failure.
 # checked in both directions by `copyright_header.py verify`:
 # holder line. That is a claim of sole authorship, so the list is pinned and
-contrib/appimage/build-appimage.sh
 contrib/calibration/mainnet_floor_model.py
 contrib/calibration/test_mainnet_floor_model.py
 contrib/devtools/export-public-source.sh

@@ -169,17 +169,6 @@ def check_windows_installer(failures: list[str]) -> None:
             failures.append(f"cmake/module/GenerateSetupNsi.cmake: installer generator must define {binary}")
 
 
-def check_appimage(failures: list[str]) -> None:
-    # BUILD_* switches are not enough on their own: several default ON, so a
-    # future default change would sweep a new binary into the bundle without
-    # anyone editing the script.
-    script = read("contrib/appimage/build-appimage.sh")
-    if "-DQS_DEVELOPER_TOOLS=OFF" not in script:
-        failures.append(
-            "contrib/appimage/build-appimage.sh: must set -DQS_DEVELOPER_TOOLS=OFF"
-        )
-
-
 def check_public_desktop_metadata(failures: list[str]) -> None:
     desktop_path = "share/applications/io.github.quicksilver_hg.quicksilver_qt.desktop"
     metainfo_path = "share/applications/io.github.quicksilver_hg.quicksilver_qt.metainfo.xml"
@@ -225,7 +214,6 @@ def main() -> int:
     failures: list[str] = []
     check_debian(failures)
     check_windows_installer(failures)
-    check_appimage(failures)
     check_public_desktop_metadata(failures)
     if failures:
         print("Desktop packaging boundary violations:")

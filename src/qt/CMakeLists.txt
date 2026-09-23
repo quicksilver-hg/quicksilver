@@ -259,8 +259,8 @@ install_binary_component(quicksilver-qt HAS_MANPAGE)
 # build). macOS ships a .app bundle and Windows an NSIS installer, so both are
 # excluded here. GNUInstallDirs is already in scope (used by the manpage install
 # above). These install rules are the single source of truth for the desktop
-# entry, AppStream metainfo, and menu icons; the Debian packaging and the
-# AppImage build both consume them rather than copying these files again.
+# entry, AppStream metainfo, and menu icons; Debian packaging consumes them
+# rather than copying these files again.
 if(NOT CMAKE_SYSTEM_NAME MATCHES "(Windows|Darwin)")
   install(FILES ${PROJECT_SOURCE_DIR}/share/applications/io.github.quicksilver_hg.quicksilver_qt.desktop
           DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)

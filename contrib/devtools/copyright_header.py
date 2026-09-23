@@ -49,7 +49,6 @@ INCLUDE = ['*.h', '*.cpp', '*.cc', '*.c', '*.cu', '*.cuh', '*.mm', '*.py', '*.sh
 INCLUDE_COMPILED = re.compile('|'.join([fnmatch.translate(m) for m in INCLUDE]))
 
 QUICKSILVER_HEADER_REQUIRED_PREFIXES = [
-    "contrib/appimage/",
     "contrib/calibration/",
     "contrib/devtools/",
     "contrib/genesis/",

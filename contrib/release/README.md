@@ -55,7 +55,7 @@ itself, and the xcb plugin then crashed in `QGuiApplication::screenAdded`
 before `-version` could run. The same objects linked with `-fno-lto` leave
 that symbol to `libQt5Gui` and `-version` prints.
 
-No AppImage was produced. `contrib/appimage/build-appimage.sh` configured
+No AppImage was produced. The former AppImage builder configured
 and built (CMake `Release`, `-DBUILD_GUI=ON -DBUILD_DAEMON=OFF
 -DBUILD_CLI=OFF -DBUILD_TESTS=OFF -DQS_DEVELOPER_TOOLS=OFF`, `-j10`) and
 installed `quicksilver-qt` and `quicksilver-agent` into its AppDir. The
@@ -72,3 +72,7 @@ This machine's glibc is 2.39. The helper's own SHA-256 check had already
 passed (`974a87457ed26241b793bed7841978fcdf84158d13220e53833a06515f173b0b`
 for linuxdeployqt, `ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0`
 for appimagetool 1.9.1). Nothing was signed.
+
+The AppImage was subsequently dropped from the release matrix. Its reach is
+limited by the build host's glibc version, so bundling on this host would not
+produce an artifact compatible with older Linux distributions.
