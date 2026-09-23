@@ -110,6 +110,15 @@ function(add_windows_deploy_target)
     return()
   endif()
 
+  # The three branches above each say why the target is not what an operator
+  # wanted; this one says that it is. Silence on success is not free here: the
+  # configure log is the only record a release run leaves behind, and without
+  # this line it cannot evidence that `deploy` was defined at all -- only a
+  # target listing can, and nobody keeps one. Naming makensis as well means the
+  # log says which NSIS built the installer, which is the question asked after
+  # the fact.
+  message(STATUS "Windows installer: `deploy` target defined, using makensis at ${MAKENSIS_EXECUTABLE}.")
+
   # setup.nsi.in takes all seven binaries out of release/, so whatever stages
   # them has to populate that directory; only the staging step differs by
   # toolchain. Each binary is named on its own line rather than looped over,

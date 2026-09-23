@@ -1,8 +1,19 @@
 #!/usr/bin/make -f
-export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+# optimize=-lto: Ubuntu's default -flto=auto makes this binary define
+# QGuiApplication::staticMetaObject itself. The xcb platform plugin then
+# crashes in QGuiApplication::screenAdded during QApplication construction,
+# before -version can run. Linking the same objects with -fno-lto leaves
+# that symbol undefined (provided by libQt5Gui) and -version prints.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all optimize=-lto
 
 %:
 	dh $@ --buildsystem=cmake
+
+# depends/config.guess and config.sub belong to the depends/ build, which
+# this package does not run. Replacing them with the host copies dirties
+# the tree, and the binaries then stamp themselves -dirty.
+override_dh_update_autotools_config:
+	:
 
 override_dh_auto_configure:
 	dh_auto_configure -- \
@@ -15,3 +26,8 @@ override_dh_auto_configure:
 	  -DBUILD_VAULT_TOOL=ON \
 	  -DBUILD_TESTS=OFF \
 	  -DQS_DEVELOPER_TOOLS=ON
+
+# The devtools description names this path without a .gz suffix. Leave the
+# file uncompressed so that path exists in the package.
+override_dh_compress:
+	dh_compress -Xdeveloper-tools.md

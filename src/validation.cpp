@@ -4215,6 +4215,8 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
     // For now, since FlushStateMode::NONE is used, all that can happen is that
     // the block files may be pruned, so we can just call this on the
     // chainstate.
+    // Quicksilver: NONE can trigger a full flush when pruning selects files, including the coins cache.
+    // Desktop pruning defaults make this a routine path; see doc/design/chain-storage.md.
     ActiveChainstate().FlushStateToDisk(state, FlushStateMode::NONE);
 
     CheckBlockIndex();

@@ -213,6 +213,8 @@ ReadStatus PartiallyDownloadedBlock::FillBlock(CBlock& block, const std::vector<
         // but that is expensive, and CheckBlock caches a block's
         // "checked-status" (in the CBlock?). CBlock should be able to
         // check its own merkle root and cache that check.
+        // Quicksilver: CheckMerkleRoot already caches m_checked_merkle_root; this was also true in Core 29.1.
+        // Full CheckBlock additionally validates the header proof; see doc/design/block-pow-cuckatoo.md.
         if (state.GetResult() == BlockValidationResult::BLOCK_MUTATED)
             return READ_STATUS_FAILED; // Possible Short ID collision
         return READ_STATUS_CHECKBLOCK_FAILED;

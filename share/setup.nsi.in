@@ -27,6 +27,9 @@ Unicode true
 !define MUI_STARTMENUPAGE_DEFAULTFOLDER "@CLIENT_NAME@"
 !define MUI_FINISHPAGE_RUN "$WINDIR\explorer.exe"
 !define MUI_FINISHPAGE_RUN_PARAMETERS $INSTDIR\@QUICKSILVER_GUI_NAME@@EXEEXT@
+# Unticked by default. A ticked Finish page starts the GUI with no arguments:
+# a fresh datadir, no conf, behind the user's back. The choice stays available.
+!define MUI_FINISHPAGE_RUN_NOTCHECKED
 !define MUI_UNICON "${NSISDIR}\Contrib\Graphics\Icons\modern-uninstall.ico"
 !define MUI_UNWELCOMEFINISHPAGE_BITMAP "@nsis_wizard_bitmap@"
 !define MUI_UNFINISHPAGE_NOAUTOCLOSE
