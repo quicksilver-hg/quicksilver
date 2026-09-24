@@ -180,6 +180,9 @@ FUZZ_TARGET(p2p_headers_presync, .init = initialize)
         // Send low-work headers, compact blocks, and blocks
         CallOneOf(
             fuzzed_data_provider,
+            // CallOneOf invokes this lambda before returning. The caller holds
+            // g_msgproc_mutex, and SendMessage requires it. Clang does not
+            // carry that lock into the lambda.
             [&]() NO_THREAD_SAFETY_ANALYSIS {
                 // Send FUZZ_MAX_HEADERS_RESULTS headers
                 std::vector<CBlock> headers;
@@ -195,6 +198,8 @@ FUZZ_TARGET(p2p_headers_presync, .init = initialize)
                 auto headers_msg = NetMsg::Make(NetMsgType::HEADERS, TX_WITH_WITNESS(headers));
                 g_testing_setup->SendMessage(fuzzed_data_provider, std::move(headers_msg));
             },
+            // Same boundary as the headers lambda: g_msgproc_mutex is held
+            // across CallOneOf, and SendMessage requires it.
             [&]() NO_THREAD_SAFETY_ANALYSIS {
                 // Send a compact block
                 auto block = finalized_block();
@@ -205,6 +210,8 @@ FUZZ_TARGET(p2p_headers_presync, .init = initialize)
                 auto headers_msg = NetMsg::Make(NetMsgType::CMPCTBLOCK, TX_WITH_WITNESS(cmpct_block));
                 g_testing_setup->SendMessage(fuzzed_data_provider, std::move(headers_msg));
             },
+            // Same boundary as the headers lambda: g_msgproc_mutex is held
+            // across CallOneOf, and SendMessage requires it.
             [&]() NO_THREAD_SAFETY_ANALYSIS {
                 // Send a block
                 auto block = finalized_block();

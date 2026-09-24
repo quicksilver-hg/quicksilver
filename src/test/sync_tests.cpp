@@ -64,6 +64,9 @@ void TestDoubleLock(bool should_throw)
 }
 #endif /* DEBUG_LOCKORDER */
 
+// Locks mutex2 while mutex1 is held, then unlocks mutex1 first. That order is
+// what DEBUG_LOCKORDER exists to reject at runtime. Clang would reject it at
+// compile time; the attribute leaves the runtime check as the test.
 template <typename MutexType>
 void TestInconsistentLockOrderDetected(MutexType& mutex1, MutexType& mutex2) NO_THREAD_SAFETY_ANALYSIS
 {

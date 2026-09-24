@@ -63,6 +63,7 @@ DOCUMENTED_BINARIES = [
     "quicksilver-vault",
     "quicksilver-util",
     "quicksilver-qt",
+    "quicksilver-agent",
 ]
 
 
@@ -161,9 +162,11 @@ class GeneratedDocsTest(QuicksilverTestFramework):
             self.log.info(f"{name}: {len(from_help)} options match doc/man/{name}.1")
             checked += 1
 
-        # The five non-GUI binaries are always built alongside the functional
-        # suite, so anything less than five means this test checked less than
-        # it claims to.
+        # quicksilverd, quicksilver-cli, quicksilver-tx, quicksilver-vault and
+        # quicksilver-util are always built alongside the functional suite.
+        # quicksilver-qt and quicksilver-agent are checked when they were
+        # built and skipped, with a warning, when they were not. Anything
+        # less than five means this test checked less than it claims to.
         assert checked >= 5, f"only {checked} man pages were checked, expected at least 5"
 
     def usable_bash(self):

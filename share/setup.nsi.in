@@ -165,6 +165,11 @@ Section -un.post UNSEC0001
     DeleteRegValue HKCU "${REGKEY}" Path
     DeleteRegKey /IfEmpty HKCU "${REGKEY}\Components"
     DeleteRegKey /IfEmpty HKCU "${REGKEY}"
+    ; MUI_STARTMENUPAGE_REGISTRY_ROOT is HKLM. The lines above delete the
+    ; HKCU copy, which this installer never writes, and leave
+    ; HKLM\SOFTWARE\Quicksilver (64-bit)\StartMenuGroup behind.
+    DeleteRegValue HKLM "${REGKEY}" StartMenuGroup
+    DeleteRegKey /IfEmpty HKLM "${REGKEY}"
     DeleteRegKey HKCR "@CLIENT_TARNAME@"
     RmDir /REBOOTOK $SMPROGRAMS\$StartMenuGroup
     RmDir /REBOOTOK $INSTDIR
@@ -189,6 +194,12 @@ FunctionEnd
 
 # Uninstaller functions
 Function un.onInit
+    ; .onInit selects the 64-bit registry view before the start-menu page
+    ; writes HKLM. This process is separate and does not inherit that view;
+    ; without it, GETFOLDER and the HKLM delete below hit Wow6432Node.
+    ${If} ${RunningX64}
+      SetRegView 64
+    ${EndIf}
     ReadRegStr $INSTDIR HKCU "${REGKEY}" Path
     !insertmacro MUI_STARTMENU_GETFOLDER Application $StartMenuGroup
     !insertmacro SELECT_UNSECTION Main ${UNSEC0000}

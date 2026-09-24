@@ -44,7 +44,7 @@ MineMintPage::MineMintPage(QWidget* parent)
     title->setProperty("class", QStringLiteral("pageTitle"));
     root->addWidget(title);
 
-    auto* intro = new QLabel(tr("Mine into a vault address to mint new coins. Mining is opt-in and off by default."), this);
+    auto* intro = new QLabel(tr("Mine into a vault address to mint new coins. Mining is opt-in: it runs only after you start it here, or after the configuration file enables it."), this);
     intro->setObjectName(QStringLiteral("mineMintEmptyState"));
     intro->setProperty("class", QStringLiteral("muted"));
     intro->setWordWrap(true);

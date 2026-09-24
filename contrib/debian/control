@@ -5,6 +5,7 @@ Maintainer: The Quicksilver developers <quicksilver.maintainers@gmail.com>
 Build-Depends: debhelper-compat (= 13),
                cmake (>= 3.22),
                g++,
+               git,
                pkgconf,
                libevent-dev,
                libboost-dev,

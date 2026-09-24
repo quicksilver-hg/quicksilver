@@ -27,6 +27,20 @@ override_dh_auto_configure:
 	  -DBUILD_TESTS=OFF \
 	  -DQS_DEVELOPER_TOOLS=ON
 
+# git is a Build-Depends because GenerateBuildInfo.cmake stamps the binary
+# from `git describe` and otherwise writes "No build information available"
+# while the package still builds. That silent success is the defect: a
+# .deb cannot show that it is unstamped. Fail here unless the caller set
+# the cmake script's own opt-out. A tagged clean tree stamps BUILD_GIT_TAG;
+# every other git tree stamps BUILD_GIT_COMMIT. Either is a stamp.
+override_dh_auto_build:
+	dh_auto_build
+	if [ "$$QUICKSILVER_GENBUILD_NO_GIT" != "1" ]; then \
+		header="obj-$$(dpkg-architecture -qDEB_HOST_GNU_TYPE)/src/quicksilver-build-info.h"; \
+		test -s "$$header"; \
+		grep -E -q '^#define BUILD_GIT_(TAG|COMMIT) "' "$$header"; \
+	fi
+
 # The devtools description names this path without a .gz suffix. Leave the
 # file uncompressed so that path exists in the package.
 override_dh_compress:

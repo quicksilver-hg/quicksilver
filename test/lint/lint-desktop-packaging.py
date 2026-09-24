@@ -92,7 +92,19 @@ def check_debian(failures: list[str]) -> None:
         if shared.strip():
             failures.append(f"contrib/debian: {shared} is claimed by both packages")
 
+    control = read("contrib/debian/control")
+    source_stanza = control.split("\nPackage:", 1)[0]
+    if not re.search(r"(?m)^\s+git,", source_stanza):
+        failures.append(
+            "contrib/debian/control: Build-Depends must include git so a "
+            "package build can stamp quicksilver-build-info.h"
+        )
     rules = read("contrib/debian/rules")
+    if "QUICKSILVER_GENBUILD_NO_GIT" not in rules or "BUILD_GIT_(TAG|COMMIT)" not in rules:
+        failures.append(
+            "contrib/debian/rules: an unstamped package build must fail "
+            "unless QUICKSILVER_GENBUILD_NO_GIT=1"
+        )
     if "-DBUILD_AGENT=ON" not in rules:
         failures.append("contrib/debian/rules: packaging must explicitly build quicksilver-agent")
     if "-DQS_DEVELOPER_TOOLS=ON" not in rules:

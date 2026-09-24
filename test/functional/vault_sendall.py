@@ -37,6 +37,13 @@ class SendallTest(QuicksilverTestFramework):
         getcontext().prec=10
         self.num_nodes = 1
         self.setup_clean_chain = True
+        # sendall_fails_with_transaction_too_large pays for a 1600-output
+        # sendmany. Per-tx work scales with bytes and with net UTXOs created,
+        # so that fixture is charged ~40x an ordinary spend. Nothing in this
+        # file asserts cycle validity. -txpownocycle skips the E19 solve and
+        # leaves the proof-hash target check live, which is what
+        # getrelaypoolentry below is actually asserting.
+        self.extra_args = [["-txpownocycle=1"]]
 
     def assert_balance_swept_completely(self, tx, balance):
         output_sum = sum([o["value"] for o in tx["decoded"]["vout"]])

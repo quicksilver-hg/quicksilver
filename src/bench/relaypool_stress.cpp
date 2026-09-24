@@ -103,6 +103,10 @@ static void ComplexRelayPool(benchmark::Bench& bench)
     const auto testing_setup = MakeNoLogFileContext<const TestingSetup>(ChainType::MAIN);
     CTxRelayPool& pool = *testing_setup.get()->m_node.relaypool;
     LOCK2(cs_main, pool.cs);
+    // bench.run calls this lambda before returning, while the LOCK2 above
+    // still holds cs_main and pool.cs. AddTx requires both; TrimToSize
+    // requires pool.cs. Clang treats the lambda as its own function and
+    // does not carry the caller's locks in.
     bench.run([&]() NO_THREAD_SAFETY_ANALYSIS {
         for (auto& tx : ordered_coins) {
             AddTx(tx, pool);
@@ -121,6 +125,8 @@ static void RelayPoolCheck(benchmark::Bench& bench)
     testing_setup->PopulateRelayPool(det_rand, 400, true);
     const CCoinsViewCache& coins_tip = testing_setup.get()->m_node.chainman->ActiveChainstate().CoinsTip();
 
+    // Same boundary as ComplexRelayPool: the LOCK2 still holds cs_main,
+    // which pool.check requires, and bench.run invokes this before returning.
     bench.run([&]() NO_THREAD_SAFETY_ANALYSIS {
         // Bump up the spendheight so we don't hit premature coinbase spend errors.
         pool.check(coins_tip, /*spendheight=*/300);

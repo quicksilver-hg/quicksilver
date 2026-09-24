@@ -16,6 +16,7 @@ BINARIES = [
 'bin/quicksilver-vault',
 'bin/quicksilver-util',
 'bin/quicksilver-qt',
+'bin/quicksilver-agent',
 ]
 
 parser = argparse.ArgumentParser(

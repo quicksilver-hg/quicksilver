@@ -230,7 +230,7 @@ if(BUILD_AGENT)
     univalue
     Boost::headers
   )
-  install_binary_component(quicksilver-agent)
+  install_binary_component(quicksilver-agent HAS_MANPAGE)
 endif()
 
 if(ENABLE_VAULT)

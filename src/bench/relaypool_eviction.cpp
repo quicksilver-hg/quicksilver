@@ -132,6 +132,10 @@ static void RelayPoolEviction(benchmark::Bench& bench)
     const CTransactionRef tx6_r{MakeTransactionRef(tx6)};
     const CTransactionRef tx7_r{MakeTransactionRef(tx7)};
 
+    // bench.run calls this lambda before returning, while the LOCK2 above
+    // still holds cs_main and pool.cs. AddTx requires both; TrimToSize
+    // requires pool.cs. Clang treats the lambda as its own function and
+    // does not carry the caller's locks in.
     bench.run([&]() NO_THREAD_SAFETY_ANALYSIS {
         AddTx(tx1_r, pool);
         AddTx(tx2_r, pool);

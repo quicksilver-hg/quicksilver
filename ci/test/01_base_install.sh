@@ -92,17 +92,9 @@ if [[ "${RUN_TIDY}" == "true" ]]; then
   make -C /iwyu-build/ install "$MAKEJOBS"
 fi
 
-mkdir -p "${DEPENDS_DIR}/SDKs" "${DEPENDS_DIR}/sdk-sources"
-
-OSX_SDK_BASENAME="Xcode-${XCODE_VERSION}-${XCODE_BUILD_ID}-extracted-SDK-with-libcxx-headers"
-
-if [ -n "$XCODE_VERSION" ] && [ ! -d "${DEPENDS_DIR}/SDKs/${OSX_SDK_BASENAME}" ]; then
-  OSX_SDK_FILENAME="${OSX_SDK_BASENAME}.tar.gz"
-  OSX_SDK_PATH="${DEPENDS_DIR}/sdk-sources/${OSX_SDK_FILENAME}"
-  if [ ! -f "$OSX_SDK_PATH" ]; then
-    ${CI_RETRY_EXE} curl --location --fail "${SDK_URL}/${OSX_SDK_FILENAME}" -o "$OSX_SDK_PATH"
-  fi
-  tar -C "${DEPENDS_DIR}/SDKs" -xf "$OSX_SDK_PATH"
-fi
-
+# XCODE_VERSION is set only in depends/hosts/darwin.mk, which this script
+# never sources, so the old SDK fetch could never run: its `[ -n
+# "$XCODE_VERSION" ]` guard was always false, and the SDK_URL it would have
+# fetched from is not defined anywhere under ci/ either. The depends host
+# still names that SDK for a manual cross build; CI does not download it.
 git config --global ${CFG_DONE} "true"
