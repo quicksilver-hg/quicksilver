@@ -9,6 +9,53 @@ tree on someone else's machine. It names the file this project published,
 and the record below names the machine and the toolchain that produced it.
 Trust sits with the publisher.
 
+## Ubuntu 22.04 package builder
+
+The Ubuntu 22.04 packages are built in the pinned Jammy container described by
+`jammy.Dockerfile`. From a clean checkout, run:
+
+```
+contrib/release/build-jammy-debs.sh /path/outside/the/checkout/for/artifacts
+```
+
+The output directory must be empty. The script clones the checked-out commit,
+builds both Debian packages at `-j6`, checks the generated Git commit stamp,
+and copies the `.deb`, debug packages, `.buildinfo` and `.changes` files into
+that directory. Its Dockerfile pins the Ubuntu image digest. Updating that pin
+requires a new package build, dependency inspection, and a fresh Jammy install
+and version check. The image itself is a build host, not a release artifact.
+
+The Ubuntu 24.04 packages declare `t64` library names and
+`libstdc++6 (>= 13.1)`, which Ubuntu 22.04 cannot satisfy. Building the
+22.04 packages in its own userland yields installable dependencies for that
+distribution. A container shares the host kernel, so the check covers the
+Jammy userland and package dependencies, not separate 22.04 hardware.
+
+### Jammy validation build, 2026-09-23
+
+The pinned base image was
+`ubuntu@sha256:b8b6ee6aa931ecd9d0d952abc34dc0e5f7c6a30c6bb71b079fe399fde0329c02`.
+It carried CMake 3.22.1, GCC 11.4.0, glibc 2.35, Qt 5.15.3 and debhelper
+13.6ubuntu1. A clean clone of source commit
+`49744b1c7920aba02e3a37e2c950ecf733da6d45` produced these validation
+artifacts under `f345-jammy-recipe/validation-49744b1c/`:
+
+```
+756ade445f0e63885e0cb75a6777c6875ba4bd0efe630ecd34a040d08d93a319  quicksilver-devtools-dbgsym_0.1.1-1_amd64.ddeb
+8d67bec72c338034c775baf56ccdf4802e2796aef05a20d226bd76d8cca48a51  quicksilver-devtools_0.1.1-1_amd64.deb
+22f12949788fad1cc0fb7873497a374b06f8af8cf5ea932f0f0fdc78de0e9be3  quicksilver-qt-dbgsym_0.1.1-1_amd64.ddeb
+38af6695e73b6eb56a98dcbe37ea278e6b41bafbcd6f6813c51cbcc7020253b0  quicksilver-qt_0.1.1-1_amd64.deb
+636aea2f09b75ce278ae67d9d3359d68d426680d6e55f10ccc222cb25a3dfca4  quicksilver_0.1.1-1_amd64.buildinfo
+f56172a069652f4a539809b5b086135875a3c48e9992c8a688574fee50611a63  quicksilver_0.1.1-1_amd64.changes
+```
+
+Both packages installed in a fresh Jammy container. The installed desktop
+printed `Quicksilver version v0.1.1-49744b1c7920`. Both package dependency
+lists require `libstdc++6 (>= 12)` and contain no `t64` library. The driver
+returned an error after exporting these files because it could not remove
+root-owned temporary build files; that cleanup was repaired in the subsequent
+commit. These are validation artifacts, not published packages.
+
 ## Run
 
 From the repository root, on a directory that contains the artifacts and

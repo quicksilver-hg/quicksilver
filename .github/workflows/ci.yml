@@ -83,6 +83,13 @@ jobs:
 
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
 
+    # Two finished Win64 runs took 2h11m and 2h13m, with Generate at ~55m
+    # whether or not the vcpkg binary cache hit. 180 sits above that cold
+    # path; it does not assume the cache refresh below shortens the job.
+    # The 6-hour default did not: an external cancel at 1h41m left the
+    # functional leg unfinished.
+    timeout-minutes: 180
+
     env:
       PYTHONUTF8: 1
       TEST_RUNNER_TIMEOUT_FACTOR: 40
@@ -161,8 +168,22 @@ jobs:
         uses: actions/cache/restore@v6
         id: vcpkg-binary-cache
         with:
+          # vcpkg logs this as %LOCALAPPDATA%\vcpkg\archives. On the
+          # windows-2022 runner that is C:\Users\runneradmin\AppData\Local\vcpkg\archives,
+          # and a save of this ~/ path was ~489 MB, so ~/ is that directory.
+          # Do not retarget it: entries already saved under this path would
+          # not extract. The miss is not an empty directory. A 489 MB hit
+          # still restored 0 packages, because the key below used to hash
+          # only cmake/msbuild/toolset/vcpkg.json and not the triplet files
+          # (mutated above), the builtin ports, or the vcpkg tool. That hit
+          # was immutable: Save ran only when cache-hit was not true, and
+          # there was no prefix fallback. run_id never matches an existing
+          # entry, so cache-hit stays false and Save publishes what this
+          # run built. restore-keys loads the newest prior entry, including
+          # one saved under the old hash key.
           path: ~/AppData/Local/vcpkg/archives
-          key: ${{ github.job }}-vcpkg-binary-${{ hashFiles('cmake_version', 'msbuild_version', 'toolset_version', 'vcpkg.json') }}
+          key: ${{ github.job }}-vcpkg-binary-${{ github.run_id }}
+          restore-keys: ${{ github.job }}-vcpkg-binary-
 
       - name: Generate build system
         run: |
@@ -178,10 +199,15 @@ jobs:
 
       - name: Save vcpkg binary cache
         uses: actions/cache/save@v6
-        if: github.event_name != 'pull_request' && steps.vcpkg-binary-cache.outputs.cache-hit != 'true' && matrix.job-type == 'standard'
+        # Exact-key cache-hit is always false: the key contains github.run_id,
+        # so a restore-keys hit still saves. !cancelled() skips a partial
+        # archive if Generate itself was cancelled. Standard only — the fuzz
+        # leg's feature set must not replace this entry. PRs restore but
+        # do not publish.
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.vcpkg-binary-cache.outputs.cache-hit != 'true' && matrix.job-type == 'standard' }}
         with:
           path: ~/AppData/Local/vcpkg/archives
-          key: ${{ github.job }}-vcpkg-binary-${{ hashFiles('cmake_version', 'msbuild_version', 'toolset_version', 'vcpkg.json') }}
+          key: ${{ github.job }}-vcpkg-binary-${{ github.run_id }}
 
       - name: Build
         working-directory: build

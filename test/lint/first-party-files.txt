@@ -22,6 +22,7 @@ contrib/devtools/gen-qt-hud-icons.py
 contrib/devtools/gen-qt-spinner.py
 contrib/devtools/publish-source.sh
 contrib/genesis/derive-genesis.py
+contrib/release/build-jammy-debs.sh
 contrib/release/gen-sha256sums.sh
 contrib/tor/fetch-tor.ps1
 contrib/windows/build-qsgpusolve-windows.ps1

@@ -411,6 +411,26 @@ private:
     std::unordered_map<CScript, std::vector<ScriptPubKeyMan*>, SaltedSipHasher> m_cached_spks;
 
     /**
+     * Write the best-block sync point for a vault the calling thread has not
+     * locked, during creation or chain attachment.
+     *
+     * chainStateFlushed() declares EXCLUSIVE_LOCKS_REQUIRED(!m_best_block_mutex)
+     * so that no CVault member can self-deadlock on that non-recursive Mutex.
+     * Create() and AttachChain() both have to write the sync point, and neither
+     * can satisfy the requirement in an attribute: the capability belongs to
+     * another object, and in Create() that object is a function-local
+     * shared_ptr, which an attribute cannot name at all.
+     *
+     * Both satisfy it in fact. Neither takes m_best_block_mutex anywhere, and
+     * neither can be reached by a thread that already holds it: it is private,
+     * and the only members that lock it are chainStateFlushed() and
+     * RescanFromTime(), neither of which calls a factory. Keeping the exemption
+     * to this one statement leaves the analysis on the whole of both callers,
+     * and DEBUG_LOCKORDER still reports a genuine self-deadlock at runtime.
+     */
+    static void FlushSyncPointDuringLoad(CVault& vault, const CBlockLocator& locator) NO_THREAD_SAFETY_ANALYSIS;
+
+    /**
      * Catch vault up to current chain, scanning new blocks, updating the best
      * block locator and m_last_block_processed, and registering for
      * notifications about new blocks and transactions.
@@ -592,7 +612,7 @@ public:
     void blockConnected(const interfaces::BlockInfo& block) override;
     void blockDisconnected(const interfaces::BlockInfo& block) override;
     void updatedBlockTip() override;
-    int64_t RescanFromTime(int64_t startTime, const VaultRescanReserver& reserver, bool update);
+    int64_t RescanFromTime(int64_t startTime, const VaultRescanReserver& reserver, bool update) EXCLUSIVE_LOCKS_REQUIRED(!m_best_block_mutex);
 
     struct ScanResult {
         enum { SUCCESS,
@@ -739,7 +759,7 @@ public:
     /** should probably be renamed to IsRelevantToMe */
     bool IsFromMe(const CTransaction& tx) const;
     CAmount GetDebit(const CTransaction& tx, const isminefilter& filter) const;
-    void chainStateFlushed(const CBlockLocator& loc) override;
+    void chainStateFlushed(const CBlockLocator& loc) override EXCLUSIVE_LOCKS_REQUIRED(!m_best_block_mutex);
 
     DBErrors LoadVault();
 

@@ -2846,7 +2846,7 @@ std::shared_ptr<CVault> CVault::Create(VaultContext& context, const std::string&
         }
 
         if (chain && chain->hasChainstate()) {
-            vaultInstance->chainStateFlushed(chain->getTipLocator());
+            FlushSyncPointDuringLoad(*vaultInstance, chain->getTipLocator());
         }
     } else if (vault_creation_flags & VAULT_FLAG_DISABLE_PRIVATE_KEYS) {
         // Make it impossible to disable private keys after creation
@@ -2920,6 +2920,11 @@ std::shared_ptr<CVault> CVault::Create(VaultContext& context, const std::string&
     }
 
     return vaultInstance;
+}
+
+void CVault::FlushSyncPointDuringLoad(CVault& vault, const CBlockLocator& locator)
+{
+    vault.chainStateFlushed(locator);
 }
 
 bool CVault::AttachChain(const std::shared_ptr<CVault>& vaultInstance, interfaces::Chain& chain, const bool rescan_required, bilingual_str& error, std::vector<bilingual_str>& warnings)
@@ -3026,7 +3031,7 @@ bool CVault::AttachChain(const std::shared_ptr<CVault>& vaultInstance, interface
             }
         }
         vaultInstance->m_attaching_chain = false;
-        vaultInstance->chainStateFlushed(chain.getTipLocator());
+        FlushSyncPointDuringLoad(*vaultInstance, chain.getTipLocator());
         vaultInstance->GetDatabase().IncrementUpdateCounter();
     }
     vaultInstance->m_attaching_chain = false;
