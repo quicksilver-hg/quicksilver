@@ -32,6 +32,33 @@ be picked before running the tool:
 RUST_BACKTRACE=1 cargo run --manifest-path ./contrib/devtools/deterministic-fuzz-coverage/Cargo.toml -- $PWD/build_dir $PWD/qa-assets/corpora-dir fuzz_target_name
 ```
 
+clang-thread-safety.py
+======================
+
+Replays a clang `compile_commands.json` with `-fsyntax-only
+-Werror=thread-safety`.
+
+g++ expands the annotations in `src/threadsafety.h` to empty macros, and a
+default build does not pass `-Werror`, so a green local build has not run
+this analysis. The script refuses a database whose compiler is not clang, a
+missing database, and a selection that matches no translation unit.
+
+Generate the headers the build produces before running it: `generate_build_info`,
+the Qt `*_autogen` targets when the GUI is configured, and the embedded
+raw/JSON headers (`target_raw_data_sources` / `target_json_data_sources`,
+produced when the bench, test, and univalue test targets are built). A
+generated source that is not on disk is named in the output and the script
+exits non-zero.
+
+```
+contrib/devtools/clang-thread-safety.py --build-dir build --whole-tree
+contrib/devtools/clang-thread-safety.py --build-dir build --changed HEAD~1
+```
+
+`--whole-tree` checks every translation unit in the database.
+`--changed REVSPEC` checks only those whose source file `git diff REVSPEC`
+names; it prints header paths it did not follow. `--jobs` defaults to 10.
+
 clang-format-diff.py
 ===================
 

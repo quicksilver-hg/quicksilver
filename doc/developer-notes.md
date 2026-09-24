@@ -983,6 +983,16 @@ Threads and synchronization
 - Consistently use [Clang Thread Safety Analysis](https://clang.llvm.org/docs/ThreadSafetyAnalysis.html) annotations to
   get compile-time warnings about potential race conditions or deadlocks in code.
 
+  - Those annotations are empty unless the compiler is clang
+    (`src/threadsafety.h`), and a default build does not treat the diagnostic
+    as an error, so a green g++ build has not run the analysis.
+    `contrib/devtools/clang-thread-safety.py` replays a clang
+    `compile_commands.json` with `-fsyntax-only -Werror=thread-safety`.
+    `--whole-tree` checks every configured translation unit; `--changed REV`
+    checks the ones whose source file `git diff REV` names. The script prints
+    which mode it ran and exits non-zero when clang is missing, the database
+    is missing, or the selection matched nothing.
+
   - In functions that are declared separately from where they are defined, the
     thread safety annotations should be added exclusively to the function
     declaration. Annotations on the definition could lead to false positives

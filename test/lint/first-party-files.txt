@@ -16,6 +16,7 @@
 # One path per line. Repo-relative. Sorted.
 contrib/calibration/mainnet_floor_model.py
 contrib/calibration/test_mainnet_floor_model.py
+contrib/devtools/clang-thread-safety.py
 contrib/devtools/export-public-source.sh
 contrib/devtools/gen-brand-icons.sh
 contrib/devtools/gen-qt-hud-icons.py
