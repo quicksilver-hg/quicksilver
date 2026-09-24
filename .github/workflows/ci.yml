@@ -83,6 +83,11 @@ jobs:
 
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
 
+    # Cache pruning needs actions: write; keep it on only the jobs that prune.
+    permissions:
+      actions: write
+      contents: read
+
     # Two finished Win64 runs took 2h11m and 2h13m, with Generate at ~55m
     # whether or not the vcpkg binary cache hit. 180 sits above that cold
     # path; it does not assume the cache refresh below shortens the job.
@@ -199,6 +204,7 @@ jobs:
 
       - name: Save vcpkg binary cache
         uses: actions/cache/save@v6
+        id: save-vcpkg-binary-cache
         # Exact-key cache-hit is always false: the key contains github.run_id,
         # so a restore-keys hit still saves. !cancelled() skips a partial
         # archive if Generate itself was cancelled. Standard only — the fuzz
@@ -208,6 +214,16 @@ jobs:
         with:
           path: ~/AppData/Local/vcpkg/archives
           key: ${{ github.job }}-vcpkg-binary-${{ github.run_id }}
+
+      - name: Prune superseded vcpkg binary caches
+        # Keep the just-saved entry plus one fallback. The helper also protects
+        # this run's key explicitly in case the list is not creation-ordered.
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.save-vcpkg-binary-cache.outcome == 'success' && matrix.job-type == 'standard' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ci/prune-gha-caches.sh "${{ github.repository }}" "${{ github.ref }}" "${{ github.job }}-vcpkg-binary-" 2 "${{ github.job }}-vcpkg-binary-${{ github.run_id }}" --apply
 
       - name: Build
         working-directory: build
@@ -236,6 +252,10 @@ jobs:
     name: 'ASan + LSan + UBSan + integer, no depends, USDT'
     runs-on: ubuntu-24.04 # has to match container in ci/test/00_setup_env_native_asan.sh for tracing tools
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
+    # Cache pruning needs actions: write; keep it on only the jobs that prune.
+    permissions:
+      actions: write
+      contents: read
     timeout-minutes: 120
     env:
       FILE_ENV: "./ci/test/00_setup_env_native_asan.sh"
@@ -268,6 +288,7 @@ jobs:
 
       - name: Save Ccache cache
         uses: actions/cache/save@v6
+        id: save-ccache-cache
         # Without the status check, this step inherits success() and never saves
         # the cache on a red run, exactly when the cache is needed.
         if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.ccache-cache.outputs.cache-hit != 'true' }}
@@ -275,3 +296,12 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           # https://github.com/actions/cache/blob/main/tips-and-workarounds.md#update-a-cache
           key: ${{ github.job }}-ccache-${{ github.run_id }}
+
+      - name: Prune superseded Ccache caches
+        # Keep the just-saved entry plus one fallback. Run after a successful
+        # save even when the test step was red; housekeeping stays non-fatal.
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.save-ccache-cache.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ci/prune-gha-caches.sh "${{ github.repository }}" "${{ github.ref }}" "${{ github.job }}-ccache-" 2 "${{ github.job }}-ccache-${{ github.run_id }}" --apply

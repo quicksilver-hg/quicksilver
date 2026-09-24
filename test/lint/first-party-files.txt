@@ -14,6 +14,7 @@
 # a Quicksilver line" -- cannot see either failure.
 #
 # One path per line. Repo-relative. Sorted.
+ci/prune-gha-caches.sh
 contrib/calibration/mainnet_floor_model.py
 contrib/calibration/test_mainnet_floor_model.py
 contrib/devtools/clang-thread-safety.py

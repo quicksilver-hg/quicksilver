@@ -183,6 +183,20 @@ For example:
 BUILDDIR=$PWD/my-build-dir contrib/devtools/gen-manpages.py
 ```
 
+For a release, follow the ordered procedure in
+[`contrib/release/README.md`](../release/README.md). `--release-version vX.Y.Z`
+is the pre-tag generation mode: it requires every binary to report `vX.Y.Z`
+plus the current 12-character commit suffix, then replaces that honest build
+identity only in the generated pages. `--check` checks that every page has one
+consistent version in its title, NAME and DESCRIPTION and that every `SEE ALSO`
+section matches `BINARIES`. At the clean tag, `--verify` regenerates into a
+temporary directory with the real tagged binaries and fails if any byte differs
+from `doc/man`.
+
+Generation and verification set `SOURCE_DATE_EPOCH` to the timestamp of the
+last commit that changed `CMakeLists.txt`. That pins help2man's month to the
+same value before and after the man-page commit and tag.
+
 headerssync-params.py
 =====================
 

@@ -3,15 +3,59 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 //
+#include <node/blockstorage.h>
 #include <sync.h>
 #include <test/util/coins.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
+#include <util/fs.h>
 #include <validation.h>
 
 #include <boost/test/unit_test.hpp>
 
 BOOST_FIXTURE_TEST_SUITE(validation_flush_tests, TestingSetup)
+
+BOOST_FIXTURE_TEST_CASE(block_file_flush_failure_stops_persistence, TestChain100Setup)
+{
+    auto& chainman{*Assert(m_node.chainman)};
+    Chainstate& chainstate{chainman.ActiveChainstate()};
+    const fs::path block_path{chainman.m_blockman.GetBlockPosFilename(FlatFilePos{0, 0})};
+    fs::path saved_block_path{block_path};
+    saved_block_path += ".saved";
+
+    BOOST_REQUIRE(fs::is_regular_file(block_path));
+    fs::rename(block_path, saved_block_path);
+    struct BlockFileRestorer {
+        const fs::path& block_path;
+        const fs::path& saved_block_path;
+        ~BlockFileRestorer()
+        {
+            std::error_code error;
+            fs::remove_all(block_path, error);
+            error.clear();
+            fs::rename(saved_block_path, block_path, error);
+        }
+    } restore_block_file{block_path, saved_block_path};
+
+    // A directory at the current block-file path makes FlatFileSeq::Open fail
+    // deterministically, including when the test runs as root.
+    BOOST_REQUIRE(fs::create_directory(block_path));
+
+    size_t cache_size;
+    {
+        LOCK(::cs_main);
+        AddTestCoin(m_rng, chainstate.CoinsTip());
+        cache_size = chainstate.CoinsTip().GetCacheSize();
+    }
+
+    BlockValidationState state;
+    BOOST_CHECK(!chainstate.FlushStateToDisk(state, FlushStateMode::ALWAYS));
+    BOOST_CHECK(state.IsError());
+    {
+        LOCK(::cs_main);
+        BOOST_CHECK_EQUAL(chainstate.CoinsTip().GetCacheSize(), cache_size);
+    }
+}
 
 //! Test utilities for detecting when we need to flush the coins cache based
 //! on estimated memory usage.

@@ -1,5 +1,34 @@
 # Release checksums
 
+## Manual pages before packaging
+
+Manual pages are part of the tagged source. Prepare and prove them in this
+order; do not package before the final verification succeeds:
+
+1. Bump the version in `CMakeLists.txt`, set `CLIENT_VERSION_IS_RELEASE` to
+   `true`, and commit that change.
+2. From the clean commit, configure and build every program in
+   `contrib/devtools/gen-manpages.py`'s `BINARIES` list.
+3. Run `contrib/devtools/gen-manpages.py --release-version vX.Y.Z`. The value
+   must match `CMakeLists.txt`, and the binaries must identify the current
+   untagged `HEAD` exactly.
+4. Run `contrib/devtools/gen-manpages.py --check`.
+5. Review and commit the regenerated `doc/man/*.1` files.
+6. Place the signed `vX.Y.Z` tag on that commit.
+7. In a clean checkout of that exact tag, configure and rebuild every program,
+   confirm each `--version` reports exactly `vX.Y.Z`, then run
+   `contrib/devtools/gen-manpages.py --verify`. This regenerates into a
+   disposable directory and diffs every page against the committed copy.
+8. Only after verification passes, build the release packages.
+
+Both generation paths pin help2man's date by setting `SOURCE_DATE_EPOCH` to
+the timestamp of the last commit that changed `CMakeLists.txt`. The version
+bump therefore establishes one date input that remains stable through the page
+commit and tag.
+
+If post-tag verification fails, never move a published tag: fix the problem
+and cut the next version.
+
 `gen-sha256sums.sh` writes a `SHA256SUMS` file for one directory of release
 artifacts, in the form `sha256sum -c` reads. It does not sign anything.
 
