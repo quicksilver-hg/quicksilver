@@ -67,5 +67,5 @@ changes=("$scratch"/*.changes)
 [[ ${#debs[@]} == 2 && ${#buildinfos[@]} == 1 && ${#changes[@]} == 1 ]]
 mv -- "$scratch"/*.deb "$scratch"/*.ddeb "$scratch"/*.buildinfo \
     "$scratch"/*.changes "$output"/
-[[ -f "$output/quicksilver-qt_0.1.1-1_amd64.deb" && \
+[[ -f "$output/quicksilver_0.1.1-1_amd64.deb" && \
    -f "$output/quicksilver-devtools_0.1.1-1_amd64.deb" ]]

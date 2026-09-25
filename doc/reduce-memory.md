@@ -1,6 +1,6 @@
 # Reduce Memory
 
-There are a few parameters that can be dialed down to reduce the memory usage of `quicksilverd`. This can be useful on embedded systems or small VPSes.
+There are a few parameters that can be dialed down to reduce the memory usage of `quicksilver-daemon`. This can be useful on embedded systems or small VPSes.
 
 ## In-memory caches
 
@@ -14,7 +14,7 @@ The size of some in-memory caches can be reduced. As caches trade off memory usa
 
 - In Quicksilver there is a memory pool limiter which can be configured with `-maxrelaypool=<n>`, where `<n>` is the size in MB (1000). The default value is `300`.
   - The minimum value for `-maxrelaypool` is 5.
-  - A lower maximum relay pool size means that transactions will be evicted sooner. This will affect any uses of `quicksilverd` that process unconfirmed transactions.
+  - A lower maximum relay pool size means that transactions will be evicted sooner. This will affect any uses of `quicksilver-daemon` that process unconfirmed transactions.
 
 - The unused memory allocated to the relay pool (default: 300MB) is shared with the UTXO cache, so when trying to reduce memory usage you should limit the relay pool, with the `-maxrelaypool` command line argument.
 
@@ -43,12 +43,12 @@ threads take up 8MiB for the thread stack on a 64-bit system, and 4MiB in a
 
 ## Linux specific
 
-By default, glibc's implementation of `malloc` may use more than one arena. This is known to cause excessive memory usage in some scenarios. To avoid this, make a script that sets `MALLOC_ARENA_MAX` before starting quicksilverd:
+By default, glibc's implementation of `malloc` may use more than one arena. This is known to cause excessive memory usage in some scenarios. To avoid this, make a script that sets `MALLOC_ARENA_MAX` before starting quicksilver-daemon:
 
 ```bash
 #!/usr/bin/env bash
 export MALLOC_ARENA_MAX=1
-quicksilverd
+quicksilver-daemon
 ```
 
 The behavior was introduced to increase CPU locality of allocated memory and performance with concurrent allocation, so this setting could in theory reduce performance. However, in Quicksilver very little parallel allocation happens, so the impact is expected to be small or absent.

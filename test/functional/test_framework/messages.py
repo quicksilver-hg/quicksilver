@@ -235,7 +235,7 @@ def from_binary(cls, stream):
     return obj
 
 
-# Objects that map to quicksilverd objects, which can be serialized/deserialized
+# Objects that map to quicksilver-daemon objects, which can be serialized/deserialized
 
 
 class CAddress:
@@ -593,7 +593,7 @@ class CTransaction:
         if len(self.vin) == 0:
             flags = int.from_bytes(f.read(1), "little")
             # Not sure why flags can't be zero, but this
-            # matches the implementation in quicksilverd
+            # matches the implementation in quicksilver-daemon
             if (flags != 0):
                 self.vin = deser_vector(f, CTxIn)
                 self.vout = deser_vector(f, CTxOut)
@@ -1187,7 +1187,7 @@ class msg_version:
         self.nStartingHeight = int.from_bytes(f.read(4), "little", signed=True)
 
         # Relay field is optional for version 70001 onwards
-        # But, unconditionally check it to match behaviour in quicksilverd
+        # But, unconditionally check it to match behaviour in quicksilver-daemon
         self.relay = int.from_bytes(f.read(1), "little")  # f.read(1) may return an empty b''
 
     def serialize(self):
@@ -1551,7 +1551,7 @@ class msg_headers:
         self.headers = headers if headers is not None else []
 
     def deserialize(self, f):
-        # comment in quicksilverd indicates these should be deserialized as blocks
+        # comment in quicksilver-daemon indicates these should be deserialized as blocks
         blocks = deser_vector(f, CBlock)
         for x in blocks:
             self.headers.append(CBlockHeader(x))

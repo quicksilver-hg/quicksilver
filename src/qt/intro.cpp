@@ -282,7 +282,7 @@ bool Intro::showIfNeeded(bool& did_show_intro, std::optional<int64_t>& prune_MiB
     }
     /* Only override -datadir if different from the default, to make it possible to
      * override -datadir in the quicksilver.conf file in the default data directory
-     * (to be consistent with quicksilverd behavior)
+     * (to be consistent with quicksilver-daemon behavior)
      */
     if(dataDir != GUIUtil::getDefaultDataDirectory()) {
         gArgs.SoftSetArg("-datadir", fs::PathToString(GUIUtil::QStringToPath(dataDir))); // use OS locale for path setting

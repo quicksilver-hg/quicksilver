@@ -9,10 +9,10 @@ from the repository root with a symlink:
 
 This produces two packages:
 
-- `quicksilver-qt`       - graphical Qt client and agent runtime
+- `quicksilver`       - graphical Qt client and agent runtime
 - `quicksilver-devtools` - headless daemon and command-line tools
 
-The `quicksilver-qt` package is the user-facing desktop artifact and does not
+The `quicksilver` package is the user-facing desktop artifact and does not
 pull in the daemon or command-line tools. Install `quicksilver-devtools`
 separately when developer or service tooling is needed.
 
@@ -22,7 +22,7 @@ Build dependencies are declared in `control`. Install them with
 The `.desktop` launcher, AppStream metainfo, and menu icons are installed by
 the project's CMake rules (`src/qt/CMakeLists.txt`), so they land in the staged
 tree automatically during the build - the `.install` files only route them
-into the `quicksilver-qt` package.
+into the `quicksilver` package.
 
 The maintainer address (`quicksilver.maintainers@gmail.com`) is a shared role
 mailbox, and the homepage is the public repository

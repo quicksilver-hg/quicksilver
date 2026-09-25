@@ -356,7 +356,7 @@ Development tips and tricks
 When using the default build configuration by running `cmake -B build`, the
 `-DCMAKE_BUILD_TYPE` is set to `RelWithDebInfo`. This option adds debug symbols
 and can make the unstripped binaries much larger: in one Linux/GCC 13.3
-measurement, `quicksilverd` was 251.6 MiB versus 13.1 MiB for `Release`. It also
+measurement, `quicksilver-daemon` was 251.6 MiB versus 13.1 MiB for `Release`. It also
 performs some compiler optimizations that may make debugging trickier as the
 code may not correspond directly to the source.
 
@@ -401,8 +401,8 @@ If the code is behaving strangely, take a look in the `debug.log` file in the da
 error and debugging messages are written there.
 
 Debug logging can be enabled on startup with the `-debug` and `-loglevel`
-configuration options and toggled while quicksilverd is running with the `logging`
-RPC.  For instance, launching quicksilverd with `-debug` or `-debug=1` will turn on
+configuration options and toggled while quicksilver-daemon is running with the `logging`
+RPC.  For instance, launching quicksilver-daemon with `-debug` or `-debug=1` will turn on
 all log categories and `-loglevel=trace` will turn on all log severity levels.
 
 The Qt code routes `qDebug()` output to `debug.log` under category "qt": run with `-debug=qt`
@@ -439,7 +439,7 @@ The `-DCMAKE_BUILD_TYPE=Debug` build option adds `-DDEBUG_LOCKCONTENTION` to the
 compiler flags. You may also enable it manually by building with `-DDEBUG_LOCKCONTENTION`
 added to your CPPFLAGS, i.e. `-DAPPEND_CPPFLAGS="-DDEBUG_LOCKCONTENTION"`.
 
-You can then use the `-debug=lock` configuration option at quicksilverd startup or
+You can then use the `-debug=lock` configuration option at quicksilver-daemon startup or
 `quicksilver-cli logging '["lock"]'` at runtime to turn on lock contention logging.
 It can be toggled off again with `quicksilver-cli logging [] '["lock"]'`.
 
@@ -525,13 +525,13 @@ Make sure you [understand the security
 trade-offs](https://lwn.net/Articles/420403/) of setting these kernel
 parameters.
 
-To profile a running quicksilverd process for 60 seconds, you could use an
+To profile a running quicksilver-daemon process for 60 seconds, you could use an
 invocation of `perf record` like this:
 
 ```sh
 $ perf record \
     -g --call-graph dwarf --per-thread -F 140 \
-    -p `pgrep quicksilverd` -- sleep 60
+    -p `pgrep quicksilver-daemon` -- sleep 60
 ```
 
 You could then analyze the results by running:
@@ -619,55 +619,55 @@ and its `cs_KeyStore` lock for example).
 Threads
 -------
 
-- [Main thread (`quicksilverd`)](../src/quicksilverd.cpp)
-  : Started from `main()` in `quicksilverd.cpp`. Responsible for starting up and
+- [Main thread (`quicksilver-daemon`)](../src/quicksilver-daemon.cpp)
+  : Started from `main()` in `quicksilver-daemon.cpp`. Responsible for starting up and
   shutting down the application.
 
-- [Init load (`b-initload`)](../src/init.cpp)
+- [Init load (`qs-initload`)](../src/init.cpp)
   : Performs various loading tasks that are part of init but shouldn't block the node from being started: external block import,
    reindex, reindex-chainstate, main chain activation, spawn indexes background sync threads and relay pool load.
 
-- [CCheckQueue::Loop (`b-scriptch.x`)](../src/checkqueue.h)
+- [CCheckQueue::Loop (`qs-scriptch.x`)](../src/checkqueue.h)
   : Parallel script validation threads for transactions in blocks.
 
-- [ThreadHTTP (`b-http`)](../src/httpserver.cpp)
+- [ThreadHTTP (`qs-http`)](../src/httpserver.cpp)
   : Libevent thread to listen for RPC and REST connections.
 
-- [HTTP worker threads(`b-httpworker.x`)](../src/httpserver.cpp)
+- [HTTP worker threads(`qs-httpworker.x`)](../src/httpserver.cpp)
   : Threads to service RPC and REST requests.
 
-- [Indexer threads (`b-txindex`, etc)](../src/index/base.cpp)
+- [Indexer threads (`qs-txindex`, etc)](../src/index/base.cpp)
   : One thread per indexer.
 
-- [SchedulerThread (`b-scheduler`)](../src/scheduler.cpp)
+- [SchedulerThread (`qs-scheduler`)](../src/scheduler.cpp)
   : Does asynchronous background tasks like dumping vault contents, dumping
   addrman and running asynchronous validationinterface callbacks.
 
-- [TorControlThread (`b-torcontrol`)](../src/torcontrol.cpp)
+- [TorControlThread (`qs-torcontrol`)](../src/torcontrol.cpp)
   : Libevent thread for tor connections.
 
 - Net threads:
 
-  - [ThreadMessageHandler (`b-msghand`)](../src/net.cpp)
+  - [ThreadMessageHandler (`qs-msghand`)](../src/net.cpp)
     : Application level message handling (sending and receiving). Almost
     all net_processing and validation logic runs on this thread.
 
-  - [ThreadDNSAddressSeed (`b-dnsseed`)](../src/net.cpp)
+  - [ThreadDNSAddressSeed (`qs-dnsseed`)](../src/net.cpp)
     : Loads addresses of peers from the DNS.
 
-  - ThreadMapPort (`b-mapport`)
+  - ThreadMapPort (`qs-mapport`)
     : Universal plug-and-play startup/shutdown.
 
-  - [ThreadSocketHandler (`b-net`)](../src/net.cpp)
+  - [ThreadSocketHandler (`qs-net`)](../src/net.cpp)
     : Sends/Receives data from peers on the configured P2P port.
 
-  - [ThreadOpenAddedConnections (`b-addcon`)](../src/net.cpp)
+  - [ThreadOpenAddedConnections (`qs-addcon`)](../src/net.cpp)
     : Opens network connections to added nodes.
 
-  - [ThreadOpenConnections (`b-opencon`)](../src/net.cpp)
+  - [ThreadOpenConnections (`qs-opencon`)](../src/net.cpp)
     : Initiates new connections to peers.
 
-  - [ThreadI2PAcceptIncoming (`b-i2paccept`)](../src/net.cpp)
+  - [ThreadI2PAcceptIncoming (`qs-i2paccept`)](../src/net.cpp)
     : Listens for and accepts incoming I2P connections through the I2P SAM proxy.
 
 Ignoring IDE/editor files
@@ -1268,7 +1268,7 @@ In addition to reviewing the upstream changes in `env_posix.cc`, you can use `ls
 check this. For example, on Linux this command will show open `.ldb` file counts:
 
 ```bash
-$ lsof -p $(pidof quicksilverd) |\
+$ lsof -p $(pidof quicksilver-daemon) |\
     awk 'BEGIN { fd=0; mem=0; } /ldb$/ { if ($4 == "mem") mem++; else fd++ } END { printf "mem = %s, fd = %s\n", mem, fd}'
 mem = 119, fd = 0
 ```

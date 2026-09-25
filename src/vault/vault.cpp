@@ -2942,7 +2942,7 @@ bool CVault::AttachChain(const std::shared_ptr<CVault>& vaultInstance, interface
             // Vault is assumed to be from another chain, if genesis block in the active
             // chain differs from the genesis block known to the vault.
             if (chain.getBlockHash(0) != locator.vHave.back()) {
-                error = Untranslated("Vault files should not be reused across chains. Restart quicksilverd with -vaultcrosschain to override.");
+                error = Untranslated("Vault files should not be reused across chains. Restart quicksilver-daemon with -vaultcrosschain to override.");
                 return false;
             }
         }

@@ -50,13 +50,13 @@ document reads as broken when in fact nothing has been started. See
 [Getting Started](getting-started.md#a-first-run-is-vault-only-it-runs-no-node-until-you-enable-consensus).
 Everything below assumes a node that is actually running.
 
-**On `quicksilverd`, run a Tor daemon locally and let the node use it.** The
+**On `quicksilver-daemon`, run a Tor daemon locally and let the node use it.** The
 daemon defaults to `-bundledtor=0`: someone running a daemon can install and
 configure Tor, and a headless node should not be starting processes its operator
 did not ask for.
 
 ```bash
-quicksilverd -proxy=127.0.0.1:9050
+quicksilver-daemon -proxy=127.0.0.1:9050
 ```
 
 If you also want to accept inbound connections over Tor, `-listenonion` is on by
@@ -71,9 +71,9 @@ node started without `-publictest` is a `main` node whatever port you point it
 at, so every non-`main` example carries the network option:
 
 ```bash
-quicksilverd -addnode=<host>:9555                                # main
-quicksilverd -publictest -addnode=<host>:19557                   # publictest
-quicksilverd -addnode=<onion>.onion:9555 -proxy=127.0.0.1:9050   # main, over Tor
+quicksilver-daemon -addnode=<host>:9555                                # main
+quicksilver-daemon -publictest -addnode=<host>:19557                   # publictest
+quicksilver-daemon -addnode=<onion>.onion:9555 -proxy=127.0.0.1:9050   # main, over Tor
 ```
 
 Or in that network's `quicksilver.conf`, where the network section selects it:
@@ -195,7 +195,7 @@ If you *operate* the seed and it is reachable but never accumulates inbound
 peers, check its own binds before anything else:
 
 ```bash
-ss -ltn | grep 9556       # must show quicksilverd listening
+ss -ltn | grep 9556       # must show quicksilver-daemon listening
 ```
 
 Nothing on 9556 means the onion bind was never created — see "Operating the
@@ -256,7 +256,7 @@ and the debug log records the same decisions (grep for `AddLocal`).
 bundled Tor does not start without it** — the node is then left with no way to
 reach the onion seed at all. A desktop that wants `-listen=0` has to bring its
 own Tor: `-bundledtor=0` together with `-onion=` or `-proxy=`. On
-`quicksilverd`, which is already running its own Tor, `-listen=0` is
+`quicksilver-daemon`, which is already running its own Tor, `-listen=0` is
 unremarkable. `doc/tor.md` §4 covers the rest of the Tor-only configuration.
 
 ## Operating the seed
@@ -288,7 +288,7 @@ binary is compiled to dial.
 it explicitly.** These two flags are a matched pair and neither works alone:
 
 ```bash
-quicksilverd -listenonion=0 -bind=0.0.0.0:9555 -bind=127.0.0.1:9556=onion
+quicksilver-daemon -listenonion=0 -bind=0.0.0.0:9555 -bind=127.0.0.1:9556=onion
 ```
 
 `init.cpp` creates the default `127.0.0.1:9556=onion` bind only when

@@ -61,8 +61,8 @@ public:
      * choice that doc/design/chain-storage.md section 3 requires an operator to make
      * rather than inherit. So the question is whether this desktop has ever been
      * through it, not whether a directory happens to exist -- an empty directory, or
-     * one quicksilverd created, answered the old question and skipped every screen
-     * (F-123). doc/getting-started.md leads with quicksilverd, so that was the
+     * one quicksilver-daemon created, answered the old question and skipped every screen
+     * (F-123). doc/getting-started.md leads with quicksilver-daemon, so that was the
      * documented path.
      *
      * @param desktop_configured  this desktop has completed the dialog before

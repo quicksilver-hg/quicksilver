@@ -200,8 +200,11 @@ same value before and after the man-page commit and tag.
 headerssync-params.py
 =====================
 
-A script to generate optimal parameters for the headerssync module (src/headerssync.cpp). It takes no command-line
-options, as all its configuration is set at the top of the file. It runs many times faster inside PyPy. Invocation:
+A script to model optimal parameters for the headerssync module (src/headerssync.cpp) using Quicksilver's header
+layout and timing. Because current chains have no minimum-chain-work setting, it checks the deployed constants at
+three- and six-month record-only horizons, the ruled one-year requirement, and five- and ten-year sensitivity
+horizons. It takes no command-line options, as all its configuration is set at the top of the file. It runs many
+times faster inside PyPy. Invocation:
 
 ```bash
 pypy3 contrib/devtools/headerssync-params.py
@@ -210,7 +213,7 @@ pypy3 contrib/devtools/headerssync-params.py
 gen-quicksilver-conf.sh
 ===================
 
-Generates a quicksilver.conf file in `share/examples/` by parsing the output from `quicksilverd --help`. This script is run during the
+Generates a quicksilver.conf file in `share/examples/` by parsing the output from `quicksilver-daemon --help`. This script is run during the
 release process to include a quicksilver.conf with the release binaries and can also be run by users to generate a file locally.
 When generating a file as part of the release process, make sure to commit the changes after running the script.
 

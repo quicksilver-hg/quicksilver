@@ -22,7 +22,7 @@ namespace interfaces {
 //! and get access to other interfaces (Node, Chain, Vault, etc).
 //!
 //! There is a different Init interface implementation for each executable
-//! (quicksilverd, quicksilver-qt) and each implementation can implement the make
+//! (quicksilver-daemon, quicksilver) and each implementation can implement the make
 //! methods for interfaces it supports. The default make methods all return null.
 class Init
 {

@@ -7,7 +7,7 @@ The following directions assume you have a Tor proxy running on port 9050. Many 
 **Running the desktop?** None of the setup below is required: the Quicksilver
 desktop starts and supervises a Tor of its own. See
 [section 0](#0-the-desktop-starts-its-own-tor). The two quick starts that follow
-are for `quicksilverd` operators, and for anyone who would rather run their own
+are for `quicksilver-daemon` operators, and for anyone who would rather run their own
 Tor.
 
 ## Which parts do you actually need?
@@ -18,7 +18,7 @@ recipes. There are only two jobs, and they have separate requirements:
 
 | Goal | What it needs | What it does not need |
 |---|---|---|
-| **Reach the onion seed and sync** — what a new node needs | A SOCKS proxy, normally `127.0.0.1:9050`, given to the node as `-proxy=` or `-onion=`. For `quicksilverd`, `-proxy=` also routes clearnet peers through Tor and switches address discovery off, so the node does not advertise its routable host addresses; `-onion=` leaves clearnet peers direct and discovery on unless `-discover=0` is given. | The control port, cookie authentication, group membership, any torrc edit |
+| **Reach the onion seed and sync** — what a new node needs | A SOCKS proxy, normally `127.0.0.1:9050`, given to the node as `-proxy=` or `-onion=`. For `quicksilver-daemon`, `-proxy=` also routes clearnet peers through Tor and switches address discovery off, so the node does not advertise its routable host addresses; `-onion=` leaves clearnet peers direct and discovery on unless `-discover=0` is given. | The control port, cookie authentication, group membership, any torrc edit |
 | **Host an onion service of your own** — accept inbound Tor peers | All of the above, plus Tor's control port, its authentication, and read access to the cookie | — |
 
 A stock `tor` package on most distributions gives you the first with no
@@ -54,7 +54,7 @@ autodetection.
    SOCKS5 proxy at `127.0.0.1:9050` in **Controls > Options > Network** and
    restart Quicksilver.
 
-On `quicksilverd`, `-onion=` alone leaves address discovery on, so the node
+On `quicksilver-daemon`, `-onion=` alone leaves address discovery on, so the node
 still advertises this machine's routable addresses beside its onion address.
 Add `-discover=0` to stop that; `-proxy=` switches discovery off by itself.
 
@@ -89,7 +89,7 @@ things Quicksilver needs are the same, but they are configured differently.
    SOCKS5 proxy at `127.0.0.1:9050` in **Controls > Options > Network** and
    restart Quicksilver.
 
-On `quicksilverd`, `-onion=` alone leaves address discovery on, so the node
+On `quicksilver-daemon`, `-onion=` alone leaves address discovery on, so the node
 still advertises this machine's routable addresses beside its onion address.
 Add `-discover=0` to stop that; `-proxy=` switches discovery off by itself.
 
@@ -110,7 +110,7 @@ choose free ports for both its control port and its SOCKS port. Nothing binds
 The node's Tor exits with the node.
 
 - `-bundledtor=0` turns this off and uses a Tor you run yourself, exactly as the
-  rest of this document describes. The daemon (`quicksilverd`) defaults to 0:
+  rest of this document describes. The daemon (`quicksilver-daemon`) defaults to 0:
   someone running a daemon can install and configure Tor; someone who downloaded
   a desktop cannot be assumed to.
 - `-bundledtorpath=<path>` names the `tor` executable. By default the desktop
@@ -153,8 +153,8 @@ actually being advertised.
 To stop advertising, without giving up the bundled Tor:
 
 ```bash
-quicksilver-qt -discover=0                    # advertise nothing about this host
-quicksilver-qt -discover=0 -onlynet=onion     # and dial only onion peers
+quicksilver -discover=0                    # advertise nothing about this host
+quicksilver -discover=0 -onlynet=onion     # and dial only onion peers
 ```
 
 ⚠ Do **not** reach for `-listen=0` here. It switches off `-listenonion`, and the
@@ -222,7 +222,7 @@ outgoing connections, but more is possible.
 
 In a typical situation, this suffices to run behind a Tor proxy:
 
-    quicksilverd -proxy=127.0.0.1:9050
+    quicksilver-daemon -proxy=127.0.0.1:9050
 
 ## 2. Automatically create a Quicksilver onion service
 
@@ -237,7 +237,7 @@ it requires a Tor connection to work. It can be explicitly disabled with
 `-listenonion=0`. If it is not disabled, it can be configured using the
 `-torcontrol` and `-torpassword` settings.
 
-To see verbose Tor information in the quicksilverd debug log, pass `-debug=tor`.
+To see verbose Tor information in the quicksilver-daemon debug log, pass `-debug=tor`.
 
 ### Control Port
 
@@ -259,20 +259,20 @@ Debian and Ubuntu, or just restart the computer).
 ### Authentication
 
 Connecting to Tor's control socket API requires one of two authentication
-methods to be configured: cookie authentication or quicksilverd's `-torpassword`
+methods to be configured: cookie authentication or quicksilver-daemon's `-torpassword`
 configuration option.
 
 #### Cookie authentication
 
-For cookie authentication, the user running quicksilverd must have read access to
+For cookie authentication, the user running quicksilver-daemon must have read access to
 the `CookieAuthFile` specified in the Tor configuration. In some cases this is
 preconfigured and the creation of an onion service is automatic. Don't forget to
-use the `-debug=tor` quicksilverd configuration option to enable Tor debug logging.
+use the `-debug=tor` quicksilver-daemon configuration option to enable Tor debug logging.
 
 If a permissions problem is seen in the debug log, e.g. `tor: Authentication
 cookie /run/tor/control.authcookie could not be opened (check permissions)`, it
 can be resolved by adding both the user running Tor and the user running
-quicksilverd to the same Tor group and setting permissions appropriately.
+quicksilver-daemon to the same Tor group and setting permissions appropriately.
 
 On Debian-derived systems, the Tor group will likely be `debian-tor` and one way
 to verify could be to list the groups and grep for a "tor" group name:
@@ -289,18 +289,18 @@ TORGROUP=$(stat -c '%G' /run/tor/control.authcookie)
 ```
 
 Once you have determined the `${TORGROUP}` and selected the `${USER}` that will
-run quicksilverd, add that user to the group. This needs root, so run it under
+run quicksilver-daemon, add that user to the group. This needs root, so run it under
 `sudo` (drop the `sudo` if you are already root):
 
 ```
 sudo usermod -a -G "${TORGROUP}" "${USER}"
 ```
 
-`${USER}` is your own login name. Set it explicitly first if quicksilverd will
+`${USER}` is your own login name. Set it explicitly first if quicksilver-daemon will
 run as a different account, for example `USER=quicksilver`.
 
 Then restart the computer (or log out) and log in as the `${USER}` that will run
-quicksilverd.
+quicksilver-daemon.
 
 #### `torpassword` authentication
 
@@ -323,7 +323,7 @@ Add these lines to your `/etc/tor/torrc` (or equivalent config file):
     HiddenServicePort 9555 127.0.0.1:9556
 
 The directory can be different of course, but virtual port numbers should be equal to
-your quicksilverd's P2P listen port (9555 by default), and target addresses and ports
+your quicksilver-daemon's P2P listen port (9555 by default), and target addresses and ports
 should be equal to binding address and port for inbound Tor connections (127.0.0.1:9556 by default).
 
     -externalip=X   You can tell Quicksilver about its publicly reachable addresses using
@@ -351,13 +351,13 @@ should be equal to binding address and port for inbound Tor connections (127.0.0
 
 In a typical situation, where you're only reachable via Tor, this should suffice:
 
-    quicksilverd -proxy=127.0.0.1:9050 -externalip=7zvj7a2imdgkdbg4f2dryd5rgtrn7upivr5eeij4cicjh65pooxeshid.onion -listen
+    quicksilver-daemon -proxy=127.0.0.1:9050 -externalip=7zvj7a2imdgkdbg4f2dryd5rgtrn7upivr5eeij4cicjh65pooxeshid.onion -listen
 
 (obviously, replace the .onion address with your own). It should be noted that you still
 listen on all devices and another node could establish a clearnet connection, when knowing
 your address. To mitigate this, additionally bind the address of your Tor proxy:
 
-    quicksilverd ... -bind=127.0.0.1:9556=onion
+    quicksilver-daemon ... -bind=127.0.0.1:9556=onion
 
 For Tor-only inbound reachability without advertising the host's routable
 addresses, use these settings together in `quicksilver.conf` (the bind target
@@ -370,14 +370,14 @@ must match the Tor service target above):
 If you don't care too much about hiding your node, and want to be reachable on IPv4
 as well, use `discover` instead:
 
-    quicksilverd ... -discover
+    quicksilver-daemon ... -discover
 
 and open port 9555 on your firewall (or use port mapping, i.e., `-natpmp`).
 
 If you only want to use Tor to reach .onion addresses, but not use it as a proxy
 for normal IPv4/IPv6 communication, use:
 
-    quicksilverd -onion=127.0.0.1:9050 -externalip=7zvj7a2imdgkdbg4f2dryd5rgtrn7upivr5eeij4cicjh65pooxeshid.onion -discover
+    quicksilver-daemon -onion=127.0.0.1:9050 -externalip=7zvj7a2imdgkdbg4f2dryd5rgtrn7upivr5eeij4cicjh65pooxeshid.onion -discover
 
 ## 4. Privacy recommendations
 

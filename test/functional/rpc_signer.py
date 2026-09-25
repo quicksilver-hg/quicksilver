@@ -5,7 +5,7 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test external signer.
 
-Verify that a quicksilverd node can use an external signer command.
+Verify that a quicksilver-daemon node can use an external signer command.
 See also vault_signer.py for tests that require vault context.
 """
 import os
@@ -47,7 +47,7 @@ class RPCSignerTest(QuicksilverTestFramework):
     def run_test(self):
         self.log.debug(f"-signer={self.mock_signer_path()}")
 
-        assert_raises_rpc_error(-1, 'Error: restart quicksilverd with -signer=<cmd>',
+        assert_raises_rpc_error(-1, 'Error: restart quicksilver-daemon with -signer=<cmd>',
             self.nodes[0].enumeratesigners
         )
 

@@ -9,7 +9,7 @@ This tutorial uses [jq](https://github.com/stedolan/jq) JSON processor to proces
 Before starting this tutorial, start the Quicksilver node in sandbox mode.
 
 ```bash
-./build/bin/quicksilverd -sandbox -daemon
+./build/bin/quicksilver-daemon -sandbox -daemon
 ```
 
 This tutorial also uses the default WPKH derivation path to get the qpubs.

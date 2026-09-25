@@ -4,7 +4,7 @@
 Pull requests without a rationale and clear improvement may be closed
 immediately.
 
-GUI-related pull requests for Quicksilver Qt belong in this repository. See
+GUI-related pull requests for Quicksilver belong in this repository. See
 CONTRIBUTING.md
 -->
 

@@ -92,7 +92,7 @@ struct MiningStatus {
     bool solver_ok{true};                //!< false when the last solver attempt faulted
     std::string last_solver_error;       //!< empty when solver_ok
     //! The fault is "no solver configured" rather than a solver that ran and failed.
-    //! last_solver_error is written for quicksilverd and names the -cuckatoosolver
+    //! last_solver_error is written for quicksilver-daemon and names the -cuckatoosolver
     //! flag; the GUI has the setting as a control and must say so instead.
     bool solver_missing{false};
     //! Whether block solving can run at all in this configuration. The node
@@ -116,7 +116,7 @@ public:
     virtual std::string getName() = 0;
 };
 
-//! Top-level interface for a Quicksilver node (quicksilverd process).
+//! Top-level interface for a Quicksilver node (quicksilver-daemon process).
 class Node
 {
 public:

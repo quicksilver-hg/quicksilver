@@ -11,7 +11,7 @@ When using a hardware signer, use a signer adapter that implements the Quicksilv
 Start Quicksilver:
 
 ```sh
-$ quicksilverd -signer=/path/to/quicksilver-signer
+$ quicksilver-daemon -signer=/path/to/quicksilver-signer
 ```
 
 ### Device setup

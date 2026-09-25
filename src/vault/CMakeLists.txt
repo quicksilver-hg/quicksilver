@@ -3,7 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or https://opensource.org/license/mit/.
 
-# Vault functionality used by quicksilverd and quicksilver-vault executables.
+# Vault functionality used by quicksilver-daemon and quicksilver-vault executables.
 add_library(quicksilver_vault STATIC EXCLUDE_FROM_ALL
   coincontrol.cpp
   coinselection.cpp

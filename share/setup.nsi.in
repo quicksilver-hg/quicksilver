@@ -96,7 +96,6 @@ Section /o "Developer tools" SEC0002
     File "@nsis_release_dir@@QUICKSILVER_CLI_NAME@@EXEEXT@"
     File "@nsis_release_dir@@QUICKSILVER_TX_NAME@@EXEEXT@"
     File "@nsis_release_dir@@QUICKSILVER_VAULT_TOOL_NAME@@EXEEXT@"
-    File "@nsis_release_dir@@QUICKSILVER_UTIL_NAME@@EXEEXT@"
     File /oname=developer-tools.md "@nsis_developer_tools_doc@"
     SetOutPath $INSTDIR
     WriteRegStr HKCU "${REGKEY}\Components" DeveloperTools 1
@@ -116,7 +115,7 @@ Section -post SEC0001
     WriteRegStr HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(^Name)" DisplayVersion "@CLIENT_VERSION_STRING@"
     WriteRegStr HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(^Name)" Publisher "${COMPANY}"
     WriteRegStr HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(^Name)" URLInfoAbout "${URL}"
-    WriteRegStr HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(^Name)" DisplayIcon $INSTDIR\quicksilver-qt.exe
+    WriteRegStr HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(^Name)" DisplayIcon $INSTDIR\@QUICKSILVER_GUI_NAME@@EXEEXT@
     WriteRegStr HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(^Name)" UninstallString $INSTDIR\uninstall.exe
     WriteRegDWORD HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(^Name)" NoModify 1
     WriteRegDWORD HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(^Name)" NoRepair 1

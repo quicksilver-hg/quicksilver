@@ -5,7 +5,7 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test vault load on startup.
 
-Verify that a quicksilverd node can maintain the list of vaults loading on
+Verify that a quicksilver-daemon node can maintain the list of vaults loading on
 startup. An unnamed vault is not auto-loaded; it must be on the startup list.
 """
 from test_framework.test_framework import QuicksilverTestFramework

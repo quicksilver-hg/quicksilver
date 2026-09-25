@@ -472,7 +472,7 @@ static RPCHelpMan getmininginfo()
     if (BlockAssembler::m_last_block_weight) obj.pushKV("currentblockweight", *BlockAssembler::m_last_block_weight);
     if (BlockAssembler::m_last_block_num_txs) obj.pushKV("currentblocktx", *BlockAssembler::m_last_block_num_txs);
     obj.pushKV("bits", strprintf("%08x", tip.nBits));
-    obj.pushKV("difficulty", GetDifficulty(tip));
+    obj.pushKV("difficulty", GetDifficulty(tip, chainman.GetConsensus().powLimit));
     obj.pushKV("target", GetTarget(tip, chainman.GetConsensus().powLimit).GetHex());
     obj.pushKV("networkworkps",    getnetworkworkps().HandleRequest(request));
     obj.pushKV("pooledtx",         (uint64_t)relaypool.size());
@@ -484,7 +484,7 @@ static RPCHelpMan getmininginfo()
 
     next.pushKV("height", next_index.nHeight);
     next.pushKV("bits", strprintf("%08x", next_index.nBits));
-    next.pushKV("difficulty", GetDifficulty(next_index));
+    next.pushKV("difficulty", GetDifficulty(next_index, chainman.GetConsensus().powLimit));
     next.pushKV("target", GetTarget(next_index, chainman.GetConsensus().powLimit).GetHex());
     obj.pushKV("next", next);
 

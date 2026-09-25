@@ -244,8 +244,8 @@ Linux has no equivalent mechanism.
 Pass an absolute path at startup:
 
 ```bash
-quicksilver-qt -cuckatoosolver=/absolute/path/to/qsgpusolve
-quicksilverd -cuckatoosolver=/absolute/path/to/qsgpusolve
+quicksilver -cuckatoosolver=/absolute/path/to/qsgpusolve
+quicksilver-daemon -cuckatoosolver=/absolute/path/to/qsgpusolve
 quicksilver-agent -cuckatoosolver=/absolute/path/to/qsgpusolve <command>
 ```
 

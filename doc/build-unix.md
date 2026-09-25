@@ -23,7 +23,7 @@ To Build
 cmake -B build   # headless profile: command-line node and vault, not the GUI
 ```
 This selects `RelWithDebInfo`, so the binaries carry debug information. A Linux
-build with GCC 13.3 produced a 251.6 MiB unstripped `quicksilverd`, against
+build with GCC 13.3 produced a 251.6 MiB unstripped `quicksilver-daemon`, against
 13.1 MiB for `cmake -B build -DCMAKE_BUILD_TYPE=Release` — a factor of 19.
 Exact sizes vary by platform and compiler. Debug information can also be
 dropped from the default build type; see
@@ -99,7 +99,7 @@ Two things the install command does which are worth knowing:
   first here.
 - The `tor` package installs a system Tor service and starts it on port 9050,
   and it installs the `tor` binary the desktop execs. The service is what
-  `quicksilverd` needs. The desktop does not use that service: it starts a Tor
+  `quicksilver-daemon` needs. The desktop does not use that service: it starts a Tor
   of its own, on ports Tor picks, so the two never collide. Keep `tor` on the
   line even if you only run the desktop; what the desktop does not use is the
   system service on 9050.
@@ -121,7 +121,7 @@ desktop starts and supervises it, and needs no Tor configuration — no torrc,
 no proxy setting — once Consensus is enabled. It is the opt-in, not
 configuration, that stands between a first run and the seed (see
 [Getting Started](getting-started.md#a-first-run-is-vault-only-it-runs-no-node-until-you-enable-consensus)).
-`quicksilverd` needs a Tor proxy to reach the onion seed unless it is given an
+`quicksilver-daemon` needs a Tor proxy to reach the onion seed unless it is given an
 explicit peer, and needs Tor's control port additionally to host an onion
 service (see [Bootstrapping](bootstrapping.md)).
 
@@ -188,7 +188,7 @@ desktop starts and supervises it, and needs no Tor configuration — no torrc,
 no proxy setting — once Consensus is enabled. It is the opt-in, not
 configuration, that stands between a first run and the seed (see
 [Getting Started](getting-started.md#a-first-run-is-vault-only-it-runs-no-node-until-you-enable-consensus)).
-`quicksilverd` needs a Tor proxy to reach the onion seed unless it is given an
+`quicksilver-daemon` needs a Tor proxy to reach the onion seed unless it is given an
 explicit peer, and needs Tor's control port additionally to host an onion
 service (see [Bootstrapping](bootstrapping.md)).
 
@@ -249,10 +249,10 @@ This example lists the steps necessary to setup and build a command line only di
     cmake --build build -j "$(nproc)"
     ctest --test-dir build
     sudo systemctl start tor.service
-    ./build/bin/quicksilverd -proxy=127.0.0.1:9050
+    ./build/bin/quicksilver-daemon -proxy=127.0.0.1:9050
 
 The Tor service provides the local SOCKS proxy the daemon needs to reach the
 onion seed. Tor is needed at runtime, not to compile the command-line node.
 
-With `-proxy=`, `quicksilverd` also turns address discovery off, so it does not
+With `-proxy=`, `quicksilver-daemon` also turns address discovery off, so it does not
 advertise the machine's routable addresses.

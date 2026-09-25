@@ -3,7 +3,7 @@
 # Copyright (c) 2026 The Quicksilver developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Test running quicksilverd with -reindex from a read-only blockstore
+"""Test running quicksilver-daemon with -reindex from a read-only blockstore
 - Start a node, generate blocks, then restart with -reindex after setting blk files to read-only
 """
 

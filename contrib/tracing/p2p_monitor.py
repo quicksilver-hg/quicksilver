@@ -4,7 +4,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-""" Interactive quicksilverd P2P network traffic monitor utilizing USDT and the
+""" Interactive quicksilver-daemon P2P network traffic monitor utilizing USDT and the
     net:inbound_message and net:outbound_message tracepoints. """
 
 # This script demonstrates what USDT for Quicksilver can enable. It uses BCC
@@ -127,15 +127,15 @@ class Peer:
 
 def main(pid):
     peers = dict()
-    print(f"Hooking into quicksilverd with pid {pid}")
-    quicksilverd_with_usdts = USDT(pid=int(pid))
+    print(f"Hooking into quicksilver-daemon with pid {pid}")
+    quicksilver_daemon_with_usdts = USDT(pid=int(pid))
 
     # attaching the trace functions defined in the BPF program to the tracepoints
-    quicksilverd_with_usdts.enable_probe(
+    quicksilver_daemon_with_usdts.enable_probe(
         probe="inbound_message", fn_name="trace_inbound_message")
-    quicksilverd_with_usdts.enable_probe(
+    quicksilver_daemon_with_usdts.enable_probe(
         probe="outbound_message", fn_name="trace_outbound_message")
-    bpf = BPF(text=program, usdt_contexts=[quicksilverd_with_usdts])
+    bpf = BPF(text=program, usdt_contexts=[quicksilver_daemon_with_usdts])
 
     # BCC: perf buffer handle function for inbound_messages
     def handle_inbound(_, data, size):
@@ -260,7 +260,7 @@ def running_as_root():
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("USAGE:", sys.argv[0], "<pid of quicksilverd>")
+        print("USAGE:", sys.argv[0], "<pid of quicksilver-daemon>")
         exit()
     if not running_as_root():
         print("You might not have the privileges required to hook into the tracepoints!")

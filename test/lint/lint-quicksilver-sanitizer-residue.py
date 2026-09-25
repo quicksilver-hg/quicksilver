@@ -10,7 +10,7 @@
 # A suppression is a silent pass. TxConfirmStats is gone with the fee
 # estimator; a leftover line would cover a reintroduction. A bare `crypto/`
 # prefix matches src/crypto/cuckatoo/ as well as hash primitives.
-# `race:quicksilver-qt` and `src/qt/test/*` hide allotment, mining-model,
+# `race:quicksilver` and `src/qt/test/*` hide allotment, mining-model,
 # and GPU-option races. TSan CI does not even build the GUI.
 
 import re
@@ -38,7 +38,7 @@ FORBIDDEN = [
     ),
     (
         "GUI binary wildcard",
-        re.compile(r"^race:quicksilver-qt\s*$"),
+        re.compile(r"^race:quicksilver\s*$"),
     ),
     (
         "GUI test wildcard",
@@ -87,12 +87,12 @@ def self_test() -> list[str]:
         ("implicit-signed-integer-truncation:crypto/", "blanket crypto/ prefix"),
         ("implicit-unsigned-integer-truncation:crypto/", "blanket crypto/ prefix"),
         ("shift-base:crypto/", "blanket crypto/ prefix"),
-        ("race:quicksilver-qt", "GUI binary wildcard"),
+        ("race:quicksilver", "GUI binary wildcard"),
         ("race:src/qt/test/*", "GUI test wildcard"),
         ("deadlock:src/qt/test/*", "GUI test wildcard"),
         ("unsigned-integer-overflow:crypto/sha", None),
         ("unsigned-integer-overflow:crypto/cuckatoo/vendor", None),
-        ("# race:quicksilver-qt", None),
+        ("# race:quicksilver", None),
         ("unsigned-integer-overflow:MurmurHash3", None),
     ]
     failures = []

@@ -517,7 +517,7 @@ fn get_pathspecs_exclude_whitespace() -> Vec<String> {
             "research/*.csv",
             // Temporary excludes, or existing violations
             "doc/release-notes/release-notes-0.*",
-            "contrib/init/quicksilverd.openrc",
+            "contrib/init/quicksilver-daemon.openrc",
             "src/crypto/sha256_sse4.cpp",
             "src/qt/res/src/*.svg",
             "test/functional/test_framework/crypto/ellswift_decode_test_vectors.csv",

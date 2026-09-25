@@ -16,7 +16,7 @@ Standards-Version: 4.6.2
 Homepage: https://github.com/quicksilver-hg/quicksilver
 Rules-Requires-Root: no
 
-Package: quicksilver-qt
+Package: quicksilver
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: feeless per-transaction proof-of-work currency
@@ -34,8 +34,8 @@ Description: feeless per-transaction proof-of-work currency - developer tools
  Quicksilver is a feeless, per-transaction proof-of-work cryptocurrency built
  for autonomous agents and the humans who run them.
  .
- This package provides the headless daemon (quicksilverd) and the command-line
- tools quicksilver-cli, quicksilver-tx, quicksilver-vault and quicksilver-util.
+ This package provides the headless daemon (quicksilver-daemon) and the command-line
+ tools quicksilver-cli, quicksilver-tx and quicksilver-vault.
  The desktop application provisions consensus itself, so its users do not need
  a separate node. These tools support development, scripting and headless
  operation.

@@ -5,7 +5,7 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test relaypool persistence.
 
-By default, quicksilverd will dump relaypool on shutdown and
+By default, quicksilver-daemon will dump relaypool on shutdown and
 then reload it on startup. This can be overridden with
 the -persistrelaypool=0 command line option.
 
@@ -170,7 +170,7 @@ class RelayPoolPersistTest(QuicksilverTestFramework):
         assert self.nodes[1].getrelaypoolinfo()["loaded"]
         assert_equal(len(self.nodes[1].getrawrelaypool()), 7)
 
-        self.log.debug("Prevent quicksilverd from writing relaypool.dat to disk. Verify that `saverelaypool` fails")
+        self.log.debug("Prevent quicksilver-daemon from writing relaypool.dat to disk. Verify that `saverelaypool` fails")
         # to test the exception we are creating a tmp folder called relaypool.dat.new
         # which is an implementation detail that could change and break this test
         relaypooldotnew1 = relaypooldat1 + '.new'

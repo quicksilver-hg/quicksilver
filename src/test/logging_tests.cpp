@@ -244,7 +244,7 @@ BOOST_FIXTURE_TEST_CASE(logging_Conf, LogSetup)
         ResetLogger();
         ArgsManager args;
         args.AddArg("-loglevel", "...", ArgsManager::ALLOW_ANY, OptionsCategory::DEBUG_TEST);
-        const char* argv_test[] = {"quicksilverd", "-loglevel=debug"};
+        const char* argv_test[] = {"quicksilver-daemon", "-loglevel=debug"};
         std::string err;
         BOOST_REQUIRE(args.ParseParameters(2, argv_test, err));
 
@@ -258,7 +258,7 @@ BOOST_FIXTURE_TEST_CASE(logging_Conf, LogSetup)
         ResetLogger();
         ArgsManager args;
         args.AddArg("-loglevel", "...", ArgsManager::ALLOW_ANY, OptionsCategory::DEBUG_TEST);
-        const char* argv_test[] = {"quicksilverd", "-loglevel=mesh:trace"};
+        const char* argv_test[] = {"quicksilver-daemon", "-loglevel=mesh:trace"};
         std::string err;
         BOOST_REQUIRE(args.ParseParameters(2, argv_test, err));
 
@@ -277,7 +277,7 @@ BOOST_FIXTURE_TEST_CASE(logging_Conf, LogSetup)
         ResetLogger();
         ArgsManager args;
         args.AddArg("-loglevel", "...", ArgsManager::ALLOW_ANY, OptionsCategory::DEBUG_TEST);
-        const char* argv_test[] = {"quicksilverd", "-loglevel=debug", "-loglevel=mesh:trace", "-loglevel=http:info"};
+        const char* argv_test[] = {"quicksilver-daemon", "-loglevel=debug", "-loglevel=mesh:trace", "-loglevel=http:info"};
         std::string err;
         BOOST_REQUIRE(args.ParseParameters(4, argv_test, err));
 

@@ -459,7 +459,8 @@ class BlockchainTest(QuicksilverTestFramework):
         assert isinstance(header['nonce'], int)
         assert isinstance(header['version'], int)
         assert isinstance(int(header['versionHex'], 16), int)
-        assert isinstance(header['difficulty'], Decimal)
+        # This sandbox header is at the chain minimum; exact 1 may decode as an integer.
+        assert_equal(header['difficulty'], Decimal('1'))
 
         # Test with verbose=False, which should return the header as hex.
         header_hex = node.getblockheader(blockhash=besthash, verbose=False)
@@ -475,9 +476,8 @@ class BlockchainTest(QuicksilverTestFramework):
     def _test_getdifficulty(self):
         self.log.info("Test getdifficulty")
         difficulty = self.nodes[0].getdifficulty()
-        # 1 hash in 2 should be valid, so difficulty should be 1/2**31
-        # binary => decimal => binary math is why we do this check
-        assert abs(difficulty * 2**31 - 1) < 0.0001
+        # The sandbox tip is at its chain minimum, so chain-relative difficulty is exactly 1.
+        assert_equal(difficulty, Decimal('1'))
 
     def _test_getnetworkworkps(self):
         self.log.info("Test getnetworkworkps")

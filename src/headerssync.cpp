@@ -10,19 +10,22 @@
 #include <util/time.h>
 #include <util/vector.h>
 
-// The two constants below are computed using the simulation script in
-// contrib/devtools/headerssync-params.py.
+// The two constants below are node-local anti-DoS policy, computed on
+// 2026-09-25 using contrib/devtools/headerssync-params.py. The model assumes
+// 300-second blocks, 220-byte compact headers, 253-byte wire headers, a
+// conservative 6 Gbit/s attacker bound, and a one-year minimum-chain-work
+// horizon as ruled by the owner on 2026-09-25.
 
 //! Store one header commitment per HEADER_COMMITMENT_PERIOD blocks.
-constexpr size_t HEADER_COMMITMENT_PERIOD{624};
+constexpr size_t HEADER_COMMITMENT_PERIOD{219};
 
 //! Only feed headers to validation once this many headers on top have been
 //! received and validated against commitments.
-constexpr size_t REDOWNLOAD_BUFFER_SIZE{14827}; // 14827/624 = ~23.8 commitments
+constexpr size_t REDOWNLOAD_BUFFER_SIZE{4889}; // 4889/219 = ~22.3 commitments
 
-// Our memory analysis assumes 48 bytes for a CompressedHeader (so we should
-// re-calculate parameters if we compress further)
-static_assert(sizeof(CompressedHeader) == 48);
+// Our memory analysis assumes 220 bytes for a CompressedHeader (so we should
+// re-calculate parameters if this representation changes).
+static_assert(sizeof(CompressedHeader) == 220);
 
 HeadersSyncState::HeadersSyncState(NodeId id, const Consensus::Params& consensus_params,
         const CBlockIndex* chain_start, const arith_uint256& minimum_required_work) :

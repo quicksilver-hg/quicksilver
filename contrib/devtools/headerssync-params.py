@@ -11,19 +11,33 @@ import random
 
 # Parameters:
 
-# Aim for still working fine at some point in the future. [datetime]
-TIME = datetime(2027, 10, 6)
+# Aim for still working fine ten years after launch. [datetime]
+TIME = datetime(2036, 9, 5)
 
 # Expected block interval. [timedelta]
-BLOCK_INTERVAL = timedelta(seconds=600)
+# src/kernel/chainparams.cpp: mainnet nPowTargetSpacing is 5 minutes.
+BLOCK_INTERVAL = timedelta(seconds=300)
 
-# The number of headers corresponding to the minchainwork parameter. [headers]
-MINCHAINWORK_HEADERS = 886157
+# All current chains set nMinimumChainWork to zero, so there is no measured
+# Quicksilver value for this upstream model input. Model assumed minimum-work
+# horizons at the intended 288 headers/day. The one-year horizon is the ruled
+# requirement (owner, 2026-09-25); three and six months are record-only, while
+# five and ten years are sensitivity checks.
+MINCHAINWORK_HORIZONS = {
+    "3-month assumed minchainwork horizon (record only)": 26298,
+    "6-month assumed minchainwork horizon (record only)": 52596,
+    "1-year assumed minchainwork horizon (ruled requirement)": 105192,
+    "5-year assumed minchainwork horizon (sensitivity)": 525960,
+    "10-year assumed minchainwork horizon (sensitivity)": 1051920,
+}
+MINCHAINWORK_HEADERS = 0  # Set from MINCHAINWORK_HORIZONS by main().
 
 # Combined processing bandwidth from all attackers to one victim. [bit/s]
-# 6 Gbit/s is approximately the speed at which a single thread of a Ryzen 5950X CPU thread can hash
-# headers. In practice, the victim's network bandwidth and network processing overheads probably
-# impose a far lower number, but it's a useful upper bound.
+# Quicksilver header production requires a Cuckatoo graph solve (src/pow.cpp),
+# not a simple digest computation. Keep the existing 6 Gbit/s figure as a
+# deliberately conservative supply bound: treating forged headers as limited
+# only by transmission ignores the much more expensive graph-solving work and
+# therefore favors the attacker.
 ATTACK_BANDWIDTH = 6000000000
 
 # How much additional permanent memory usage are attackers (jointly) allowed to cause in the victim,
@@ -105,11 +119,13 @@ ASSUME_CONVEX = True
 
 # System properties:
 
-# Headers in the redownload buffer are stored without prevhash. [bits]
-COMPACT_HEADER_SIZE = 48 * 8
+# src/headerssync.cpp: CompressedHeader is 220 bytes without hashPrevBlock. [bits]
+COMPACT_HEADER_SIZE = 220 * 8
 
 # How many bits a header uses in P2P protocol. [bits]
-NET_HEADER_SIZE = 81 * 8
+# src/primitives/block.h serializes a 252-byte header; net_processing.cpp sends
+# CBlock entries so each also carries the one-byte zero transaction count.
+NET_HEADER_SIZE = 253 * 8
 
 # How many headers are sent at once. [headers]
 HEADER_BATCH_COUNT = 2000
@@ -117,8 +133,8 @@ HEADER_BATCH_COUNT = 2000
 # Whether or not the offset of which blocks heights get checksummed is randomized.
 RANDOMIZE_OFFSET = True
 
-# Timestamp of the genesis block
-GENESIS_TIME = datetime(2009, 1, 3)
+# src/kernel/chainparams.cpp: mainnet launch genesis nTime is 1788566400.
+GENESIS_TIME = datetime(2026, 9, 5)
 
 # Derived values:
 
@@ -132,7 +148,11 @@ NET_HEADERRATE = ATTACK_BANDWIDTH / NET_HEADER_SIZE
 LIMIT_FRACTION = LIMIT_HEADERRATE / NET_HEADERRATE
 
 # How many headers we permit attackers to cause being accepted per attack. [headers/attack]
-ATTACK_HEADERS = LIMIT_FRACTION * MINCHAINWORK_HEADERS
+ATTACK_HEADERS = 0.0  # Recomputed for each assumed minchainwork horizon.
+
+# Shipped src/headerssync.cpp values, re-evaluated for every scenario below.
+CURRENT_PERIOD = 219
+CURRENT_BUFFER = 4889
 
 
 def find_max_headers(when):
@@ -353,5 +373,22 @@ def analyze(when):
     print(f"- Attack rate: {1/headers_per_attack:.1f} attacks for 1 header of memory growth")
     print(f"  (where each attack costs {attack_volume / 8388608:.3f} MiB bandwidth)")
 
+    current_headers_per_attack, _ = attack_rate(CURRENT_PERIOD, CURRENT_BUFFER)
+    security_margin = ATTACK_HEADERS / current_headers_per_attack
+    print("Shipped configuration:")
+    print(f"- period={CURRENT_PERIOD}, buffer={CURRENT_BUFFER}")
+    print(f"- Security margin: {security_margin:.3f}x target "
+          f"({'safe' if security_margin >= 1 else 'unsafe'})")
 
-analyze(TIME)
+
+def main():
+    global MINCHAINWORK_HEADERS, ATTACK_HEADERS
+    for label, headers in MINCHAINWORK_HORIZONS.items():
+        MINCHAINWORK_HEADERS = headers
+        ATTACK_HEADERS = LIMIT_FRACTION * MINCHAINWORK_HEADERS
+        print(f"\n=== {label}: {headers} headers ===")
+        analyze(TIME)
+
+
+if __name__ == '__main__':
+    main()

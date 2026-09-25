@@ -1153,7 +1153,7 @@ class RawTransactionsTest(QuicksilverTestFramework):
 
         # A P2WPKH input costs 68 vbytes; With a single P2WPKH output, the rest of the tx is 42 vbytes for a total of 110 vbytes.
         # Spending almost the full input exercises the near-exact funding path. If working correctly,
-        # this should fail with insufficient funds rather than quicksilverd asserting.
+        # this should fail with insufficient funds rather than quicksilver-daemon asserting.
         rawtx = w.createrawtransaction(inputs=[], outputs=[{self.nodes[0].getnewaddress(address_type="bech32"): 1 - 0.00000202}])
         funded_tx = w.fundrawtransaction(rawtx)
         assert "fee" not in funded_tx

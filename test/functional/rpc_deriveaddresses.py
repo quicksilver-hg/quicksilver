@@ -51,7 +51,7 @@ class DeriveaddressesTest(QuicksilverTestFramework):
         # P2PK does not have a valid address
         assert_raises_rpc_error(-5, "Descriptor does not have a corresponding address", self.nodes[0].deriveaddresses, descsum_create("pk(sqrv1wkfAGt6m8urp6Nm81gjbw1uQBManWccxmKUim1PqG4DdonyjFj4qXgjMAzPSjgBb6U6x947ZNrPtfBiKZ8NTfCaLUSX3GJCMqDjHqz7mN7)"))
 
-        # Before #26275, quicksilverd would crash when deriveaddresses was
+        # Before #26275, quicksilver-daemon would crash when deriveaddresses was
         # called with derivation index 2147483647, which is the maximum
         # positive value of a signed int32, and - currently - the
         # maximum value that the deriveaddresses RPC call

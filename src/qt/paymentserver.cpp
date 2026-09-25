@@ -43,7 +43,7 @@ const QString QUICKSILVER_IPC_PREFIX("quicksilver:");
 //
 static QString ipcServerName()
 {
-    QString name("QuicksilverQt");
+    QString name("Quicksilver");
 
     // Append a simple hash of the datadir
     // Note that gArgs.GetDataDirNet() returns a different path

@@ -1,0 +1,33 @@
+# /etc/conf.d/quicksilver-daemon: config file for /etc/init.d/quicksilver-daemon
+
+# Config file location
+#QUICKSILVER_DAEMON_CONFIGFILE="/etc/quicksilver/quicksilver.conf"
+
+# What directory to write pidfile to?  (created and owned by $QUICKSILVER_DAEMON_USER)
+#QUICKSILVER_DAEMON_PIDDIR="/var/run/quicksilver-daemon"
+
+# What filename to give the pidfile
+#QUICKSILVER_DAEMON_PIDFILE="${QUICKSILVER_DAEMON_PIDDIR}/quicksilver-daemon.pid"
+
+# Where to write quicksilver-daemon data (be mindful that the blockchain is large)
+#QUICKSILVER_DAEMON_DATADIR="/var/lib/quicksilver-daemon"
+
+# User and group to own quicksilver-daemon process
+#QUICKSILVER_DAEMON_USER="quicksilver"
+#QUICKSILVER_DAEMON_GROUP="quicksilver"
+
+# Path to quicksilver-daemon executable
+#QUICKSILVER_DAEMON_BIN="/usr/bin/quicksilver-daemon"
+
+# Nice value to run quicksilver-daemon under
+#QUICKSILVER_DAEMON_NICE=0
+
+# Additional options (avoid -conf and -datadir, use flags above)
+#QUICKSILVER_DAEMON_OPTS=""
+
+# The timeout in seconds OpenRC will wait for quicksilver-daemon to terminate
+# after a SIGTERM has been raised.
+# Note that this will be mapped as argument to start-stop-daemon's
+# '--retry' option, which means you can specify a retry schedule
+# here. For more information see man 8 start-stop-daemon.
+QUICKSILVER_DAEMON_SIGTERM_TIMEOUT=600

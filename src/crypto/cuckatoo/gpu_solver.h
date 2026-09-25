@@ -33,7 +33,7 @@ std::optional<std::string> SolverFault(GpuSolveStatus status, bool cpu_fallback)
 /**
  * True when the reportable fault is specifically "no solver is configured", as
  * opposed to a solver that ran and failed. SolverFault's sentence is written for
- * quicksilverd and names -cuckatoosolver; a GUI has that setting as a control and
+ * quicksilver-daemon and names -cuckatoosolver; a GUI has that setting as a control and
  * must say so instead, which means it needs the fault's identity and not its prose.
  *
  * Defined in terms of SolverFault so the two cannot disagree about which outcomes

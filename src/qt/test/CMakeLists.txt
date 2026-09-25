@@ -17,7 +17,7 @@ add_executable(test_quicksilver-qt
   test_main.cpp
   uritests.cpp
   util.cpp
-  ../../init/quicksilver-qt.cpp
+  ../../init/quicksilver.cpp
 )
 
 target_link_libraries(test_quicksilver-qt

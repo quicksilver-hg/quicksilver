@@ -39,10 +39,9 @@ default. They install to `developer-tools\` beside the application.
 
 | Program | What it is for |
 |---|---|
-| `quicksilverd` | The headless node. Run this on a server, or where you want consensus without a desktop. The application runs its own node, so you do not need both. |
-| `quicksilver-cli` | Sends RPC calls to a running node. The tool you use to script against `quicksilverd`. |
+| `quicksilver-daemon` | The headless node. Run this on a server, or where you want consensus without a desktop. The application runs its own node, so you do not need both. |
+| `quicksilver-cli` | Sends RPC calls to a running node. The tool you use to script against `quicksilver-daemon`. |
 | `quicksilver-tx` | Builds and modifies raw transactions offline. No node required. |
-| `quicksilver-util` | Runs `grind`, which performs proof of work on a hex block header. No node required. |
 | `quicksilver-vault` | Offline vault file maintenance: inspect, salvage or dump a vault without starting a node. |
 
 One more is built only when explicitly enabled, and is experimental:

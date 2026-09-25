@@ -382,7 +382,7 @@ def main():
     parser.add_argument('--failfast', '-F', action='store_true', help='stop execution after the first test failure')
     parser.add_argument('--filter', help='filter scripts to run by regular expression')
     parser.add_argument("--nocleanup", dest="nocleanup", default=False, action="store_true",
-                        help="Leave quicksilverds and test.* datadir on exit or error")
+                        help="Leave quicksilver-daemons and test.* datadir on exit or error")
     parser.add_argument('--resultsfile', '-r', help='store test results (as CSV) to the provided file')
 
     args, unknown_args = parser.parse_known_args()
@@ -423,9 +423,9 @@ def main():
         assert results_filepath.parent.exists(), "Results file parent directory does not exist"
         logging.debug("Test results will be written to " + str(results_filepath))
 
-    enable_quicksilverd = config["components"].getboolean("ENABLE_QUICKSILVERD")
+    enable_quicksilverdaemon = config["components"].getboolean("ENABLE_QUICKSILVERDAEMON")
 
-    if not enable_quicksilverd:
+    if not enable_quicksilverdaemon:
         print("No functional tests to run.")
         print("Re-compile with the -DBUILD_DAEMON=ON build option")
         sys.exit(1)
@@ -528,11 +528,11 @@ def main():
 def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, args=None, combined_logs_len=0, failfast=False, use_term_control, results_filepath=None):
     args = args or []
 
-    # Warn if quicksilverd is already running
+    # Warn if quicksilver-daemon is already running
     try:
         # pgrep exits with code zero when one or more matching processes found
-        if subprocess.run(["pgrep", "-x", "quicksilverd"], stdout=subprocess.DEVNULL).returncode == 0:
-            print("%sWARNING!%s There is already a quicksilverd process running on this system. Tests may fail unexpectedly due to resource contention!" % (BOLD[1], BOLD[0]))
+        if subprocess.run(["pgrep", "-f", r"(^|/)quicksilver-daemon( |$)"], stdout=subprocess.DEVNULL).returncode == 0:
+            print("%sWARNING!%s There is already a quicksilver-daemon process running on this system. Tests may fail unexpectedly due to resource contention!" % (BOLD[1], BOLD[0]))
     except OSError:
         # pgrep not supported
         pass

@@ -1,16 +1,16 @@
-# bash programmable completion for quicksilverd(1) and quicksilver-qt(1)
+# bash programmable completion for quicksilver-daemon(1) and quicksilver(1)
 # Copyright (c) 2012-2022 The Bitcoin Core developers
 # Copyright (c) 2026 The Quicksilver developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-_quicksilverd() {
+_quicksilver_daemon() {
     local cur prev words=() cword
-    local quicksilverd
+    local quicksilver_daemon
 
-    # save and use original argument to invoke quicksilverd for -help
+    # save and use original argument to invoke quicksilver-daemon for -help
     # it might not be in $PATH
-    quicksilverd="$1"
+    quicksilver_daemon="$1"
 
     COMPREPLY=()
     _get_comp_words_by_ref -n = cur prev words cword
@@ -34,7 +34,7 @@ _quicksilverd() {
             # only parse -help if sensible
             if [[ -z "$cur" || "$cur" =~ ^- ]]; then
                 local helpopts
-                helpopts=$($quicksilverd -help 2>&1 | awk '$1 ~ /^-/ { sub(/=.*/, "="); print $1 }' )
+                helpopts=$($quicksilver_daemon -help 2>&1 | awk '$1 ~ /^-/ { sub(/=.*/, "="); print $1 }' )
                 COMPREPLY=( $( compgen -W "$helpopts" -- "$cur" ) )
             fi
 
@@ -46,7 +46,7 @@ _quicksilverd() {
             ;;
     esac
 } &&
-complete -F _quicksilverd quicksilverd quicksilver-qt
+complete -F _quicksilver_daemon quicksilver-daemon quicksilver
 
 # Local variables:
 # mode: shell-script

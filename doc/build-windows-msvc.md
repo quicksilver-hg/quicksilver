@@ -1,6 +1,6 @@
 # Windows / MSVC Build Guide
 
-This guide describes how to build quicksilverd, command-line utilities, and GUI on Windows using Microsoft Visual Studio.
+This guide describes how to build quicksilver-daemon, command-line utilities, and GUI on Windows using Microsoft Visual Studio.
 
 For cross-compiling options, please see [`build-windows.md`](./build-windows.md).
 
@@ -56,12 +56,12 @@ download on a mismatch. It extracts into `build\tor\` and prints where
 `tor.exe` landed.
 
 `tor.exe` in this bundle is self-contained — the archive ships no DLLs beside
-it — so copy that one file next to `quicksilver-qt.exe`, or run the desktop
+it — so copy that one file next to `quicksilver.exe`, or run the desktop
 with `-bundledtorpath=<path to tor.exe>`. The bundle's pluggable transports and
 geoip data are not used: Quicksilver configures no bridges and no country
 selection.
 
-`quicksilverd` does not need this step. It defaults to `-bundledtor=0` and
+`quicksilver-daemon` does not need this step. It defaults to `-bundledtor=0` and
 expects a Tor you run and configure yourself.
 
 ## Triplets and Presets

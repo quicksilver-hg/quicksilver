@@ -48,7 +48,7 @@ bool ExternalSignerScriptPubKeyMan::SetupDescriptor(VaultBatch& batch, std::uniq
 
 ExternalSigner ExternalSignerScriptPubKeyMan::GetExternalSigner() {
     const std::string command = gArgs.GetArg("-signer", "");
-    if (command == "") throw std::runtime_error(std::string(__func__) + ": restart quicksilverd with -signer=<cmd>");
+    if (command == "") throw std::runtime_error(std::string(__func__) + ": restart quicksilver-daemon with -signer=<cmd>");
     std::vector<ExternalSigner> signers;
     ExternalSigner::Enumerate(command, signers, Params().GetChainTypeString());
     if (signers.empty()) throw std::runtime_error(std::string(__func__) + ": No external signers found");

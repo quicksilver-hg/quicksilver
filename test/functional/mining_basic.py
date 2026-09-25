@@ -117,12 +117,14 @@ class MiningTest(QuicksilverTestFramework):
         assert 'currentblockweight' not in mining_info
         assert_equal(mining_info['bits'], nbits_str(SANDBOX_N_BITS))
         assert_equal(mining_info['target'], target_str(SANDBOX_TARGET))
-        assert_equal(mining_info['difficulty'], Decimal('4.656542373906925E-10'))
+        # Sandbox is at its chain minimum, so its chain-relative difficulty is exactly 1.
+        assert_equal(mining_info['difficulty'], Decimal('1'))
         assert_equal(mining_info['next'], {
             'height': 201,
             'target': target_str(SANDBOX_TARGET),
             'bits': nbits_str(SANDBOX_N_BITS),
-            'difficulty': Decimal('4.656542373906925E-10')
+            # The next sandbox target is also the chain minimum, so its difficulty is exactly 1.
+            'difficulty': Decimal('1')
         })
         assert_equal(mining_info['networkworkps'], Decimal('0.003333333333333334'))
         assert_equal(mining_info['pooledtx'], 0)

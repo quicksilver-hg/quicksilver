@@ -4,10 +4,10 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 # Disable files from being included in completions by default
-complete --command quicksilverd --no-files
+complete --command quicksilver --no-files
 
 # Extract options
-function __fish_quicksilverd_get_options
+function __fish_quicksilver_get_options
     argparse 'nofiles' -- $argv
     set --local cmd (commandline -opc)[1]
     set --local options
@@ -26,14 +26,14 @@ end
 
 # Add options with file completion
 complete \
-    --command quicksilverd \
-    --arguments "(__fish_quicksilverd_get_options)"
+    --command quicksilver \
+    --arguments "(__fish_quicksilver_get_options)"
 # Enable file completions only if the commandline now contains a `*.=` style option
-complete --command quicksilverd \
+complete -c quicksilver \
     --condition 'string match --regex -- ".*=" (commandline -pt)' \
     --force-files
 
 # Add options without file completion
 complete \
-    --command quicksilverd \
-    --arguments "(__fish_quicksilverd_get_options --nofiles)"
+    --command quicksilver \
+    --arguments "(__fish_quicksilver_get_options --nofiles)"

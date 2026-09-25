@@ -3,13 +3,13 @@
 # Copyright (c) 2026 The Quicksilver developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Test quicksilverd with different proxy configuration.
+"""Test quicksilver-daemon with different proxy configuration.
 
 Test plan:
-- Start quicksilverd's with different proxy configurations
+- Start quicksilver-daemon's with different proxy configurations
 - Use addnode to initiate connections
 - Verify that proxies are connected to, and the right connection command is given
-- Proxy configurations to test on quicksilverd side:
+- Proxy configurations to test on quicksilver-daemon side:
     - `-proxy` (proxy everything)
     - `-onion` (proxy just onions)
     - `-proxyrandomize` Circuit randomization
@@ -153,7 +153,7 @@ class ProxyTest(QuicksilverTestFramework):
         node.addnode(addr, "onetry", v2transport=False)
         cmd = proxies[0].queue.get()
         assert isinstance(cmd, Socks5Command)
-        # Note: quicksilverd's SOCKS5 implementation only sends atyp DOMAINNAME, even if connecting directly to IPv4/IPv6
+        # Note: quicksilver-daemon's SOCKS5 implementation only sends atyp DOMAINNAME, even if connecting directly to IPv4/IPv6
         assert_equal(cmd.atyp, AddressType.DOMAINNAME)
         assert_equal(cmd.addr, b"15.61.23.23")
         assert_equal(cmd.port, 1234)
@@ -169,7 +169,7 @@ class ProxyTest(QuicksilverTestFramework):
             node.addnode(addr, "onetry", v2transport=False)
             cmd = proxies[1].queue.get()
             assert isinstance(cmd, Socks5Command)
-            # Note: quicksilverd's SOCKS5 implementation only sends atyp DOMAINNAME, even if connecting directly to IPv4/IPv6
+            # Note: quicksilver-daemon's SOCKS5 implementation only sends atyp DOMAINNAME, even if connecting directly to IPv4/IPv6
             assert_equal(cmd.atyp, AddressType.DOMAINNAME)
             assert_equal(cmd.addr, b"1233:3432:2434:2343:3234:2345:6546:4534")
             assert_equal(cmd.port, 5443)

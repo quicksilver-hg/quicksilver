@@ -23,6 +23,7 @@
 #   * wrapped-witness descriptor, helper, and transaction-construction residue
 #   * caller-less signing, vault-db, agent, RBF, Qt-migration and IPC leftovers
 #   * provenance links to unpublished planning documents
+#   * retired binary names, product identities, desktop IDs, and thread prefixes
 #   * fee-contrast product copy, non-descriptor vault errors, camelCase listunspent
 #     options, bitcoin-era networkhashps naming, fee-era package/priority test names
 #     (including TestPackageSelection), leftover "descriptor vault" type contrast,
@@ -162,7 +163,7 @@ RULES = [
     Rule("historical P2P feature gate", re.compile(r"\b(?:BIP0031_VERSION|SENDHEADERS_VERSION|SHORT_IDS_BLOCKS_VERSION|INVALID_CB_NO_BAN_VERSION|WTXID_RELAY_VERSION)\b"), P2P_VERSION_SCOPE),
     Rule("previous-release functional harness", re.compile(r"\bversion_is_at_least\b|\b(?:190000|219900|239000|260000|299900)\b|compatibility with older clients"), FUNCTIONAL_FRAMEWORK_SCOPE),
     Rule("legacy UTXO hash implementation", re.compile(r"\b(?:HASH_SERIALIZED|hashSerialized)\b|hash_serialized_3"), COINSTATS_SCOPE),
-    Rule("inherited release migration", re.compile(r"prior to 25\.0|requires quicksilverd server to be running v22\.0|pre-v28 versions|CSIDL_APPDATA")),
+    Rule("inherited release migration", re.compile(r"prior to 25\.0|requires quicksilver-daemon server to be running v22\.0|pre-v28 versions|CSIDL_APPDATA")),
     Rule("upstream release RPC wording", re.compile(r"v27\.0 and prior releases"), DOC),
     Rule("SLIP-44 coin type 0 in derivation example", re.compile(r"/(?:44|49|84)(?:'|h)/0(?:'|h)/0(?:'|h)"), SLIP44_EXAMPLE_SCOPE),
     Rule("createmultisig base58 default", re.compile(r'RPCArg::Default\{"base58"\}|output_type = OutputType::BASE58'), re.compile(r"^src/rpc/output_script\.cpp$")),
@@ -422,6 +423,14 @@ RULES = [
     # confusion the rename fixed. Both spellings stay banned in product copy.
     Rule("agent-vault product copy", re.compile(r"agent vaults?", re.IGNORECASE)),
     Rule("bootstrap.dat linearize example", re.compile(r"bootstrap\.dat"), re.compile(r"^contrib/linearize/")),
+    Rule("retired quicksilver-" "util binary", re.compile(r"quicksilver-" r"util|quicksilver" r"util|QUICKSILVER" r"UTIL")),
+    # Case-sensitive per spelling, so the retired name is caught as a prefix of
+    # an identifier (a QUICKSILVER-D-underscore variable, an Init class) while
+    # quicksilver-daemon's own spellings, where "d" is followed by "aemon", are not.
+    Rule("retired quicksilver" "d binary", re.compile(r"\bquicksilver" r"d(?![a-z])|\bQuicksilver" r"d(?![a-z])|\bQUICKSILVER" r"D(?![A-Z])")),
+    Rule("retired quicksilver-" "qt product name", re.compile(r"(?<!test_)quicksilver-" r"qt|Quicksilver-" r"Qt|Quicksilver " r"Qt|Quicksilver" r"Qt|quicksilver" r"qt")),
+    Rule("retired quicksilver_" "qt desktop identity", re.compile(r"quicksilver_" r"qt\.(?:desktop|metainfo)|hg\.quicksilver_" r"qt")),
+    Rule("retired b- thread prefix", re.compile(r'["\'`]b' r'-')),
 ]
 
 ALLOWED = {
@@ -434,8 +443,16 @@ ALLOWED = {
     Path("test/functional/rpc_scantxoutset.py"): [
         re.compile(r"assert_raises_rpc_error.*sh\(wpkh\("),
     ],
-    Path("test/util/data/quicksilver-util-test.json"): [
+    Path("test/util/data/quicksilver-tx-test.json"): [
         re.compile(r":WS\""),
+    ],
+    # Dated evidence of the 2026-09-23 Jammy build; these names describe the
+    # artifacts that were actually produced and are not current procedure.
+    Path("contrib/release/README.md"): [
+        re.compile(r"quicksilver-" r"qt-dbgsym_0\.1\.1-1_amd64\.ddeb"),
+        re.compile(r"quicksilver-" r"qt_0\.1\.1-1_amd64\.deb"),
+        re.compile(r"made `quicksilver-" r"qt` define"),
+        re.compile(r"installed `quicksilver-" r"qt` and"),
     ],
     Path("doc/design/network-naming.md"): [
         re.compile(r"`regtest`"),

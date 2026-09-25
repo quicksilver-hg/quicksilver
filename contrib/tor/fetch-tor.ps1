@@ -88,6 +88,6 @@ if (-not (Test-Path $TorExe)) { throw "tor.exe not found at $TorExe after extrac
 # Quicksilver -- no bridges, no country selection -- so tor.exe alone is enough.
 Write-Host ''
 Write-Host "tor.exe is at: $TorExe"
-Write-Host 'Either copy it beside quicksilver-qt.exe, or run the desktop with'
+Write-Host 'Either copy it beside quicksilver.exe, or run the desktop with'
 Write-Host "  -bundledtorpath=$TorExe"
 exit 0

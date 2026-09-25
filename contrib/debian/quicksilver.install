@@ -1,9 +1,9 @@
-usr/bin/quicksilver-qt
+usr/bin/quicksilver
 usr/bin/quicksilver-agent
-usr/share/man/man1/quicksilver-qt.1
+usr/share/man/man1/quicksilver.1
 usr/share/man/man1/quicksilver-agent.1
-usr/share/applications/io.github.quicksilver_hg.quicksilver_qt.desktop
-usr/share/metainfo/io.github.quicksilver_hg.quicksilver_qt.metainfo.xml
+usr/share/applications/io.github.quicksilver_hg.quicksilver.desktop
+usr/share/metainfo/io.github.quicksilver_hg.quicksilver.metainfo.xml
 usr/share/icons/hicolor/16x16/apps/quicksilver.png
 usr/share/icons/hicolor/32x32/apps/quicksilver.png
 usr/share/icons/hicolor/64x64/apps/quicksilver.png

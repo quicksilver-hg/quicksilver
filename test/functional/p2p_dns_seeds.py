@@ -38,7 +38,7 @@ class P2PDNSSeeds(QuicksilverTestFramework):
         with self.nodes[0].assert_debug_log(expected_msgs=["loaded source=dnsseed addresses="], timeout=12):
             self.restart_node(0, extra_args=[f"-connect={fakeaddr}", "-dnsseed=1", UNREACHABLE_PROXY_ARG])
 
-        # Restore default quicksilverd settings
+        # Restore default quicksilver-daemon settings
         self.restart_node(0)
 
     def existing_outbound_connections_test(self):

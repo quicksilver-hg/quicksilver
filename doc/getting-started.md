@@ -10,9 +10,9 @@ release series.
 
 ## Choose a program
 
-- `quicksilver-qt` is the desktop application and vault interface. Build it
+- `quicksilver` is the desktop application and vault interface. Build it
   with `-DBUILD_GUI=ON`.
-- `quicksilverd` is the headless full node.
+- `quicksilver-daemon` is the headless full node.
 - `quicksilver-cli` sends RPC commands to a running node.
 - `quicksilver-agent` is the experimental thin agent client. Its limits are
   client-side guardrails, not protocol-enforced spending guarantees; read the
@@ -37,7 +37,7 @@ The network option applies to every program in the tree, the desktop included.
 ## Start the desktop
 
 ```bash
-./build/bin/quicksilver-qt -publictest
+./build/bin/quicksilver -publictest
 ```
 
 With no network option the desktop starts on `main`.
@@ -94,22 +94,22 @@ first-run screen to keep full history. The reasoning is in
 
 ## Start the headless node
 
-`quicksilverd` does not start a Tor of its own — it defaults to
+`quicksilver-daemon` does not start a Tor of its own — it defaults to
 `-bundledtor=0`, because someone running a daemon can install and configure
 Tor. `main` and `publictest` have no DNS seeds, so to use the shipped onion
 seed, run a Tor daemon and point the node at its SOCKS proxy:
 
 ```bash
-./build/bin/quicksilverd -proxy=127.0.0.1:9050
+./build/bin/quicksilver-daemon -proxy=127.0.0.1:9050
 ```
 
 For `publictest`:
 
 ```bash
-./build/bin/quicksilverd -publictest -proxy=127.0.0.1:9050
+./build/bin/quicksilver-daemon -publictest -proxy=127.0.0.1:9050
 ```
 
-With `-proxy=`, `quicksilverd` also turns address discovery off, so it does not
+With `-proxy=`, `quicksilver-daemon` also turns address discovery off, so it does not
 advertise the machine's routable addresses.
 
 A SOCKS proxy is the whole requirement for *reaching* the seed. The control
@@ -122,8 +122,8 @@ If Tor is unavailable, supply a peer you obtained out of band. The port belongs
 to the network, so name the network too:
 
 ```bash
-./build/bin/quicksilverd -addnode=<host>:9555               # main
-./build/bin/quicksilverd -publictest -addnode=<host>:19557  # publictest
+./build/bin/quicksilver-daemon -addnode=<host>:9555               # main
+./build/bin/quicksilver-daemon -publictest -addnode=<host>:19557  # publictest
 ```
 
 The full discovery model, network ports, and failure checks are in
@@ -141,7 +141,7 @@ Consensus is enabled; if every field below reads `N/A`, read
 [A first run is vault-only](#a-first-run-is-vault-only-it-runs-no-node-until-you-enable-consensus)
 before treating it as a fault.
 
-If you are running `quicksilver-qt`, do not reach for `quicksilver-cli` — the
+If you are running `quicksilver`, do not reach for `quicksilver-cli` — the
 desktop runs no RPC server by default, so it cannot answer. The same checks are
 in the **Node window**: press `Ctrl+Shift+D`, or pick Information, Console,
 Network Traffic or Peers from the **Panels** menu. The Information tab reports
@@ -152,7 +152,7 @@ tabs, so select Console yourself. The Console needs no `-server` option and no
 RPC credentials, because it calls the node in process. The window becomes
 available once startup finishes.
 
-For `quicksilverd`, run these from another terminal:
+For `quicksilver-daemon`, run these from another terminal:
 
 ```bash
 ./build/bin/quicksilver-cli getblockchaininfo
@@ -187,7 +187,7 @@ The desktop can use its built-in CPU solver, but preparation may take many
 minutes. Configure the external CUDA helper for practical transfer times:
 
 ```bash
-./build/bin/quicksilver-qt -cuckatoosolver=/absolute/path/to/qsgpusolve
+./build/bin/quicksilver -cuckatoosolver=/absolute/path/to/qsgpusolve
 ```
 
 The Qt settings screen can store the same path. Build and verification steps

@@ -6,7 +6,7 @@ body:
   id: acknowledgement
   attributes:
     label: Issues, reports or feature requests related to the Quicksilver GUI belong in this repository
-    description: Use this form for Quicksilver Qt vault, mining, minting, and network-panel issues.
+    description: Use this form for Quicksilver vault, mining, minting, and network-panel issues.
     options:
       - label: I still think this issue should be opened here
         required: true

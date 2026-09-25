@@ -16,8 +16,8 @@ SOURCE_SCOPE = Path("src/init.cpp")
 
 ARTIFACT_SCOPES = [
     Path("share/examples/quicksilver.conf"),
-    Path("doc/man/quicksilverd.1"),
-    Path("doc/man/quicksilver-qt.1"),
+    Path("doc/man/quicksilver-daemon.1"),
+    Path("doc/man/quicksilver.1"),
 ]
 
 STALE_DEFAULTS = [

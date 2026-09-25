@@ -1,7 +1,7 @@
 # JSON-RPC Interface
 
-The headless daemon `quicksilverd` has the JSON-RPC API enabled by default, the GUI
-`quicksilver-qt` has it disabled by default. This can be changed with the `-server`
+The headless daemon `quicksilver-daemon` has the JSON-RPC API enabled by default, the GUI
+`quicksilver` has it disabled by default. This can be changed with the `-server`
 option. The GUI can execute RPC methods regardless, on the **Console** tab of its
 **Node window** (`Ctrl+Shift+C`, or `Ctrl+Shift+D` and pick the tab): that path
 calls the node in process rather than over HTTP, so it needs neither `-server`
@@ -126,7 +126,7 @@ RPC interface will be abused.
   withstand arbitrary Internet traffic, so changing the above settings
   to expose it to the Internet (even using something like a Tor onion
   service) could expose you to unconsidered vulnerabilities.  See
-  `quicksilverd -help` for more information about these settings and other
+  `quicksilver-daemon -help` for more information about these settings and other
   settings described in this document.
 
     Related, if you use Quicksilver inside a Docker container, you may

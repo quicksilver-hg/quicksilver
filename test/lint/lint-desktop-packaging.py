@@ -19,16 +19,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 DEVELOPER_BINS = {
-    "quicksilverd": "@QUICKSILVER_DAEMON_NAME@",
+    "quicksilver-daemon": "@QUICKSILVER_DAEMON_NAME@",
     "quicksilver-cli": "@QUICKSILVER_CLI_NAME@",
     "quicksilver-tx": "@QUICKSILVER_TX_NAME@",
     "quicksilver-vault": "@QUICKSILVER_VAULT_TOOL_NAME@",
-    "quicksilver-util": "@QUICKSILVER_UTIL_NAME@",
 }
 
 # What a release install is allowed to place on the user's system.
 APPLICATION_BINS = {
-    "quicksilver-qt": "@QUICKSILVER_GUI_NAME@",
+    "quicksilver": "@QUICKSILVER_GUI_NAME@",
     "quicksilver-agent": "@QUICKSILVER_AGENT_NAME@",
 }
 
@@ -56,22 +55,22 @@ def debian_stanzas(control: str) -> dict[str, str]:
 
 def check_debian(failures: list[str]) -> None:
     stanzas = debian_stanzas(read("contrib/debian/control"))
-    qt_stanza = stanzas.get("quicksilver-qt", "")
+    qt_stanza = stanzas.get("quicksilver", "")
     devtools_stanza = stanzas.get("quicksilver-devtools", "")
     if not qt_stanza:
-        failures.append("contrib/debian/control: missing quicksilver-qt package stanza")
-    elif re.search(r"^(?:Depends|Recommends|Pre-Depends):.*\bquicksilverd\b", qt_stanza, re.MULTILINE):
-        failures.append("contrib/debian/control: quicksilver-qt must not pull in quicksilverd")
+        failures.append("contrib/debian/control: missing quicksilver package stanza")
+    elif re.search(r"^(?:Depends|Recommends|Pre-Depends):.*\bquicksilver-daemon\b", qt_stanza, re.MULTILINE):
+        failures.append("contrib/debian/control: quicksilver must not pull in quicksilver-daemon")
     if not devtools_stanza:
         failures.append("contrib/debian/control: missing quicksilver-devtools package stanza")
 
-    qt_install = set(read("contrib/debian/quicksilver-qt.install").splitlines())
+    qt_install = set(read("contrib/debian/quicksilver.install").splitlines())
     for binary in set(DEVELOPER_BINS) | TEST_BINS:
         if f"usr/bin/{binary}" in qt_install:
-            failures.append(f"contrib/debian/quicksilver-qt.install: desktop package installs {binary}")
+            failures.append(f"contrib/debian/quicksilver.install: desktop package installs {binary}")
     for binary in APPLICATION_BINS:
         if f"usr/bin/{binary}" not in qt_install:
-            failures.append(f"contrib/debian/quicksilver-qt.install: application package omits {binary}")
+            failures.append(f"contrib/debian/quicksilver.install: application package omits {binary}")
 
     devtools_install = set(read(DEVTOOLS_INSTALL).splitlines())
     for binary in DEVELOPER_BINS:
@@ -83,7 +82,7 @@ def check_debian(failures: list[str]) -> None:
 
     # One file claimed by two packages is a dpkg conflict, so no manifest may
     # glob and no path may appear in both.
-    for manifest, entries in (("contrib/debian/quicksilver-qt.install", qt_install),
+    for manifest, entries in (("contrib/debian/quicksilver.install", qt_install),
                               (DEVTOOLS_INSTALL, devtools_install)):
         for entry in entries:
             if "*" in entry or "?" in entry:
@@ -111,13 +110,13 @@ def check_debian(failures: list[str]) -> None:
         failures.append("contrib/debian/rules: must install developer tools so the split can claim them")
 
     readme = read("contrib/debian/README.md")
-    for package_name in ("quicksilver-qt", "quicksilver-devtools"):
+    for package_name in ("quicksilver", "quicksilver-devtools"):
         if f"`{package_name}`" not in readme:
             failures.append(f"contrib/debian/README.md: missing documented package `{package_name}`")
-    if re.search(r"`quicksilverd`\s*-", readme):
-        failures.append("contrib/debian/README.md: quicksilverd is a binary, not a Debian package")
-    if "Install `quicksilverd` separately" in readme:
-        failures.append("contrib/debian/README.md: install quicksilver-devtools, not quicksilverd")
+    if re.search(r"`quicksilver-daemon`\s*-", readme):
+        failures.append("contrib/debian/README.md: quicksilver-daemon is a binary, not a Debian package")
+    if "Install `quicksilver-daemon` separately" in readme:
+        failures.append("contrib/debian/README.md: install quicksilver-devtools, not quicksilver-daemon")
 
 
 def check_windows_installer(failures: list[str]) -> None:
@@ -166,6 +165,8 @@ def check_windows_installer(failures: list[str]) -> None:
         )
     if "MUI_PAGE_COMPONENTS" not in nsi:
         failures.append("share/setup.nsi.in: no components page, so an optional section cannot be declined")
+    if r"DisplayIcon $INSTDIR\@QUICKSILVER_GUI_NAME@@EXEEXT@" not in nsi:
+        failures.append("share/setup.nsi.in: uninstall DisplayIcon must use the configured GUI binary name")
 
     maintenance = read("cmake/module/Maintenance.cmake")
     if "TARGET_FILE:test_quicksilver" in maintenance or "TARGET_FILE:bench_quicksilver" in maintenance:
@@ -182,25 +183,25 @@ def check_windows_installer(failures: list[str]) -> None:
 
 
 def check_public_desktop_metadata(failures: list[str]) -> None:
-    desktop_path = "share/applications/io.github.quicksilver_hg.quicksilver_qt.desktop"
-    metainfo_path = "share/applications/io.github.quicksilver_hg.quicksilver_qt.metainfo.xml"
+    desktop_path = "share/applications/io.github.quicksilver_hg.quicksilver.desktop"
+    metainfo_path = "share/applications/io.github.quicksilver_hg.quicksilver.metainfo.xml"
     desktop = read(desktop_path)
     metainfo = read(metainfo_path)
 
     required_desktop_lines = {
         "Name=Quicksilver",
-        "Exec=quicksilver-qt %u",
+        "Exec=quicksilver %u",
         "Icon=quicksilver",
         "MimeType=x-scheme-handler/quicksilver;",
-        "StartupWMClass=quicksilver-qt",
+        "StartupWMClass=quicksilver",
     }
     for line in sorted(required_desktop_lines):
         if line not in desktop.splitlines():
             failures.append(f"{desktop_path}: missing `{line}`")
 
     required_metainfo_fragments = {
-        "<id>io.github.quicksilver_hg.quicksilver_qt</id>",
-        "<launchable type=\"desktop-id\">io.github.quicksilver_hg.quicksilver_qt.desktop</launchable>",
+        "<id>io.github.quicksilver_hg.quicksilver</id>",
+        "<launchable type=\"desktop-id\">io.github.quicksilver_hg.quicksilver.desktop</launchable>",
         "<mediatype>x-scheme-handler/quicksilver</mediatype>",
         "<url type=\"homepage\">https://github.com/quicksilver-hg/quicksilver</url>",
         "<url type=\"bugtracker\">https://github.com/quicksilver-hg/quicksilver/issues</url>",

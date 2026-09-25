@@ -193,7 +193,7 @@ static RPCHelpMan loadvault()
 {
     return RPCHelpMan{"loadvault",
                 "\nLoads a vault from a vault file or directory."
-                "\nNote that all vault command-line options used when starting quicksilverd will be"
+                "\nNote that all vault command-line options used when starting quicksilver-daemon will be"
                 "\napplied to the new vault.\n",
                 {
                     {"filename", RPCArg::Type::STR, RPCArg::Optional::NO, "The path to the directory of the vault to be loaded, either absolute or relative to the \"vaults\" directory. The \"vaults\" directory is set by the -vaultdir option and defaults to the \"vaults\" folder within the data directory."},

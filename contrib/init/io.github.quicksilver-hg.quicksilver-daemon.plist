@@ -3,10 +3,10 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>io.github.quicksilver-hg.quicksilverd</string>
+	<string>io.github.quicksilver-hg.quicksilver-daemon</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/local/bin/quicksilverd</string>
+		<string>/usr/local/bin/quicksilver-daemon</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>

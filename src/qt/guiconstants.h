@@ -49,9 +49,9 @@ static const int TOOLTIP_WRAP_THRESHOLD = 80;
 
 #define QAPP_ORG_NAME "Quicksilver"
 #define QAPP_ORG_DOMAIN "quicksilver.org"
-#define QAPP_APP_NAME_DEFAULT "Quicksilver-Qt"
-#define QAPP_APP_NAME_PUBLIC_TEST "Quicksilver-Qt-publictest"
-#define QAPP_APP_NAME_SANDBOX "Quicksilver-Qt-sandbox"
+#define QAPP_APP_NAME_DEFAULT "Quicksilver"
+#define QAPP_APP_NAME_PUBLIC_TEST "Quicksilver-publictest"
+#define QAPP_APP_NAME_SANDBOX "Quicksilver-sandbox"
 
 /* One gigabyte (GB) in bytes */
 static constexpr uint64_t GB_BYTES{1000000000};

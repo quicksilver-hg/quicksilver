@@ -41,9 +41,9 @@ class HelpTest(QuicksilverTestFramework):
         return out, err
 
     def run_test(self):
-        quicksilverd = resolve_binary_path(
+        quicksilver_daemon = resolve_binary_path(
             self.config["environment"]["BUILDDIR"],
-            "quicksilverd",
+            "quicksilver-daemon",
             self.config["environment"]["EXEEXT"],
         )
         blocked_datadir = tempfile.mkdtemp(prefix="blocked_datadir_", dir=self.options.tmpdir)
@@ -55,7 +55,7 @@ class HelpTest(QuicksilverTestFramework):
         for arg, expected_text in [("--help", "Options"), ("-version", "version")]:
             for datadir in [control_datadir, blocked_datadir]:
                 result = subprocess.run(
-                    [quicksilverd, "-chain=sandbox", f"-datadir={datadir}", arg],
+                    [quicksilver_daemon, "-chain=sandbox", f"-datadir={datadir}", arg],
                     capture_output=True,
                     text=True,
                 )
@@ -77,7 +77,7 @@ class HelpTest(QuicksilverTestFramework):
         self.log.info(f"Version text received: {output[0:60]} (...)")
 
         # Test that arguments not in the help results in an error
-        self.log.info("Start quicksilverd with -fakearg to make sure it does not start")
+        self.log.info("Start quicksilver-daemon with -fakearg to make sure it does not start")
         self.nodes[0].start(extra_args=['-fakearg'])
         # Node should exit immediately and output an error to stderr
         _, output = self.get_node_output(ret_code_expected=1)

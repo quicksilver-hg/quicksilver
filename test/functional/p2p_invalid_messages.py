@@ -8,6 +8,7 @@
 import random
 import time
 
+from test_framework.cuckatoo import proof_hash_int
 from test_framework.messages import (
     CBlockHeader,
     CInv,
@@ -22,6 +23,7 @@ from test_framework.messages import (
     msg_ping,
     msg_version,
     ser_string,
+    uint256_from_compact,
 )
 from test_framework.p2p import (
     P2PDataStore,
@@ -183,7 +185,7 @@ class InvalidMessagesTest(QuicksilverTestFramework):
         node = self.nodes[0]
         conn = node.add_p2p_connection(SenderOfAddrV2())
 
-        # Make sure quicksilverd signals support for ADDRv2, otherwise this test
+        # Make sure quicksilver-daemon signals support for ADDRv2, otherwise this test
         # will bombard an old node with messages it does not recognize which
         # will produce unexpected results.
         conn.wait_for_sendaddrv2()
@@ -290,9 +292,6 @@ class InvalidMessagesTest(QuicksilverTestFramework):
         blockheader.nTime = int(time.time())
         blockheader.nBits = blockheader_tip.nBits
         blockheader.rehash()
-        while not blockheader.hash.startswith('0'):
-            blockheader.nNonce += 1
-            blockheader.rehash()
         peer = self.nodes[0].add_p2p_connection(P2PInterface())
         peer.send_and_ping(msg_headers([blockheader]))
         assert_equal(self.nodes[0].getblockchaininfo()['headers'], 1)
@@ -301,11 +300,15 @@ class InvalidMessagesTest(QuicksilverTestFramework):
         assert_equal(chaintips[0]['hash'], blockheader.hash)
 
         # invalidate PoW
-        while not blockheader.hash.startswith('f'):
-            blockheader.nNonce += 1
+        target = uint256_from_compact(blockheader.nBits)
+        while proof_hash_int(blockheader.nCycle) <= target:
+            blockheader.nCycle[0] = (blockheader.nCycle[0] + 42) & 0xffffffff
             blockheader.rehash()
-        peer.send_and_ping(msg_headers([blockheader]))
+        invalid_hash = blockheader.hash
+        peer.send_message(msg_headers([blockheader]))
+        peer.wait_for_disconnect()
         assert_equal(self.nodes[0].getblockchaininfo()['headers'], 1)
+        assert invalid_hash not in {tip['hash'] for tip in self.nodes[0].getchaintips()}
 
     def test_noncontinuous_headers_msg(self):
         self.log.info("Test headers message with non-continuous headers sequence is logged as misbehaving")

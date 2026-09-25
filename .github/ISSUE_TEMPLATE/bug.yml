@@ -68,7 +68,7 @@ body:
     id: core-version
     attributes:
       label: What version of Quicksilver are you using?
-      description: Run `quicksilverd --version` or in Quicksilver Qt use `Help > About Quicksilver`
+      description: Run `quicksilver-daemon --version` or in Quicksilver use `Help > About Quicksilver`
       placeholder: e.g. v0.1.0-dev or main@<commit>
     validations:
       required: true

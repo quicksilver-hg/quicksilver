@@ -29,13 +29,13 @@ The following are some helpful notes on how to run Quicksilver on your native pl
 Build Quicksilver from source with the Unix build notes below, then run the
 generated executable from the build directory:
 
-- `build/bin/quicksilver-qt` (GUI, if built) or
-- `build/bin/quicksilverd` (headless)
+- `build/bin/quicksilver` (GUI, if built) or
+- `build/bin/quicksilver-daemon` (headless)
 
 ### Windows
 
 Build Quicksilver from source with the Windows build notes below, then run
-`quicksilver-qt.exe` or `quicksilverd.exe` from the generated build output.
+`quicksilver.exe` or `quicksilver-daemon.exe` from the generated build output.
 
 ### macOS (unsupported)
 

@@ -57,7 +57,7 @@ static void SetInternalName(const std::string& name)
 
 void util::ThreadRename(const std::string& name)
 {
-    SetThreadName(("b-" + name).c_str());
+    SetThreadName(("qs-" + name).c_str());
     SetInternalName(name);
 }
 

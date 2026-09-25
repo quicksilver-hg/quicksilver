@@ -2,7 +2,7 @@
 
 **Updated for OpenBSD [7.6](https://www.openbsd.org/76.html)**
 
-This guide describes how to build quicksilverd, command-line utilities, and GUI on OpenBSD.
+This guide describes how to build quicksilver-daemon, command-line utilities, and GUI on OpenBSD.
 
 ## Preparation
 
@@ -26,7 +26,7 @@ cd quicksilver
 
 #### Vault Dependencies
 
-It is not necessary to build vault functionality to run either `quicksilverd` or `quicksilver-qt`.
+It is not necessary to build vault functionality to run either `quicksilver-daemon` or `quicksilver`.
 
 ###### Vault Support
 

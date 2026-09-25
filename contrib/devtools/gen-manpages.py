@@ -16,12 +16,11 @@ import tempfile
 
 
 BINARIES = [
-    "bin/quicksilverd",
+    "bin/quicksilver-daemon",
     "bin/quicksilver-cli",
     "bin/quicksilver-tx",
     "bin/quicksilver-vault",
-    "bin/quicksilver-util",
-    "bin/quicksilver-qt",
+    "bin/quicksilver",
     "bin/quicksilver-agent",
 ]
 

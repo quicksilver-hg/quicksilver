@@ -199,7 +199,7 @@ python3 test/lint/lint-cuckatoo-solver-filenames.py
 
 lint-desktop-packaging.py
 =========================
-Checks that user-facing desktop packages expose `quicksilver-qt` as the primary
+Checks that user-facing desktop packages expose `quicksilver` as the primary
 application while keeping daemon, command-line, agent, and test binaries out of
 the desktop package root.
 

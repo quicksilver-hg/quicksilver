@@ -6,6 +6,7 @@
 
 #include <rpc/blockchain.h>
 
+#include <arith_uint256.h>
 #include <blockfilter.h>
 #include <chain.h>
 #include <chainparams.h>
@@ -72,24 +73,15 @@ using util::MakeUnorderedList;
 
 /* Calculate the difficulty for a given block index.
  */
-double GetDifficulty(const CBlockIndex& blockindex)
+double GetDifficulty(const CBlockIndex& blockindex, const uint256& pow_limit)
 {
-    int nShift = (blockindex.nBits >> 24) & 0xff;
-    double dDiff =
-        (double)0x0000ffff / (double)(blockindex.nBits & 0x00ffffff);
+    arith_uint256 target;
+    target.SetCompact(blockindex.nBits);
 
-    while (nShift < 29)
-    {
-        dDiff *= 256.0;
-        nShift++;
-    }
-    while (nShift > 29)
-    {
-        dDiff /= 256.0;
-        nShift--;
-    }
+    arith_uint256 minimum_target;
+    minimum_target.SetCompact(UintToArith256(pow_limit).GetCompact());
 
-    return dDiff;
+    return target == 0 ? 0.0 : minimum_target.getdouble() / target.getdouble();
 }
 
 static int ComputeNextBlockAndDepth(const CBlockIndex& tip, const CBlockIndex& blockindex, const CBlockIndex*& next)
@@ -153,7 +145,7 @@ UniValue blockheaderToJSON(const CBlockIndex& tip, const CBlockIndex& blockindex
     result.pushKV("cuckatoo_cycle", cuckatoo_cycle);
     result.pushKV("bits", strprintf("%08x", blockindex.nBits));
     result.pushKV("target", GetTarget(tip, pow_limit).GetHex());
-    result.pushKV("difficulty", GetDifficulty(blockindex));
+    result.pushKV("difficulty", GetDifficulty(blockindex, pow_limit));
     // Quicksilver (#5c-1 Phase 2): the EIP-1559 congestion multiplier. Two forms, because
     // they serve different callers: "congestion" is the exact header field, which anyone
     // building or verifying a block on top of this one needs (the recurrence is integer
@@ -439,7 +431,7 @@ static RPCHelpMan getdifficulty()
 {
     ChainstateManager& chainman = EnsureAnyChainman(request.context);
     LOCK(cs_main);
-    return GetDifficulty(*CHECK_NONFATAL(chainman.ActiveChain().Tip()));
+    return GetDifficulty(*CHECK_NONFATAL(chainman.ActiveChain().Tip()), chainman.GetConsensus().powLimit);
 },
     };
 }
@@ -1332,7 +1324,7 @@ RPCHelpMan getblockchaininfo()
     obj.pushKV("bestblockhash", tip.GetBlockHash().GetHex());
     obj.pushKV("bits", strprintf("%08x", tip.nBits));
     obj.pushKV("target", GetTarget(tip, chainman.GetConsensus().powLimit).GetHex());
-    obj.pushKV("difficulty", GetDifficulty(tip));
+    obj.pushKV("difficulty", GetDifficulty(tip, chainman.GetConsensus().powLimit));
     obj.pushKV("time", tip.GetBlockTime());
     obj.pushKV("mediantime", tip.GetMedianTimePast());
     obj.pushKV("verificationprogress", chainman.GuessVerificationProgress(&tip));

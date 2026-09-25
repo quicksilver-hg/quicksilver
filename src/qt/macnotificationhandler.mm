@@ -14,7 +14,7 @@
 - (NSString *)__bundleIdentifier
 {
     if (self == [NSBundle mainBundle]) {
-        return @"org.quicksilver.hg.Quicksilver-Qt";
+        return @"org.quicksilver.hg.Quicksilver";
     } else {
         return [self __bundleIdentifier];
     }

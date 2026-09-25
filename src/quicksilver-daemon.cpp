@@ -123,7 +123,7 @@ static bool ParseArgs(NodeContext& node, int argc, char* argv[])
     // Error out when loose non-argument tokens are encountered on command line
     for (int i = 1; i < argc; i++) {
         if (!IsSwitchChar(argv[i][0])) {
-            return InitError(Untranslated(strprintf("Command line contains unexpected token '%s', see quicksilverd -h for a list of options.", argv[i])));
+            return InitError(Untranslated(strprintf("Command line contains unexpected token '%s', see quicksilver-daemon -h for a list of options.", argv[i])));
         }
     }
     return true;
@@ -139,12 +139,12 @@ static bool ProcessInitCommands(ArgsManager& args)
             strUsage += FormatParagraph(LicenseInfo());
         } else {
             strUsage += "\n"
-                "The " CLIENT_NAME " daemon (quicksilverd) is a headless program that connects to the Quicksilver network to validate and relay transactions and blocks, as well as relaying addresses.\n\n"
+                "The " CLIENT_NAME " daemon (quicksilver-daemon) is a headless program that connects to the Quicksilver network to validate and relay transactions and blocks, as well as relaying addresses.\n\n"
                 "It provides the backbone of the Quicksilver network and its RPC, REST and ZMQ services can provide various transaction, block and address-related services.\n\n"
                 "There is an optional vault component which provides transaction services.\n\n"
                 "It can be used in a headless environment or as part of a server setup.\n"
                 "\n"
-                "Usage: quicksilverd [options]\n"
+                "Usage: quicksilver-daemon [options]\n"
                 "\n";
             strUsage += args.GetHelpMessage();
         }
@@ -172,7 +172,7 @@ static bool AppInit(NodeContext& node)
     std::any context{&node};
     try
     {
-        // -server defaults to true for quicksilverd but not for the GUI so do this here
+        // -server defaults to true for quicksilver-daemon but not for the GUI so do this here
         args.SoftSetBoolArg("-server", true);
         // Set this early so that parameter interactions go to console
         InitLogging(args);
@@ -261,7 +261,7 @@ MAIN_FUNCTION
 
     SetupEnvironment();
 
-    // Connect quicksilverd signal handlers
+    // Connect quicksilver-daemon signal handlers
     noui_connect();
 
     util::ThreadSetInternalName("init");

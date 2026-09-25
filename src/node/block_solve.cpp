@@ -68,7 +68,7 @@ bool SolveBlockPoW(ChainstateManager& chainman, CBlock& block, uint64_t& max_tri
     // Checking m_interrupt only between budget windows is not enough to shut down:
     // one window is up to 4096 graphs, and a single GPU attempt can block for the
     // whole no-progress watchdog. Hand the solver the same flag so it can abandon
-    // the sweep from inside. Observed without this: a dead GPU held quicksilverd at
+    // the sweep from inside. Observed without this: a dead GPU held quicksilver-daemon at
     // 609% CPU for 90+ seconds after SIGTERM, and the process needed SIGKILL.
     //
     // `abandon` rides the same predicate, which is what lets a superseded template

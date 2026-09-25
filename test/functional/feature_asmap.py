@@ -5,21 +5,21 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test asmap config argument for ASN-based IP bucketing.
 
-Verify node behaviour and debug log when launching quicksilverd in these cases:
+Verify node behaviour and debug log when launching quicksilver-daemon in these cases:
 
-1. `quicksilverd` with no -asmap arg, using /16 prefix for IP bucketing
+1. `quicksilver-daemon` with no -asmap arg, using /16 prefix for IP bucketing
 
-2. `quicksilverd -asmap=<absolute path>`, using the unit test skeleton asmap
+2. `quicksilver-daemon -asmap=<absolute path>`, using the unit test skeleton asmap
 
-3. `quicksilverd -asmap=<relative path>`, using the unit test skeleton asmap
+3. `quicksilver-daemon -asmap=<relative path>`, using the unit test skeleton asmap
 
-4. `quicksilverd -asmap/-asmap=` with no file specified, using the default asmap
+4. `quicksilver-daemon -asmap/-asmap=` with no file specified, using the default asmap
 
-5. `quicksilverd -asmap` restart with an addrman containing new and tried entries
+5. `quicksilver-daemon -asmap` restart with an addrman containing new and tried entries
 
-6. `quicksilverd -asmap` with no file specified and a missing default asmap file
+6. `quicksilver-daemon -asmap` with no file specified and a missing default asmap file
 
-7. `quicksilverd -asmap` with an empty (unparsable) default asmap file
+7. `quicksilver-daemon -asmap` with an empty (unparsable) default asmap file
 
 The tests are order-independent.
 
@@ -50,19 +50,19 @@ class AsmapTest(QuicksilverTestFramework):
             self.nodes[node_id].addpeeraddress(address=f"101.{addr}.0.0", tried=tried, port=9555)
 
     def test_without_asmap_arg(self):
-        self.log.info('Test quicksilverd with no -asmap arg passed')
+        self.log.info('Test quicksilver-daemon with no -asmap arg passed')
         self.stop_node(0)
         with self.node.assert_debug_log(['ready bucketing=ipv4-prefix-16']):
             self.start_node(0)
 
     def test_noasmap_arg(self):
-        self.log.info('Test quicksilverd with -noasmap arg passed')
+        self.log.info('Test quicksilver-daemon with -noasmap arg passed')
         self.stop_node(0)
         with self.node.assert_debug_log(['ready bucketing=ipv4-prefix-16']):
             self.start_node(0, ["-noasmap"])
 
     def test_asmap_with_absolute_path(self):
-        self.log.info('Test quicksilverd -asmap=<absolute path>')
+        self.log.info('Test quicksilver-daemon -asmap=<absolute path>')
         self.stop_node(0)
         filename = os.path.join(self.datadir, 'my-map-file.map')
         shutil.copyfile(self.asmap_raw, filename)
@@ -71,7 +71,7 @@ class AsmapTest(QuicksilverTestFramework):
         os.remove(filename)
 
     def test_asmap_with_relative_path(self):
-        self.log.info('Test quicksilverd -asmap=<relative path>')
+        self.log.info('Test quicksilver-daemon -asmap=<relative path>')
         self.stop_node(0)
         name = 'ASN_map'
         filename = os.path.join(self.datadir, name)
@@ -83,14 +83,14 @@ class AsmapTest(QuicksilverTestFramework):
     def test_default_asmap(self):
         shutil.copyfile(self.asmap_raw, self.default_asmap)
         for arg in ['-asmap', '-asmap=']:
-            self.log.info(f'Test quicksilverd {arg} (using default map file)')
+            self.log.info(f'Test quicksilver-daemon {arg} (using default map file)')
             self.stop_node(0)
             with self.node.assert_debug_log(expected_messages(self.default_asmap)):
                 self.start_node(0, [arg])
         os.remove(self.default_asmap)
 
     def test_asmap_interaction_with_addrman_containing_entries(self):
-        self.log.info("Test quicksilverd -asmap restart with addrman containing new and tried entries")
+        self.log.info("Test quicksilver-daemon -asmap restart with addrman containing new and tried entries")
         self.stop_node(0)
         shutil.copyfile(self.asmap_raw, self.default_asmap)
         self.start_node(0, ["-asmap", "-checkaddrman=1", "-test=addrman"])
@@ -106,13 +106,13 @@ class AsmapTest(QuicksilverTestFramework):
         os.remove(self.default_asmap)
 
     def test_default_asmap_with_missing_file(self):
-        self.log.info('Test quicksilverd -asmap with missing default map file')
+        self.log.info('Test quicksilver-daemon -asmap with missing default map file')
         self.stop_node(0)
         msg = f"Error: Could not find asmap file \"{self.default_asmap}\""
         self.node.assert_start_raises_init_error(extra_args=['-asmap'], expected_msg=msg)
 
     def test_empty_asmap(self):
-        self.log.info('Test quicksilverd -asmap with empty map file')
+        self.log.info('Test quicksilver-daemon -asmap with empty map file')
         self.stop_node(0)
         with open(self.default_asmap, "w", encoding="utf-8") as f:
             f.write("")
@@ -121,7 +121,7 @@ class AsmapTest(QuicksilverTestFramework):
         os.remove(self.default_asmap)
 
     def test_asmap_health_check(self):
-        self.log.info('Test quicksilverd -asmap logs ASMap Health Check with basic stats')
+        self.log.info('Test quicksilver-daemon -asmap logs ASMap Health Check with basic stats')
         shutil.copyfile(self.asmap_raw, self.default_asmap)
         msg = "ASMap Health Check: 4 clearnet peers are mapped to 3 ASNs with 0 peers being unmapped"
         with self.node.assert_debug_log(expected_msgs=[msg]):

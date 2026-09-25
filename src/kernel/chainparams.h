@@ -59,7 +59,7 @@ public:
      * Upstream derives this as P2P+1, which silently assumes that port is free.
      * Quicksilver's publictest and sandbox put their RPC port at P2P+1, so the
      * derived target collided with the node's own RPC listener and bare
-     * `quicksilverd -sandbox` could not start. Naming it per network makes the
+     * `quicksilver-daemon -sandbox` could not start. Naming it per network makes the
      * constraint checkable; net_tests/default_ports_do_not_collide asserts it stays
      * distinct from both the P2P and the RPC port.
      */

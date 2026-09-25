@@ -5,7 +5,7 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test multivault.
 
-Verify that a quicksilverd node can load multiple vault files
+Verify that a quicksilver-daemon node can load multiple vault files
 """
 from threading import Thread
 import os

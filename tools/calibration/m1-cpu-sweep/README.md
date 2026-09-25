@@ -31,7 +31,7 @@ unresolved.**
 
 ### What was ruled out
 
-- **Stray processes.** No orphaned `quicksilverd` or test runners were alive.
+- **Stray processes.** No orphaned `quicksilver-daemon` or test runners were alive.
 - **Contention.** Contention would inflate both configurations. The 8-thread
   figure is 6% *faster* than recorded, so the machine and build are healthy.
 - **Hyperthread scheduling.** With 4 threads on 8 logical CPUs the scheduler can

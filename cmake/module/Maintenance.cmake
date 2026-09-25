@@ -24,7 +24,7 @@ function(add_maintenance_targets)
     return()
   endif()
 
-  foreach(target IN ITEMS quicksilverd quicksilver-qt quicksilver-cli quicksilver-agent quicksilver-tx quicksilver-util quicksilver-vault test_quicksilver bench_quicksilver)
+  foreach(target IN ITEMS quicksilver-daemon quicksilver quicksilver-cli quicksilver-agent quicksilver-tx quicksilver-vault test_quicksilver bench_quicksilver)
     if(TARGET ${target})
       list(APPEND executables $<TARGET_FILE:${target}>)
     endif()
@@ -48,13 +48,12 @@ function(add_windows_deploy_target)
   # when one of them is missing is deliberate: an installer cannot be built out
   # of a configuration that does not produce what it installs.
   set(deploy_binaries
-    quicksilver-qt
-    quicksilverd
+    quicksilver
+    quicksilver-daemon
     quicksilver-cli
     quicksilver-agent
     quicksilver-tx
     quicksilver-vault
-    quicksilver-util
   )
 
   # `--target deploy` against a configuration that never defined it fails with
@@ -119,7 +118,7 @@ function(add_windows_deploy_target)
   # the fact.
   message(STATUS "Windows installer: `deploy` target defined, using makensis at ${MAKENSIS_EXECUTABLE}.")
 
-  # setup.nsi.in takes all seven binaries out of release/, so whatever stages
+  # setup.nsi.in takes all six binaries out of release/, so whatever stages
   # them has to populate that directory; only the staging step differs by
   # toolchain. Each binary is named on its own line rather than looped over,
   # because test/lint/lint-desktop-packaging.py reads these genexes to check
@@ -128,13 +127,12 @@ function(add_windows_deploy_target)
     # strip is doing two jobs here: removing the debug symbols the GNU toolchain
     # leaves in the binary, and being the thing that copies it into release/.
     set(stage_commands
-      COMMAND ${CMAKE_STRIP} $<TARGET_FILE:quicksilver-qt> -o ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-qt>
-      COMMAND ${CMAKE_STRIP} $<TARGET_FILE:quicksilverd> -o ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilverd>
+      COMMAND ${CMAKE_STRIP} $<TARGET_FILE:quicksilver> -o ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver>
+      COMMAND ${CMAKE_STRIP} $<TARGET_FILE:quicksilver-daemon> -o ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-daemon>
       COMMAND ${CMAKE_STRIP} $<TARGET_FILE:quicksilver-cli> -o ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-cli>
       COMMAND ${CMAKE_STRIP} $<TARGET_FILE:quicksilver-agent> -o ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-agent>
       COMMAND ${CMAKE_STRIP} $<TARGET_FILE:quicksilver-tx> -o ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-tx>
       COMMAND ${CMAKE_STRIP} $<TARGET_FILE:quicksilver-vault> -o ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-vault>
-      COMMAND ${CMAKE_STRIP} $<TARGET_FILE:quicksilver-util> -o ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-util>
     )
   else()
     # MSVC keeps debug info in a separate .pdb, so a Release .exe has nothing to
@@ -142,13 +140,12 @@ function(add_windows_deploy_target)
     # which would leave the command line starting with its own -o. The MSVC
     # counterpart of the strip above is therefore a plain copy.
     set(stage_commands
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:quicksilver-qt> ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-qt>
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:quicksilverd> ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilverd>
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:quicksilver> ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver>
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:quicksilver-daemon> ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-daemon>
       COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:quicksilver-cli> ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-cli>
       COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:quicksilver-agent> ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-agent>
       COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:quicksilver-tx> ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-tx>
       COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:quicksilver-vault> ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-vault>
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:quicksilver-util> ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-util>
     )
   endif()
 
@@ -163,8 +160,8 @@ function(add_windows_deploy_target)
 endfunction()
 
 function(add_macos_deploy_target)
-  if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND TARGET quicksilver-qt)
-    set(macos_app "Quicksilver-Qt.app")
+  if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND TARGET quicksilver)
+    set(macos_app "Quicksilver.app")
     # Populate Contents subdirectory.
     configure_file(${PROJECT_SOURCE_DIR}/share/qt/Info.plist.in ${macos_app}/Contents/Info.plist NO_SOURCE_PERMISSIONS)
     file(CONFIGURE OUTPUT ${macos_app}/Contents/PkgInfo CONTENT "APPL????")
@@ -176,20 +173,20 @@ function(add_macos_deploy_target)
     )
 
     add_custom_command(
-      OUTPUT ${PROJECT_BINARY_DIR}/${macos_app}/Contents/MacOS/Quicksilver-Qt
-      COMMAND ${CMAKE_COMMAND} --install ${PROJECT_BINARY_DIR} --config $<CONFIG> --component quicksilver-qt --prefix ${macos_app}/Contents/MacOS --strip
-      COMMAND ${CMAKE_COMMAND} -E rename ${macos_app}/Contents/MacOS/bin/$<TARGET_FILE_NAME:quicksilver-qt> ${macos_app}/Contents/MacOS/Quicksilver-Qt
+      OUTPUT ${PROJECT_BINARY_DIR}/${macos_app}/Contents/MacOS/Quicksilver
+      COMMAND ${CMAKE_COMMAND} --install ${PROJECT_BINARY_DIR} --config $<CONFIG> --component quicksilver --prefix ${macos_app}/Contents/MacOS --strip
+      COMMAND ${CMAKE_COMMAND} -E rename ${macos_app}/Contents/MacOS/bin/$<TARGET_FILE_NAME:quicksilver> ${macos_app}/Contents/MacOS/Quicksilver
       COMMAND ${CMAKE_COMMAND} -E rm -rf ${macos_app}/Contents/MacOS/bin
       COMMAND ${CMAKE_COMMAND} -E rm -rf ${macos_app}/Contents/MacOS/share
       VERBATIM
     )
 
     add_custom_target(deploydir
-      DEPENDS ${PROJECT_BINARY_DIR}/${macos_app}/Contents/MacOS/Quicksilver-Qt
+      DEPENDS ${PROJECT_BINARY_DIR}/${macos_app}/Contents/MacOS/Quicksilver
     )
     add_custom_target(deploy
       DEPENDS deploydir
     )
-    add_dependencies(deploydir quicksilver-qt)
+    add_dependencies(deploydir quicksilver)
   endif()
 endfunction()

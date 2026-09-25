@@ -5,78 +5,40 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <arith_uint256.h>
 #include <chain.h>
+#include <chainparams.h>
+#include <chainparamsbase.h>
 #include <node/blockstorage.h>
 #include <rpc/blockchain.h>
 #include <sync.h>
 #include <test/util/setup_common.h>
-#include <util/string.h>
-
-#include <cstdlib>
-
-using util::ToString;
-
-/* Equality between doubles is imprecise. Comparison should be done
- * with a small threshold of tolerance, rather than exact equality.
- */
-static bool DoubleEquals(double a, double b, double epsilon)
-{
-    return std::abs(a - b) < epsilon;
-}
-
-static CBlockIndex* CreateBlockIndexWithNbits(uint32_t nbits)
-{
-    CBlockIndex* block_index = new CBlockIndex();
-    block_index->nHeight = 46367;
-    block_index->nTime = 1269211443;
-    block_index->nBits = nbits;
-    return block_index;
-}
-
-static void RejectDifficultyMismatch(double difficulty, double expected_difficulty) {
-     BOOST_CHECK_MESSAGE(
-        DoubleEquals(difficulty, expected_difficulty, 0.00001),
-        "Difficulty was " + ToString(difficulty)
-            + " but was expected to be " + ToString(expected_difficulty));
-}
 
 /* Given a BlockIndex with the provided nbits,
  * verify that the expected difficulty results.
  */
-static void TestDifficulty(uint32_t nbits, double expected_difficulty)
+static void TestDifficulty(uint32_t nbits, const uint256& pow_limit, double expected_difficulty)
 {
-    CBlockIndex* block_index = CreateBlockIndexWithNbits(nbits);
-    double difficulty = GetDifficulty(*block_index);
-    delete block_index;
-
-    RejectDifficultyMismatch(difficulty, expected_difficulty);
+    CBlockIndex block_index;
+    block_index.nBits = nbits;
+    BOOST_CHECK_EQUAL(GetDifficulty(block_index, pow_limit), expected_difficulty);
 }
 
 BOOST_FIXTURE_TEST_SUITE(blockchain_tests, BasicTestingSetup)
 
-BOOST_AUTO_TEST_CASE(get_difficulty_for_very_low_target)
+BOOST_AUTO_TEST_CASE(get_difficulty_relative_to_each_chain_pow_limit)
 {
-    TestDifficulty(0x1f111111, 0.000001);
-}
+    for (const ChainType chain_type : {ChainType::MAIN, ChainType::PUBLIC_TEST, ChainType::SANDBOX}) {
+        const auto params{CreateChainParams(*m_node.args, chain_type)};
+        const uint256& pow_limit{params->GetConsensus().powLimit};
+        const uint32_t minimum_bits{UintToArith256(pow_limit).GetCompact()};
+        TestDifficulty(minimum_bits, pow_limit, 1.0);
 
-BOOST_AUTO_TEST_CASE(get_difficulty_for_low_target)
-{
-    TestDifficulty(0x1ef88f6f, 0.000016);
-}
-
-BOOST_AUTO_TEST_CASE(get_difficulty_for_mid_target)
-{
-    TestDifficulty(0x1df88f6f, 0.004023);
-}
-
-BOOST_AUTO_TEST_CASE(get_difficulty_for_high_target)
-{
-    TestDifficulty(0x1cf88f6f, 1.029916);
-}
-
-BOOST_AUTO_TEST_CASE(get_difficulty_for_very_high_target)
-{
-    TestDifficulty(0x12345678, 5913134931067755359633408.0);
+        arith_uint256 harder_target;
+        harder_target.SetCompact(minimum_bits);
+        harder_target >>= 8;
+        TestDifficulty(harder_target.GetCompact(), pow_limit, 256.0);
+    }
 }
 
 //! Prune chain from height down to genesis block and check that

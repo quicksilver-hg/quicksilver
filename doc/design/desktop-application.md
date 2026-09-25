@@ -515,9 +515,9 @@ executables; the remainder are developer tooling and belong in a separate downlo
 or a clearly separated subdirectory of the archive, not in front of someone who
 came to open a vault.
 
-Current packaging status: the Debian `quicksilver-qt` package is the desktop
+Current packaging status: the Debian `quicksilver` package is the desktop
 artifact and no longer recommends the daemon/tools package. The Windows installer
-keeps `quicksilver-qt` at the install root and places developer executables under
+keeps `quicksilver` at the install root and places developer executables under
 `developer-tools`; test binaries are not part of that installer.
 
 ## Open questions

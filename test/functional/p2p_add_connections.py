@@ -22,7 +22,7 @@ class VersionSender(P2PInterface):
 
 class P2PFeelerReceiver(P2PInterface):
     def on_version(self, message):
-        # The quicksilverd node closes feeler connections as soon as a version
+        # The quicksilver-daemon node closes feeler connections as soon as a version
         # message is received from the test framework. Don't send any responses
         # to the node's version message since the connection will already be
         # closed.
@@ -118,10 +118,10 @@ class P2PAddConnections(QuicksilverTestFramework):
         self.log.info("Send version message early to node")
         # Normally the test framework would be shy and send the version message
         # only after it received one. See the on_version method. Check that
-        # quicksilverd behaves properly when a version is sent unexpectedly (but
+        # quicksilver-daemon behaves properly when a version is sent unexpectedly (but
         # tolerably) early.
         #
-        # This checks that quicksilverd sends its own version prior to processing
+        # This checks that quicksilver-daemon sends its own version prior to processing
         # the remote version (and replying with a verack). Otherwise it would
         # be violating its own rules, such as "non-version message before
         # version handshake".

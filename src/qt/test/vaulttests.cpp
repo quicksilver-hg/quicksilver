@@ -1679,7 +1679,7 @@ void VaultTests::mineMintPageRendersStatus()
     QCOMPARE(page.findChild<QLabel*>("attemptsRateValue")->text(),
              QStringLiteral("None (0 graphs attempted)"));
 
-    // F-109: the core fault string is written for quicksilverd and names a
+    // F-109: the core fault string is written for quicksilver-daemon and names a
     // command-line flag. This window owns the setting, so the missing-solver case
     // must name the control instead. The flag must not survive anywhere in the row:
     // it is the whole defect, and asserting only the new prose would let it back in

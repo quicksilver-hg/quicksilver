@@ -233,7 +233,7 @@ MineMintPage::StatusText MineMintPage::statusText(const interfaces::MiningStatus
             ? tr("Working — no graph finished yet")
             : tr("Working");
     } else if (s.solver_missing) {
-        // The core message names -cuckatoosolver, which is right for quicksilverd and
+        // The core message names -cuckatoosolver, which is right for quicksilver-daemon and
         // useless here: this window owns the setting. Sending a desktop user after a
         // command-line flag pointed them away from a control two clicks away.
         rows.health = tr("No GPU solver is configured. Choose one in Controls > Options > Main.");

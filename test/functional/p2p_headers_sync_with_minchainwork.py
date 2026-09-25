@@ -25,7 +25,7 @@ from test_framework.util import assert_equal
 import time
 
 NODE1_BLOCKS_REQUIRED = 15
-NODE2_BLOCKS_REQUIRED = 127
+NODE2_BLOCKS_REQUIRED = 2048
 
 
 class RejectLowDifficultyHeadersTest(QuicksilverTestFramework):
@@ -34,9 +34,11 @@ class RejectLowDifficultyHeadersTest(QuicksilverTestFramework):
         self.setup_clean_chain = True
         self.num_nodes = 4
         # Node0 has no required chainwork; node1 requires 15 blocks on top of
-        # the genesis block; node2 requires 127. Quicksilver sandbox block work
-        # is 2, with genesis contributing 1, so 0x100 is crossed at height 127.
-        self.extra_args = [["-minimumchainwork=0x0", "-checkblockindex=0"], ["-minimumchainwork=0x1f", "-checkblockindex=0"], ["-minimumchainwork=0x100", "-checkblockindex=0"], ["-minimumchainwork=0x100", "-checkblockindex=0", "-whitelist=noban@127.0.0.1"]]
+        # the genesis block; node2 requires 2048. Quicksilver sandbox block work
+        # is 2, with genesis contributing 1, so 0x1000 is crossed at height 2048.
+        # This is deliberately above one 2000-header message so node2 must use
+        # both presync and redownload rather than accepting one short response.
+        self.extra_args = [["-minimumchainwork=0x0", "-checkblockindex=0"], ["-minimumchainwork=0x1f", "-checkblockindex=0"], ["-minimumchainwork=0x1000", "-checkblockindex=0"], ["-minimumchainwork=0x100", "-checkblockindex=0", "-whitelist=noban@127.0.0.1"]]
 
     def setup_network(self):
         self.setup_nodes()
@@ -109,6 +111,16 @@ class RejectLowDifficultyHeadersTest(QuicksilverTestFramework):
 
         self.log.info("Verify that node2 and node3 will sync the chain when it gets long enough")
         self.sync_blocks(timeout=300)
+
+        # Redownload must release the peer's actual headers, not a parallel
+        # header-only chain reconstructed with defaulted serialized fields.
+        expected_tip = {
+            'height': NODE2_BLOCKS_REQUIRED,
+            'hash': self.nodes[0].getbestblockhash(),
+            'branchlen': 0,
+            'status': 'active',
+        }
+        assert_equal(self.nodes[2].getchaintips(), [expected_tip])
 
     def test_peerinfo_includes_headers_presync_height(self):
         self.log.info("Test that getpeerinfo() includes headers presync height")

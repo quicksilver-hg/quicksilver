@@ -279,7 +279,7 @@ std::unique_ptr<ContainedChild> ContainedChild::Spawn(const std::vector<std::str
     if (want_pipe) SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
 
     // STARTF_USESTDHANDLES requires all three to be valid. Under a scheduled
-    // task, and under quicksilver-qt, there is no console, so GetStdHandle can
+    // task, and under quicksilver, there is no console, so GetStdHandle can
     // hand back NULL -- open the NUL device instead of trusting it.
     HANDLE nul = CreateFileA("NUL", GENERIC_READ | GENERIC_WRITE,
                              FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,

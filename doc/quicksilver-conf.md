@@ -1,10 +1,10 @@
 # `quicksilver.conf` Configuration File
 
-The configuration file is used by `quicksilverd`, `quicksilver-qt` and `quicksilver-cli`.
+The configuration file is used by `quicksilver-daemon`, `quicksilver` and `quicksilver-cli`.
 
 All command-line options (except for `-?`, `-help`, `-version` and `-conf`) may be specified in a configuration file, and all configuration file options (except for `includeconf`) may also be specified on the command line. Command-line options override values set in the configuration file and configuration file options override values set in the GUI.
 
-Changes to the configuration file while `quicksilverd` or `quicksilver-qt` is running only take effect after restarting.
+Changes to the configuration file while `quicksilver-daemon` or `quicksilver` is running only take effect after restarting.
 
 Users should never make any configuration changes which they do not understand. Furthermore, users should always be wary of accepting any configuration changes provided to them by another source (even if they believe that they do understand them).
 

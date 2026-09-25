@@ -22,12 +22,12 @@ class BlockManager;
 } // namespace node
 
 /**
- * Get the difficulty of the net wrt to the given block index.
+ * Get the difficulty of the net wrt to the given block index and chain limit.
  *
- * @return A floating point number that is a multiple of the main net minimum
- * difficulty (4295032833 hashes).
+ * @return A floating point number that is a multiple of the chain's minimum
+ * difficulty.
  */
-double GetDifficulty(const CBlockIndex& blockindex);
+double GetDifficulty(const CBlockIndex& blockindex, const uint256& pow_limit);
 
 /** Block description to JSON */
 UniValue blockToJSON(node::BlockManager& blockman, const CBlock& block, const CBlockIndex& tip, const CBlockIndex& blockindex, TxVerbosity verbosity, const uint256 pow_limit) LOCKS_EXCLUDED(cs_main);

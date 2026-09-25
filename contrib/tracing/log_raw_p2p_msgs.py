@@ -146,15 +146,15 @@ def print_message(event, inbound):
 
 
 def main(pid):
-    print(f"Hooking into quicksilverd with pid {pid}")
-    quicksilverd_with_usdts = USDT(pid=int(pid))
+    print(f"Hooking into quicksilver-daemon with pid {pid}")
+    quicksilver_daemon_with_usdts = USDT(pid=int(pid))
 
     # attaching the trace functions defined in the BPF program to the tracepoints
-    quicksilverd_with_usdts.enable_probe(
+    quicksilver_daemon_with_usdts.enable_probe(
         probe="inbound_message", fn_name="trace_inbound_message")
-    quicksilverd_with_usdts.enable_probe(
+    quicksilver_daemon_with_usdts.enable_probe(
         probe="outbound_message", fn_name="trace_outbound_message")
-    bpf = BPF(text=program, usdt_contexts=[quicksilverd_with_usdts])
+    bpf = BPF(text=program, usdt_contexts=[quicksilver_daemon_with_usdts])
 
     # BCC: perf buffer handle function for inbound_messages
     def handle_inbound(_, data, size):
@@ -191,7 +191,7 @@ def main(pid):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("USAGE:", sys.argv[0], "<pid of quicksilverd>")
+        print("USAGE:", sys.argv[0], "<pid of quicksilver-daemon>")
         exit()
     pid = sys.argv[1]
     main(pid)

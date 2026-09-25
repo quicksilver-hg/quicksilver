@@ -15,7 +15,7 @@
 class ArgsManager;
 
 /**
- * CBaseChainParams defines the base parameters (shared between quicksilver-cli and quicksilverd)
+ * CBaseChainParams defines the base parameters (shared between quicksilver-cli and quicksilver-daemon)
  * of a given instance of the Quicksilver system.
  */
 class CBaseChainParams

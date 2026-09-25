@@ -31,7 +31,7 @@ public:
                 id processInfo = [NSProcessInfo processInfo];
                 if ([processInfo respondsToSelector:@selector(beginActivityWithOptions:reason:)])
                 {
-                    activityId = [processInfo beginActivityWithOptions: activityOptions reason:@"Temporarily disable App Nap for quicksilver-qt."];
+                    activityId = [processInfo beginActivityWithOptions: activityOptions reason:@"Temporarily disable App Nap for quicksilver."];
                     [activityId retain];
                 }
             }

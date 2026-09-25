@@ -2,7 +2,7 @@
 
 **Updated for FreeBSD [14.0](https://www.freebsd.org/releases/14.0R/announce/)**
 
-This guide describes how to build quicksilverd, command-line utilities, and GUI on FreeBSD.
+This guide describes how to build quicksilver-daemon, command-line utilities, and GUI on FreeBSD.
 
 ## Preparation
 
@@ -25,7 +25,7 @@ cd quicksilver
 ### 3. Install Optional Dependencies
 
 #### Vault Dependencies
-It is not necessary to build vault functionality to run either `quicksilverd` or `quicksilver-qt`.
+It is not necessary to build vault functionality to run either `quicksilver-daemon` or `quicksilver`.
 
 ###### Vault Support
 

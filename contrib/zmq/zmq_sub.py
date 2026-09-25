@@ -8,7 +8,7 @@
     ZMQ example using python3's asyncio
 
     Quicksilver should be started with the command line arguments:
-        quicksilverd -publictest -daemon \
+        quicksilver-daemon -publictest -daemon \
                 -zmqpubrawtx=tcp://127.0.0.1:29554 \
                 -zmqpubrawblock=tcp://127.0.0.1:29554 \
                 -zmqpubhashtx=tcp://127.0.0.1:29554 \
@@ -33,6 +33,10 @@ if (sys.version_info.major, sys.version_info.minor) < (3, 5):
     sys.exit(1)
 
 port = 29554
+
+# Serialized CBlockHeader fields from src/primitives/block.h.
+BLOCK_HEADER_SIZE = 4 + 32 + 32 + 4 + 4 + 4 + 4 + (42 * 4)
+
 
 class ZMQHandler():
     def __init__(self):
@@ -61,7 +65,7 @@ class ZMQHandler():
             print(body.hex())
         elif topic == b"rawblock":
             print('- RAW BLOCK HEADER ('+sequence+') -')
-            print(body[:80].hex())
+            print(body[:BLOCK_HEADER_SIZE].hex())
         elif topic == b"rawtx":
             print('- RAW TX ('+sequence+') -')
             print(body.hex())

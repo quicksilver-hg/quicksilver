@@ -8,22 +8,22 @@ export LC_ALL=C
 TOPDIR=${TOPDIR:-$(git rev-parse --show-toplevel)}
 BUILDDIR=${BUILDDIR:-$TOPDIR/build}
 BINDIR=${BINDIR:-$BUILDDIR/bin}
-QUICKSILVERD=${QUICKSILVERD:-$BINDIR/quicksilverd}
+QUICKSILVER_DAEMON=${QUICKSILVER_DAEMON:-$BINDIR/quicksilver-daemon}
 SHARE_EXAMPLES_DIR=${SHARE_EXAMPLES_DIR:-$TOPDIR/share/examples}
 EXAMPLE_CONF_FILE=${EXAMPLE_CONF_FILE:-$SHARE_EXAMPLES_DIR/quicksilver.conf}
 
-[ ! -x "$QUICKSILVERD" ] && echo "$QUICKSILVERD not found or not executable." && exit 1
+[ ! -x "$QUICKSILVER_DAEMON" ] && echo "$QUICKSILVER_DAEMON not found or not executable." && exit 1
 
 DIRTY=""
-VERSION_OUTPUT=$($QUICKSILVERD --version)
+VERSION_OUTPUT=$($QUICKSILVER_DAEMON --version)
 if [[ $VERSION_OUTPUT == *"dirty"* ]]; then
-  DIRTY="${DIRTY}${QUICKSILVERD}\n"
+  DIRTY="${DIRTY}${QUICKSILVER_DAEMON}\n"
 fi
 
 if [ -n "$DIRTY" ]
 then
-  echo -e "WARNING: $QUICKSILVERD was built from a dirty tree.\n"
-  echo -e "To safely generate a quicksilver.conf file, please commit your changes to $QUICKSILVERD, rebuild, then run this script again.\n"
+  echo -e "WARNING: $QUICKSILVER_DAEMON was built from a dirty tree.\n"
+  echo -e "To safely generate a quicksilver.conf file, please commit your changes to $QUICKSILVER_DAEMON, rebuild, then run this script again.\n"
 fi
 
 echo 'Generating example quicksilver.conf file in share/examples/'
@@ -47,10 +47,10 @@ cat > "${EXAMPLE_CONF_FILE}" << 'EOF'
 ### Options
 EOF
 
-# parse the output from quicksilverd --help
+# parse the output from quicksilver-daemon --help
 # adding newlines is a bit funky to ensure portability for BSD
 # see here for more details: https://stackoverflow.com/a/24575385
-${QUICKSILVERD} --help \
+${QUICKSILVER_DAEMON} --help \
     | sed '1,/Options:/d' \
     | sed -E '/^[[:space:]]{2}-help/,/^[[:space:]]*$/d' \
     | sed -E 's/^[[:space:]]{2}\-/#/' \

@@ -8,8 +8,8 @@ The `TestShell` submodule extends the `QuicksilverTestFramework` functionality t
 external interactive environments for prototyping and educational purposes. Just
 like `QuicksilverTestFramework`, the `TestShell` allows the user to:
 
-* Manage sandbox quicksilverd subprocesses.
-* Access RPC interfaces of the underlying quicksilverd instances.
+* Manage sandbox quicksilver-daemon subprocesses.
+* Access RPC interfaces of the underlying quicksilver-daemon instances.
 * Log events to the functional test logging utility.
 
 The `TestShell` can be useful in interactive environments where it is necessary
@@ -20,7 +20,7 @@ user inputs. Such environments include the Python3 command line interpreter or
 ## 1. Requirements
 
 * Python3
-* `quicksilverd` built in the same repository as the `TestShell`.
+* `quicksilver-daemon` built in the same repository as the `TestShell`.
 
 ## 2. Importing `TestShell` from the Quicksilver repository
 
@@ -37,7 +37,7 @@ must be used.
 >>> from test_framework.test_shell import TestShell
 ```
 
-The following `TestShell` methods manage the lifetime of the underlying quicksilverd
+The following `TestShell` methods manage the lifetime of the underlying quicksilver-daemon
 processes and logging utilities.
 
 * `TestShell().setup()`
@@ -64,7 +64,7 @@ used to initialize the `TestShell` can be found in [section
 
 **Note: Running multiple instances of `TestShell` is not allowed.** Running a
 single process also ensures that logging remains consolidated in the same
-temporary folder. If you need more quicksilverd nodes than set by default (1),
+temporary folder. If you need more quicksilver-daemon nodes than set by default (1),
 simply increase the `num_nodes` parameter during setup.
 
 ```
@@ -75,10 +75,10 @@ TestShell is already running!
 ## 4. Interacting with the `TestShell`
 
 Unlike the `QuicksilverTestFramework` class, the `TestShell` keeps the underlying
-quicksilverd subprocesses (nodes) and logging utilities running until the user
+quicksilver-daemon subprocesses (nodes) and logging utilities running until the user
 explicitly shuts down the `TestShell` object.
 
-During the time between the `setup` and `shutdown` calls, all `quicksilverd` node
+During the time between the `setup` and `shutdown` calls, all `quicksilver-daemon` node
 processes and `QuicksilverTestFramework` convenience methods can be accessed
 interactively.
 
@@ -131,12 +131,12 @@ test-framework**. Modules such as
 [key.py](test_framework/key.py),
 [script.py](test_framework/script.py) and
 [messages.py](test_framework/messages.py) are particularly
-useful in constructing objects which can be passed to the quicksilverd nodes managed
+useful in constructing objects which can be passed to the quicksilver-daemon nodes managed
 by a running `TestShell` object.
 
 ## 5. Shutting the `TestShell` down
 
-Shutting down the `TestShell` will safely tear down all running quicksilverd
+Shutting down the `TestShell` will safely tear down all running quicksilver-daemon
 instances and remove all temporary data and logging directories.
 
 ```
@@ -155,7 +155,7 @@ To prevent the logs from being removed after a shutdown, simply set the
 20XX-XX-XXTXX:XX:XX.XXXXXXX TestFramework (INFO): Tests successful
 ```
 
-The following utility consolidates logs from the quicksilverd nodes and the
+The following utility consolidates logs from the quicksilver-daemon nodes and the
 underlying `QuicksilverTestFramework`:
 
 * `/path/to/quicksilver/build/test/functional/combine_logs.py
@@ -172,20 +172,20 @@ can be called after the TestShell is shut down.
 
 | Test parameter key | Default Value | Description |
 |---|---|---|
-| `bind_to_localhost_only` | `True` | Binds quicksilverd P2P services to `127.0.0.1` if set to `True`.|
-| `cachedir` | `"/path/to/quicksilver/build/test/cache"` | Sets the quicksilverd datadir directory. |
-| `chain`  | `"sandbox"` | Sets the chain-type for the underlying test quicksilverd processes. |
+| `bind_to_localhost_only` | `True` | Binds quicksilver-daemon P2P services to `127.0.0.1` if set to `True`.|
+| `cachedir` | `"/path/to/quicksilver/build/test/cache"` | Sets the quicksilver-daemon datadir directory. |
+| `chain`  | `"sandbox"` | Sets the chain-type for the underlying test quicksilver-daemon processes. |
 | `configfile` | `"/path/to/quicksilver/build/test/config.ini"` | Sets the location of the test framework config file. |
-| `coveragedir` | `None` | Records quicksilverd RPC test coverage into this directory if set. |
+| `coveragedir` | `None` | Records quicksilver-daemon RPC test coverage into this directory if set. |
 | `loglevel` | `INFO` | Logs events at this level and higher. Can be set to `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`. |
 | `nocleanup` | `False` | Cleans up temporary test directory if set to `True` during `shutdown`. |
-| `noshutdown` | `False` | Does not stop quicksilverd instances after `shutdown` if set to `True`. |
-| `num_nodes` | `1` | Sets the number of initialized quicksilverd processes. |
+| `noshutdown` | `False` | Does not stop quicksilver-daemon instances after `shutdown` if set to `True`. |
+| `num_nodes` | `1` | Sets the number of initialized quicksilver-daemon processes. |
 | `perf` | False | Profiles running nodes with `perf` for the duration of the test if set to `True`. |
-| `rpc_timeout` | `60` | Sets the RPC server timeout for the underlying quicksilverd processes. |
+| `rpc_timeout` | `60` | Sets the RPC server timeout for the underlying quicksilver-daemon processes. |
 | `setup_clean_chain` | `False` | A 200-block-long chain is initialized from cache by default. Instead, `setup_clean_chain` initializes an empty blockchain if set to `True`. |
 | `randomseed` | Random Integer | `TestShell().options.randomseed` is a member of `TestShell` which can be accessed during a test to seed a random generator. User can override default with a constant value for reproducible test runs. |
 | `supports_cli` | `False` | Whether the quicksilver-cli utility is compiled and available for the test. |
 | `tmpdir` | `"/var/folders/.../"` | Sets directory for test logs. Will be deleted upon a successful test run unless `nocleanup` is set to `True` |
 | `trace_rpc` | `False` | Logs all RPC calls if set to `True`. |
-| `usecli` | `False` | Uses the quicksilver-cli interface for all quicksilverd commands instead of directly calling the RPC server. Requires `supports_cli`. |
+| `usecli` | `False` | Uses the quicksilver-cli interface for all quicksilver-daemon commands instead of directly calling the RPC server. Requires `supports_cli`. |

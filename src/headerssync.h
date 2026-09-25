@@ -25,7 +25,9 @@ struct CompressedHeader {
     uint256 hashMerkleRoot;
     uint32_t nTime{0};
     uint32_t nBits{0};
+    uint32_t nCongestion{0};
     uint32_t nNonce{0};
+    std::array<uint32_t, 42> nCycle{};
 
     CompressedHeader()
     {
@@ -38,7 +40,9 @@ struct CompressedHeader {
         hashMerkleRoot = header.hashMerkleRoot;
         nTime = header.nTime;
         nBits = header.nBits;
+        nCongestion = header.nCongestion;
         nNonce = header.nNonce;
+        nCycle = header.nCycle;
     }
 
     CBlockHeader GetFullHeader(const uint256& hash_prev_block) {
@@ -48,10 +52,18 @@ struct CompressedHeader {
         ret.hashMerkleRoot = hashMerkleRoot;
         ret.nTime = nTime;
         ret.nBits = nBits;
+        ret.nCongestion = nCongestion;
         ret.nNonce = nNonce;
+        ret.nCycle = nCycle;
         return ret;
     };
 };
+
+// CompressedHeader contains every serialized CBlockHeader field except
+// hashPrevBlock. If CBlockHeader's in-memory field set changes, this forces an
+// explicit update here instead of silently defaulting a field on reconstruction.
+static_assert(sizeof(CompressedHeader) + sizeof(uint256) == sizeof(CBlockHeader));
+
 
 /** HeadersSyncState:
  *

@@ -179,7 +179,7 @@ void IntroTests::freeSpaceLabelReadsGrammaticallyWithNoCatalogue()
 //! directory choice and -- because no prune setting is then written at all -- the pruning
 //! default that doc/design/chain-storage.md section 3 requires an operator to be shown,
 //! silently leaving them archival. It reproduced on the documented path: getting-started.md
-//! leads with quicksilverd, which creates the directory.
+//! leads with quicksilver-daemon, which creates the directory.
 void IntroTests::datadirExistenceIsNotTheFirstRunQuestion()
 {
     // The defect, stated exactly: a directory is there, this desktop has never been set up.

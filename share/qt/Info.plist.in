@@ -34,16 +34,16 @@
   <string>????</string>
 
   <key>CFBundleExecutable</key>
-  <string>Quicksilver-Qt</string>
+  <string>Quicksilver</string>
 
   <key>CFBundleName</key>
-  <string>Quicksilver-Qt</string>
+  <string>Quicksilver</string>
 
   <key>LSHasLocalizedDisplayName</key>
   <true/>
 
   <key>CFBundleIdentifier</key>
-  <string>io.github.quicksilver-hg.Quicksilver-Qt</string>
+  <string>io.github.quicksilver-hg.Quicksilver</string>
 
   <key>CFBundleURLTypes</key>
   <array>

@@ -1203,7 +1203,7 @@ void TouchStubFile(const fs::path& path)
 //! F-91: the cross-process half of this case used to be `#ifndef WIN32`, so on
 //! Windows it ran, passed, and verified nothing about the one thing the datadir
 //! lock exists for -- that a SECOND PROCESS cannot open a directory this one
-//! holds. Two quicksilverd instances over one datadir is chain corruption, and
+//! holds. Two quicksilver-daemon instances over one datadir is chain corruption, and
 //! that was unverified on the platform where a stale lock is hardest to see.
 //! The fixture is now a spawned helper on both platforms, so the contract is
 //! asserted identically everywhere. See src/test/lockdirstub.cpp.

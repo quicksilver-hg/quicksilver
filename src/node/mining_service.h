@@ -91,7 +91,7 @@ struct MiningStatus {
     std::string last_solver_error;
     //! True when the fault is specifically "no solver is configured", as opposed to a
     //! solver that ran and failed. The message alone cannot carry this: it is written
-    //! for quicksilverd and names -cuckatoosolver, a flag a GUI user has no way to set.
+    //! for quicksilver-daemon and names -cuckatoosolver, a flag a GUI user has no way to set.
     //! The GUI substitutes its own wording for this case and points at the control it
     //! actually has, so it needs the fault's identity, not its prose.
     bool solver_missing{false};

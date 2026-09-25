@@ -57,11 +57,11 @@ HelpMessageDialog::HelpMessageDialog(QWidget *parent, bool about) :
         ui->helpMessage->setVisible(false);
     } else {
         setWindowTitle(tr("Command-line options"));
-        QString header = "The quicksilver-qt application provides a graphical interface for interacting with " CLIENT_NAME ".\n\n"
-                         "It combines the core functionalities of quicksilverd with a user-friendly interface for vault management, transaction history, and network statistics.\n\n"
+        QString header = "The quicksilver application provides a graphical interface for interacting with " CLIENT_NAME ".\n\n"
+                         "It combines the core functionalities of quicksilver-daemon with a user-friendly interface for vault management, transaction history, and network statistics.\n\n"
                          "It is suitable for users who prefer a graphical over a command-line interface.\n\n"
                          "You can optionally specify a payment [URI], in e.g. the BIP21 URI format.\n\n"
-                         "Usage: quicksilver-qt [options] [URI]\n\n";
+                         "Usage: quicksilver [options] [URI]\n\n";
         QTextCursor cursor(ui->helpMessage->document());
         cursor.insertText(version);
         cursor.insertBlock();

@@ -17,10 +17,10 @@ bool noui_ThreadSafeQuestion(const bilingual_str& /* ignored interactive message
 /** Non-GUI handler, which only logs a message. */
 void noui_InitMessage(const std::string& message);
 
-/** Connect all quicksilverd signal handlers */
+/** Connect all quicksilver-daemon signal handlers */
 void noui_connect();
 
-/** Redirect all quicksilverd signal handlers to the log. Used to check or suppress output during test runs that produce expected errors */
+/** Redirect all quicksilver-daemon signal handlers to the log. Used to check or suppress output during test runs that produce expected errors */
 void noui_test_redirect();
 
 /** Reconnects the regular Non-GUI handlers after having used noui_test_redirect */

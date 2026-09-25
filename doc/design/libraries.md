@@ -7,12 +7,12 @@
 | *libquicksilver_consensus*   | Consensus functionality used by *libquicksilver_node* and *libquicksilver_vault*. |
 | *libquicksilver_crypto*      | Hardware-optimized functions for data encryption, hashing, message authentication, and key derivation. |
 | *libquicksilver_kernel*      | Consensus engine and support library used for validation by *libquicksilver_node*. |
-| *libquicksilver_qt*      | GUI functionality used by the *quicksilver-qt* executable. |
-| *libquicksilver_node*        | P2P and RPC server functionality used by *quicksilverd* and *quicksilver-qt* executables. |
+| *libquicksilver_qt*      | GUI functionality used by the *quicksilver* executable. |
+| *libquicksilver_node*        | P2P and RPC server functionality used by *quicksilver-daemon* and *quicksilver* executables. |
 | *libquicksilver_util*        | Home for common functionality shared by different executables and libraries. Similar to *libquicksilver_common*, but lower-level (see [Dependencies](#dependencies)). |
-| *libquicksilver_vault*      | Vault functionality used by *quicksilverd* and *quicksilver-vault* executables. |
+| *libquicksilver_vault*      | Vault functionality used by *quicksilver-daemon* and *quicksilver-vault* executables. |
 | *libquicksilver_vault_tool* | Lower-level vault functionality used by *quicksilver-vault* executable. |
-| *libquicksilver_zmq*         | [ZeroMQ](../zmq.md) functionality used by *quicksilverd* and *quicksilver-qt* executables. |
+| *libquicksilver_zmq*         | [ZeroMQ](../zmq.md) functionality used by *quicksilver-daemon* and *quicksilver* executables. |
 
 ## Conventions
 
@@ -39,12 +39,12 @@ graph TD;
 
 quicksilver-cli[quicksilver-cli]-->libquicksilver_cli;
 
-quicksilverd[quicksilverd]-->libquicksilver_node;
-quicksilverd[quicksilverd]-->libquicksilver_vault;
+quicksilver-daemon[quicksilver-daemon]-->libquicksilver_node;
+quicksilver-daemon[quicksilver-daemon]-->libquicksilver_vault;
 
-quicksilver-qt[quicksilver-qt]-->libquicksilver_node;
-quicksilver-qt[quicksilver-qt]-->libquicksilver_qt;
-quicksilver-qt[quicksilver-qt]-->libquicksilver_vault;
+quicksilver[quicksilver]-->libquicksilver_node;
+quicksilver[quicksilver]-->libquicksilver_qt;
+quicksilver[quicksilver]-->libquicksilver_vault;
 
 quicksilver-vault[quicksilver-vault]-->libquicksilver_vault;
 quicksilver-vault[quicksilver-vault]-->libquicksilver_vault_tool;
@@ -81,7 +81,7 @@ libquicksilver_vault_tool-->libquicksilver_vault;
 libquicksilver_vault_tool-->libquicksilver_util;
 
 classDef bold stroke-width:2px, font-weight:bold, font-size: smaller;
-class quicksilver-qt,quicksilverd,quicksilver-cli,quicksilver-vault bold
+class quicksilver,quicksilver-daemon,quicksilver-cli,quicksilver-vault bold
 ```
 </td></tr><tr><td>
 

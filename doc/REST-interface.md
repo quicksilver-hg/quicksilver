@@ -136,4 +136,4 @@ Refer to the `getrawrelaypool` RPC help for details. Defaults to setting
 
 Risks
 -------------
-Running a web browser on the same node with a REST enabled quicksilverd can be a risk. Accessing prepared XSS websites could read out tx/block data of your node by placing links like `<script src="http://127.0.0.1:9554/rest/tx/1234567890.json">` which might break the node's privacy.
+Running a web browser on the same node with a REST enabled quicksilver-daemon can be a risk. Accessing prepared XSS websites could read out tx/block data of your node by placing links like `<script src="http://127.0.0.1:9554/rest/tx/1234567890.json">` which might break the node's privacy.

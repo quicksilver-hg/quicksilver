@@ -12,7 +12,7 @@
 //
 // The desktop needs it because the seed is onion-only: without a Tor, a first
 // run on a machine that has never installed one cannot find the network at all.
-// quicksilverd does NOT default to it -- a person running a daemon can install
+// quicksilver-daemon does NOT default to it -- a person running a daemon can install
 // Tor; a desktop downloader cannot be assumed to.
 #ifndef QUICKSILVER_TOR_BUNDLED_TOR_H
 #define QUICKSILVER_TOR_BUNDLED_TOR_H
@@ -25,7 +25,7 @@
 #include <optional>
 #include <string>
 
-//! quicksilverd default. The GUI soft-sets this to true; see
+//! quicksilver-daemon default. The GUI soft-sets this to true; see
 //! QuicksilverApplication::parameterSetup().
 static constexpr bool DEFAULT_BUNDLED_TOR{false};
 

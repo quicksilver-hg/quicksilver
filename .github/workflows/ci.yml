@@ -240,9 +240,8 @@ jobs:
         if: matrix.job-type == 'standard'
         working-directory: build
         env:
-          QUICKSILVERD: '${{ github.workspace }}\build\bin\Release\quicksilverd.exe'
+          QUICKSILVERDAEMON: '${{ github.workspace }}\build\bin\Release\quicksilver-daemon.exe'
           QUICKSILVERCLI: '${{ github.workspace }}\build\bin\Release\quicksilver-cli.exe'
-          QUICKSILVERUTIL: '${{ github.workspace }}\build\bin\Release\quicksilver-util.exe'
           QUICKSILVERVAULT: '${{ github.workspace }}\build\bin\Release\quicksilver-vault.exe'
           TEST_RUNNER_EXTRA: ${{ github.event_name != 'pull_request' && '--extended' || '' }}
         shell: cmd

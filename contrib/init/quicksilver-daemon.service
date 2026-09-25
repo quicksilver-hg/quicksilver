@@ -1,7 +1,7 @@
 # It is not recommended to modify this file in-place, because it will
 # be overwritten during package upgrades. If you want to add further
 # options or overwrite existing ones then use
-# $ systemctl edit quicksilverd.service
+# $ systemctl edit quicksilver-daemon.service
 # See "man systemd.service" for details.
 
 # Note that almost all daemon options could be specified in
@@ -18,9 +18,9 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/bin/quicksilverd -pid=/run/quicksilverd/quicksilverd.pid \
+ExecStart=/usr/bin/quicksilver-daemon -pid=/run/quicksilver-daemon/quicksilver-daemon.pid \
                             -conf=/etc/quicksilver/quicksilver.conf \
-                            -datadir=/var/lib/quicksilverd \
+                            -datadir=/var/lib/quicksilver-daemon \
                             -startupnotify='systemd-notify --ready' \
                             -shutdownnotify='systemd-notify --stopping'
 
@@ -33,7 +33,7 @@ ExecStartPre=/bin/chgrp quicksilver /etc/quicksilver
 
 Type=notify
 NotifyAccess=all
-PIDFile=/run/quicksilverd/quicksilverd.pid
+PIDFile=/run/quicksilver-daemon/quicksilver-daemon.pid
 
 Restart=on-failure
 TimeoutStartSec=infinity
@@ -46,16 +46,16 @@ TimeoutStopSec=600
 User=quicksilver
 Group=quicksilver
 
-# /run/quicksilverd
-RuntimeDirectory=quicksilverd
+# /run/quicksilver-daemon
+RuntimeDirectory=quicksilver-daemon
 RuntimeDirectoryMode=0710
 
 # /etc/quicksilver
 ConfigurationDirectory=quicksilver
 ConfigurationDirectoryMode=0710
 
-# /var/lib/quicksilverd
-StateDirectory=quicksilverd
+# /var/lib/quicksilver-daemon
+StateDirectory=quicksilver-daemon
 StateDirectoryMode=0710
 
 # Hardening measures

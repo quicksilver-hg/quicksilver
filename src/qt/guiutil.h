@@ -49,7 +49,7 @@ class QUrl;
 class QWidget;
 QT_END_NAMESPACE
 
-/** Utility functions used by the Quicksilver Qt UI.
+/** Utility functions used by the Quicksilver UI.
  */
 namespace GUIUtil
 {

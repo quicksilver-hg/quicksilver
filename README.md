@@ -79,13 +79,13 @@ The GUI is opt-in for ordinary CMake builds:
 ```bash
 cmake -B build -DBUILD_GUI=ON
 cmake --build build -j "$(nproc)"
-./build/bin/quicksilver-qt
+./build/bin/quicksilver
 ```
 
 For the headless node:
 
 ```bash
-./build/bin/quicksilverd -proxy=127.0.0.1:9050        # main
+./build/bin/quicksilver-daemon -proxy=127.0.0.1:9050        # main
 ./build/bin/quicksilver-cli getblockchaininfo
 ```
 
@@ -93,7 +93,7 @@ Add `-publictest` to both commands for the public test network. The daemon does
 not start a Tor of its own, which is why it is given a proxy here; the desktop
 does, and is not.
 
-For `quicksilverd`, `-proxy=` also turns address discovery off, so it does not
+For `quicksilver-daemon`, `-proxy=` also turns address discovery off, so it does not
 advertise the machine's routable addresses.
 
 The [Getting Started](doc/getting-started.md) guide continues from build output

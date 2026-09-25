@@ -20,7 +20,7 @@ standalone hash lists but safe to use with linearize-data.py, which will output
 the same data no matter which byte format is chosen.
 
 The `linearize-hashes` script requires a connection, local or remote, to a
-JSON-RPC server. Running `quicksilverd` or `quicksilver-qt -server` will be sufficient.
+JSON-RPC server. Running `quicksilver-daemon` or `quicksilver -server` will be sufficient.
 
 ## Step 2: Copy local block data
 
@@ -40,7 +40,7 @@ written to the script's blockchain.
 * `genesis`: The hash of the genesis block in the blockchain. (Default: the
 Quicksilver mainnet genesis hash. Set this explicitly when linearizing publictest
 or sandbox — see `example-linearize.cfg` for each network's value.)
-* `input`: quicksilverd blocks/ directory containing blkNNNNN.dat
+* `input`: quicksilver-daemon blocks/ directory containing blkNNNNN.dat
 * `hashlist`: text file containing list of block hashes created by
 linearize-hashes.py.
 * `max_out_sz`: Maximum size for files created by the `output_file` option.

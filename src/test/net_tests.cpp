@@ -1628,7 +1628,7 @@ BOOST_AUTO_TEST_CASE(fixed_seeds_decode_to_the_published_endpoint)
 // RPC. Upstream gets the onion target as P2P+1 and never checks it, which held
 // only because upstream puts RPC below P2P. Quicksilver's publictest and sandbox
 // put RPC at P2P+1, so the derived target landed on the node's own RPC listener and
-// `quicksilverd -sandbox` failed to start on default ports. The ports are now named
+// `quicksilver-daemon -sandbox` failed to start on default ports. The ports are now named
 // explicitly, and this asserts they stay distinct.
 BOOST_AUTO_TEST_CASE(default_ports_do_not_collide)
 {

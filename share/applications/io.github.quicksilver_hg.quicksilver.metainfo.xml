@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Copyright 2026 The Quicksilver developers -->
 <component type="desktop-application">
-  <id>io.github.quicksilver_hg.quicksilver_qt</id>
+  <id>io.github.quicksilver_hg.quicksilver</id>
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
   <name>Quicksilver</name>
@@ -12,11 +12,11 @@
       built for autonomous agents and the humans who run them.
     </p>
     <p>
-      The Quicksilver-Qt graphical client lets you run a full node, mint and
+      The Quicksilver graphical client lets you run a full node, mint and
       send coins, and manage a vault.
     </p>
   </description>
-  <launchable type="desktop-id">io.github.quicksilver_hg.quicksilver_qt.desktop</launchable>
+  <launchable type="desktop-id">io.github.quicksilver_hg.quicksilver.desktop</launchable>
   <url type="homepage">https://github.com/quicksilver-hg/quicksilver</url>
   <url type="bugtracker">https://github.com/quicksilver-hg/quicksilver/issues</url>
   <url type="vcs-browser">https://github.com/quicksilver-hg/quicksilver</url>

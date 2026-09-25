@@ -117,7 +117,7 @@ class HTTPBasicsTest (QuicksilverTestFramework):
         conn.connect()
         conn.request('POST', '/', rpc_request("getbestblockhash"), headers)
         assert_jsonrpc2_ok(conn.getresponse())
-        assert conn.sock is not None  #connection must be closed because quicksilverd should use keep-alive by default
+        assert conn.sock is not None  #connection must be closed because quicksilver-daemon should use keep-alive by default
 
         # Check excessive request size
         conn = http.client.HTTPConnection(urlNode2.hostname, urlNode2.port)

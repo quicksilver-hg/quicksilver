@@ -81,10 +81,10 @@ The high water mark value must be an integer greater than or equal to 0.
 
 For instance, using local ZMQ ports chosen by the operator:
 
-    $ quicksilverd -zmqpubhashtx=tcp://127.0.0.1:29554 \
+    $ quicksilver-daemon -zmqpubhashtx=tcp://127.0.0.1:29554 \
                -zmqpubhashtx=tcp://192.168.1.2:29554 \
                -zmqpubhashblock="tcp://[::1]:29555" \
-               -zmqpubrawtx=unix:/tmp/quicksilverd.tx.raw \
+               -zmqpubrawtx=unix:/tmp/quicksilver-daemon.tx.raw \
                -zmqpubhashtxhwm=10000
 
 Each PUB notification has a topic and body, where the header
@@ -149,9 +149,9 @@ hosts as well. If needed, this option has to be set on the client side too.
 
 ## Remarks
 
-From the perspective of quicksilverd, the ZeroMQ socket is write-only; PUB
+From the perspective of quicksilver-daemon, the ZeroMQ socket is write-only; PUB
 sockets don't even have a read function. Thus, there is no state
-introduced into quicksilverd directly. Furthermore, no information is
+introduced into quicksilver-daemon directly. Furthermore, no information is
 broadcast that wasn't already received from the public P2P network.
 
 No authentication or authorization is done on connecting clients; it
@@ -168,7 +168,7 @@ disconnections.
 
 There are several possibilities that ZMQ notification can get lost
 during transmission depending on the communication type you are
-using. quicksilverd appends an up-counting sequence number to each
+using. quicksilver-daemon appends an up-counting sequence number to each
 notification which allows listeners to detect lost notifications.
 
 The `sequence` topic refers specifically to the relay pool sequence

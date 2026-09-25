@@ -2,7 +2,7 @@
 
 **Updated for NetBSD [10.1](https://netbsd.org/releases/formal-10/NetBSD-10.1.html)**
 
-This guide describes how to build quicksilverd, command-line utilities, and GUI on NetBSD.
+This guide describes how to build quicksilver-daemon, command-line utilities, and GUI on NetBSD.
 
 ## Preparation
 
@@ -46,7 +46,7 @@ cd quicksilver
 
 #### Vault Dependencies
 
-It is not necessary to build vault functionality to run quicksilverd or the GUI.
+It is not necessary to build vault functionality to run quicksilver-daemon or the GUI.
 
 ###### Vault Support
 

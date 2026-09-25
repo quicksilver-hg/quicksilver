@@ -3,12 +3,12 @@
 # Copyright (c) 2026 The Quicksilver developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Test quicksilverd aborts if can't disconnect a block.
+"""Test quicksilver-daemon aborts if can't disconnect a block.
 
 - Start a single node and generate 3 blocks.
 - Delete the undo data.
 - Mine a fork that requires disconnecting the tip.
-- Verify that quicksilverd AbortNode's.
+- Verify that quicksilver-daemon AbortNode's.
 """
 from test_framework.test_framework import QuicksilverTestFramework
 

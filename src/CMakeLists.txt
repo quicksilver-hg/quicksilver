@@ -254,7 +254,7 @@ if(ENABLE_VAULT)
 endif()
 
 
-# P2P and RPC server functionality used by `quicksilverd` and `quicksilver-qt` executables.
+# P2P and RPC server functionality used by `quicksilver-daemon` and `quicksilver` executables.
 add_library(quicksilver_node STATIC EXCLUDE_FROM_ALL
   addrdb.cpp
   addrman.cpp
@@ -363,17 +363,17 @@ target_link_libraries(quicksilver_node
 
 # Quicksilver daemon.
 if(BUILD_DAEMON)
-  add_executable(quicksilverd
-    quicksilverd.cpp
-    init/quicksilverd.cpp
+  add_executable(quicksilver-daemon
+    quicksilver-daemon.cpp
+    init/quicksilver-daemon.cpp
   )
-  add_windows_resources(quicksilverd quicksilverd-res.rc)
-  target_link_libraries(quicksilverd
+  add_windows_resources(quicksilver-daemon quicksilver-daemon-res.rc)
+  target_link_libraries(quicksilver-daemon
     core_interface
     quicksilver_node
     $<TARGET_NAME_IF_EXISTS:quicksilver_vault>
   )
-  install_binary_component(quicksilverd HAS_MANPAGE DEVELOPER_TOOL)
+  install_binary_component(quicksilver-daemon HAS_MANPAGE DEVELOPER_TOOL)
 endif()
 
 add_library(quicksilver_cli STATIC EXCLUDE_FROM_ALL
@@ -413,18 +413,6 @@ if(BUILD_TX)
     univalue
   )
   install_binary_component(quicksilver-tx HAS_MANPAGE DEVELOPER_TOOL)
-endif()
-
-
-if(BUILD_UTIL)
-  add_executable(quicksilver-util quicksilver-util.cpp)
-  add_windows_resources(quicksilver-util quicksilver-util-res.rc)
-  target_link_libraries(quicksilver-util
-    core_interface
-    quicksilver_common
-    quicksilver_util
-  )
-  install_binary_component(quicksilver-util HAS_MANPAGE DEVELOPER_TOOL)
 endif()
 
 

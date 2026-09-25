@@ -4,25 +4,25 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #
-# Be aware that quicksilverd and quicksilver-qt differ in terms of localization: Qt
+# Be aware that quicksilver-daemon and quicksilver differ in terms of localization: Qt
 # opts in to POSIX localization by running setlocale(LC_ALL, "") on startup,
-# whereas no such call is made in quicksilverd.
+# whereas no such call is made in quicksilver-daemon.
 #
 # Qt runs setlocale(LC_ALL, "") on initialization. This installs the locale
 # specified by the user's LC_ALL (or LC_*) environment variable as the new
 # C locale.
 #
-# In contrast, quicksilverd does not opt in to localization -- no call to
+# In contrast, quicksilver-daemon does not opt in to localization -- no call to
 # setlocale(LC_ALL, "") is made and the environment variables LC_* are
 # thus ignored.
 #
-# This results in situations where quicksilverd is guaranteed to be running
-# with the classic locale ("C") whereas the locale of quicksilver-qt will vary
+# This results in situations where quicksilver-daemon is guaranteed to be running
+# with the classic locale ("C") whereas the locale of quicksilver will vary
 # depending on the user's environment variables.
 #
 # An example: Assuming the environment variable LC_ALL=de_DE then the
-# call std::to_string(1.23) will return "1.230000" in quicksilverd but
-# "1,230000" in quicksilver-qt.
+# call std::to_string(1.23) will return "1.230000" in quicksilver-daemon but
+# "1,230000" in quicksilver.
 #
 # From the Qt documentation:
 # "On Unix/Linux Qt is configured to use the system locale settings by default.
@@ -65,9 +65,9 @@ KNOWN_VIOLATIONS = [
     # now fixed rather than exempted. Everything below is a genuine exemption.
     #
     # The three GPU tools are standalone nvcc binaries. They are never linked
-    # into quicksilverd or quicksilver-qt and never call setlocale, so they run
+    # into quicksilver-daemon or quicksilver and never call setlocale, so they run
     # in the classic "C" locale by construction, which is the same guarantee the
-    # header comment above says quicksilverd relies on. Their stdout contracts
+    # header comment above says quicksilver-daemon relies on. Their stdout contracts
     # (nonce=/cycle=, and the CSV) now use only %u/%s/%llx plus Seconds6, so no
     # LC_NUMERIC surface remains; the entries below are stderr diagnostics,
     # argument parsing, and integer formatting.

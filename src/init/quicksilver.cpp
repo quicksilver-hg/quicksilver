@@ -16,10 +16,10 @@
 
 namespace init {
 namespace {
-class QuicksilverQtInit : public interfaces::Init
+class QuicksilverInit : public interfaces::Init
 {
 public:
-    QuicksilverQtInit()
+    QuicksilverInit()
     {
         InitContext(m_node);
         m_node.init = this;
@@ -39,6 +39,6 @@ public:
 namespace interfaces {
 std::unique_ptr<Init> MakeGuiInit()
 {
-    return std::make_unique<init::QuicksilverQtInit>();
+    return std::make_unique<init::QuicksilverInit>();
 }
 } // namespace interfaces

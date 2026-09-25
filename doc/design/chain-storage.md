@@ -84,7 +84,7 @@ upstream's roughly 60 GB/year. At 152 GB/year the same assumption is not safe to
 silently. An operator who wants to serve history should choose to, and should see what
 it costs at the moment they choose.
 
-The daemon is deliberately **not** changed. `quicksilverd` still defaults to
+The daemon is deliberately **not** changed. `quicksilver-daemon` still defaults to
 `-prune=0`, so an operator who runs the node directly gets full history unless they ask
 otherwise. The default that changed is the desktop's, because the desktop is what an
 ordinary user runs without reading the manual.
@@ -95,11 +95,11 @@ ordinary user runs without reading the manual.
   re-derives that choice from how much free disk the machine happens to have.
 - The dialog fires on whether this desktop has ever been set up, not on whether a data
   directory happens to exist (`Intro::IsNeeded`). Existence was the wrong question: any
-  directory that was already there — an empty one, or one `quicksilverd` had created —
+  directory that was already there — an empty one, or one `quicksilver-daemon` had created —
   skipped the welcome screen, the storage figures and the data directory choice, and
   wrote no prune setting at all, which left that operator **archival by silence**. That
   is the outcome this section exists to prevent, and it was reachable by following
-  [getting-started.md](../getting-started.md), which leads with `quicksilverd` (F-123).
+  [getting-started.md](../getting-started.md), which leads with `quicksilver-daemon` (F-123).
 - **The pruning choice is offered only where it is still free to make.** A data
   directory that already holds a chain has a settled storage policy, so the dialog
   discloses that rather than defaulting it: checking the box would delete history the
@@ -137,7 +137,7 @@ If that node disappears and no other archival node exists:
   those headers commit to.
 
 The recovery from that state is not automatic: it needs somebody to restore an archival
-copy. Anyone running `quicksilverd` without `-prune` is holding one, which is a further
+copy. Anyone running `quicksilver-daemon` without `-prune` is holding one, which is a further
 reason the daemon default was left alone.
 
 This is a real single point of failure and it is stated rather than mitigated. The

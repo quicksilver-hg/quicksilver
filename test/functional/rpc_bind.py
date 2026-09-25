@@ -3,7 +3,7 @@
 # Copyright (c) 2026 The Quicksilver developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Test running quicksilverd with the -rpcbind and -rpcallowip options."""
+"""Test running quicksilver-daemon with the -rpcbind and -rpcallowip options."""
 
 from test_framework.netutil import all_interfaces, addr_to_hex, get_bind_addrs, test_ipv6_local
 from test_framework.test_framework import QuicksilverTestFramework, SkipTest

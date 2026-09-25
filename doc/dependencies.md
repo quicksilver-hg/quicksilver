@@ -43,6 +43,6 @@ package manager on Unix. On Windows, the operator can run
 `contrib/tor/fetch-tor.ps1`, which pins a SHA-256, to obtain it. The version
 floor is whatever supports `ControlPort auto`, which Tor has since 0.2.7; every
 packaged Tor since 2015 satisfies it, so there is no practical floor to police.
-`quicksilverd` defaults to `-bundledtor=0`. It needs a Tor proxy to reach the
+`quicksilver-daemon` defaults to `-bundledtor=0`. It needs a Tor proxy to reach the
 onion seed unless given an explicit peer. Hosting an onion service additionally
 requires Tor's control port (see [Bootstrapping](bootstrapping.md)).

@@ -7,8 +7,10 @@
 #include <chainparams.h>
 #include <test/util/mining.h>
 #include <consensus/params.h>
+#include <crypto/cuckatoo/cuckatoo.h>
 #include <headerssync.h>
 #include <pow.h>
+#include <streams.h>
 #include <test/util/setup_common.h>
 #include <validation.h>
 #include <vector>
@@ -47,8 +49,19 @@ void HeadersGeneratorSetup::GenerateHeaders(std::vector<CBlockHeader>& headers,
         next_header.hashMerkleRoot = merkle_root;
         next_header.nTime = prev_time+1;
         next_header.nBits = nBits;
+        next_header.nCongestion = headers.size();
 
         FindProofOfWork(next_header);
+        // Give every header a distinct non-zero proof while preserving sandbox
+        // proof-hash validity. HeadersSyncState's caller normally performs this
+        // check before handing headers to it.
+        next_header.nCycle[1] += headers.size();
+        const auto target = DeriveTarget(next_header.nBits, Params().GetConsensus().powLimit);
+        BOOST_REQUIRE(target);
+        while (UintToArith256(cuckatoo::CuckatooProofHash(next_header.nCycle)) > *target) {
+            next_header.nCycle[0] += next_header.nCycle.size();
+        }
+        BOOST_REQUIRE(CheckProofOfWork(next_header, Params().GetConsensus()));
         prev_hash = next_header.GetHash();
         prev_time = next_header.nTime;
     }
@@ -118,6 +131,14 @@ BOOST_AUTO_TEST_CASE(headers_sync_state)
     BOOST_CHECK(!result.request_more);
     // All headers should be ready for acceptance:
     BOOST_CHECK(result.pow_validated_headers.size() == first_chain.size());
+    for (size_t i = 0; i < first_chain.size(); ++i) {
+        DataStream original;
+        DataStream released;
+        original << first_chain[i];
+        released << result.pow_validated_headers[i];
+        BOOST_REQUIRE(original.str() == released.str());
+        BOOST_CHECK_EQUAL(result.pow_validated_headers[i].GetHash(), first_chain[i].GetHash());
+    }
     // Nothing left for the sync logic to do:
     BOOST_CHECK(hss->GetState() == HeadersSyncState::State::FINAL);
 

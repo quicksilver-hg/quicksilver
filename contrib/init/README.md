@@ -1,11 +1,11 @@
 Sample configuration files for:
 ```
-systemd: quicksilverd.service
-Upstart: quicksilverd.conf
-OpenRC:  quicksilverd.openrc
-         quicksilverd.openrcconf
-CentOS:  quicksilverd.init
-macOS:   io.github.quicksilver-hg.quicksilverd.plist
+systemd: quicksilver-daemon.service
+Upstart: quicksilver-daemon.conf
+OpenRC:  quicksilver-daemon.openrc
+         quicksilver-daemon.openrcconf
+CentOS:  quicksilver-daemon.init
+macOS:   io.github.quicksilver-hg.quicksilver-daemon.plist
 ```
 have been made available to assist packagers in creating node packages here.
 

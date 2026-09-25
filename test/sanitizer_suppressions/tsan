@@ -14,7 +14,7 @@ race:zmq::*
 # Intentional deadlock in tests
 deadlock:sync_tests::potential_deadlock_detected
 
-# Do not restore race:quicksilver-qt or src/qt/test/* wildcards. They hide
+# Do not restore race:quicksilver or src/qt/test/* wildcards. They hide
 # allotment, mining-model, and GPU-option races. TSan CI does not build
 # the GUI (BUILD_GUI defaults off); if you run TSan with the GUI, name
 # the specific frame.

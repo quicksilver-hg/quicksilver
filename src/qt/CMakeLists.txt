@@ -239,21 +239,21 @@ if(qt_lib_type STREQUAL "STATIC_LIBRARY")
   )
 endif()
 
-add_executable(quicksilver-qt
+add_executable(quicksilver
   main.cpp
-  ../init/quicksilver-qt.cpp
+  ../init/quicksilver.cpp
 )
 
-add_windows_resources(quicksilver-qt res/quicksilver-qt-res.rc)
+add_windows_resources(quicksilver res/quicksilver-res.rc)
 
-target_link_libraries(quicksilver-qt
+target_link_libraries(quicksilver
   core_interface
   quicksilver_qt
   quicksilver_node
 )
 
-import_plugins(quicksilver-qt)
-install_binary_component(quicksilver-qt HAS_MANPAGE)
+import_plugins(quicksilver)
+install_binary_component(quicksilver HAS_MANPAGE)
 
 # Linux/BSD desktop integration (matches the DBus guard used elsewhere in the
 # build). macOS ships a .app bundle and Windows an NSIS installer, so both are
@@ -262,9 +262,9 @@ install_binary_component(quicksilver-qt HAS_MANPAGE)
 # entry, AppStream metainfo, and menu icons; Debian packaging consumes them
 # rather than copying these files again.
 if(NOT CMAKE_SYSTEM_NAME MATCHES "(Windows|Darwin)")
-  install(FILES ${PROJECT_SOURCE_DIR}/share/applications/io.github.quicksilver_hg.quicksilver_qt.desktop
+  install(FILES ${PROJECT_SOURCE_DIR}/share/applications/io.github.quicksilver_hg.quicksilver.desktop
           DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
-  install(FILES ${PROJECT_SOURCE_DIR}/share/applications/io.github.quicksilver_hg.quicksilver_qt.metainfo.xml
+  install(FILES ${PROJECT_SOURCE_DIR}/share/applications/io.github.quicksilver_hg.quicksilver.metainfo.xml
           DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
   foreach(icon_size IN ITEMS 16 32 64 128 256)
     install(FILES ${PROJECT_SOURCE_DIR}/share/pixmaps/quicksilver${icon_size}.png
@@ -279,7 +279,7 @@ if(NOT CMAKE_SYSTEM_NAME MATCHES "(Windows|Darwin)")
           RENAME quicksilver.xpm)
 endif()
 if(WIN32)
-  set_target_properties(quicksilver-qt PROPERTIES WIN32_EXECUTABLE TRUE)
+  set_target_properties(quicksilver PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
 
 if(BUILD_GUI_TESTS)

@@ -158,7 +158,7 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
     def parse_args(self, test_file):
         parser = argparse.ArgumentParser(usage="%(prog)s [options]")
         parser.add_argument("--nocleanup", dest="nocleanup", default=False, action="store_true",
-                            help="Leave quicksilverds and test.* datadir on exit or error")
+                            help="Leave quicksilver-daemons and test.* datadir on exit or error")
         parser.add_argument("--cachedir", dest="cachedir", default=os.path.abspath(os.path.dirname(test_file) + "/../cache"),
                             help="Directory for caching pregenerated datadirs (default: %(default)s)")
         parser.add_argument("--tmpdir", dest="tmpdir", help="Root directory for datadirs (must not exist)")
@@ -230,9 +230,8 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
         """Update self.options with the paths of all binaries from environment variables or their default values"""
 
         binaries = {
-            "quicksilverd": ("quicksilverd", "QUICKSILVERD"),
+            "quicksilver-daemon": ("quicksilverdaemon", "QUICKSILVERDAEMON"),
             "quicksilver-cli": ("quicksilvercli", "QUICKSILVERCLI"),
-            "quicksilver-util": ("quicksilverutil", "QUICKSILVERUTIL"),
             "quicksilver-vault": ("quicksilvervault", "QUICKSILVERVAULT"),
             "quicksilver-agent": ("quicksilveragent", "QUICKSILVERAGENT"),
         }
@@ -465,7 +464,7 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
             for i in range(len(extra_args)):
                 extra_args[i] = extra_args[i] + ["-whitelist=noban,in,out@127.0.0.1"]
         if binary is None:
-            binary = [self.options.quicksilverd] * num_nodes
+            binary = [self.options.quicksilverdaemon] * num_nodes
         if binary_cli is None:
             binary_cli = [self.options.quicksilvercli] * num_nodes
         assert_equal(len(extra_confs), num_nodes)
@@ -481,7 +480,7 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
                 rpchost=rpchost,
                 timewait=self.rpc_timeout,
                 timeout_factor=self.options.timeout_factor,
-                quicksilverd=binary[i],
+                quicksilverdaemon=binary[i],
                 quicksilver_cli=binary_cli[i],
                 coverage_dir=self.options.coveragedir,
                 cwd=self.options.tmpdir,
@@ -496,7 +495,7 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
             self.nodes.append(test_node_i)
 
     def start_node(self, i, *args, **kwargs):
-        """Start a quicksilverd"""
+        """Start a quicksilver-daemon"""
 
         node = self.nodes[i]
 
@@ -507,7 +506,7 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
             coverage.write_all_rpc_commands(self.options.coveragedir, node.rpc)
 
     def start_nodes(self, extra_args=None, *args, **kwargs):
-        """Start multiple quicksilverds"""
+        """Start multiple quicksilver-daemons"""
 
         if extra_args is None:
             extra_args = [None] * self.num_nodes
@@ -522,11 +521,11 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
                 coverage.write_all_rpc_commands(self.options.coveragedir, node.rpc)
 
     def stop_node(self, i, expected_stderr='', wait=0):
-        """Stop a quicksilverd test node"""
+        """Stop a quicksilver-daemon test node"""
         self.nodes[i].stop_node(expected_stderr, wait=wait)
 
     def stop_nodes(self, wait=0):
-        """Stop multiple quicksilverd test nodes"""
+        """Stop multiple quicksilver-daemon test nodes"""
         for node in self.nodes:
             # Issue RPC to stop nodes
             node.stop_node(wait=wait, wait_until_stopped=False)
@@ -663,7 +662,7 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
         return blocks
 
     def create_outpoints(self, node, *, outputs):
-        """Send funds to a given list of `{address: amount}` targets using the quicksilverd
+        """Send funds to a given list of `{address: amount}` targets using the quicksilver-daemon
         vault and return the corresponding outpoints as a list of dictionaries
         `[{"txid": txid, "vout": vout1}, {"txid": txid, "vout": vout2}, ...]`.
         The result can be used to specify inputs for RPCs like `createrawtransaction`,
@@ -744,7 +743,7 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
         # User can provide log level as a number or string (eg DEBUG). loglevel was caught as a string, so try to convert it to an int
         ll = int(self.options.loglevel) if self.options.loglevel.isdigit() else self.options.loglevel.upper()
         ch.setLevel(ll)
-        # Format logs the same as quicksilverd's debug.log with microprecision (so log files can be concatenated and sorted)
+        # Format logs the same as quicksilver-daemon's debug.log with microprecision (so log files can be concatenated and sorted)
         formatter = logging.Formatter(fmt='%(asctime)s.%(msecs)03d000Z %(name)s (%(levelname)s): %(message)s', datefmt='%Y-%m-%dT%H:%M:%S')
         formatter.converter = time.gmtime
         fh.setFormatter(formatter)
@@ -784,7 +783,7 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
                     rpchost=None,
                     timewait=self.rpc_timeout,
                     timeout_factor=self.options.timeout_factor,
-                    quicksilverd=self.options.quicksilverd,
+                    quicksilverdaemon=self.options.quicksilverdaemon,
                     quicksilver_cli=self.options.quicksilvercli,
                     coverage_dir=None,
                     cwd=self.options.tmpdir,
@@ -863,10 +862,10 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
         except ImportError:
             raise SkipTest("bcc python module not available")
 
-    def skip_if_no_quicksilverd_tracepoints(self):
-        """Skip the running test if quicksilverd has not been compiled with USDT tracepoint support."""
+    def skip_if_no_quicksilverdaemon_tracepoints(self):
+        """Skip the running test if quicksilver-daemon has not been compiled with USDT tracepoint support."""
         if not self.is_usdt_compiled():
-            raise SkipTest("quicksilverd has not been built with USDT tracepoints enabled.")
+            raise SkipTest("quicksilver-daemon has not been built with USDT tracepoints enabled.")
 
     def skip_if_no_bpf_permissions(self):
         """Skip the running test if we don't have permissions to do BPF syscalls and load BPF maps."""
@@ -884,13 +883,13 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
         if os.name != 'posix':
             raise SkipTest("not on a POSIX system")
 
-    def skip_if_no_quicksilverd_zmq(self):
-        """Skip the running test if quicksilverd has not been compiled with zmq support."""
+    def skip_if_no_quicksilverdaemon_zmq(self):
+        """Skip the running test if quicksilver-daemon has not been compiled with zmq support."""
         if not self.is_zmq_compiled():
             # Name the option: WITH_ZMQ defaults to OFF, so this script silently did
             # not run for a long time, and four real bugs sat behind that silence.
             # A gate record should say why a stage produced nothing.
-            raise SkipTest("quicksilverd was built without ZMQ; configure with -DWITH_ZMQ=ON to run this test.")
+            raise SkipTest("quicksilver-daemon was built without ZMQ; configure with -DWITH_ZMQ=ON to run this test.")
 
     def skip_if_no_vault(self):
         """Skip the running test if vault has not been compiled."""
@@ -908,11 +907,6 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
         """Skip the running test if quicksilver-vault has not been compiled."""
         if not self.is_vault_tool_compiled():
             raise SkipTest("quicksilver-vault has not been compiled")
-
-    def skip_if_no_quicksilver_util(self):
-        """Skip the running test if quicksilver-util has not been compiled."""
-        if not self.is_quicksilver_util_compiled():
-            raise SkipTest("quicksilver-util has not been compiled")
 
     def skip_if_no_cli(self):
         """Skip the running test if quicksilver-cli has not been compiled."""
@@ -952,10 +946,6 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
     def is_vault_tool_compiled(self):
         """Checks whether quicksilver-vault was compiled."""
         return self.config["components"].getboolean("ENABLE_VAULT_TOOL")
-
-    def is_quicksilver_util_compiled(self):
-        """Checks whether quicksilver-util was compiled."""
-        return self.config["components"].getboolean("ENABLE_QUICKSILVER_UTIL")
 
     def is_zmq_compiled(self):
         """Checks whether the zmq module was compiled."""

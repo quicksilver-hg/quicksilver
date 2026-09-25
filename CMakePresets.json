@@ -72,7 +72,6 @@
         "BUILD_SHARED_LIBS": "ON",
         "BUILD_TESTS": "ON",
         "BUILD_TX": "ON",
-        "BUILD_UTIL": "ON",
         "BUILD_UTIL_CHAINSTATE": "ON",
         "BUILD_VAULT_TOOL": "ON",
         "ENABLE_EXTERNAL_SIGNER": "ON",

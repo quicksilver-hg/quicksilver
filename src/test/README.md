@@ -68,7 +68,7 @@ build/bin/test_quicksilver --run_test=getarg_tests/doubledash
 The `--log_level=` (or `-l`) argument controls the verbosity of the test output.
 
 The `test_quicksilver` runner also accepts some of the command line arguments accepted by
-`quicksilverd`. Use `--` to separate these sets of arguments:
+`quicksilver-daemon`. Use `--` to separate these sets of arguments:
 
 ```bash
 build/bin/test_quicksilver --log_level=all --run_test=getarg_tests -- -printtoconsole=1
@@ -82,7 +82,7 @@ Running `test_quicksilver` creates a temporary working (data) directory with a r
 generated pathname within `test_common quicksilver/`, which in turn is within
 the system's temporary directory (see
 [`temp_directory_path`](https://en.cppreference.com/w/cpp/filesystem/temp_directory_path)).
-This data directory looks like a simplified form of the standard `quicksilverd` data
+This data directory looks like a simplified form of the standard `quicksilver-daemon` data
 directory. Its content will vary depending on the test, but it will always
 have a `debug.log` file, for example.
 

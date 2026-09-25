@@ -18,10 +18,10 @@ using node::NodeContext;
 
 namespace init {
 namespace {
-class QuicksilverdInit : public interfaces::Init
+class QuicksilverDaemonInit : public interfaces::Init
 {
 public:
-    QuicksilverdInit(NodeContext& node) : m_node(node)
+    QuicksilverDaemonInit(NodeContext& node) : m_node(node)
     {
         InitContext(m_node);
         m_node.init = this;
@@ -41,6 +41,6 @@ public:
 namespace interfaces {
 std::unique_ptr<Init> MakeNodeInit(NodeContext& node)
 {
-    return std::make_unique<init::QuicksilverdInit>(node);
+    return std::make_unique<init::QuicksilverDaemonInit>(node);
 }
 } // namespace interfaces

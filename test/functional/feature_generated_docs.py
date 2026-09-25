@@ -57,12 +57,11 @@ MAN_OPTION_RE = re.compile(r"^\\fB\\-((?:\\-|[a-zA-Z0-9_.])+)")
 
 # Every binary gen-manpages.py generates a page for.
 DOCUMENTED_BINARIES = [
-    "quicksilverd",
+    "quicksilver-daemon",
     "quicksilver-cli",
     "quicksilver-tx",
     "quicksilver-vault",
-    "quicksilver-util",
-    "quicksilver-qt",
+    "quicksilver",
     "quicksilver-agent",
 ]
 
@@ -89,7 +88,7 @@ class GeneratedDocsTest(QuicksilverTestFramework):
         return os.path.join(self.config["environment"]["SRCDIR"], *parts)
 
     def help_options(self, binary):
-        # quicksilver-qt would otherwise need a display; the help text is
+        # quicksilver would otherwise need a display; the help text is
         # identical either way. Verified width-independent at COLUMNS=40, 80
         # and 200, so this output is deterministic.
         env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
@@ -133,7 +132,7 @@ class GeneratedDocsTest(QuicksilverTestFramework):
         for name in DOCUMENTED_BINARIES:
             binary = self.binary_path(name)
             if not os.path.isfile(binary):
-                # quicksilver-qt is the only one that can legitimately be
+                # quicksilver is the only one that can legitimately be
                 # absent, and only when the GUI was not built. Say so loudly:
                 # its page is still checked in and goes unverified here.
                 self.log.warning(
@@ -162,9 +161,9 @@ class GeneratedDocsTest(QuicksilverTestFramework):
             self.log.info(f"{name}: {len(from_help)} options match doc/man/{name}.1")
             checked += 1
 
-        # quicksilverd, quicksilver-cli, quicksilver-tx, quicksilver-vault and
-        # quicksilver-util are always built alongside the functional suite.
-        # quicksilver-qt and quicksilver-agent are checked when they were
+        # quicksilver-daemon, quicksilver-cli, quicksilver-tx and quicksilver-vault
+        # are always built alongside the functional suite.
+        # quicksilver and quicksilver-agent are checked when they were
         # built and skipped, with a warning, when they were not. Anything
         # less than five means this test checked less than it claims to.
         assert checked >= 5, f"only {checked} man pages were checked, expected at least 5"
@@ -196,7 +195,7 @@ class GeneratedDocsTest(QuicksilverTestFramework):
     def check_example_conf(self):
         if platform.system() == "Windows":
             # Same reason check_man_pages() skips: the committed conf is
-            # generated from quicksilverd --help on a POSIX build, and -daemon /
+            # generated from quicksilver-daemon --help on a POSIX build, and -daemon /
             # -daemonwait are registered only #if HAVE_DECL_FORK (src/init.cpp),
             # so a Windows binary never prints them. The diff that produces is
             # the platform's, not a stale file -- regenerating here would only
@@ -227,7 +226,7 @@ class GeneratedDocsTest(QuicksilverTestFramework):
                 env=dict(
                     os.environ,
                     TOPDIR=self.config["environment"]["SRCDIR"],
-                    QUICKSILVERD=self.binary_path("quicksilverd"),
+                    QUICKSILVERDAEMON=self.binary_path("quicksilver-daemon"),
                     SHARE_EXAMPLES_DIR=tmpdir,
                     EXAMPLE_CONF_FILE=regenerated,
                 ),

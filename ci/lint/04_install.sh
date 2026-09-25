@@ -55,8 +55,11 @@ ${CI_RETRY_EXE} pip3 install \
   vulture==2.6
 
 SHELLCHECK_VERSION=v0.8.0
-curl -sL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | \
-    tar --xz -xf - --directory /tmp/
+SHELLCHECK_ARCHIVE="/tmp/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+${CI_RETRY_EXE} curl --fail --silent --show-error --location \
+    --output "${SHELLCHECK_ARCHIVE}" \
+    "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+tar --xz -xf "${SHELLCHECK_ARCHIVE}" --directory /tmp/
 mv "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/bin/
 
 popd || exit

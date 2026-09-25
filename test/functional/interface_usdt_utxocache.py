@@ -151,7 +151,7 @@ class UTXOCacheTracepointTest(QuicksilverTestFramework):
 
     def skip_test_if_missing_module(self):
         self.skip_if_platform_not_linux()
-        self.skip_if_no_quicksilverd_tracepoints()
+        self.skip_if_no_quicksilverdaemon_tracepoints()
         self.skip_if_no_python_bcc()
         self.skip_if_no_bpf_permissions()
 
