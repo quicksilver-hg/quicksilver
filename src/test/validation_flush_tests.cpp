@@ -4,16 +4,68 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 //
 #include <node/blockstorage.h>
+#include <script/solver.h>
 #include <sync.h>
 #include <test/util/coins.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
+#include <undo.h>
 #include <util/fs.h>
 #include <validation.h>
 
 #include <boost/test/unit_test.hpp>
 
 BOOST_FIXTURE_TEST_SUITE(validation_flush_tests, TestingSetup)
+
+namespace {
+class ScopedFlushFailureHook
+{
+public:
+    explicit ScopedFlushFailureHook(FlatFileSeq::FlushFailureHook hook)
+    {
+        FlatFileSeq::SetFlushFailureHookForTesting(std::move(hook));
+    }
+    ~ScopedFlushFailureHook() { FlatFileSeq::SetFlushFailureHookForTesting({}); }
+    void Reset() { FlatFileSeq::SetFlushFailureHookForTesting({}); }
+};
+
+class BlockFilePathRestorer
+{
+public:
+    explicit BlockFilePathRestorer(fs::path path) : m_path{std::move(path)}, m_saved_path{SavedPath(m_path)}
+    {
+        BOOST_REQUIRE(fs::is_regular_file(m_path));
+        fs::rename(m_path, m_saved_path);
+        BOOST_REQUIRE(fs::create_directory(m_path));
+    }
+
+    ~BlockFilePathRestorer()
+    {
+        std::error_code error;
+        if (fs::exists(m_saved_path)) {
+            fs::remove_all(m_path, error);
+            error.clear();
+            fs::rename(m_saved_path, m_path, error);
+        }
+    }
+
+    void Restore()
+    {
+        BOOST_REQUIRE(fs::remove(m_path));
+        fs::rename(m_saved_path, m_path);
+    }
+
+private:
+    static fs::path SavedPath(fs::path path)
+    {
+        path += ".saved";
+        return path;
+    }
+
+    const fs::path m_path;
+    const fs::path m_saved_path;
+};
+} // namespace
 
 BOOST_FIXTURE_TEST_CASE(block_file_flush_failure_stops_persistence, TestChain100Setup)
 {
@@ -55,6 +107,98 @@ BOOST_FIXTURE_TEST_CASE(block_file_flush_failure_stops_persistence, TestChain100
         LOCK(::cs_main);
         BOOST_CHECK_EQUAL(chainstate.CoinsTip().GetCacheSize(), cache_size);
     }
+}
+
+BOOST_FIXTURE_TEST_CASE(block_file_rollover_flush_failure_stops_index_write, TestChain100Setup)
+{
+    auto& chainman{*Assert(m_node.chainman)};
+    auto& blockman{chainman.m_blockman};
+    Chainstate& chainstate{chainman.ActiveChainstate()};
+
+    BlockValidationState initial_state;
+    BOOST_REQUIRE(chainstate.FlushStateToDisk(initial_state, FlushStateMode::ALWAYS));
+    int persisted_last_file{-1};
+    BOOST_REQUIRE(WITH_LOCK(::cs_main, return blockman.m_block_tree_db->ReadLastBlockFile(persisted_last_file)));
+    BOOST_REQUIRE_EQUAL(persisted_last_file, 0);
+
+    const CScript coinbase_script{GetScriptForRawPubKey(coinbaseKey.GetPubKey())};
+    const CBlock block{CreateBlock({}, coinbase_script, chainstate)};
+    const unsigned int serialized_size{static_cast<unsigned int>(GetSerializeSize(TX_WITH_WITNESS(block)))};
+    const unsigned int record_size{static_cast<unsigned int>(serialized_size + node::BLOCK_SERIALIZATION_HEADER_SIZE)};
+    WITH_LOCK(::cs_main, blockman.GetBlockFileInfo(0)->nSize = node::MAX_BLOCKFILE_SIZE - record_size);
+
+    BlockFilePathRestorer restore_block_file{blockman.GetBlockPosFilename(FlatFilePos{0, 0})};
+    BOOST_REQUIRE(chainman.ProcessNewBlock(std::make_shared<const CBlock>(block), true, true, nullptr));
+    BOOST_REQUIRE_EQUAL(WITH_LOCK(::cs_main, return blockman.LookupBlockIndex(block.GetHash())->nFile), 1);
+
+    BlockValidationState failed_state;
+    BOOST_CHECK(!chainstate.FlushStateToDisk(failed_state, FlushStateMode::ALWAYS));
+    BOOST_CHECK(failed_state.IsError());
+    int last_file_after_failure{-1};
+    BOOST_REQUIRE(WITH_LOCK(::cs_main, return blockman.m_block_tree_db->ReadLastBlockFile(last_file_after_failure)));
+    BOOST_CHECK_EQUAL(last_file_after_failure, persisted_last_file);
+
+    restore_block_file.Restore();
+    BlockValidationState retry_state;
+    BOOST_CHECK(chainstate.FlushStateToDisk(retry_state, FlushStateMode::ALWAYS));
+    int last_file_after_retry{-1};
+    BOOST_REQUIRE(WITH_LOCK(::cs_main, return blockman.m_block_tree_db->ReadLastBlockFile(last_file_after_retry)));
+    BOOST_CHECK_EQUAL(last_file_after_retry, 1);
+}
+
+BOOST_FIXTURE_TEST_CASE(older_undo_file_flush_failure_stops_index_write, TestChain100Setup)
+{
+    auto& chainman{*Assert(m_node.chainman)};
+    auto& blockman{chainman.m_blockman};
+    Chainstate& chainstate{chainman.ActiveChainstate()};
+
+    BlockValidationState initial_state;
+    BOOST_REQUIRE(chainstate.FlushStateToDisk(initial_state, FlushStateMode::ALWAYS));
+
+    CBlockIndex* old_tip{WITH_LOCK(::cs_main, return chainman.ActiveChain().Tip())};
+    const CScript coinbase_script{GetScriptForRawPubKey(coinbaseKey.GetPubKey())};
+    const CBlock rollover_block{CreateBlock({}, coinbase_script, chainstate)};
+    const unsigned int record_size{static_cast<unsigned int>(GetSerializeSize(TX_WITH_WITNESS(rollover_block)) + node::BLOCK_SERIALIZATION_HEADER_SIZE)};
+    WITH_LOCK(::cs_main, blockman.GetBlockFileInfo(0)->nSize = node::MAX_BLOCKFILE_SIZE - record_size);
+    BOOST_REQUIRE(chainman.ProcessNewBlock(std::make_shared<const CBlock>(rollover_block), true, true, nullptr));
+
+    BlockValidationState baseline_state;
+    BOOST_REQUIRE(chainstate.FlushStateToDisk(baseline_state, FlushStateMode::ALWAYS));
+    CBlockFileInfo persisted_file_info;
+    BOOST_REQUIRE(WITH_LOCK(::cs_main, return blockman.m_block_tree_db->ReadBlockFileInfo(0, persisted_file_info)));
+
+    const fs::path undo_path{blockman.GetBlockPosFilename(FlatFilePos{0, 0}).parent_path() / "rev00000.dat"};
+    int hook_calls{0};
+    ScopedFlushFailureHook flush_failure{[&](const fs::path& path, const FlatFilePos& pos, bool finalize) {
+        if (path == undo_path && pos.nFile == 0 && finalize) {
+            ++hook_calls;
+            return true;
+        }
+        return false;
+    }};
+
+    BlockValidationState undo_state;
+    {
+        LOCK(::cs_main);
+        old_tip->nUndoPos = 0;
+        old_tip->nStatus &= ~BLOCK_HAVE_UNDO;
+        BOOST_REQUIRE(blockman.WriteBlockUndo(CBlockUndo{}, undo_state, *old_tip));
+    }
+    BOOST_REQUIRE_EQUAL(hook_calls, 1);
+
+    BlockValidationState failed_state;
+    BOOST_CHECK(!chainstate.FlushStateToDisk(failed_state, FlushStateMode::ALWAYS));
+    BOOST_CHECK(failed_state.IsError());
+    CBlockFileInfo file_info_after_failure;
+    BOOST_REQUIRE(WITH_LOCK(::cs_main, return blockman.m_block_tree_db->ReadBlockFileInfo(0, file_info_after_failure)));
+    BOOST_CHECK_EQUAL(file_info_after_failure.nUndoSize, persisted_file_info.nUndoSize);
+
+    flush_failure.Reset();
+    BlockValidationState retry_state;
+    BOOST_CHECK(chainstate.FlushStateToDisk(retry_state, FlushStateMode::ALWAYS));
+    CBlockFileInfo file_info_after_retry;
+    BOOST_REQUIRE(WITH_LOCK(::cs_main, return blockman.m_block_tree_db->ReadBlockFileInfo(0, file_info_after_retry)));
+    BOOST_CHECK_GT(file_info_after_retry.nUndoSize, persisted_file_info.nUndoSize);
 }
 
 //! Test utilities for detecting when we need to flush the coins cache based

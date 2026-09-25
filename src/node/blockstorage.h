@@ -132,6 +132,11 @@ class BlockManager
     friend ChainstateManager;
 
 private:
+    enum class FlushFileType {
+        BLOCK,
+        UNDO,
+    };
+
     const CChainParams& GetParams() const { return m_opts.chainparams; }
     const Consensus::Params& GetConsensus() const { return m_opts.chainparams.GetConsensus(); }
     /**
@@ -194,6 +199,9 @@ private:
 
     RecursiveMutex cs_LastBlockFile;
     std::vector<CBlockFileInfo> m_blockfile_info;
+
+    /** Finalized files whose flush failed and must succeed before index persistence. */
+    std::set<std::pair<int, FlushFileType>> m_failed_file_flushes GUARDED_BY(cs_LastBlockFile);
 
     //! Blockfile number cursor. Ordinary IBD uses a single chain of block files.
     std::optional<BlockfileCursor> m_blockfile_cursor GUARDED_BY(cs_LastBlockFile){BlockfileCursor{}};

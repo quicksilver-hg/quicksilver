@@ -7,6 +7,7 @@
 #ifndef QUICKSILVER_FLATFILE_H
 #define QUICKSILVER_FLATFILE_H
 
+#include <functional>
 #include <string>
 
 #include <serialize.h>
@@ -51,6 +52,8 @@ private:
     const size_t m_chunk_size;
 
 public:
+    using FlushFailureHook = std::function<bool(const fs::path&, const FlatFilePos&, bool)>;
+
     /**
      * Constructor
      *
@@ -85,6 +88,9 @@ public:
      * @return true on success, false on failure.
      */
     bool Flush(const FlatFilePos& pos, bool finalize = false) const;
+
+    /** Install a process-wide fault hook used by unit tests. */
+    static void SetFlushFailureHookForTesting(FlushFailureHook hook);
 };
 
 #endif // QUICKSILVER_FLATFILE_H

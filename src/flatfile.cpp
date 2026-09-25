@@ -4,12 +4,19 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <mutex>
 #include <stdexcept>
+#include <utility>
 
 #include <flatfile.h>
 #include <logging.h>
 #include <tinyformat.h>
 #include <util/fs_helpers.h>
+
+namespace {
+std::mutex g_flush_failure_hook_mutex;
+FlatFileSeq::FlushFailureHook g_flush_failure_hook;
+} // namespace
 
 FlatFileSeq::FlatFileSeq(fs::path dir, const char* prefix, size_t chunk_size) :
     m_dir(std::move(dir)),
@@ -81,6 +88,14 @@ size_t FlatFileSeq::Allocate(const FlatFilePos& pos, size_t add_size, bool& out_
 
 bool FlatFileSeq::Flush(const FlatFilePos& pos, bool finalize) const
 {
+    FlushFailureHook failure_hook;
+    {
+        std::lock_guard<std::mutex> lock{g_flush_failure_hook_mutex};
+        failure_hook = g_flush_failure_hook;
+    }
+    if (failure_hook && failure_hook(FileName(pos), pos, finalize)) {
+        return false;
+    }
     FILE* file = Open(FlatFilePos(pos.nFile, 0)); // Avoid fseek to nPos
     if (!file) {
         LogError(HgLog::LEDGER, "%s: failed to open file %d\n", __func__, pos.nFile);
@@ -100,4 +115,10 @@ bool FlatFileSeq::Flush(const FlatFilePos& pos, bool finalize) const
 
     fclose(file);
     return true;
+}
+
+void FlatFileSeq::SetFlushFailureHookForTesting(FlushFailureHook hook)
+{
+    std::lock_guard<std::mutex> lock{g_flush_failure_hook_mutex};
+    g_flush_failure_hook = std::move(hook);
 }

@@ -664,11 +664,14 @@ bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index
 
 bool BlockManager::FlushUndoFile(int block_file, bool finalize)
 {
+    LOCK(cs_LastBlockFile);
     FlatFilePos undo_pos_old(block_file, m_blockfile_info[block_file].nUndoSize);
     if (!m_undo_file_seq.Flush(undo_pos_old, finalize)) {
+        if (finalize) m_failed_file_flushes.emplace(block_file, FlushFileType::UNDO);
         m_opts.notifications.flushError(_("Flushing undo file to disk failed. This is likely the result of an I/O error."));
         return false;
     }
+    if (finalize) m_failed_file_flushes.erase({block_file, FlushFileType::UNDO});
     return true;
 }
 
@@ -688,8 +691,11 @@ bool BlockManager::FlushBlockFile(int blockfile_num, bool fFinalize, bool finali
 
     FlatFilePos block_pos_old(blockfile_num, m_blockfile_info[blockfile_num].nSize);
     if (!m_block_file_seq.Flush(block_pos_old, fFinalize)) {
+        if (fFinalize) m_failed_file_flushes.emplace(blockfile_num, FlushFileType::BLOCK);
         m_opts.notifications.flushError(_("Flushing block file to disk failed. This is likely the result of an I/O error."));
         success = false;
+    } else if (fFinalize) {
+        m_failed_file_flushes.erase({blockfile_num, FlushFileType::BLOCK});
     }
     // we do not always flush the undo file, as the chain tip may be lagging behind the incoming blocks,
     // e.g. during IBD or a sync after a node going offline
@@ -704,6 +710,17 @@ bool BlockManager::FlushBlockFile(int blockfile_num, bool fFinalize, bool finali
 bool BlockManager::FlushChainstateBlockFile()
 {
     LOCK(cs_LastBlockFile);
+
+    bool success{true};
+    const auto failed_file_flushes{m_failed_file_flushes};
+    for (const auto& [file, type] : failed_file_flushes) {
+        const bool retry_success{type == FlushFileType::BLOCK
+                ? FlushBlockFile(file, /*fFinalize=*/true, /*finalize_undo=*/false)
+                : FlushUndoFile(file, /*finalize=*/true)};
+        success &= retry_success;
+    }
+    if (!success) return false;
+
     if (m_blockfile_cursor) {
         return FlushBlockFile(m_blockfile_cursor->file_num, /*fFinalize=*/false, /*finalize_undo=*/false);
     }
@@ -804,13 +821,9 @@ FlatFilePos BlockManager::FindNextBlockPos(unsigned int nAddSize, unsigned int n
         LogDebug(HgLog::BLOCKSTORE, "Leaving block file %i: %s (onto %i) (height %i)\n",
                  last_blockfile, m_blockfile_info[last_blockfile].ToString(), nFile, nHeight);
 
-        // Do not propagate the return code. The flush concerns a previous block
-        // and undo file that has already been written to. If a flush fails
-        // here, and we crash, there is no expected additional block data
-        // inconsistency arising from the flush failure here. However, the undo
-        // data may be inconsistent after a crash if the flush is called during
-        // a reindex. A flush error might also leave some of the data files
-        // untrimmed.
+        // Do not turn a failed flush of already-written data into a failed block
+        // write. The failed finalize is remembered instead, and block-index
+        // persistence remains blocked until the same file flushes successfully.
         if (!FlushBlockFile(last_blockfile, /*fFinalize=*/true, finalize_undo)) {
             LogPrintLevel(HgLog::BLOCKSTORE, HgLog::Level::Warning,
                           "Failed to flush previous block file %05i (finalize=1, finalize_undo=%i) before opening new block file %05i\n",
@@ -921,11 +934,9 @@ bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationSt
         // with the block writes (usually when a synced up node is getting newly mined blocks) -- this case is caught in
         // the FindNextBlockPos function
         if (pos.nFile < cursor.file_num && static_cast<uint32_t>(block.nHeight) == m_blockfile_info[pos.nFile].nHeightLast) {
-            // Do not propagate the return code, a failed flush here should not
-            // be an indication for a failed write. If it were propagated here,
-            // the caller would assume the undo data not to be written, when in
-            // fact it is. Note though, that a failed flush might leave the data
-            // file untrimmed.
+            // Do not report a failed flush as a failed undo write. Remember the
+            // failed finalize instead, so block-index persistence is blocked
+            // until this undo file flushes successfully.
             if (!FlushUndoFile(pos.nFile, true)) {
                 LogPrintLevel(HgLog::BLOCKSTORE, HgLog::Level::Warning, "Failed to flush undo file %05i\n", pos.nFile);
             }
