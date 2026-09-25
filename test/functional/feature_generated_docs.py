@@ -226,7 +226,7 @@ class GeneratedDocsTest(QuicksilverTestFramework):
                 env=dict(
                     os.environ,
                     TOPDIR=self.config["environment"]["SRCDIR"],
-                    QUICKSILVERDAEMON=self.binary_path("quicksilver-daemon"),
+                    QUICKSILVER_DAEMON=self.binary_path("quicksilver-daemon"),
                     SHARE_EXAMPLES_DIR=tmpdir,
                     EXAMPLE_CONF_FILE=regenerated,
                 ),
