@@ -177,7 +177,7 @@ public:
       u64 alive64 = alive.block(block);
       for (word_t nonce = block-1; alive64; ) { // -1 compensates for 1-based ffs
         u32 ffs = (u32)std::countr_zero(alive64) + 1;  // 1-based; alive64 != 0 here (portable __builtin_ffsll)
-        nonce += ffs; alive64 >>= ffs;
+        nonce += ffs; alive64 = ffs < 64 ? alive64 >> ffs : 0;  // shifting a u64 by 64 is UB
         indices[nidx++ % NSIPHASH] = 2*(u64)nonce + uorv;
         if (nidx % NSIPHASH == 0) {
           node_deg(hashes+nidx-NSIPHASH, NSIPHASH, part);
@@ -206,7 +206,7 @@ public:
       u64 alive64 = alive.block(block);
       for (word_t nonce = block-1; alive64; ) { // -1 compensates for 1-based ffs
         u32 ffs = (u32)std::countr_zero(alive64) + 1;  // 1-based; alive64 != 0 here (portable __builtin_ffsll)
-        nonce += ffs; alive64 >>= ffs;
+        nonce += ffs; alive64 = ffs < 64 ? alive64 >> ffs : 0;  // shifting a u64 by 64 is UB
         indices[nidx++] = 2*(u64)nonce + uorv;
         if (nidx % NSIPHASH == 0) {
           siphash24xN(&sip_keys, indices+nidx-NSIPHASH, hashes+nidx-NSIPHASH);
@@ -272,7 +272,7 @@ void *worker(void *vp) {
     u64 alive64 = alive.block(block);
     for (word_t nonce = block-1; alive64; ) { // -1 compensates for 1-based ffs
       u32 ffs = (u32)std::countr_zero(alive64) + 1;  // 1-based; alive64 != 0 here (portable __builtin_ffsll)
-      nonce += ffs; alive64 >>= ffs;
+      nonce += ffs; alive64 = ffs < 64 ? alive64 >> ffs : 0;  // shifting a u64 by 64 is UB
       word_t u=sipnode(&ctx->sip_keys, nonce, 0), v=sipnode(&ctx->sip_keys, nonce, 1);
       ctx->cg.add_compress_edge(u, v);
       if (ffs & 64) break; // can't shift by 64
@@ -286,7 +286,7 @@ void *worker(void *vp) {
       u64 alive64 = alive.block(block);
       for (word_t nonce = block-1; alive64; ) { // -1 compensates for 1-based ffs
         u32 ffs = (u32)std::countr_zero(alive64) + 1;  // 1-based; alive64 != 0 here (portable __builtin_ffsll)
-        nonce += ffs; alive64 >>= ffs;
+        nonce += ffs; alive64 = ffs < 64 ? alive64 >> ffs : 0;  // shifting a u64 by 64 is UB
         if (j < PROOFSIZE && nalive++ == ctx->cg.sols[s][j]) {
           ctx->sols[s][j++] = nonce;
         }

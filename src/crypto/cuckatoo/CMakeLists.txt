@@ -30,11 +30,23 @@ target_include_directories(quicksilver_cuckatoo
 
 # The lean solver uses pthreads (run_solver spawns worker threads).
 find_package(Threads REQUIRED)
-# warn_interface only: WERROR (-Werror / /WX) hangs off core_interface (F-268).
+# Not core_interface: WERROR (-Werror / /WX) hangs off it (F-268). Link its
+# sanitizer half directly, or a -DSANITIZERS build leaves these translation
+# units uninstrumented while everything that calls them is (F-370).
 target_link_libraries(quicksilver_cuckatoo
   PUBLIC Threads::Threads quicksilver_process
-  PRIVATE warn_interface
+  PRIVATE warn_interface sanitize_interface
 )
+# The vendored hashes wrap by design; drop the `integer` checks on them at
+# compile time, since a runtime suppression still costs a handler call per
+# hash round. Clang only; see sanitizer_ignorelist.txt.
+set(QS_CUCKATOO_SANITIZER_IGNORELIST "")
+if(SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(QS_CUCKATOO_SANITIZER_IGNORELIST
+    "-fsanitize-ignorelist=${CMAKE_CURRENT_SOURCE_DIR}/sanitizer_ignorelist.txt"
+  )
+endif()
+target_compile_options(quicksilver_cuckatoo PRIVATE ${QS_CUCKATOO_SANITIZER_IGNORELIST})
 
 # Calibration-only single-graph harness (Stage 1 of the tx-cost flag day).
 add_subdirectory(bench)

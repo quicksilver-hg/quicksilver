@@ -1,0 +1,36 @@
+# Clang -fsanitize-ignorelist for the vendored Cuckatoo code (F-370).
+#
+# The solver and verifier hash with SipHash and BLAKE2b, whose rotations and
+# additions wrap by design. The `integer` sanitizers report that wrapping as
+# unsigned-integer-overflow, unsigned-shift-base and implicit conversions,
+# none of which is undefined behaviour. test/sanitizer_suppressions/ubsan
+# already silences them for crypto/cuckatoo/vendor at runtime, but a runtime
+# suppression still enters the UBSan handler on every hash round: measured
+# on a RelWithDebInfo ASan build, cuckatoo_tests went from 78 s to 7344 s.
+# Removing the checks at compile time instead keeps the real UB checks
+# (shift-exponent, signed overflow, bounds, ...) on the rest of this code.
+#
+# The hashing, bitmap and edge-trimming loops are excluded from every
+# sanitizer: they run once per edge per trimming round, and instrumenting
+# them made the heaviest vault functional scripts up to 4x slower, past what
+# the CI sanitizer job's time limit allows. They had one full instrumented
+# pass (the shift-by-64 in lean.hpp was the only finding). The cycle graph
+# and node compressor (graph.hpp, compress.hpp, where F-265 faulted), the
+# verifier (cuckatoo.h) and BLAKE2b stay under ASan and UBSan. Clang does not
+# inline a callee into a caller with different sanitizer attributes, so the
+# graph code keeps its checks when lean.hpp calls it.
+src:*/crypto/cuckatoo/vendor/lean.hpp
+src:*/crypto/cuckatoo/vendor/bitmap.hpp
+src:*/crypto/cuckatoo/vendor/siphash.hpp
+src:*/crypto/cuckatoo/vendor/siphashxN.h
+src:*/crypto/cuckatoo/vendor/barrier.hpp
+[unsigned-integer-overflow]
+src:*/crypto/cuckatoo/vendor/*
+[unsigned-shift-base]
+src:*/crypto/cuckatoo/vendor/*
+[implicit-unsigned-integer-truncation]
+src:*/crypto/cuckatoo/vendor/*
+[implicit-signed-integer-truncation]
+src:*/crypto/cuckatoo/vendor/*
+[implicit-integer-sign-change]
+src:*/crypto/cuckatoo/vendor/*

@@ -32,19 +32,24 @@ add_library(quicksilver_cuckatoo_bench OBJECT EXCLUDE_FROM_ALL
   ${QS_BENCH_GENERATED}
 )
 
+# Spelled without `..`: the compiler records vendor paths as reached, and the
+# UBSan suppressions for crypto/cuckatoo/vendor never match bench/../vendor.
 target_include_directories(quicksilver_cuckatoo_bench
   PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${PROJECT_SOURCE_DIR}/src/crypto/cuckatoo
   PUBLIC
     ${PROJECT_SOURCE_DIR}/src
 )
 
 find_package(Threads REQUIRED)
-# warn_interface only: WERROR (-Werror / /WX) hangs off core_interface (F-268).
+# Not core_interface: WERROR (-Werror / /WX) hangs off it (F-268). Link its
+# sanitizer half directly, or a -DSANITIZERS build leaves these translation
+# units uninstrumented while everything that calls them is (F-370).
 target_link_libraries(quicksilver_cuckatoo_bench
   PUBLIC Threads::Threads
-  PRIVATE warn_interface
+  PRIVATE warn_interface sanitize_interface
 )
+target_compile_options(quicksilver_cuckatoo_bench PRIVATE ${QS_CUCKATOO_SANITIZER_IGNORELIST})
 
 # The calibration CLI. EXCLUDE_FROM_ALL, but it lands in the same bin/ directory
 # as the node binaries (CMAKE_RUNTIME_OUTPUT_DIRECTORY, set in src/CMakeLists.txt)
@@ -63,4 +68,5 @@ target_link_libraries(qscalibrate PRIVATE
   quicksilver_cuckatoo_bench
   quicksilver_cuckatoo
   warn_interface
+  sanitize_interface
 )

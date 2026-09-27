@@ -81,10 +81,23 @@ in-tree and are recorded in the git history:
   upstream's fix as superseding this commit and drop the bound with it.**
 - `4b1f28c5` — free the `compressor` objects both `graph` constructors allocate;
   the vendored destructor freed neither, leaking 112 bytes per solver context.
+  Upstream's fix (`55852825`) deletes them only inside `if (!sharedmem)`, but
+  the lean solver's `cuckoo_ctx` builds its graph with the placement
+  constructor, which sets `sharedmem` and still heap-allocates both
+  compressors. Upstream's lean solver therefore still leaks them. Deleting
+  unconditionally is correct because `~compressor` checks its own `sharedmem`
+  before freeing its node array. **A re-sync must not read `55852825` as
+  superseding this commit.**
 - `36877a85` — trim every edge-bitmap word in `count_node_deg` and
   `kill_leaf_edges` when `nthreads` does not divide `NEDGES/64`. The truncated
   `nloops = NEDGES/64/nthreads` walk left the remainder unvisited, so a
   non-power-of-two thread count could return a 42-cycle `verify()` rejects.
+- `59859e41` — in `lean.hpp`'s four edge-scan loops, shift `alive64` by the
+  1-based bit index `ffs` only when it is below 64. When bit 63 is the lowest
+  set bit, `ffs` is 64, and shifting a 64-bit value by 64 is undefined
+  behaviour (UBSan: "shift exponent 64"). The existing `if (ffs & 64) break;`
+  leaves the loop before the shifted value is read, so the output is
+  unchanged.
 
 Include paths were flattened to be path-local when the closure was vendored
 (`c6ec788f`). Do not re-stamp these files with a Quicksilver copyright line;
