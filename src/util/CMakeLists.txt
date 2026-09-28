@@ -11,13 +11,11 @@ add_library(quicksilver_util STATIC EXCLUDE_FROM_ALL
   chaintype.cpp
   check.cpp
   exception.cpp
-  workfrac.cpp
   fs.cpp
   fs_helpers.cpp
   hasher.cpp
   moneystr.cpp
   readwritefile.cpp
-  serfloat.cpp
   signalinterrupt.cpp
   sock.cpp
   strencodings.cpp

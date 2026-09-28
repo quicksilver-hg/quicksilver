@@ -16,7 +16,6 @@ add_executable(fuzz
   bech32.cpp
   bip324.cpp
   bitdeque.cpp
-  bitset.cpp
   block.cpp
   block_header.cpp
   block_index.cpp
@@ -24,7 +23,6 @@ add_executable(fuzz
   buffered_file.cpp
   chain.cpp
   checkqueue.cpp
-  cluster_linearize.cpp
   coins_view.cpp
   coinscache_sim.cpp
   connman.cpp
@@ -43,7 +41,6 @@ add_executable(fuzz
   deserialize.cpp
   eval_script.cpp
   flatfile.cpp
-  float.cpp
   golomb_rice.cpp
   headerssync.cpp
   hex.cpp
@@ -118,7 +115,6 @@ add_executable(fuzz
   txrequest.cpp
   utxo_total_supply.cpp
   validation_load_relaypool.cpp
-  vecdeque.cpp
   versionbits.cpp
 )
 target_link_libraries(fuzz

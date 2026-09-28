@@ -35,6 +35,7 @@
 #     pre-segwit GBT/upgrade-test residue, CAddress V1 disk, coin-control and
 #     BIP70 merchant copy, bitcoin-era linearize height / bootstrap.dat, and
 #     leftover "agent wallet" product copy
+#   * the dead fee-cluster linearizer island and caller-less serfloat (F-372, F-373)
 #
 # Negative feeless assertions stay valid. Internal BIP32/PSQT field names are
 # classified separately.
@@ -431,6 +432,21 @@ RULES = [
     Rule("retired quicksilver-" "qt product name", re.compile(r"(?<!test_)quicksilver-" r"qt|Quicksilver-" r"Qt|Quicksilver " r"Qt|Quicksilver" r"Qt|quicksilver" r"qt")),
     Rule("retired quicksilver_" "qt desktop identity", re.compile(r"quicksilver_" r"qt\.(?:desktop|metainfo)|hg\.quicksilver_" r"qt")),
     Rule("retired b- thread prefix", re.compile(r'["\'`]b' r'-')),
+    Rule(
+        "dead fee-cluster util header",
+        re.compile(r"util/(?:bitset|vecdeque|workfrac|serfloat)\.h"),
+    ),
+    Rule("dead fee-cluster linearizer", re.compile(r"cluster_linearize")),
+    Rule("dead fee-cluster fuzz target", re.compile(r"clusterlin_")),
+    Rule("dead fee-cluster WorkFrac", re.compile(r"\bWorkFrac\b")),
+    Rule("dead fee-cluster CompareChunks", re.compile(r"\bCompareChunks\b")),
+    Rule("dead fee-cluster VecDeque", re.compile(r"\bVecDeque\b")),
+    Rule("dead fee-cluster BitSet", re.compile(r"\b(?:Int|MultiInt)BitSet\b")),
+    Rule("dead fee-cluster bitset_detail", re.compile(r"bitset_detail")),
+    Rule("dead serfloat codec", re.compile(r"\b(?:Encode|Decode)Double\b")),
+    # Upstream's name. 3349761d renamed it to WorkFrac; a re-import under the
+    # old spelling is the likely way back.
+    Rule("dead fee-cluster FeeFrac", re.compile(r"\bFeeFrac\b")),
 ]
 
 ALLOWED = {
@@ -887,7 +903,27 @@ def self_test() -> int:
         ("src/interfaces/chain.h", "    const CBlockUndo* undo_data = nullptr;", "unused BlockInfo undo payload"),
         ("src/index/coinstatsindex.cpp", "        // will be removed in upcoming commit", "stale future-commit note"),
         ("src/test/fuzz/txdownloadman.cpp", "// it may request low-feerate parent of orphan.", "fee-era reconsiderable-parent wording"),
+        ("src/test/util/cluster_linearize.h", "#include <util/bitset.h>", "dead fee-cluster util header"),
+        ("src/test/fuzz/vecdeque.cpp", "#include <util/vecdeque.h>", "dead fee-cluster util header"),
+        ("src/cluster_linearize.h", "#include <util/workfrac.h>", "dead fee-cluster util header"),
+        ("src/util/serfloat.cpp", "#include <util/serfloat.h>", "dead fee-cluster util header"),
+        ("src/cluster_linearize.h", "namespace cluster_linearize {", "dead fee-cluster linearizer"),
+        ("src/test/fuzz/cluster_linearize.cpp", "FUZZ_TARGET(clusterlin_depgraph_sim)", "dead fee-cluster fuzz target"),
+        ("src/cluster_linearize.h", "        WorkFrac workrate;", "dead fee-cluster WorkFrac"),
+        ("src/test/fuzz/cluster_linearize.cpp", "        auto cmp = CompareChunks(chunking, old_chunking);", "dead fee-cluster CompareChunks"),
+        ("src/util/vecdeque.h", "class VecDeque", "dead fee-cluster VecDeque"),
+        ("src/util/bitset.h", "class IntBitSet", "dead fee-cluster BitSet"),
+        ("src/util/bitset.h", "class MultiIntBitSet", "dead fee-cluster BitSet"),
+        ("src/util/bitset.h", "namespace bitset_detail {", "dead fee-cluster bitset_detail"),
+        ("src/util/serfloat.h", "uint64_t EncodeDouble(double f) noexcept;", "dead serfloat codec"),
+        ("src/util/serfloat.h", "double DecodeDouble(uint64_t v) noexcept;", "dead serfloat codec"),
+        # FeeFrac was already renamed away at 3349761d. This is the line from
+        # cluster_linearize.h at that commit's parent.
+        ("src/cluster_linearize.h", "        Entry(const FeeFrac& f, const SetType& a, const SetType& d) noexcept : feerate(f), ancestors(a), descendants(d) {}", "dead fee-cluster FeeFrac"),
         # Negative / out-of-scope cases
+        ("src/headerssync.cpp", "#include <util/bitdeque.h>", None),
+        ("src/headerssync.cpp", "std::bitset<8> b;", None),
+        ("src/headerssync.cpp", "bitdeque<> m_headers;", None),
         ("src/vault/spend.cpp", "        // For backwards compatibility, we convert P2PK output scripts into PKHash destinations", None),
         ("src/logging.cpp", '    {"tor", HgLog::TOR},', None),
         ("src/test/txpackage_tests.cpp", "    // low-feerate \"invalid on its own\" parent, package-feerate assertions) is dropped.", None),

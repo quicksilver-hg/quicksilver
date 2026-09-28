@@ -18,7 +18,6 @@ add_executable(bench_quicksilver
   checkblock.cpp
   checkblockindex.cpp
   checkqueue.cpp
-  cluster_linearize.cpp
   crypto_hash.cpp
   descriptors.cpp
   disconnected_transactions.cpp

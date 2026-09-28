@@ -59,12 +59,10 @@ add_library(quicksilverkernel
   ../uint256.cpp
   ../util/chaintype.cpp
   ../util/check.cpp
-  ../util/workfrac.cpp
   ../util/fs.cpp
   ../util/fs_helpers.cpp
   ../util/hasher.cpp
   ../util/moneystr.cpp
-  ../util/serfloat.cpp
   ../util/signalinterrupt.cpp
   ../util/strencodings.cpp
   ../util/string.cpp

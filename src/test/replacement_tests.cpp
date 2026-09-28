@@ -8,7 +8,6 @@
 #include <test/util/txrelaypool.h>
 #include <txrelaypool.h>
 #include <util/time.h>
-#include <util/workfrac.h>
 
 #include <test/util/setup_common.h>
 
@@ -178,81 +177,6 @@ BOOST_FIXTURE_TEST_CASE(replacement_helper_functions, TestChain100Setup)
     const auto spends_conflicting_confirmed = make_tx({m_coinbase_txns[0], m_coinbase_txns[1]}, {45 * CENT});
     BOOST_CHECK(HasNoNewUnconfirmed(*spends_conflicting_confirmed.get(), pool, {entry1_normal, entry3_low}) == std::nullopt);
 
-}
-
-BOOST_AUTO_TEST_CASE(workrate_chunks_utilities)
-{
-    // Sanity check the correctness of the workrate chunks comparison.
-
-    // A strictly better case.
-    std::vector<WorkFrac> old_chunks{{{950, 300}, {100, 100}}};
-    std::vector<WorkFrac> new_chunks{{{1000, 300}, {50, 100}}};
-
-    BOOST_CHECK(std::is_lt(CompareChunks(old_chunks, new_chunks)));
-    BOOST_CHECK(std::is_gt(CompareChunks(new_chunks, old_chunks)));
-
-    // Incomparable diagrams
-    old_chunks = {{950, 300}, {100, 100}};
-    new_chunks = {{1000, 300}, {0, 100}};
-
-    BOOST_CHECK(CompareChunks(old_chunks, new_chunks) == std::partial_ordering::unordered);
-    BOOST_CHECK(CompareChunks(new_chunks, old_chunks) == std::partial_ordering::unordered);
-
-    // Strictly better but smaller size.
-    old_chunks = {{950, 300}, {100, 100}};
-    new_chunks = {{1100, 300}};
-
-    BOOST_CHECK(std::is_lt(CompareChunks(old_chunks, new_chunks)));
-    BOOST_CHECK(std::is_gt(CompareChunks(new_chunks, old_chunks)));
-
-    // New diagram is strictly better due to the first chunk, even though
-    // the second chunk contributes no work.
-    old_chunks = {{950, 300}, {100, 100}};
-    new_chunks = {{1100, 100}, {0, 100}};
-
-    BOOST_CHECK(std::is_lt(CompareChunks(old_chunks, new_chunks)));
-    BOOST_CHECK(std::is_gt(CompareChunks(new_chunks, old_chunks)));
-
-    // Work of the first new chunk is better, but the second chunk is worse
-    old_chunks = {{950, 300}, {100, 100}};
-    new_chunks = {{750, 100}, {249, 250}, {151, 650}};
-
-    BOOST_CHECK(CompareChunks(old_chunks, new_chunks) == std::partial_ordering::unordered);
-    BOOST_CHECK(CompareChunks(new_chunks, old_chunks) == std::partial_ordering::unordered);
-
-    // If we make the second chunk slightly better, the new diagram now wins.
-    old_chunks = {{950, 300}, {100, 100}};
-    new_chunks = {{750, 100}, {250, 250}, {150, 150}};
-
-    BOOST_CHECK(std::is_lt(CompareChunks(old_chunks, new_chunks)));
-    BOOST_CHECK(std::is_gt(CompareChunks(new_chunks, old_chunks)));
-
-    // Identical diagrams, cannot be strictly better
-    old_chunks = {{950, 300}, {100, 100}};
-    new_chunks = {{950, 300}, {100, 100}};
-
-    BOOST_CHECK(std::is_eq(CompareChunks(old_chunks, new_chunks)));
-    BOOST_CHECK(std::is_eq(CompareChunks(new_chunks, old_chunks)));
-
-    // Same aggregate work, but different total size (trigger single tail work check step)
-    old_chunks = {{950, 300}, {100, 99}};
-    new_chunks = {{950, 300}, {100, 100}};
-
-    // No change in evaluation when tail check needed.
-    BOOST_CHECK(std::is_gt(CompareChunks(old_chunks, new_chunks)));
-    BOOST_CHECK(std::is_lt(CompareChunks(new_chunks, old_chunks)));
-
-    // Trigger multiple tail work check steps
-    old_chunks = {{950, 300}, {100, 99}};
-    new_chunks = {{950, 300}, {100, 100}, {0, 1}, {0, 1}};
-
-    BOOST_CHECK(std::is_gt(CompareChunks(old_chunks, new_chunks)));
-    BOOST_CHECK(std::is_lt(CompareChunks(new_chunks, old_chunks)));
-
-    // Multiple tail work check steps, unordered result
-    new_chunks = {{950, 300}, {100, 100}, {0, 1}, {0, 1}, {1, 1}};
-    BOOST_CHECK(CompareChunks(old_chunks, new_chunks) == std::partial_ordering::unordered);
-    BOOST_CHECK(CompareChunks(new_chunks, old_chunks) == std::partial_ordering::unordered);
 }
 
 // #6: surplus-work replacement comparators (replace-by-work -> replace-by-surplus-work).

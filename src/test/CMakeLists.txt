@@ -30,7 +30,6 @@ add_executable(test_quicksilver
   bswap_tests.cpp
   checkqueue_tests.cpp
   chaintype_tests.cpp
-  cluster_linearize_tests.cpp
   coins_tests.cpp
   coinscachepair_tests.cpp
   coinstatsindex_tests.cpp
@@ -98,7 +97,6 @@ add_executable(test_quicksilver
   script_standard_tests.cpp
   script_tests.cpp
   scriptnum_tests.cpp
-  serfloat_tests.cpp
   serialize_tests.cpp
   settings_tests.cpp
   sighash_tests.cpp
