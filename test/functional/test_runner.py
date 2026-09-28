@@ -353,6 +353,11 @@ NON_SCRIPTS = [
     # naming-convention check, so the functional suite could not run at all.
     "calibration_disk_cost.py",
     "calibration_tx_sizes.py",
+    # The F-333 tx-PoW race harness. It asserts, but its default is 2000
+    # iterations (hours), so it is run by name with --race-iters. Unlisted, it
+    # failed `test_runner.py --ci` before any test ran; under --extended it
+    # would hold a CI leg for hours.
+    "vault_txpow_race.py",
 ]
 
 # Quicksilver has no monetary fee market. The upstream fee-estimation,

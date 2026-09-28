@@ -33,6 +33,13 @@ asserted in both directions so a stale entry for a removed option fails too.
 
 The conf half is a byte comparison, because that generator only prefixes
 --help output with "# " and embeds no version string.
+
+An ENABLE_EXTERNAL_SIGNER build is allowed to differ by exactly the options
+registered inside that ifdef (today: -signer) and by nothing else. The man
+pages and the example conf are generated from the shipping OFF build, so
+those options are absent there on purpose. The allowed set is a literal,
+checked against the source, so adding another guarded option fails here
+instead of being absorbed.
 """
 
 import os
@@ -54,6 +61,106 @@ HELP_OPTION_RE = re.compile(r"^  -([a-zA-Z0-9_.-]+)")
 # Anchoring on .HP is what separates a definition from the same option merely
 # mentioned inside another option's description.
 MAN_OPTION_RE = re.compile(r"^\\fB\\-((?:\\-|[a-zA-Z0-9_.])+)")
+
+# Options registered only inside `#ifdef ENABLE_EXTERNAL_SIGNER`. Kept as a
+# literal so a new guarded AddArg fails this test instead of widening it.
+# The source is parsed and must name this same set (see signer_addarg_options).
+SIGNER_ONLY_OPTIONS = frozenset({"signer"})
+
+# AddVaultOptions registers this with no ifdef. A binary whose help or man
+# page contains it is one that gains exactly SIGNER_ONLY_OPTIONS when the
+# external signer is compiled in.
+VAULT_OPTIONS_MARK = "vaultdir"
+
+_ADDARG_RE = re.compile(r'AddArg\(\s*"-([A-Za-z0-9_.-]+)')
+_PREPROC_RE = re.compile(r"^\s*#\s*(ifdef|ifndef|if|else|elif|endif)\b(.*)$")
+
+
+def signer_addarg_options(srcdir):
+    """Option names passed to AddArg inside `#ifdef ENABLE_EXTERNAL_SIGNER`."""
+    found = set()
+    src = os.path.join(srcdir, "src")
+    for root, dirs, files in os.walk(src):
+        for name in files:
+            if name.endswith((".cpp", ".h", ".c", ".hpp")):
+                found |= _addargs_in_signer_region(os.path.join(root, name))
+    return found
+
+
+def _signer_frame(kind, rest):
+    text = rest.strip()
+    if kind == "ifdef" and text == "ENABLE_EXTERNAL_SIGNER":
+        return "signer-on"
+    if kind == "ifndef" and text == "ENABLE_EXTERNAL_SIGNER":
+        return "signer-off"
+    if kind == "if" and text in ("defined(ENABLE_EXTERNAL_SIGNER)", "defined (ENABLE_EXTERNAL_SIGNER)"):
+        return "signer-on"
+    if kind == "if" and text in ("!defined(ENABLE_EXTERNAL_SIGNER)", "!defined (ENABLE_EXTERNAL_SIGNER)"):
+        return "signer-off"
+    return "other"
+
+
+def _addargs_in_signer_region(path):
+    found = set()
+    stack = []
+    with open(path, encoding="utf8") as source:
+        for line in source:
+            match = _PREPROC_RE.match(line)
+            if match:
+                kind, rest = match.group(1), match.group(2)
+                if kind in ("ifdef", "ifndef", "if"):
+                    stack.append(_signer_frame(kind, rest))
+                elif kind == "else" and stack:
+                    top = stack[-1]
+                    if top == "signer-on":
+                        stack[-1] = "signer-off"
+                    elif top == "signer-off":
+                        stack[-1] = "signer-on"
+                elif kind == "elif" and stack and stack[-1] in ("signer-on", "signer-off"):
+                    stack[-1] = "signer-off"
+                elif kind == "endif" and stack:
+                    stack.pop()
+                continue
+            if "signer-on" in stack:
+                for name in _ADDARG_RE.findall(line):
+                    found.add(name)
+    return found
+
+
+def _conf_option_names(text):
+    names = set()
+    for line in text.splitlines():
+        match = re.match(r"^#([A-Za-z0-9_.-]+)", line)
+        if match:
+            names.add(match.group(1))
+    return names
+
+
+def _strip_conf_options(text, names):
+    """Drop the generator's blocks for `names` and return (text, names removed).
+
+    gen-quicksilver-conf.sh prints an option's description, then the option,
+    then a blank line. Removing that triple leaves the OFF-build conf.
+    """
+    lines = text.splitlines()
+    drop = set()
+    removed = set()
+    for index, line in enumerate(lines):
+        match = re.match(r"^#([A-Za-z0-9_.-]+)", line)
+        if not match or match.group(1) not in names:
+            continue
+        removed.add(match.group(1))
+        drop.add(index)
+        cursor = index - 1
+        while cursor >= 0 and lines[cursor].startswith("# "):
+            drop.add(cursor)
+            cursor -= 1
+        if index + 1 < len(lines) and lines[index + 1] == "":
+            drop.add(index + 1)
+    kept = [line for index, line in enumerate(lines) if index not in drop]
+    trailer = "\n" if text.endswith("\n") else ""
+    return "\n".join(kept) + trailer, removed
+
 
 # Every binary gen-manpages.py generates a page for.
 DOCUMENTED_BINARIES = [
@@ -113,7 +220,20 @@ class GeneratedDocsTest(QuicksilverTestFramework):
                 options.add(match.group(1).replace("\\-", "-"))
         return options
 
+    def assert_signer_source(self):
+        parsed = signer_addarg_options(self.config["environment"]["SRCDIR"])
+        unexpected = sorted(parsed - SIGNER_ONLY_OPTIONS)
+        missing = sorted(SIGNER_ONLY_OPTIONS - parsed)
+        assert parsed == SIGNER_ONLY_OPTIONS, (
+            "ENABLE_EXTERNAL_SIGNER AddArg options are "
+            f"{sorted(parsed)}, expected {sorted(SIGNER_ONLY_OPTIONS)}. "
+            f"Unexpected: {unexpected}. Missing: {missing}."
+        )
+
     def check_man_pages(self):
+        # Read straight from the build's component list. is_external_signer_compiled()
+        # is this same lookup; kept inline so the comparison shows which config it uses.
+        signer_on = self.config["components"].getboolean("ENABLE_EXTERNAL_SIGNER")
         if platform.system() == "Windows":
             # The checked-in pages are generated from a POSIX build and describe
             # one. -daemon and -daemonwait are registered only #if HAVE_DECL_FORK
@@ -148,16 +268,33 @@ class GeneratedDocsTest(QuicksilverTestFramework):
             # pass vacuously against a binary with no options.
             assert from_man, f"parsed no options out of doc/man/{name}.1"
 
-            undocumented = sorted(from_help - from_man)
-            assert not undocumented, (
-                f"{name} accepts options that doc/man/{name}.1 does not document: "
-                f"{undocumented}. Rebuild, then run contrib/devtools/gen-manpages.py."
-            )
+            extra = from_help - from_man
             stale = sorted(from_man - from_help)
-            assert not stale, (
-                f"doc/man/{name}.1 documents options {name} no longer accepts: "
-                f"{stale}. Rebuild, then run contrib/devtools/gen-manpages.py."
+            has_vault_options = (
+                VAULT_OPTIONS_MARK in from_help or VAULT_OPTIONS_MARK in from_man
             )
+            if signer_on and has_vault_options:
+                # Stricter than the OFF check: the only permitted difference is
+                # the signer-only set, in the help-minus-man direction. A second
+                # undocumented option still fails, and so does losing -signer.
+                unexpected = sorted(extra - SIGNER_ONLY_OPTIONS)
+                lost = sorted(SIGNER_ONLY_OPTIONS - extra)
+                assert not unexpected and not lost and not stale, (
+                    f"{name}: an external-signer build may differ from "
+                    f"doc/man/{name}.1 by exactly {sorted(SIGNER_ONLY_OPTIONS)} "
+                    f"and nothing else. unexpected={unexpected} lost={lost} "
+                    f"stale={stale}."
+                )
+            else:
+                undocumented = sorted(extra)
+                assert not undocumented, (
+                    f"{name} accepts options that doc/man/{name}.1 does not document: "
+                    f"{undocumented}. Rebuild, then run contrib/devtools/gen-manpages.py."
+                )
+                assert not stale, (
+                    f"doc/man/{name}.1 documents options {name} no longer accepts: "
+                    f"{stale}. Rebuild, then run contrib/devtools/gen-manpages.py."
+                )
             self.log.info(f"{name}: {len(from_help)} options match doc/man/{name}.1")
             checked += 1
 
@@ -193,6 +330,7 @@ class GeneratedDocsTest(QuicksilverTestFramework):
         return bash if probe.returncode == 0 and probe.stdout.strip() == "ok" else None
 
     def check_example_conf(self):
+        signer_on = self.config["components"].getboolean("ENABLE_EXTERNAL_SIGNER")
         if platform.system() == "Windows":
             # Same reason check_man_pages() skips: the committed conf is
             # generated from quicksilver-daemon --help on a POSIX build, and -daemon /
@@ -237,6 +375,25 @@ class GeneratedDocsTest(QuicksilverTestFramework):
         with open(committed, encoding="utf8") as committed_file:
             on_disk = committed_file.read()
 
+        if signer_on:
+            # Measured against an ON --help: the generator emits -signer, so a
+            # byte compare with the committed OFF conf fails on that option.
+            # Strip exactly that block. Anything else still fails.
+            generated_names = _conf_option_names(generated)
+            disk_names = _conf_option_names(on_disk)
+            unexpected = sorted(generated_names - disk_names - SIGNER_ONLY_OPTIONS)
+            lost = sorted(SIGNER_ONLY_OPTIONS - generated_names)
+            assert not unexpected and not lost, (
+                "share/examples/quicksilver.conf under ENABLE_EXTERNAL_SIGNER "
+                f"may add exactly {sorted(SIGNER_ONLY_OPTIONS)}. "
+                f"unexpected={unexpected} lost={lost}."
+            )
+            generated, removed = _strip_conf_options(generated, SIGNER_ONLY_OPTIONS)
+            assert removed == set(SIGNER_ONLY_OPTIONS), (
+                "failed to isolate the signer block in the generated conf: "
+                f"removed={sorted(removed)}"
+            )
+
         if generated != on_disk:
             # Point at the first differing line; the whole file is 21kB.
             generated_lines = generated.splitlines()
@@ -259,6 +416,7 @@ class GeneratedDocsTest(QuicksilverTestFramework):
         self.log.info("share/examples/quicksilver.conf matches its generator")
 
     def run_test(self):
+        self.assert_signer_source()
         self.log.info("Check doc/man/*.1 against each binary's --help")
         self.check_man_pages()
 

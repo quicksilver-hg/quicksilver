@@ -178,6 +178,7 @@ test/functional/test_framework/cuckatoo.py
 test/functional/test_framework/txpow.py
 test/functional/tool_qscalibrate.py
 test/functional/vault_archive.py
+test/functional/vault_txpow_race.py
 test/lint/check-doc-links.py
 test/lint/lint-boost-silent-skip.py
 test/lint/lint-branding-residue.py
