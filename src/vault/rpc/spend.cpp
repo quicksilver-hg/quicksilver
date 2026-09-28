@@ -3,6 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <arith_uint256.h>
 #include <common/messages.h>
 #include <consensus/validation.h>
 #include <core_io.h>
@@ -35,7 +36,9 @@ std::vector<CRecipient> CreateRecipients(const std::vector<std::pair<CTxDestinat
     return recipients;
 }
 
-static UniValue FinishTransaction(const std::shared_ptr<CVault> pvault, const UniValue& options, const CMutableTransaction& rawTx)
+static UniValue FinishTransaction(const std::shared_ptr<CVault> pvault, const UniValue& options,
+                                  const CMutableTransaction& rawTx,
+                                  std::optional<uint64_t> estimated_pow_bytes = std::nullopt)
 {
     // Make a blank psqt
     PartiallySignedQuicksilverTransaction psqtx(rawTx);
@@ -83,6 +86,25 @@ static UniValue FinishTransaction(const std::shared_ptr<CVault> pvault, const Un
         if (auto err{vault::GrindTransactionPow(*pvault, mtx, final_bytes, anchor_height)}) {
             throw JSONRPCError(RPC_VAULT_ERROR, err->original);
         }
+    }
+
+    if (complete) {
+        const CTransaction final_tx{mtx};
+        const vault::FinalTxPow final_pow{vault::GetFinalTxPow(*pvault, final_tx, mtx.nAnchorHeight)};
+        const uint256 proof_hash{cuckatoo::CuckatooProofHash(mtx.nCycle)};
+        // send carries the size its existing proof was ground against. If signing
+        // made that proof too weak, keep its original anchor and regrind against
+        // the exact bytes. The transaction is local, so no vault lock is needed or
+        // held during the potentially long grind.
+        if (estimated_pow_bytes && UintToArith256(proof_hash) > UintToArith256(final_pow.target)) {
+            pvault->VaultLogPrintf("tx-pow: size estimate ran low (%u estimated, %u actual); regrinding\n",
+                                  static_cast<unsigned>(*estimated_pow_bytes),
+                                  static_cast<unsigned>(final_pow.bytes));
+            if (auto err{vault::GrindTransactionPow(*pvault, mtx, final_pow.bytes, mtx.nAnchorHeight)}) {
+                throw JSONRPCError(RPC_VAULT_ERROR, err->original);
+            }
+        }
+        vault::LogFinalTxPow(*pvault, CTransaction{mtx}, mtx.nAnchorHeight);
     }
 
     UniValue result(UniValue::VOBJ);
@@ -810,7 +832,7 @@ RPCHelpMan send()
             rawTx.vout.clear();
             auto txr = FundTransaction(*pvault, rawTx, recipients, options, coin_control);
 
-            return FinishTransaction(pvault, options, CMutableTransaction(*txr.tx));
+            return FinishTransaction(pvault, options, CMutableTransaction(*txr.tx), txr.pow_bytes);
         }
     };
 }

@@ -129,7 +129,7 @@ class VaultTxPowRaceTest(QuicksilverTestFramework):
     def _require_congestion_moves(self, node):
         tip = node.getbestblockhash()
         before = int(node.getblockheader(tip)["congestion"])
-        self._send("heavy", node)
+        heavy_txid = self._send("heavy", node)
         self.generate(node, 1)
         tip = node.getbestblockhash()
         after = int(node.getblockheader(tip)["congestion"])
@@ -143,7 +143,9 @@ class VaultTxPowRaceTest(QuicksilverTestFramework):
             "the raced variable would be sitting on the floor"
         )
         text = self._read_log(0)
-        counts = self._consume(text, "setup", "nocycle", reorg=False)
+        counts = self._consume(
+            text, "setup", "nocycle", reorg=False, expected_txids={heavy_txid},
+        )
         self._raise_if_divergence(counts)
         assert counts["equal"] > 0, (
             "setup produced no joined equal pair; the detector lines are not visible"
@@ -216,7 +218,7 @@ class VaultTxPowRaceTest(QuicksilverTestFramework):
 
         self._await_txids(found, offset)
         text = self._read_log(offset)
-        counts = self._consume(text, tag, mode, reorg=reorg)
+        counts = self._consume(text, tag, mode, reorg=reorg, expected_txids=set(found))
         height = node.getblockcount()
         congestion = node.getblockheader(node.getbestblockhash())["congestion"]
         self.log.info(
@@ -270,9 +272,9 @@ class VaultTxPowRaceTest(QuicksilverTestFramework):
         """Wait until each returned txid has shown up in the log.
 
         The grind runs inside the RPC, and the caller joins those threads
-        first, so this is only waiting for the log to be flushed. `send`
-        goes through FundTransaction (sign=false) and never emits
-        `tx-pow final`; its consensus line is the signal that it finished.
+        first, so this is only waiting for the log to be flushed. The consensus
+        line remains a fallback so a missing final line becomes a named
+        `no-final` failure instead of a five-second delay.
         """
         deadline = time.time() + 5
         pending = set(txids)
@@ -288,7 +290,7 @@ class VaultTxPowRaceTest(QuicksilverTestFramework):
             if pending:
                 time.sleep(0.05)
 
-    def _consume(self, text, tag, mode, reorg):
+    def _consume(self, text, tag, mode, reorg, expected_txids):
         finals = {}
         for match in FINAL_RX.finditer(text):
             finals[match.group(1)] = _record(match.groups(), "final")
@@ -305,12 +307,10 @@ class VaultTxPowRaceTest(QuicksilverTestFramework):
             "verdict-flipped": 0,
             "nin-disagreement": 0,
             "unjoined": 0,
-            # send() funds with sign=false, so CreateTransaction never emits
-            # tx-pow final. The accept is real; it cannot be joined by txid.
             "no-final": 0,
         }
         for txid, other in consensus.items():
-            if txid in finals:
+            if txid in finals or txid not in expected_txids:
                 continue
             counts["no-final"] += 1
             self.rows.append({
@@ -366,13 +366,15 @@ class VaultTxPowRaceTest(QuicksilverTestFramework):
         return counts
 
     def _raise_if_divergence(self, counts):
-        bad = counts["differs-verdict-held"] + counts["verdict-flipped"] + counts["nin-disagreement"]
+        bad = (counts["differs-verdict-held"] + counts["verdict-flipped"]
+               + counts["nin-disagreement"] + counts["no-final"])
         if bad:
             raise AssertionError(
                 "tx-pow divergence: "
                 f"held={counts['differs-verdict-held']} "
                 f"flipped={counts['verdict-flipped']} "
-                f"nin={counts['nin-disagreement']}"
+                f"nin={counts['nin-disagreement']} "
+                f"no-final={counts['no-final']}"
             )
 
     def _finish(self):
@@ -399,6 +401,9 @@ class VaultTxPowRaceTest(QuicksilverTestFramework):
         assert totals["equal"] > 0, "no joined sample; the harness saw nothing"
         assert totals["unjoined"] == 0, (
             f"{totals['unjoined']} final lines had no consensus line"
+        )
+        assert totals["no-final"] == 0, (
+            f"{totals['no-final']} consensus lines had no final line"
         )
 
 

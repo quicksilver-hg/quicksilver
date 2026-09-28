@@ -6,6 +6,7 @@
 """Test the fundrawtransaction RPC."""
 
 
+import re
 from decimal import Decimal
 from test_framework.address import address_to_scriptpubkey
 
@@ -918,8 +919,22 @@ class RawTransactionsTest(QuicksilverTestFramework):
         # Case (1), 'send' command
         # 'add_inputs' value is true unless "inputs" are specified, in such case, add_inputs=false.
         # So, the vault will automatically select coins and create the transaction if only the outputs are provided.
+        log_offset = self.nodes[2].debug_log_path.stat().st_size
         tx = vault.send(outputs=[{addr1: 3}])
         assert tx["complete"]
+        with open(self.nodes[2].debug_log_path, encoding="utf8", errors="replace") as log:
+            log.seek(log_offset)
+            tx_log = log.read()
+        final_targets = re.findall(
+            rf"tx-pow final: tx={tx['txid']} .* target=([0-9a-f]+) proof=",
+            tx_log,
+        )
+        consensus_targets = re.findall(
+            rf"accepted tx={tx['txid']} .* target=([0-9a-f]+) proof=",
+            tx_log,
+        )
+        assert_equal(len(final_targets), 1)
+        assert_equal(final_targets, consensus_targets)
 
         # Case (2), 'send' command
         # Select an input manually, which doesn't cover the entire output amount and

@@ -112,6 +112,7 @@ to network selection, peer discovery, and first health checks.
 - [Mining integration](doc/mining/README.md)
 - [0.1.x release notes](doc/release-notes.md)
 - [Source publication procedure](doc/source-publication.md)
+- [Verifying a binary release](doc/release-verification.md)
 
 ## Contributing and security
 

@@ -69,3 +69,43 @@ mv -- "$scratch"/*.deb "$scratch"/*.ddeb "$scratch"/*.buildinfo \
     "$scratch"/*.changes "$output"/
 [[ -f "$output/quicksilver_0.1.1-1_amd64.deb" && \
    -f "$output/quicksilver-devtools_0.1.1-1_amd64.deb" ]]
+
+# A release build can leave the provenance record stage-release.py consumes.
+# This checkout can name its own tag, commit, image, and build command. The
+# reviewed development SHA and the installed binary's -version line are not
+# in the public tree; the release procedure exports them. When either is
+# unset, this block writes nothing and the build result is unchanged.
+if [[ -n ${QS_DEVELOPMENT_SHA:-} && -n ${QS_VERSION_LINE:-} ]]; then
+    public_sha=$(git -C "$repo" rev-parse HEAD)
+    public_tag=$(git -C "$repo" describe --exact-match --tags HEAD 2>/dev/null || true)
+    image_line=$(grep -m1 '^FROM ubuntu@' "$repo/contrib/release/jammy.Dockerfile" || true)
+    image_digest=${image_line#FROM ubuntu@}
+    dev_sha=$(printf '%s' "$QS_DEVELOPMENT_SHA" | tr '[:upper:]' '[:lower:]')
+    case "$QS_VERSION_LINE" in
+        *$'\n'*) version_line_ok=0 ;;
+        *) version_line_ok=1 ;;
+    esac
+    if [[ $public_tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ \
+        && $public_sha =~ ^[0-9a-f]{40}$ \
+        && $dev_sha =~ ^[0-9a-f]{40}$ \
+        && $image_digest == sha256:* \
+        && $version_line_ok == 1 ]]; then
+        {
+            printf 'platform=ubuntu-22.04\n'
+            printf 'public_tag=%s\n' "$public_tag"
+            printf 'public_sha=%s\n' "$public_sha"
+            printf 'development_sha=%s\n' "$dev_sha"
+            printf 'builder_host=%s\n' "$(hostname)"
+            printf 'os_userland=Ubuntu 22.04 (Jammy container)\n'
+            printf 'compiler=g++ from build-essential in the pinned Jammy image\n'
+            printf 'image_digest=%s\n' "$image_digest"
+            printf 'build_command=dpkg-buildpackage -us -uc -b -j6\n'
+            printf 'version_line=%s\n' "$QS_VERSION_LINE"
+            find "$output" -maxdepth 1 -type f -printf '%f\n' | sort | while IFS= read -r name; do
+                printf 'file=%s\n' "$name"
+            done
+        } >"$output/PROVENANCE"
+    else
+        echo 'provenance record not written: public tag, development SHA, image digest, or version line is missing or not in the required form' >&2
+    fi
+fi

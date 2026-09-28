@@ -8,6 +8,7 @@
 
 #include <consensus/amount.h>
 #include <crypto/cuckatoo/cuckatoo.h>
+#include <uint256.h>
 #include <util/result.h>
 #include <vault/coinselection.h>
 #include <vault/transaction.h>
@@ -39,6 +40,18 @@ static constexpr int VAULT_ANCHOR_DEPTH{6};
 
 /** The height a per-tx proof should anchor to: VAULT_ANCHOR_DEPTH below the tip. */
 util::Result<int> TxPowAnchorHeight(CVault& vault);
+
+/** Exact final transaction inputs to the byte-priced proof target. */
+struct FinalTxPow {
+    uint64_t bytes;
+    uint256 target;
+};
+
+/** Compute the target for a complete, signed transaction's final bytes. */
+FinalTxPow GetFinalTxPow(CVault& vault, const CTransaction& tx, int anchor_height);
+
+/** Log a complete, signed transaction's final proof inputs and result. */
+void LogFinalTxPow(CVault& vault, const CTransaction& tx, int anchor_height);
 
 /** Whether this shipped graph size may fall back to built-in CPU solving. */
 constexpr bool AllowsTxPowCpuFallback(uint8_t edgebits)
@@ -236,9 +249,11 @@ struct CreatedTransactionResult
 {
     CTransactionRef tx;
     std::optional<unsigned int> change_pos;
+    /** Bytes the proof was ground against before any external signing. */
+    uint64_t pow_bytes;
 
-    CreatedTransactionResult(CTransactionRef tx, std::optional<unsigned int> change_pos)
-        : tx(std::move(tx)), change_pos(change_pos) {}
+    CreatedTransactionResult(CTransactionRef tx, std::optional<unsigned int> change_pos, uint64_t pow_bytes)
+        : tx(std::move(tx)), change_pos(change_pos), pow_bytes(pow_bytes) {}
 };
 
 /**

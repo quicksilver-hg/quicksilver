@@ -1,4 +1,4 @@
-# Release checksums
+# Release procedure
 
 ## Manual pages before packaging
 
@@ -14,12 +14,20 @@ order; do not package before the final verification succeeds:
    untagged `HEAD` exactly.
 4. Run `contrib/devtools/gen-manpages.py --check`.
 5. Review and commit the regenerated `doc/man/*.1` files.
-6. Place the signed `vX.Y.Z` tag on that commit.
-7. In a clean checkout of that exact tag, configure and rebuild every program,
+6. Publish that commit from the development checkout with
+   `contrib/devtools/publish-source.sh` into the publication clone. Record the
+   development SHA and the public SHA. The trees match. The commits do not:
+   the development history is never pushed, and the public repository has no
+   shared ancestry with it. See `doc/source-publication.md`.
+7. Place the signed `vX.Y.Z` tag on the public commit, in the publication
+   clone. Do not tag the development checkout.
+8. In a clean clone of that public tag, configure and rebuild every program,
    confirm each `--version` reports exactly `vX.Y.Z`, then run
    `contrib/devtools/gen-manpages.py --verify`. This regenerates into a
    disposable directory and diffs every page against the committed copy.
-8. Only after verification passes, build the release packages.
+9. Only after verification passes, build the release packages. Every builder
+   starts from a clean clone of the public tag, not from the development
+   checkout.
 
 Both generation paths pin help2man's date by setting `SOURCE_DATE_EPOCH` to
 the timestamp of the last commit that changed `CMakeLists.txt`. The version
@@ -28,6 +36,202 @@ commit and tag.
 
 If post-tag verification fails, never move a published tag: fix the problem
 and cut the next version.
+
+## Build each leg from the public tag
+
+One public tag covers Ubuntu 22.04, Ubuntu 24.04, and Windows x64. The binary
+release waits until all three have passed. Each builder is a clean clone of
+that tag.
+
+- Ubuntu 22.04: `contrib/release/build-jammy-debs.sh`, below.
+- Ubuntu 24.04: the Debian package build on the 24.04 host.
+- Windows x64: the MSVC installer build. Copy the installer off the build
+  host and hash it before and after the copy. Keep the two hashes. Staging
+  checks the same thing again.
+
+A Windows installer is not opened during staging. Its provenance record and
+the transfer hash are the checks for that file. A `.deb` is extracted,
+because the packaged programs can be executed on Linux, and each must
+identify as exactly `vX.Y.Z`. A suffix such as `vX.Y.Z-<12 hex>` is an
+untagged build and is refused.
+
+## Stage
+
+`contrib/release/stage-release.py` copies an explicit file list into a new
+tree `<output>/vX.Y.Z/<platform>/`. It refuses an existing `<output>/vX.Y.Z`.
+It does not move or edit the builder's outputs. It hashes every file before
+and after the copy and stops if they differ.
+
+Each input directory carries a `PROVENANCE` file. Blank lines and `#`
+comments are ignored. Other lines are `key=value`. Required once:
+
+```
+platform=ubuntu-22.04
+public_tag=vX.Y.Z
+public_sha=<40 hex>
+development_sha=<40 hex>
+builder_host=<hostname>
+os_userland=<distribution and version>
+compiler=<compiler and version>
+image_digest=<sha256:...> or none
+build_command=<command that produced the files>
+version_line=<the -version line a built binary printed>
+file=<basename>
+```
+
+`file` repeats, once per public file. `image_digest` is `none` when that
+build had no image. The script copies those basenames and nothing else in
+the directory, so a log left beside the artifacts is not signed. The three
+platform names above are the 1.0 matrix. The script does not hardcode them:
+another platform is another `--platform` argument and another input
+directory.
+
+```
+contrib/release/stage-release.py \
+  --version vX.Y.Z \
+  --public-sha <public SHA> \
+  --development-sha <development SHA> \
+  --output /path/to/staging \
+  --platform ubuntu-22.04=/path/to/jammy-output \
+  --platform ubuntu-24.04=/path/to/noble-output \
+  --platform windows-x64=/path/to/windows-output
+```
+
+Every platform's tag and both SHAs must match the arguments. One tag for
+the whole release is enforced here.
+
+The pre-hash signing slot is `--sign-hook PLATFORM=EXECUTABLE`. After the
+copy and the transfer-hash check, and before `gen-sha256sums.sh`, the
+executable is run with the staged platform directory as its only argument.
+It may rewrite bytes in place. It may not add, remove, or rename a file; a
+change of the file set is refused and the name is reported. Omit the option
+and that platform is hashed as copied. Any platform may set a hook. The
+flow does not branch on the platform name.
+
+`gen-sha256sums.sh` then writes `SHA256SUMS` in each platform directory.
+The script also writes `INDEX` at the top of `vX.Y.Z`, one record per
+platform: directory, provenance fields, and each file's name, size, and
+SHA-256. It writes a top-level `SHA256SUMS` over each platform's
+`SHA256SUMS` and over `INDEX`.
+
+## Sign
+
+`contrib/release/sign-release.sh <staged vX.Y.Z> FINGERPRINT` writes a
+detached armored signature for `INDEX` and for every `SHA256SUMS`. The
+fingerprint is the full 40 hex digits. A short key id is refused, as is a
+fingerprint that is not exactly the secret key's own, as is a signature
+file that already exists. The script verifies each signature it wrote and
+requires the `VALIDSIG` primary fingerprint to match. It does not upload.
+
+Leave `QS_GPG_PASSPHRASE` unset for the project key and let `gpg-agent`
+handle the passphrase. That variable exists so a test can pass an empty
+passphrase to a throwaway key in a temporary `GNUPGHOME`. Do not set it for
+the project key.
+
+## Verify
+
+`contrib/release/verify-release.sh <directory> FINGERPRINT` is the check a
+stranger runs, and the check to run again after a Release is downloaded.
+It verifies every signature by parsing `VALIDSIG`, and it fails when the
+primary fingerprint is not the one on the command line. `gpg --verify`
+alone is not the check: it accepts any key in the keyring. The script then
+runs `sha256sum -c` in the top directory and in each platform directory,
+rejects an extra or missing file, and checks `INDEX` against the files.
+
+## GitHub Release
+
+GitHub Release assets are a flat list of file names. Each platform
+directory contains `SHA256SUMS` and `SHA256SUMS.asc`, so uploading those
+files directly would collide. Ship one tar per platform directory, which
+keeps the signed directory intact and keeps the platforms apart, and ship
+the four top-level files beside the archives. Their names are unique. The
+signed hashes are of the unpacked tree, not of the tar bytes.
+
+Run this from the publication clone, after staging, signing, and
+`verify-release.sh` have succeeded. Do not run it from the development
+checkout, and do not run it as part of preparing the tooling.
+
+```bash
+VERSION=vX.Y.Z
+STAGE=/path/to/staging/$VERSION
+DIST=$(mktemp -d)
+tar -C "$STAGE" -cf "$DIST/ubuntu-22.04.tar" ubuntu-22.04
+tar -C "$STAGE" -cf "$DIST/ubuntu-24.04.tar" ubuntu-24.04
+tar -C "$STAGE" -cf "$DIST/windows-x64.tar" windows-x64
+cp "$STAGE/INDEX" "$STAGE/INDEX.asc" "$STAGE/SHA256SUMS" "$STAGE/SHA256SUMS.asc" "$DIST/"
+gh release create "$VERSION" --repo quicksilver-hg/quicksilver \
+  --title "$VERSION" \
+  --notes-file /path/to/release-notes \
+  "$DIST/INDEX" "$DIST/INDEX.asc" "$DIST/SHA256SUMS" "$DIST/SHA256SUMS.asc" \
+  "$DIST/ubuntu-22.04.tar" "$DIST/ubuntu-24.04.tar" "$DIST/windows-x64.tar"
+```
+
+The notes file carries the key fingerprint and a pointer to
+`doc/release-verification.md`. The fingerprint is published there and in
+that document, not only as a file beside the binaries.
+
+## Verify the downloaded assets
+
+Download the assets, rebuild the tree, and run the verifier again. This is
+the readback. The fingerprint is the published one.
+
+```bash
+mkdir "$VERSION"
+tar -C "$VERSION" -xf ubuntu-22.04.tar
+tar -C "$VERSION" -xf ubuntu-24.04.tar
+tar -C "$VERSION" -xf windows-x64.tar
+cp INDEX INDEX.asc SHA256SUMS SHA256SUMS.asc "$VERSION/"
+contrib/release/verify-release.sh "$VERSION" FINGERPRINT
+```
+
+## Key custody
+
+Create the release key offline, on a machine that is not the one that will
+build or upload the artifacts:
+
+```bash
+gpg --quick-gen-key "Quicksilver Release <address the owner chooses>" ed25519 cert never
+```
+
+GnuPG writes a revocation certificate under `openpgp-revocs.d` in that
+`GNUPGHOME` when the key is created. Store that certificate, and an
+encrypted backup of the secret key (`gpg --export-secret-keys --armor
+FINGERPRINT`), offline. Do not put either in the repository or in a
+Release.
+
+Publish the public key (`gpg --export --armor FINGERPRINT`) and its
+fingerprint in the release notes and in `doc/release-verification.md`. A
+copy of the public key next to the binaries is not the publication
+channel: anyone who can replace the binaries can replace that copy.
+
+To rotate the key, generate the new one the same way, with its own
+revocation certificate. Sign the new fingerprint with the old key and
+publish that signature in the release notes and in
+`doc/release-verification.md` before any release is signed by the new key.
+The last release signed by the old key can carry the announcement. Later
+releases are signed by the new key. If the old key is compromised, publish
+its revocation certificate through that same channel and stop trusting
+signatures from it. Do not replace the artifacts of a tag that was already
+published. A later release gets a new tag.
+
+## Authenticode later
+
+No code-signing certificate is held, so the Windows installer is not
+Authenticode-signed and SmartScreen may warn. The public integrity check
+is the GPG signature on `SHA256SUMS` and the checksum of the installer.
+Authenticode is not part of this release.
+
+Authenticode changes the installer bytes, so it has to run before those
+bytes are hashed. That is the pre-hash slot:
+
+```bash
+--sign-hook windows-x64=/path/to/authenticode-sign
+```
+
+The hook receives the staged `windows-x64` directory. A later certificate
+plugs in there and rewrites the installer in place. The hash and the
+signature are taken after it returns. Nothing else in the flow changes,
+and a platform with no hook is unchanged.
 
 `gen-sha256sums.sh` writes a `SHA256SUMS` file for one directory of release
 artifacts, in the form `sha256sum -c` reads. It does not sign anything.
@@ -53,6 +257,15 @@ and copies the `.deb`, debug packages, `.buildinfo` and `.changes` files into
 that directory. Its Dockerfile pins the Ubuntu image digest. Updating that pin
 requires a new package build, dependency inspection, and a fresh Jammy install
 and version check. The image itself is a build host, not a release artifact.
+
+When this checkout is the signed public tag, the script can also write a
+`PROVENANCE` record into that output directory. Export `QS_DEVELOPMENT_SHA`
+(the reviewed development commit, 40 hex digits) and `QS_VERSION_LINE` (a
+`-version` line captured from an installed binary) before the run. The
+public tree does not contain the development SHA, and the script does not
+execute the packaged binaries, so it cannot invent those two values. If
+either is unset, or `HEAD` is not exactly `vX.Y.Z`, the script writes no
+record and its result is unchanged.
 
 The Ubuntu 24.04 packages declare `t64` library names and
 `libstdc++6 (>= 13.1)`, which Ubuntu 22.04 cannot satisfy. Building the

@@ -902,6 +902,30 @@ util::Result<int> TxPowAnchorHeight(CVault& vault)
     return std::max(0, *tip_height - VAULT_ANCHOR_DEPTH);
 }
 
+FinalTxPow GetFinalTxPow(CVault& vault, const CTransaction& tx, int anchor_height)
+{
+    const uint64_t bytes{static_cast<uint64_t>(::GetSerializeSize(TX_WITH_WITNESS(tx)))};
+    return {
+        bytes,
+        vault.chain().txPowTarget(anchor_height, bytes, tx.vout.size(), tx.vin.size()),
+    };
+}
+
+void LogFinalTxPow(CVault& vault, const CTransaction& tx, int anchor_height)
+{
+    const FinalTxPow final_pow{GetFinalTxPow(vault, tx, anchor_height)};
+    // Keyed by txid, not by the proof hash: tests running -txpownocycle fabricate a
+    // deterministic cycle, so hundreds of transactions share one proof hash and a
+    // join on it silently collapses them into a single, wrong sample.
+    vault.VaultLogPrintf("tx-pow final: tx=%s anchor=%d bytes=%u nout=%u nin=%u target=%s proof=%s\n",
+                         tx.GetHash().ToString(), anchor_height,
+                         static_cast<unsigned>(final_pow.bytes),
+                         static_cast<unsigned>(tx.vout.size()),
+                         static_cast<unsigned>(tx.vin.size()),
+                         final_pow.target.ToString(),
+                         cuckatoo::CuckatooProofHash(tx.nCycle).ToString());
+}
+
 std::optional<bilingual_str> GrindTransactionPow(CVault& vault, CMutableTransaction& txNew,
                                                  uint64_t bytes, int anchor_height,
                                                  const cuckatoo::SolverProgressCallback& tx_proof_progress,
@@ -1349,30 +1373,20 @@ util::Result<CreatedTransactionResult> CreateTransaction(
     //
     // Regrinding here is safe: the signature hash does not cover nAnchorHeight,
     // nCycle or nPowNonce, so a new proof does not invalidate what was signed in
-    // phase 1. In the PSQT/offline flow (sign == false) the final transaction is
-    // assembled elsewhere and this check cannot run — there the estimate must simply
-    // be right, which is why the taproot estimator was fixed rather than papered
-    // over here.
+    // phase 1. The send RPC also uses sign == false, but finishes locally and checks
+    // the signed bytes in FinishTransaction. Only the external PSQT/offline flow
+    // assembles the final transaction elsewhere, where this check cannot run and the
+    // estimate must simply be right. That is why the taproot estimator was fixed
+    // rather than papered over here.
     if (!grind_err && sign) {
         const CTransaction final_tx{built->txNew};
-        const uint64_t final_bytes{static_cast<uint64_t>(::GetSerializeSize(TX_WITH_WITNESS(final_tx)))};
-        const uint256 final_target = vault.chain().txPowTarget(
-            built->pow_anchor_height, final_bytes, built->txNew.vout.size(), built->txNew.vin.size());
-        // Keyed by txid, not by the proof hash: tests running -txpownocycle fabricate a
-        // deterministic cycle, so hundreds of transactions share one proof hash and a
-        // join on it silently collapses them into a single, wrong sample.
-        vault.VaultLogPrintf("tx-pow final: tx=%s anchor=%d bytes=%u nout=%u nin=%u target=%s proof=%s\n",
-                             final_tx.GetHash().ToString(),
-                             built->pow_anchor_height, static_cast<unsigned>(final_bytes),
-                             static_cast<unsigned>(built->txNew.vout.size()),
-                             static_cast<unsigned>(built->txNew.vin.size()),
-                             final_target.ToString(),
-                             cuckatoo::CuckatooProofHash(built->txNew.nCycle).ToString());
-        if (UintToArith256(cuckatoo::CuckatooProofHash(built->txNew.nCycle)) > UintToArith256(final_target)) {
+        const FinalTxPow final_pow{GetFinalTxPow(vault, final_tx, built->pow_anchor_height)};
+        if (UintToArith256(cuckatoo::CuckatooProofHash(built->txNew.nCycle)) > UintToArith256(final_pow.target)) {
             vault.VaultLogPrintf("tx-pow: size estimate ran low (%u estimated, %u actual); regrinding\n",
-                                 static_cast<unsigned>(built->pow_bytes), static_cast<unsigned>(final_bytes));
-            grind_err = grind_pow(final_bytes);
+                                 static_cast<unsigned>(built->pow_bytes), static_cast<unsigned>(final_pow.bytes));
+            grind_err = grind_pow(final_pow.bytes);
         }
+        if (!grind_err) LogFinalTxPow(vault, CTransaction{built->txNew}, built->pow_anchor_height);
     }
 
     // Phase 3 — finalize, with the vault locked again. `built` is reset explicitly
@@ -1405,9 +1419,10 @@ util::Result<CreatedTransactionResult> CreateTransaction(
     vault.VaultLogPrintf("Transaction construction: Bytes:%u (exact value)\n", built->nBytes);
 
     const std::optional<unsigned int> final_change_pos{built->change_pos};
+    const uint64_t final_pow_bytes{built->pow_bytes};
     built.reset();
     trace_result(true, final_change_pos);
-    return CreatedTransactionResult(tx, final_change_pos);
+    return CreatedTransactionResult(tx, final_change_pos, final_pow_bytes);
 }
 
 util::Result<CreatedTransactionResult> FundTransaction(CVault& vault, const CMutableTransaction& tx, const std::vector<CRecipient>& vecSend, std::optional<unsigned int> change_pos, bool lockUnspents, CCoinControl coinControl)

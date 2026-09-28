@@ -5,6 +5,7 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the sendall RPC command."""
 
+import re
 from decimal import Decimal, getcontext
 
 from test_framework.test_framework import QuicksilverTestFramework
@@ -71,7 +72,14 @@ class SendallTest(QuicksilverTestFramework):
 
     # Helper schema for success cases
     def test_sendall_success(self, sendall_args, remaining_balance = 0):
+        log_offset = self.nodes[0].debug_log_path.stat().st_size
         sendall_tx_receipt = self.vault.sendall(sendall_args)
+        with open(self.nodes[0].debug_log_path, encoding="utf8", errors="replace") as log:
+            log.seek(log_offset)
+            tx_log = log.read()
+        assert_equal(1, len(re.findall(
+            rf"tx-pow final: tx={sendall_tx_receipt['txid']} ", tx_log,
+        )))
         # sendall must produce a transaction the network will actually take. It did
         # not: it skipped the per-tx proof-of-work grind entirely, so every
         # transaction it built was rejected as bad-txns-pow-anchor with anchor=0
