@@ -5,4 +5,4 @@
 export LC_ALL=C
 set -euo pipefail
 
-exec "$(dirname "$0")/build-debs.sh" jammy "$@"
+exec "$(dirname "$0")/build-debs.sh" noble "$@"

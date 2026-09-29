@@ -24,6 +24,7 @@ HERE = Path(__file__).resolve().parent
 STAGE = HERE / "stage-release.py"
 SIGN = HERE / "sign-release.sh"
 VERIFY = HERE / "verify-release.sh"
+BUILD_DEBS = HERE / "build-debs.sh"
 VERSION = "v1.2.3"
 PUBLIC = "a" * 40
 DEV = "b" * 40
@@ -77,7 +78,7 @@ def version_script(line):
     return f"#!/bin/sh\nprintf '%s\\n' '{line}'\n"
 
 
-def make_deb(dest, files):
+def make_deb(dest, files, debian_version="1.2.3-1"):
     """files is a list of (archive path, body, mode)."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "pkg"
@@ -86,7 +87,7 @@ def make_deb(dest, files):
         control.chmod(0o755)
         (control / "control").write_text(
             "Package: quicksilver\n"
-            "Version: 1.2.3-1\n"
+            f"Version: {debian_version}\n"
             "Architecture: amd64\n"
             "Maintainer: Quicksilver Release Test <release-test@example.invalid>\n"
             "Description: synthetic release-tooling package\n",
@@ -244,7 +245,15 @@ class ReleaseToolingTest(unittest.TestCase):
         )
         return directory
 
-    def write_deb_platform(self, root, name, identity_line, extra_binary=None):
+    def write_deb_platform(
+        self,
+        root,
+        name,
+        identity_line,
+        extra_binary=None,
+        release_version=VERSION,
+        debian_version="1.2.3-1",
+    ):
         directory = Path(root) / name
         directory.mkdir(parents=True)
         files = [
@@ -252,14 +261,26 @@ class ReleaseToolingTest(unittest.TestCase):
         ]
         if extra_binary is not None:
             files.append(("usr/bin/quicksilver-cli", version_script(extra_binary), 0o755))
-        deb_name = "quicksilver_1.2.3-1_amd64.deb"
-        make_deb(directory / deb_name, files)
+        deb_name = f"quicksilver_{debian_version}_amd64.deb"
+        make_deb(directory / deb_name, files, debian_version)
         shipped = [deb_name]
-        for extra in ("quicksilver_1.2.3-1_amd64.ddeb", "quicksilver_1.2.3-1_amd64.buildinfo", "quicksilver_1.2.3-1_amd64.changes"):
+        for extra in (
+            f"quicksilver_{debian_version}_amd64.ddeb",
+            f"quicksilver_{debian_version}_amd64.buildinfo",
+            f"quicksilver_{debian_version}_amd64.changes",
+        ):
             (directory / extra).write_text(extra + "\n", encoding="utf8")
             shipped.append(extra)
         (directory / "build.log").write_text("not shipped\n", encoding="utf8")
-        (directory / "PROVENANCE").write_text(provenance_text(name, shipped), encoding="utf8")
+        (directory / "PROVENANCE").write_text(
+            provenance_text(
+                name,
+                shipped,
+                public_tag=release_version,
+                version_line=f"Quicksilver version {release_version}",
+            ),
+            encoding="utf8",
+        )
         return directory
 
     def stage_plain(self, root, names):
@@ -345,6 +366,86 @@ class ReleaseToolingTest(unittest.TestCase):
             result = self.run_stage(root / "out", [("example-arch", directory)])
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((root / "out" / VERSION / "example-arch" / "payload.bin").is_file())
+
+    def test_package_build_driver_refuses_unknown_suite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [str(BUILD_DEBS), "oracular", tmp],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("Unsupported Ubuntu suite: oracular", result.stderr)
+
+    def test_package_build_driver_checks_tag_or_commit_stamp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Release Test"], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.email", "release@example.invalid"],
+                check=True,
+            )
+            (root / "tracked").write_text("tracked\n", encoding="utf8")
+            subprocess.run(["git", "-C", str(root), "add", "tracked"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "test"], check=True)
+            commit = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "--short=12", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            header = root / "build-info.h"
+            header.write_text(f'#define BUILD_GIT_COMMIT "{commit}"\n', encoding="utf8")
+            untagged = subprocess.run(
+                [str(BUILD_DEBS), "--check-stamp", str(root), str(header)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(untagged.returncode, 0, untagged.stderr)
+
+            subprocess.run(["git", "-C", str(root), "tag", "v1.2.3rc1"], check=True)
+            wrong = subprocess.run(
+                [str(BUILD_DEBS), "--check-stamp", str(root), str(header)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(wrong.returncode, 0)
+            header.write_text('#define BUILD_GIT_TAG "v1.2.3rc1"\n', encoding="utf8")
+            tagged = subprocess.run(
+                [str(BUILD_DEBS), "--check-stamp", str(root), str(header)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(tagged.returncode, 0, tagged.stderr)
+
+    def test_linux_package_recipes_are_pinned_and_select_suite(self):
+        for suite in ("jammy", "noble"):
+            with self.subTest(suite=suite):
+                dockerfile = (HERE / f"{suite}.Dockerfile").read_text(encoding="utf8")
+                wrapper = (HERE / f"build-{suite}-debs.sh").read_text(encoding="utf8")
+                self.assertRegex(dockerfile, r"(?m)^FROM ubuntu@sha256:[0-9a-f]{64}$")
+                self.assertIn(f'"--inside", "{suite}"', dockerfile)
+                self.assertIn("export LC_ALL=C\nset -euo pipefail", wrapper)
+                self.assertIn(f'build-debs.sh" {suite} "$@"', wrapper)
+
+    def test_package_provenance_does_not_list_its_own_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            (output / "payload.deb").write_bytes(b"package")
+            (output / "PROVENANCE").write_text("partial record\n", encoding="utf8")
+            result = subprocess.run(
+                [str(BUILD_DEBS), "--list-provenance-files", str(output)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "file=payload.deb\n")
 
     def test_refuse_existing_staging_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -459,6 +560,18 @@ class ReleaseToolingTest(unittest.TestCase):
             result = self.run_stage(root / "out", [("ubuntu-22.04", directory)])
             self.assert_refused(result, "v9.9.9")
 
+    def test_refuse_deb_different_debian_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = self.write_deb_platform(
+                root / "in",
+                "ubuntu-22.04",
+                f"Quicksilver daemon version {VERSION}",
+                debian_version="1.2.2-1",
+            )
+            result = self.run_stage(root / "out", [("ubuntu-22.04", directory)])
+            self.assert_refused(result, "Debian version 1.2.2-1, not 1.2.3-1")
+
     def test_refuse_deb_without_executable(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -505,10 +618,52 @@ class ReleaseToolingTest(unittest.TestCase):
             result = self.run_stage(Path(tmp) / "out", [("example-arch", Path(tmp))], public="abcd")
             self.assert_refused(result, "40 hex")
 
-    def test_refuse_bad_version(self):
+    def test_release_version_forms(self):
+        for version in ("v0.0.0", "v1.2.3", "v1.2.3rc1", "v10.20.30rc42"):
+            with self.subTest(version=version):
+                self.assertIsNotNone(STAGE_MODULE.RELEASE_VERSION.fullmatch(version))
+
+    def test_refuse_bad_version_forms(self):
+        for version in (
+            "1.2.3",
+            "v01.2.3",
+            "v1.02.3",
+            "v1.2.03",
+            "v1.2.3rc0",
+            "v1.2.3rc01",
+            "v1.2.3-rc1",
+            "v1.2.3-0123456789ab",
+            "v1.2.3-dirty",
+        ):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as tmp:
+                result = self.run_stage(
+                    Path(tmp) / "out",
+                    [("example-arch", Path(tmp))],
+                    version=version,
+                )
+                self.assert_refused(result, "vX.Y.Z or vX.Y.ZrcN")
+
+    def test_rc_deb_stages_signs_and_verifies(self):
+        version = "v1.2.3rc4"
         with tempfile.TemporaryDirectory() as tmp:
-            result = self.run_stage(Path(tmp) / "out", [("example-arch", Path(tmp))], version="v1.2.3-rc1")
-            self.assert_refused(result, "vX.Y.Z")
+            root = Path(tmp)
+            directory = self.write_deb_platform(
+                root / "in",
+                "ubuntu-22.04",
+                f"Quicksilver daemon version {version}",
+                release_version=version,
+                debian_version="1.2.3~rc4-1",
+            )
+            result = self.run_stage(
+                root / "out",
+                [("ubuntu-22.04", directory)],
+                version=version,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            staged = root / "out" / version
+            self.assertEqual(self.sign(staged).returncode, 0)
+            checked = self.verify(staged)
+            self.assertEqual(checked.returncode, 0, checked.stderr)
 
     def test_refuse_no_platform(self):
         with tempfile.TemporaryDirectory() as tmp:

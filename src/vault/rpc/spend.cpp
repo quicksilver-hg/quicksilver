@@ -107,10 +107,60 @@ static UniValue FinishTransaction(const std::shared_ptr<CVault> pvault, const Un
         vault::LogFinalTxPow(*pvault, CTransaction{mtx}, mtx.nAnchorHeight);
     }
 
+    // An incomplete PSQT is signed somewhere else, so the exact signed size is
+    // not known here. Grind into the PSQT against the maximum signed size, then
+    // return that. The final-bytes check the complete path runs cannot run on
+    // this one: the signed bytes are assembled elsewhere, the same limit as
+    // CreateTransaction's external PSQT flow. The estimator is an upper bound
+    // by construction, so a proof ground on it stays valid when the real
+    // signatures are smaller. cs_vault covers the estimate and the anchor
+    // lookup only, and is released before the grind.
+    if (!complete && psqtx.tx &&
+        psqtx.tx->nAnchorHeight == 0 &&
+        std::all_of(psqtx.tx->nCycle.begin(), psqtx.tx->nCycle.end(), [](uint32_t e) { return e == 0; })) {
+        int anchor_height{0};
+        uint64_t estimated_bytes{0};
+        {
+            LOCK(pvault->cs_vault);
+            const TxSize tx_size{CalculateMaximumSignedTxSize(CTransaction(*psqtx.tx), pvault.get())};
+            if (tx_size.bytes < 0) {
+                throw JSONRPCError(RPC_VAULT_ERROR, "Missing solving data for estimating transaction size");
+            }
+            const auto anchor_height_result{vault::TxPowAnchorHeight(*pvault)};
+            if (!anchor_height_result) {
+                throw JSONRPCError(RPC_VAULT_ERROR, util::ErrorString(anchor_height_result).original);
+            }
+            anchor_height = *anchor_height_result;
+            estimated_bytes = static_cast<uint64_t>(tx_size.bytes);
+        }
+        if (auto err{vault::GrindTransactionPow(*pvault, *psqtx.tx, estimated_bytes, anchor_height)}) {
+            throw JSONRPCError(RPC_VAULT_ERROR, err->original);
+        }
+    }
+
     UniValue result(UniValue::VOBJ);
 
     const bool psqt_opt_in{options.exists("psqt") && options["psqt"].get_bool()};
     bool add_to_vault{options.exists("add_to_vault") ? options["add_to_vault"].get_bool() : true};
+    // The proof was ground into mtx. Copy it onto the PSQT before a complete one
+    // is serialized. The signature hash covers none of these fields, so this
+    // does not re-sign and does not take cs_vault. The PSQT's unsigned
+    // transaction keeps an empty scriptSig, so its txid is not the committed
+    // txid when the signature is legacy. The check is that finalizing the PSQT
+    // reproduces the committed transaction.
+    if (complete && (psqt_opt_in || !add_to_vault)) {
+        psqtx.tx->nAnchorHeight = mtx.nAnchorHeight;
+        psqtx.tx->nCycle = mtx.nCycle;
+        psqtx.tx->nPowNonce = mtx.nPowNonce;
+        CMutableTransaction finalized{*psqtx.tx};
+        for (unsigned int i = 0; i < finalized.vin.size(); ++i) {
+            finalized.vin[i].scriptSig = psqtx.inputs[i].final_script_sig;
+            finalized.vin[i].scriptWitness = psqtx.inputs[i].final_script_witness;
+        }
+        if (EncodeHexTx(CTransaction(finalized)) != EncodeHexTx(CTransaction(mtx))) {
+            throw JSONRPCError(RPC_INTERNAL_ERROR, "PSQT does not finalize to the committed transaction");
+        }
+    }
     if (psqt_opt_in || !complete || !add_to_vault) {
         // Serialize the PSQT
         DataStream ssTx{};
@@ -784,7 +834,7 @@ RPCHelpMan send()
                     },
                     {"locktime", RPCArg::Type::NUM, RPCArg::Default{0}, "Raw locktime. Non-0 value also locktime-activates inputs"},
                     {"lock_unspents", RPCArg::Type::BOOL, RPCArg::Default{false}, "Lock selected unspent outputs"},
-                    {"psqt", RPCArg::Type::BOOL,  RPCArg::DefaultHint{"automatic"}, "Always return a PSQT, implies add_to_vault=false."},
+                    {"psqt", RPCArg::Type::BOOL,  RPCArg::DefaultHint{"automatic"}, "Always return a PSQT, implies add_to_vault=false. A returned PSQT, complete or not, already carries its proof-of-work, ground against an estimate of the signed size when this vault could not sign."},
                     {"max_tx_weight", RPCArg::Type::NUM, RPCArg::Default{MAX_STANDARD_TX_WEIGHT}, "The maximum acceptable transaction weight.\n"
                                                   "Transaction building will fail if this can not be satisfied."},
                 },
@@ -873,7 +923,7 @@ RPCHelpMan sendall()
                         },
                         {"locktime", RPCArg::Type::NUM, RPCArg::Default{0}, "Raw locktime. Non-0 value also locktime-activates inputs"},
                         {"lock_unspents", RPCArg::Type::BOOL, RPCArg::Default{false}, "Lock selected unspent outputs"},
-                        {"psqt", RPCArg::Type::BOOL,  RPCArg::DefaultHint{"automatic"}, "Always return a PSQT, implies add_to_vault=false."},
+                        {"psqt", RPCArg::Type::BOOL,  RPCArg::DefaultHint{"automatic"}, "Always return a PSQT, implies add_to_vault=false. A returned PSQT, complete or not, already carries its proof-of-work, ground against an estimate of the signed size when this vault could not sign."},
                         {"minconf", RPCArg::Type::NUM, RPCArg::Default{0}, "Require inputs with at least this many confirmations."},
                         {"maxconf", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Require inputs with at most this many confirmations."},
                     },

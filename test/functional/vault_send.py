@@ -162,6 +162,25 @@ class VaultSendTest(QuicksilverTestFramework):
 
         return res
 
+    def assert_psqt_matches_committed(self, node, res):
+        """A complete PSQT must finalize to the transaction the RPC returned.
+
+        The unsigned transaction inside a PSQT has an empty scriptSig. A legacy
+        signature lives on the PSQT input and is part of the committed txid, so
+        the unsigned txid and res["txid"] differ even when both carry the same
+        proof. Compare the proof, then the transaction a finalizer extracts.
+        testrelaypoolaccept is this tree's acceptance check.
+        """
+        decoded = node.decodepsqt(res["psqt"])["tx"]
+        committed = node.decoderawtransaction(res["hex"])
+        assert_equal(decoded["anchor_height"], committed["anchor_height"])
+        assert_equal(decoded["pow_nonce"], committed["pow_nonce"])
+        assert_equal(decoded["cuckatoo_cycle"], committed["cuckatoo_cycle"])
+        finalized = node.finalizepsqt(res["psqt"])
+        assert_equal(finalized["hex"], res["hex"])
+        assert_equal(node.testrelaypoolaccept([finalized["hex"]])[0]["allowed"], True)
+        assert_equal(node.decoderawtransaction(finalized["hex"])["txid"], res["txid"])
+
     def run_test(self):
         self.log.info("Setup vaults...")
         # w0 is a vault with coinbase rewards
@@ -228,6 +247,7 @@ class VaultSendTest(QuicksilverTestFramework):
         self.log.info("Return PSQT...")
         res = self.test_send(from_vault=w0, to_vault=w1, amount=1, psqt=True)
         assert res["psqt"]
+        self.assert_psqt_matches_committed(self.nodes[0], res)
 
         self.log.info("Create transaction that spends to address, but don't broadcast...")
         self.test_send(from_vault=w0, to_vault=w1, amount=1, add_to_vault=False)
@@ -236,6 +256,13 @@ class VaultSendTest(QuicksilverTestFramework):
         res = self.test_send(from_vault=w3, to_vault=w1, amount=1)
         res = w2.vaultprocesspsqt(res["psqt"])
         assert res["complete"]
+        finalized = self.nodes[1].finalizepsqt(res["psqt"])
+        assert_equal(finalized["complete"], True)
+        txid = self.nodes[1].sendrawtransaction(finalized["hex"])
+        self.sync_relaypools()
+        self.generate(self.nodes[0], 1)
+        blockhash = self.nodes[0].getbestblockhash()
+        assert_equal(self.nodes[0].getrawtransaction(txid, 1, blockhash)["confirmations"], 1)
 
         self.log.info("Create OP_RETURN...")
         self.test_send(from_vault=w0, to_vault=w1, amount=1)

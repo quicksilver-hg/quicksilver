@@ -104,7 +104,35 @@ class SendallTest(QuicksilverTestFramework):
         self.gen_and_clean()
         assert_equal(0, self.vault.getbalances()["mine"]["trusted"]) # vault is empty
 
+    def assert_psqt_matches_committed(self, res):
+        """A complete PSQT must finalize to the transaction the RPC returned.
+
+        The unsigned transaction inside a PSQT has an empty scriptSig. A legacy
+        signature lives on the PSQT input and is part of the committed txid, so
+        the unsigned txid and res["txid"] differ even when both carry the same
+        proof. Compare the proof, then the transaction a finalizer extracts.
+        testrelaypoolaccept is this tree's acceptance check.
+        """
+        node = self.nodes[0]
+        decoded = node.decodepsqt(res["psqt"])["tx"]
+        committed = node.decoderawtransaction(res["hex"])
+        assert_equal(decoded["anchor_height"], committed["anchor_height"])
+        assert_equal(decoded["pow_nonce"], committed["pow_nonce"])
+        assert_equal(decoded["cuckatoo_cycle"], committed["cuckatoo_cycle"])
+        finalized = node.finalizepsqt(res["psqt"])
+        assert_equal(finalized["hex"], res["hex"])
+        assert_equal(node.testrelaypoolaccept([finalized["hex"]])[0]["allowed"], True)
+        assert_equal(node.decoderawtransaction(finalized["hex"])["txid"], res["txid"])
+
     # Actual tests
+    @cleanup
+    def sendall_psqt_carries_committed_proof(self):
+        self.log.info("A complete sendall PSQT carries the committed proof")
+        self.add_utxos([6])
+        res = self.vault.sendall(recipients=[self.remainder_target], options={"psqt": True})
+        assert_equal(res["complete"], True)
+        self.assert_psqt_matches_committed(res)
+
     @cleanup
     def sendall_two_utxos(self):
         self.log.info("Testing basic sendall case without specific amounts")
@@ -333,9 +361,20 @@ class SendallTest(QuicksilverTestFramework):
         assert_equal(decoded["tx"]["vin"][0]["vout"], utxo["vout"])
         assert_equal(decoded["tx"]["vout"][0]["output_script"]["address"], self.remainder_target)
 
+        # The key-holding vault signs and finalizes. The proof has to already
+        # be in the PSQT: nothing downstream grinds.
+        signed = self.vault.vaultprocesspsqt(psqt)
+        assert_equal(signed["complete"], True)
+        finalized = self.nodes[0].finalizepsqt(signed["psqt"])
+        assert_equal(finalized["complete"], True)
+        txid = self.nodes[0].sendrawtransaction(finalized["hex"])
+        self.generate(self.nodes[0], 1)
+        blockhash = self.nodes[0].getbestblockhash()
+        assert_equal(self.nodes[0].getrawtransaction(txid, 1, blockhash)["confirmations"], 1)
+
     @cleanup
     def sendall_with_minconf(self):
-        # utxo of 17 bicoin has 6 confirmations, utxo of 4 has 3
+        # The 17 Hg output has 6 confirmations and the 4 Hg output has 3.
         self.add_utxos([17])
         self.generate(self.nodes[0], 2)
         self.add_utxos([4])
@@ -377,7 +416,7 @@ class SendallTest(QuicksilverTestFramework):
 
     @cleanup
     def sendall_with_maxconf(self):
-        # utxo of 17 bicoin has 6 confirmations, utxo of 4 has 3
+        # The 17 Hg output has 6 confirmations and the 4 Hg output has 3.
         self.add_utxos([17])
         self.generate(self.nodes[0], 2)
         self.add_utxos([4])
@@ -480,6 +519,8 @@ class SendallTest(QuicksilverTestFramework):
 
         # Test cleanup
         self.test_cleanup()
+
+        self.sendall_psqt_carries_committed_proof()
 
         # Basic sweep: everything to one address
         self.sendall_two_utxos()

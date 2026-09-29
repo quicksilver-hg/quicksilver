@@ -41,7 +41,9 @@ import tempfile
 from pathlib import Path
 
 
-RELEASE_VERSION = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+RELEASE_VERSION = re.compile(
+    r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:rc([1-9][0-9]*))?$"
+)
 HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
 PLATFORM_NAME = re.compile(r"^[a-z0-9][a-z0-9.+_-]{0,63}$")
 FILE_NAME = re.compile(r"^[A-Za-z0-9._~+-]+$")
@@ -206,6 +208,28 @@ def identify_deb(deb, version):
     else, including a Windows installer, is not inspected: the provenance
     record and the transfer hash are the checks for that file.
     """
+    match = RELEASE_VERSION.fullmatch(version)
+    if match is None:
+        raise ReleaseError(f"cannot derive Debian version from {version}")
+    debian_version = ".".join(match.groups()[:3])
+    if match.group(4) is not None:
+        debian_version += f"~rc{match.group(4)}"
+    debian_version += "-1"
+    declared = subprocess.run(
+        ["dpkg-deb", "--field", str(deb), "Version"],
+        capture_output=True,
+        text=True,
+        encoding="utf8",
+        errors="replace",
+        check=False,
+    )
+    if declared.returncode != 0:
+        detail = (declared.stderr or declared.stdout).strip()
+        raise ReleaseError(f"could not read Debian version from {deb.name}: {detail}")
+    if declared.stdout.strip() != debian_version:
+        raise ReleaseError(
+            f"{deb.name} has Debian version {declared.stdout.strip()}, not {debian_version}"
+        )
     with tempfile.TemporaryDirectory() as extracted:
         result = subprocess.run(
             ["dpkg-deb", "-x", str(deb), extracted],
@@ -407,7 +431,7 @@ def main(argv):
         if not args.platform:
             raise ReleaseError("at least one --platform NAME=INPUT_DIR is required")
         if not RELEASE_VERSION.fullmatch(args.version):
-            raise ReleaseError(f"version must be vX.Y.Z, not {args.version}")
+            raise ReleaseError(f"version must be vX.Y.Z or vX.Y.ZrcN, not {args.version}")
         if not HEX40.fullmatch(args.public_sha):
             raise ReleaseError("public SHA must be 40 hex digits")
         if not HEX40.fullmatch(args.development_sha):

@@ -9,7 +9,8 @@ order; do not package before the final verification succeeds:
    `true`, and commit that change.
 2. From the clean commit, configure and build every program in
    `contrib/devtools/gen-manpages.py`'s `BINARIES` list.
-3. Run `contrib/devtools/gen-manpages.py --release-version vX.Y.Z`. The value
+3. Run `contrib/devtools/gen-manpages.py --release-version vX.Y.Z`. Release
+   candidates use `vX.Y.ZrcN`. The value
    must match `CMakeLists.txt`, and the binaries must identify the current
    untagged `HEAD` exactly.
 4. Run `contrib/devtools/gen-manpages.py --check`.
@@ -22,7 +23,7 @@ order; do not package before the final verification succeeds:
 7. Place the signed `vX.Y.Z` tag on the public commit, in the publication
    clone. Do not tag the development checkout.
 8. In a clean clone of that public tag, configure and rebuild every program,
-   confirm each `--version` reports exactly `vX.Y.Z`, then run
+   confirm each `--version` reports exactly the tag, then run
    `contrib/devtools/gen-manpages.py --verify`. This regenerates into a
    disposable directory and diffs every page against the committed copy.
 9. Only after verification passes, build the release packages. Every builder
@@ -44,21 +45,22 @@ release waits until all three have passed. Each builder is a clean clone of
 that tag.
 
 - Ubuntu 22.04: `contrib/release/build-jammy-debs.sh`, below.
-- Ubuntu 24.04: the Debian package build on the 24.04 host.
+- Ubuntu 24.04: `contrib/release/build-noble-debs.sh`, below.
 - Windows x64: the MSVC installer build. Copy the installer off the build
   host and hash it before and after the copy. Keep the two hashes. Staging
   checks the same thing again.
 
 A Windows installer is not opened during staging. Its provenance record and
 the transfer hash are the checks for that file. A `.deb` is extracted,
-because the packaged programs can be executed on Linux, and each must
-identify as exactly `vX.Y.Z`. A suffix such as `vX.Y.Z-<12 hex>` is an
-untagged build and is refused.
+because the packaged programs can be executed on Linux. Each must identify
+as exactly the tag, and the Debian package version must be `X.Y.Z-1` or
+`X.Y.Z~rcN-1` for an RC. A suffix such as `vX.Y.Z-<12 hex>` is an untagged
+build and is refused.
 
 ## Stage
 
 `contrib/release/stage-release.py` copies an explicit file list into a new
-tree `<output>/vX.Y.Z/<platform>/`. It refuses an existing `<output>/vX.Y.Z`.
+tree `<output>/<tag>/<platform>/`. It refuses an existing `<output>/<tag>`.
 It does not move or edit the builder's outputs. It hashes every file before
 and after the copy and stops if they differ.
 
@@ -242,21 +244,25 @@ tree on someone else's machine. It names the file this project published,
 and the record below names the machine and the toolchain that produced it.
 Trust sits with the publisher.
 
-## Ubuntu 22.04 package builder
+## Ubuntu package builders
 
-The Ubuntu 22.04 packages are built in the pinned Jammy container described by
-`jammy.Dockerfile`. From a clean checkout, run:
+The Ubuntu packages are built in pinned suite containers described by
+`jammy.Dockerfile` and `noble.Dockerfile`. From separate clean checkouts of
+the public tag, run:
 
 ```
-contrib/release/build-jammy-debs.sh /path/outside/the/checkout/for/artifacts
+contrib/release/build-jammy-debs.sh /path/outside/the/checkout/for/jammy-artifacts
+contrib/release/build-noble-debs.sh /path/outside/the/checkout/for/noble-artifacts
 ```
 
-The output directory must be empty. The script clones the checked-out commit,
-builds both Debian packages at `-j6`, checks the generated Git commit stamp,
-and copies the `.deb`, debug packages, `.buildinfo` and `.changes` files into
-that directory. Its Dockerfile pins the Ubuntu image digest. Updating that pin
-requires a new package build, dependency inspection, and a fresh Jammy install
-and version check. The image itself is a build host, not a release artifact.
+The wrappers select the suite in the shared `build-debs.sh` driver. Each output
+directory must be empty. The driver clones the checked-out commit, builds both
+Debian packages at `-j6`, checks the generated exact-tag or commit stamp, and
+copies the `.deb`, debug packages, `.buildinfo` and `.changes` files into that
+directory.
+Each Dockerfile pins its Ubuntu image digest. Updating a pin requires a new
+package build, dependency inspection, and a fresh install and version check in
+that suite. The image itself is a build host, not a release artifact.
 
 When this checkout is the signed public tag, the script can also write a
 `PROVENANCE` record into that output directory. Export `QS_DEVELOPMENT_SHA`
@@ -264,14 +270,14 @@ When this checkout is the signed public tag, the script can also write a
 `-version` line captured from an installed binary) before the run. The
 public tree does not contain the development SHA, and the script does not
 execute the packaged binaries, so it cannot invent those two values. If
-either is unset, or `HEAD` is not exactly `vX.Y.Z`, the script writes no
-record and its result is unchanged.
+either is unset, or `HEAD` is not exactly `vX.Y.Z` or `vX.Y.ZrcN`, the
+script writes no record and its result is unchanged.
 
 The Ubuntu 24.04 packages declare `t64` library names and
 `libstdc++6 (>= 13.1)`, which Ubuntu 22.04 cannot satisfy. Building the
-22.04 packages in its own userland yields installable dependencies for that
-distribution. A container shares the host kernel, so the check covers the
-Jammy userland and package dependencies, not separate 22.04 hardware.
+packages in their own userlands yields installable dependencies for each
+distribution. A container shares the host kernel, so these checks cover the
+Jammy and Noble userlands and package dependencies, not separate hardware.
 
 ### Jammy validation build, 2026-09-23
 

@@ -654,7 +654,10 @@ class PSQTTest(QuicksilverTestFramework):
         psqt = tracking_vault.sendall([vault.getnewaddress()])["psqt"]
         signed_tx = self.nodes[0].vaultprocesspsqt(psqt)
         assert signed_tx["complete"]
-        assert_raises_rpc_error(-26, "bad-txns-pow-anchor", self.nodes[0].sendrawtransaction, signed_tx["hex"])
+        # sendall grinds the proof into a PSQT it cannot sign, against the
+        # maximum signed size, so the signer's transaction relays as is.
+        txid = self.nodes[0].sendrawtransaction(signed_tx["hex"])
+        assert_equal(txid, self.nodes[0].decoderawtransaction(signed_tx["hex"])["txid"])
 
         # Same test but for taproot
         privkey, pubkey = generate_keypair(wif=True)
@@ -670,7 +673,8 @@ class PSQTTest(QuicksilverTestFramework):
         psqt = tracking_vault.sendall([vault.getnewaddress(), addr])["psqt"]
         processed_psqt = self.nodes[0].vaultprocesspsqt(psqt)
         assert processed_psqt["complete"]
-        assert_raises_rpc_error(-26, "bad-txns-pow-anchor", self.nodes[0].sendrawtransaction, processed_psqt["hex"])
+        txid = self.nodes[0].sendrawtransaction(processed_psqt["hex"])
+        assert_equal(txid, self.nodes[0].decoderawtransaction(processed_psqt["hex"])["txid"])
         tx = self.nodes[0].decoderawtransaction(processed_psqt["hex"])
         vout = next(i for i, txout in enumerate(tx["vout"]) if txout["output_script"].get("address") == addr)
 

@@ -78,15 +78,40 @@ fingerprint it prints. It must be the published fingerprint.
 
 ## Windows
 
-`gpg --verify SHA256SUMS.asc SHA256SUMS` is the same check when GnuPG is
-installed. Read the fingerprint it prints.
+The verification chain is the signed top-level `SHA256SUMS`, which names the
+signed `windows-x64/SHA256SUMS`, which in turn names the installer.
 
-PowerShell does not print checksums in the `sha256sum` layout. After
-unpacking `windows-x64.tar`, hash each file the manifest names and compare
-`Hash` with the hex in `SHA256SUMS`, ignoring case:
+After unpacking all three archives and copying the four top-level files into
+the same directory as shown above, open PowerShell in that directory. When
+GnuPG is installed, verify both manifest signatures:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 -Path .\the-file
+gpg --verify .\SHA256SUMS.asc .\SHA256SUMS
+gpg --verify .\windows-x64\SHA256SUMS.asc .\windows-x64\SHA256SUMS
+```
+
+Each command must report a good signature from the published fingerprint.
+Then hash every entry in the top-level manifest and every entry in the
+Windows manifest. These commands stop with an error if a file is missing or
+its hash differs, ignoring hex-letter case:
+
+```powershell
+Get-Content .\SHA256SUMS | ForEach-Object {
+    $expected, $name = $_ -split '  ', 2
+    $actual = (Get-FileHash -Algorithm SHA256 -Path $name).Hash
+    if ($actual -ne $expected) { throw "SHA256 mismatch: $name" }
+}
+
+Push-Location .\windows-x64
+try {
+    Get-Content .\SHA256SUMS | ForEach-Object {
+        $expected, $name = $_ -split '  ', 2
+        $actual = (Get-FileHash -Algorithm SHA256 -Path $name).Hash
+        if ($actual -ne $expected) { throw "SHA256 mismatch: $name" }
+    }
+} finally {
+    Pop-Location
+}
 ```
 
 ## Windows SmartScreen
