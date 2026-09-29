@@ -28,6 +28,7 @@ target_link_libraries(test_quicksilver-qt
   Boost::headers
   Qt5::Test
 )
+quicksilver_link_qt_pic(test_quicksilver-qt)
 
 import_plugins(test_quicksilver-qt)
 

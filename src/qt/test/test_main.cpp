@@ -33,6 +33,9 @@
 #include <QSettings>
 #include <QTest>
 
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
 #include <functional>
 
 const std::function<void(const std::string&)> G_TEST_LOG_FUN{};
@@ -41,9 +44,31 @@ const std::function<std::vector<const char*>()> G_TEST_COMMAND_LINE_ARGUMENTS{};
 
 const std::function<std::string()> G_TEST_GET_FULL_NAME{};
 
+namespace {
+[[noreturn]] void TestTerminateHandler() noexcept
+{
+    std::fputs("test_quicksilver-qt: std::terminate", stderr);
+    try {
+        if (const auto exception = std::current_exception()) std::rethrow_exception(exception);
+    } catch (const std::exception& exception) {
+        std::fputs(": ", stderr);
+        std::fputs(exception.what(), stderr);
+    } catch (...) {
+    }
+    std::fputc('\n', stderr);
+    std::fflush(stdout);
+    std::fflush(stderr);
+    std::abort();
+}
+} // namespace
+
 // This is all you need to run all the tests
 int main(int argc, char* argv[])
 {
+    // F-382: keep piped Qt test output readable if the process aborts, including under MSVC.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::set_terminate(TestTerminateHandler);
+
     // Initialize persistent globals with the testing setup state for sanity.
     // E.g. -datadir in gArgs is set to a temp directory dummy value (instead
     // of defaulting to the default datadir), or globalChainParams is set to

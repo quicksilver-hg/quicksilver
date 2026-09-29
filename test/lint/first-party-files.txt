@@ -15,6 +15,7 @@
 #
 # One path per line. Repo-relative. Sorted.
 ci/prune-gha-caches.sh
+cmake/script/CheckNoQtCopyReloc.cmake
 contrib/calibration/mainnet_floor_model.py
 contrib/calibration/test_mainnet_floor_model.py
 contrib/devtools/clang-thread-safety.py

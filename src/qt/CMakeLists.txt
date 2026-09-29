@@ -239,6 +239,23 @@ if(qt_lib_type STREQUAL "STATIC_LIBRARY")
   )
 endif()
 
+# F-334: Qt puts -fPIC on INTERFACE_COMPILE_OPTIONS only. This executable is
+# still linked -fPIE -pie, and GCC LTO codegens from the link line, where
+# -fPIE wins. GCC 5+ then emits a COPY relocation for Qt data
+# (QGuiApplication::staticMetaObject, QCoreApplication::self, and the other
+# Qt data symbols the link references). libQt5Gui keeps its own objects, and
+# the platform plugin crashes in QGuiApplication::screenAdded while
+# QApplication is constructed, before -version.
+# -fPIC has to follow -fPIE. target_link_options is the wrong slot: CMake
+# appends -fPIE -pie after those options. The library list is after -pie.
+function(quicksilver_link_qt_pic target)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT CMAKE_SYSTEM_NAME MATCHES "(Windows|Darwin)")
+    # Plain signature, matching the callers. The keyword form is rejected once
+    # the plain form has been used on the same target.
+    target_link_libraries(${target} -fPIC)
+  endif()
+endfunction()
+
 add_executable(quicksilver
   main.cpp
   ../init/quicksilver.cpp
@@ -251,6 +268,7 @@ target_link_libraries(quicksilver
   quicksilver_qt
   quicksilver_node
 )
+quicksilver_link_qt_pic(quicksilver)
 
 import_plugins(quicksilver)
 install_binary_component(quicksilver HAS_MANPAGE)
@@ -280,6 +298,14 @@ if(NOT CMAKE_SYSTEM_NAME MATCHES "(Windows|Darwin)")
 endif()
 if(WIN32)
   set_target_properties(quicksilver PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
+
+# F-334: the gate builds this binary without LTO, where the check passes, and
+# an LTO link without the -fPIC above fails it. No display.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_test(NAME quicksilver_no_qt_copy_reloc
+    COMMAND ${CMAKE_COMMAND} -DBINARY=$<TARGET_FILE:quicksilver> -P ${PROJECT_SOURCE_DIR}/cmake/script/CheckNoQtCopyReloc.cmake
+  )
 endif()
 
 if(BUILD_GUI_TESTS)

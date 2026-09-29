@@ -1,10 +1,9 @@
 #!/usr/bin/make -f
-# optimize=-lto: Ubuntu's default -flto=auto makes this binary define
-# QGuiApplication::staticMetaObject itself. The xcb platform plugin then
-# crashes in QGuiApplication::screenAdded during QApplication construction,
-# before -version can run. Linking the same objects with -fno-lto leaves
-# that symbol undefined (provided by libQt5Gui) and -version prints.
-export DEB_BUILD_MAINT_OPTIONS = hardening=+all optimize=-lto
+# F-334: Qt executables are linked -fPIC after -fPIE, so GCC LTO does not
+# copy Qt data (QGuiApplication::staticMetaObject, QCoreApplication::self)
+# into the binary. Distro -flto=auto stays on. optimize=-lto hid that crash
+# and is retired.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 %:
 	dh $@ --buildsystem=cmake

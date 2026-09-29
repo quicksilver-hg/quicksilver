@@ -28,6 +28,9 @@
 #include <validation.h>
 
 #include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 #include <QAbstractButton>
@@ -60,6 +63,55 @@
 #include <QtTest/QtTestGui>
 
 namespace {
+class MessageBoxWorkerGuard
+{
+public:
+    MessageBoxWorkerGuard(std::thread& worker, const std::atomic<bool>& worker_done) :
+        m_worker{worker}, m_worker_done{worker_done}
+    {
+    }
+
+    ~MessageBoxWorkerGuard()
+    {
+        if (!m_worker.joinable()) return;
+
+        static constexpr auto TIMEOUT{std::chrono::seconds{30}};
+        const auto deadline{std::chrono::steady_clock::now() + TIMEOUT};
+        bool box_present{false};
+        while (!m_worker_done.load() && std::chrono::steady_clock::now() < deadline) {
+            QApplication::processEvents();
+            box_present = false;
+            for (QWidget* widget : QApplication::allWidgets()) {
+                auto* box = qobject_cast<QMessageBox*>(widget);
+                if (box && box->objectName() == QStringLiteral("clientMessageBox")) {
+                    box_present = true;
+                    box->reject();
+                }
+            }
+            if (!m_worker_done.load()) std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+
+        if (m_worker_done.load()) {
+            m_worker.join();
+            return;
+        }
+
+        std::fputs("F-382 message-box worker guard timed out after 30 s "
+                   "(clientMessageBox present: ", stderr);
+        std::fputs(box_present ? "yes" : "no", stderr);
+        std::fputs(", worker_done: ", stderr);
+        std::fputs(m_worker_done.load() ? "yes" : "no", stderr);
+        std::fputs(")\n", stderr);
+        std::fflush(stdout);
+        std::fflush(stderr);
+        std::abort();
+    }
+
+private:
+    std::thread& m_worker;
+    const std::atomic<bool>& m_worker_done;
+};
+
 //! Regex find a string group inside of the console output
 QString FindInConsole(const QString& output, const QString& pattern)
 {
@@ -540,6 +592,7 @@ void AppTests::guiTests(QuicksilverGUI* window)
                 Untranslated("from worker"), "", CClientUIInterface::MSG_ERROR);
             worker_done = true;
         });
+        MessageBoxWorkerGuard worker_guard{worker, worker_done};
         QTRY_VERIFY(QApplication::activeModalWidget());
         QVERIFY(!worker_done.load());
         auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());

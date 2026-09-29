@@ -334,7 +334,7 @@ The two `.deb` files were built with:
 dpkg-buildpackage -us -uc -b -j10
 ```
 
-`debian/rules` passes `DEB_BUILD_MAINT_OPTIONS=hardening=+all optimize=-lto`
+`debian/rules` passed `DEB_BUILD_MAINT_OPTIONS=hardening=+all optimize=-lto`
 and configures CMake as debhelper does (`-DCMAKE_BUILD_TYPE=None`, prefix
 `/usr`) plus:
 
@@ -344,11 +344,12 @@ and configures CMake as debhelper does (`-DCMAKE_BUILD_TYPE=None`, prefix
 -DBUILD_TESTS=OFF -DQS_DEVELOPER_TOOLS=ON
 ```
 
-`optimize=-lto` is required on this toolchain. Ubuntu's default
-`-flto=auto` made `quicksilver-qt` define `QGuiApplication::staticMetaObject`
-itself, and the xcb plugin then crashed in `QGuiApplication::screenAdded`
-before `-version` could run. The same objects linked with `-fno-lto` leave
-that symbol to `libQt5Gui` and `-version` prints.
+That build passed `optimize=-lto` because Ubuntu's default `-flto=auto`
+made `quicksilver-qt` define `QGuiApplication::staticMetaObject` itself, and
+the xcb plugin then crashed in `QGuiApplication::screenAdded` before
+`-version` could run. F-334 links the Qt executables `-fPIC` after `-fPIE`,
+so that copy relocation is gone, and later packages do not pass
+`optimize=-lto`.
 
 No AppImage was produced. The former AppImage builder configured
 and built (CMake `Release`, `-DBUILD_GUI=ON -DBUILD_DAEMON=OFF
