@@ -25,7 +25,7 @@
 #include <util/string.h>
 #include <util/time.h>
 #include <util/vector.h>
-
+#include <util/utf16.h>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -1967,5 +1967,48 @@ BOOST_AUTO_TEST_CASE(mib_string_literal_test)
     const auto max_mib{std::numeric_limits<size_t>::max() >> 20};
     BOOST_CHECK_EXCEPTION(operator""_MiB(static_cast<unsigned long long>(max_mib) + 1), std::overflow_error, HasReason("MiB value too large for size_t byte conversion"));
 }
-
+#ifndef WIN32
 BOOST_AUTO_TEST_SUITE_END()
+#else
+BOOST_AUTO_TEST_CASE(utf16_ascii_round_trip)
+{
+    const std::string utf8{"Quicksilver"};
+    const std::wstring utf16{L"Quicksilver"};
+    BOOST_CHECK(util::Utf8ToUtf16(utf8) == utf16);
+    BOOST_CHECK_EQUAL(util::Utf16ToUtf8(utf16), utf8);
+}
+
+BOOST_AUTO_TEST_CASE(utf16_bmp_round_trip)
+{
+    const std::string utf8{"\xC3\xA9\xC3\xBC"};
+    const std::wstring utf16{L"\x00E9\x00FC"};
+    BOOST_CHECK(util::Utf8ToUtf16(utf8) == utf16);
+    BOOST_CHECK_EQUAL(util::Utf16ToUtf8(utf16), utf8);
+}
+
+BOOST_AUTO_TEST_CASE(utf16_supplementary_round_trip)
+{
+    const std::string utf8{"\xF0\x9F\x98\x80"};
+    const std::wstring utf16{L"\xD83D" L"\xDE00"};
+    BOOST_CHECK(util::Utf8ToUtf16(utf8) == utf16);
+    BOOST_CHECK_EQUAL(util::Utf16ToUtf8(utf16), utf8);
+}
+
+BOOST_AUTO_TEST_CASE(utf16_empty_input)
+{
+    BOOST_CHECK(util::Utf8ToUtf16("").empty());
+    BOOST_CHECK(util::Utf16ToUtf8(L"").empty());
+}
+
+BOOST_AUTO_TEST_CASE(utf16_invalid_utf8_throws)
+{
+    BOOST_CHECK_THROW(util::Utf8ToUtf16("\xC3\x28"), std::range_error);
+    BOOST_CHECK_THROW(util::Utf8ToUtf16("\xFF"), std::range_error);
+}
+
+BOOST_AUTO_TEST_CASE(utf16_unpaired_surrogate_throws)
+{
+    BOOST_CHECK_THROW(util::Utf16ToUtf8(L"\xD83D"), std::range_error);
+}
+BOOST_AUTO_TEST_SUITE_END()
+#endif // WIN32

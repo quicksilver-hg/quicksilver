@@ -44,6 +44,8 @@ from pathlib import Path
 RELEASE_VERSION = re.compile(
     r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:rc([1-9][0-9]*))?$"
 )
+# A Debian revision is -N with N a positive integer and no leading zero.
+DEBIAN_REVISION = re.compile(r"^[1-9][0-9]*$")
 HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
 PLATFORM_NAME = re.compile(r"^[a-z0-9][a-z0-9.+_-]{0,63}$")
 FILE_NAME = re.compile(r"^[A-Za-z0-9._~+-]+$")
@@ -201,20 +203,32 @@ def run_hook(executable, platform_dir):
         )
 
 
-def identify_deb(deb, version):
+def debian_upstream(version):
+    """Upstream version derived from a release tag, with no Debian revision."""
+    match = RELEASE_VERSION.fullmatch(version)
+    if match is None:
+        raise ReleaseError(f"cannot derive Debian version from {version}")
+    upstream = ".".join(match.groups()[:3])
+    if match.group(4) is not None:
+        upstream += f"~rc{match.group(4)}"
+    return upstream
+
+
+def identify_deb(deb, version, accepted_revision=None):
     """Refuse a .deb whose packaged executables are not exactly this release.
+
+    The upstream version comes from the tag (`X.Y.Z` or `X.Y.Z~rcN`). The
+    revision may be any `-N`, because a packaging-only rebuild of that tag
+    is `-2`. Staging sees builder output and has no source tree, so it does
+    not read debian/changelog. `accepted_revision` is the revision of a `.deb`
+    already accepted in this run, or None for the first one. A later `.deb`
+    with a different revision is refused, and the message names both.
 
     A Debian package is the artifact staging can open on Linux. Anything
     else, including a Windows installer, is not inspected: the provenance
     record and the transfer hash are the checks for that file.
     """
-    match = RELEASE_VERSION.fullmatch(version)
-    if match is None:
-        raise ReleaseError(f"cannot derive Debian version from {version}")
-    debian_version = ".".join(match.groups()[:3])
-    if match.group(4) is not None:
-        debian_version += f"~rc{match.group(4)}"
-    debian_version += "-1"
+    upstream = debian_upstream(version)
     declared = subprocess.run(
         ["dpkg-deb", "--field", str(deb), "Version"],
         capture_output=True,
@@ -226,9 +240,19 @@ def identify_deb(deb, version):
     if declared.returncode != 0:
         detail = (declared.stderr or declared.stdout).strip()
         raise ReleaseError(f"could not read Debian version from {deb.name}: {detail}")
-    if declared.stdout.strip() != debian_version:
+    declared_version = declared.stdout.strip()
+    prefix = upstream + "-"
+    if declared_version.startswith(prefix):
+        revision = declared_version[len(prefix):]
+    else:
+        revision = None
+    if revision is None or DEBIAN_REVISION.fullmatch(revision) is None:
         raise ReleaseError(
-            f"{deb.name} has Debian version {declared.stdout.strip()}, not {debian_version}"
+            f"{deb.name} has Debian version {declared_version}, not {upstream}-1"
+        )
+    if accepted_revision is not None and revision != accepted_revision:
+        raise ReleaseError(
+            f"{deb.name} has Debian revision -{revision}, not -{accepted_revision}"
         )
     with tempfile.TemporaryDirectory() as extracted:
         result = subprocess.run(
@@ -252,6 +276,7 @@ def identify_deb(deb, version):
             identify_binary(path, version)
         if not ran:
             raise ReleaseError(f"{deb.name} contains no executable to identify")
+    return revision
 
 
 def identify_binary(path, version):
@@ -386,6 +411,7 @@ def stage(version, public_sha, development_sha, output, platforms, hooks):
                     platform["source"] / file_name,
                     destination / file_name,
                 )
+        accepted_revision = None
         for platform in platforms:
             hook = hooks.get(platform["name"])
             if hook is not None:
@@ -393,7 +419,9 @@ def stage(version, public_sha, development_sha, output, platforms, hooks):
             for file_name in platform["files"]:
                 staged = version_dir / platform["name"] / file_name
                 if file_name.endswith(".deb"):
-                    identify_deb(staged, version)
+                    accepted_revision = identify_deb(
+                        staged, version, accepted_revision
+                    )
         generator = Path(__file__).resolve().parent / "gen-sha256sums.sh"
         for platform in platforms:
             result = subprocess.run(

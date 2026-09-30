@@ -60,7 +60,7 @@ Documentation for C++ subprocessing library.
 #endif
 
 #ifdef __USING_WINDOWS__
-  #include <codecvt>
+  #include <limits>
 #endif
 
 extern "C" {
@@ -237,6 +237,31 @@ namespace util
     LocalFree(messageBuffer);
 
     return message;
+  }
+
+  inline std::wstring utf8_to_wstring(const std::string& input)
+  {
+    if (input.empty()) return {};
+    if (input.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+      SetLastError(ERROR_INVALID_PARAMETER);
+      throw OSError("MultiByteToWideChar", (int)GetLastError());
+    }
+
+    const int input_size = static_cast<int>(input.size());
+    const int output_size = MultiByteToWideChar(
+        CP_UTF8, MB_ERR_INVALID_CHARS, input.data(), input_size, nullptr, 0);
+    if (output_size == 0) {
+      const DWORD error = GetLastError();
+      throw OSError("MultiByteToWideChar", (int)error);
+    }
+
+    std::wstring output(static_cast<size_t>(output_size), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input.data(),
+                            input_size, output.data(), output_size) == 0) {
+      const DWORD error = GetLastError();
+      throw OSError("MultiByteToWideChar", (int)error);
+    }
+    return output;
   }
 
   struct HandleCloser {
@@ -1100,12 +1125,11 @@ inline void Popen::execute_process() noexcept(false)
   }
   this->exe_name_ = vargs_[0];
 
-  std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
   std::wstring argument;
   std::wstring command_line;
 
   for (auto arg : this->vargs_) {
-    argument = converter.from_bytes(arg);
+    argument = util::utf8_to_wstring(arg);
     util::quote_argument(argument, command_line, false);
     command_line += L" ";
   }
@@ -1161,12 +1185,15 @@ inline void Popen::execute_process() noexcept(false)
 
   this->process_handle_.reset(piProcInfo.hProcess);
 
+  // The child inherited its own copies during CreateProcessW. Drop the
+  // parent's copies now so its stdout and stderr readers can observe EOF as
+  // soon as the child closes its write ends.
+  this->stream_.g_hChildStd_ERR_Wr.reset();
+  this->stream_.g_hChildStd_OUT_Wr.reset();
+  this->stream_.g_hChildStd_IN_Rd.reset();
+
   this->cleanup_future_ = std::async(std::launch::async, [this] {
     WaitForSingleObject(this->process_handle_.get(), INFINITE);
-
-    this->stream_.g_hChildStd_ERR_Wr.reset();
-    this->stream_.g_hChildStd_OUT_Wr.reset();
-    this->stream_.g_hChildStd_IN_Rd.reset();
   });
 
 /*

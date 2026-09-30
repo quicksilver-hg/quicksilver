@@ -12,9 +12,8 @@
 #include <string>
 
 #if defined(WIN32)
+#include <util/utf16.h>
 #include <windows.h>
-#include <locale>
-#include <codecvt>
 #endif
 
 std::string SysErrorString(int err)
@@ -48,7 +47,7 @@ std::string Win32ErrorString(int err)
                        nullptr, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                        buf, ARRAYSIZE(buf), nullptr))
     {
-        return strprintf("%s (%d)", std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>,wchar_t>().to_bytes(buf), err);
+        return strprintf("%s (%d)", util::Utf16ToUtf8(buf), err);
     }
     else
     {

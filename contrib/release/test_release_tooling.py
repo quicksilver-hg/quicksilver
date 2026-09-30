@@ -25,6 +25,19 @@ STAGE = HERE / "stage-release.py"
 SIGN = HERE / "sign-release.sh"
 VERIFY = HERE / "verify-release.sh"
 BUILD_DEBS = HERE / "build-debs.sh"
+CHECK_DBGSYM = HERE / "check-dbgsym.sh"
+# Transcripts from real gdb -batch runs, kept byte for byte.
+# FIXTURE_PASS_MISSING_SOURCE is Noble quicksilver-cli from the green
+# package check. FIXTURE_COULD_NOT_FIND is the same binary after the
+# devtools .ddeb was rebuilt without its dwz alt file. The other three
+# shapes are not in those package transcripts: a -g program whose source
+# is on disk, a program built without -g, and a dwz multifile with a
+# .debug_types section, which makes gdb print its dwz-file error.
+FIXTURE_PASS = 'Breakpoint 1 at 0x1131: file /tmp/f391-gdb-shapes/hasline.c, line 1.\n[Thread debugging using libthread_db enabled]\nUsing host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".\n\nBreakpoint 1, main () at /tmp/f391-gdb-shapes/hasline.c:1\n1\tint main(void) { return 0; }\n#0  main () at /tmp/f391-gdb-shapes/hasline.c:1\n'
+FIXTURE_PASS_MISSING_SOURCE = 'Breakpoint 1 at 0xf350: file ./quicksilver-cli.cpp, line 1341.\n[Thread debugging using libthread_db enabled]\nUsing host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".\n\nBreakpoint 1, main (argc=2, argv=0x7fffffffecb8) at ./quicksilver-cli.cpp:1341\nwarning: 1341\t./quicksilver-cli.cpp: No such file or directory\n#0  main (argc=2, argv=0x7fffffffecb8) at ./quicksilver-cli.cpp:1341\n'
+FIXTURE_NO_LINE = 'Breakpoint 1 at 0x1131\n[Thread debugging using libthread_db enabled]\nUsing host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".\n\nBreakpoint 1, 0x0000555555555131 in main ()\n#0  0x0000555555555131 in main ()\n'
+FIXTURE_COULD_NOT_FIND = '\nwarning: could not find \'.gnu_debugaltlink\' file for /usr/lib/debug/.build-id/a4/2eaeae5010b5f47c7dbe416099ef64eefe06bf.debug\ncould not read \'.gnu_debugaltlink\' section\ncould not read \'.gnu_debugaltlink\' section\n[Thread debugging using libthread_db enabled]\nUsing host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".\nQuicksilver RPC client version v0.1.1-833e06c522e9\nCopyright (C) 2026 The Quicksilver developers\nCopyright (C) 2009-2026 The Bitcoin Core developers\n\nPlease contribute if you find Quicksilver useful. Visit\n<https://github.com/quicksilver-hg/quicksilver> for further information about\nthe software.\nThe source code is available from\n<https://github.com/quicksilver-hg/quicksilver>.\n\nThis is experimental software.\nDistributed under the MIT software license, see the accompanying file COPYING\nor <https://opensource.org/licenses/MIT>\n[Inferior 1 (process 1766) exited normally]\nNo stack.\n'
+FIXTURE_DWZ_FILE = 'Dwarf Error: .debug_types section not supported in dwz file\nBreakpoint 1 at 0x1131\n[Thread debugging using libthread_db enabled]\nUsing host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".\n\nBreakpoint 1, 0x0000555555555131 in main ()\n#0  0x0000555555555131 in main ()\n'
 VERSION = "v1.2.3"
 PUBLIC = "a" * 40
 DEV = "b" * 40
@@ -194,6 +207,18 @@ class ReleaseToolingTest(unittest.TestCase):
             f"expected failure mentioning {needle!r}\n{result.stderr}",
         )
         self.assertIn(needle, result.stderr)
+
+    def assert_debian_version_refused(self, debian_version, needle):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = self.write_deb_platform(
+                root / "in",
+                "ubuntu-22.04",
+                f"Quicksilver daemon version {VERSION}",
+                debian_version=debian_version,
+            )
+            result = self.run_stage(root / "out", [("ubuntu-22.04", directory)])
+            self.assert_refused(result, needle)
 
     def run_stage(self, output, platforms, hooks=(), version=VERSION, public=PUBLIC, development=DEV):
         command = [
@@ -572,6 +597,92 @@ class ReleaseToolingTest(unittest.TestCase):
             result = self.run_stage(root / "out", [("ubuntu-22.04", directory)])
             self.assert_refused(result, "Debian version 1.2.2-1, not 1.2.3-1")
 
+    def test_deb_revision_2_stages_signs_and_verifies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = self.write_deb_platform(
+                root / "in",
+                "ubuntu-22.04",
+                f"Quicksilver daemon version {VERSION}",
+                debian_version="1.2.3-2",
+            )
+            result = self.run_stage(root / "out", [("ubuntu-22.04", directory)])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            staged = root / "out" / VERSION
+            signed = self.sign(staged)
+            self.assertEqual(signed.returncode, 0, signed.stderr)
+            checked = self.verify(staged)
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+
+    def test_rc_deb_revision_2_is_accepted(self):
+        version = "v1.2.3rc1"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = self.write_deb_platform(
+                root / "in",
+                "ubuntu-22.04",
+                f"Quicksilver daemon version {version}",
+                release_version=version,
+                debian_version="1.2.3~rc1-2",
+            )
+            result = self.run_stage(
+                root / "out",
+                [("ubuntu-22.04", directory)],
+                version=version,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_refuse_debian_revision_zero(self):
+        self.assert_debian_version_refused(
+            "1.2.3-0",
+            "Debian version 1.2.3-0, not 1.2.3-1",
+        )
+
+    def test_refuse_debian_revision_leading_zero(self):
+        self.assert_debian_version_refused(
+            "1.2.3-01",
+            "Debian version 1.2.3-01, not 1.2.3-1",
+        )
+
+    def test_refuse_debian_revision_with_letter(self):
+        self.assert_debian_version_refused(
+            "1.2.3-1a",
+            "Debian version 1.2.3-1a, not 1.2.3-1",
+        )
+
+    def test_refuse_debian_revision_ubuntu_suffix(self):
+        self.assert_debian_version_refused(
+            "1.2.3-1ubuntu1",
+            "Debian version 1.2.3-1ubuntu1, not 1.2.3-1",
+        )
+
+    def test_refuse_debian_revision_missing(self):
+        self.assert_debian_version_refused(
+            "1.2.3",
+            "Debian version 1.2.3, not 1.2.3-1",
+        )
+
+    def test_refuse_mixed_debian_revisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = self.write_deb_platform(
+                root / "in",
+                "ubuntu-22.04",
+                f"Quicksilver daemon version {VERSION}",
+                debian_version="1.2.3-1",
+            )
+            second = self.write_deb_platform(
+                root / "in",
+                "ubuntu-24.04",
+                f"Quicksilver daemon version {VERSION}",
+                debian_version="1.2.3-2",
+            )
+            result = self.run_stage(
+                root / "out",
+                [("ubuntu-22.04", first), ("ubuntu-24.04", second)],
+            )
+            self.assert_refused(result, "Debian revision -2, not -1")
+
     def test_refuse_deb_without_executable(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -879,6 +990,49 @@ class ReleaseToolingTest(unittest.TestCase):
             self.assertEqual(signed.returncode, 0, signed.stderr)
             result = self.verify(root)
             self.assert_refused(result, "index hash mismatch for example-arch/payload.bin")
+
+    def judge_gdb(self, transcript):
+        return subprocess.run(
+            [str(CHECK_DBGSYM), "--judge"],
+            input=transcript,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_judge_symbolised_frame(self):
+        self.assertNotIn("No such file or directory", FIXTURE_PASS)
+        result = self.judge_gdb(FIXTURE_PASS)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.strip(), "ok")
+
+    def test_judge_missing_source_file_is_not_a_failure(self):
+        self.assertIn("No such file or directory", FIXTURE_PASS_MISSING_SOURCE)
+        self.assertIn("./quicksilver-cli.cpp:1341", FIXTURE_PASS_MISSING_SOURCE)
+        result = self.judge_gdb(FIXTURE_PASS_MISSING_SOURCE)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.strip(), "ok")
+
+    def test_judge_main_without_file_line(self):
+        self.assertNotIn("could not find", FIXTURE_NO_LINE)
+        self.assertNotIn("dwz file", FIXTURE_NO_LINE)
+        result = self.judge_gdb(FIXTURE_NO_LINE)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no file:line", result.stdout)
+
+    def test_judge_could_not_find(self):
+        self.assertIn("could not find", FIXTURE_COULD_NOT_FIND)
+        self.assertNotIn("dwz file", FIXTURE_COULD_NOT_FIND)
+        result = self.judge_gdb(FIXTURE_COULD_NOT_FIND)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('gdb printed "could not find"', result.stdout)
+
+    def test_judge_dwz_file(self):
+        self.assertIn("dwz file", FIXTURE_DWZ_FILE)
+        self.assertNotIn("could not find", FIXTURE_DWZ_FILE)
+        result = self.judge_gdb(FIXTURE_DWZ_FILE)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('gdb printed "dwz file"', result.stdout)
 
 
 if __name__ == "__main__":

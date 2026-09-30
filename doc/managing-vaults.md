@@ -17,11 +17,15 @@ $ quicksilver-cli createvault "vault-01"
 
 By default, vaults are created in the `vaults` folder of the data directory, which varies by operating system, as shown below. The user can change the default by using the `-datadir` or `-vaultdir` initialization parameters.
 
-| Operating System | Default vault directory                                    |
-| -----------------|:------------------------------------------------------------|
-| Linux            | `/home/<user>/.quicksilver/vaults`                         |
-| Windows          | `C:\Users\<user>\AppData\Local\Quicksilver\vaults`         |
-| macOS            | `/Users/<user>/Library/Application Support/Quicksilver/vaults` |
+| Operating System    | Default vault directory                                    |
+| --------------------|:------------------------------------------------------------|
+| Linux               | `/home/<user>/.quicksilver/vaults`                         |
+| Windows             | `C:\Users\<user>\AppData\Local\Quicksilver\vaults`         |
+| macOS (unsupported) | `/Users/<user>/Library/Application Support/Quicksilver/vaults` |
+
+macOS is not a supported platform. The macOS row records the vault
+directory an experimental self-built binary uses; no macOS build is
+produced or gated. See the [macOS support status](build-osx.md).
 
 ### 1.2 Encrypting the Vault
 

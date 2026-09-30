@@ -20,9 +20,9 @@
 #include <util/string.h>
 
 #ifdef WIN32
-#include <codecvt>    /* for codecvt_utf8_utf16 */
 #include <shellapi.h> /* for CommandLineToArgvW */
 #include <shlobj.h>   /* for CSIDL_LOCAL_APPDATA */
+#include <util/utf16.h>
 #endif
 
 #include <algorithm>
@@ -846,11 +846,10 @@ namespace common {
 WinCmdLineArgs::WinCmdLineArgs()
 {
     wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>, wchar_t> utf8_cvt;
     argv = new char*[argc];
     args.resize(argc);
     for (int i = 0; i < argc; i++) {
-        args[i] = utf8_cvt.to_bytes(wargv[i]);
+        args[i] = util::Utf16ToUtf8(wargv[i]);
         argv[i] = &*args[i].begin();
     }
     LocalFree(wargv);

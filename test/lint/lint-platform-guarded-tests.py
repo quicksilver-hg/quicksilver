@@ -87,14 +87,13 @@ CASE_END = re.compile(r"^\}")
 # every shape the solver contract has needed so far, in both dialects.
 # --------------------------------------------------------------------------
 ALLOWED_WHOLE = {
-    # EMPTY, and that is the point: as of F-91's last port every Boost case in
-    # this tree runs on every platform it is built for. A whole-case exclusion is
-    # now a thing you have to add deliberately, with a reason, rather than a
-    # background condition nobody counts. The last five to go were the solver
-    # bridge's fallback, watchdog and cancel cases; two of those five were
-    # DELETED rather than ported, because a `*_both_platforms` twin already
-    # tested the same invariant -- and each twin took over the deleted case's
-    # tighter timing bound, so the merge cost no coverage on POSIX either.
+    # -- BENIGN below: the API contract exists only on Windows.
+    ("src/test/util_tests.cpp", "utf16_ascii_round_trip"): "BENIGN: exercises the Win32 UTF-8/UTF-16 conversion API",
+    ("src/test/util_tests.cpp", "utf16_bmp_round_trip"): "BENIGN: exercises the Win32 UTF-8/UTF-16 conversion API",
+    ("src/test/util_tests.cpp", "utf16_empty_input"): "BENIGN: exercises the Win32 UTF-8/UTF-16 conversion API",
+    ("src/test/util_tests.cpp", "utf16_invalid_utf8_throws"): "BENIGN: exercises the Win32 UTF-8/UTF-16 conversion API",
+    ("src/test/util_tests.cpp", "utf16_supplementary_round_trip"): "BENIGN: exercises the Win32 UTF-8/UTF-16 conversion API",
+    ("src/test/util_tests.cpp", "utf16_unpaired_surrogate_throws"): "BENIGN: exercises the Win32 UTF-8/UTF-16 conversion API",
 }
 
 ALLOWED_PARTIAL = {

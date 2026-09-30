@@ -53,9 +53,14 @@ that tag.
 A Windows installer is not opened during staging. Its provenance record and
 the transfer hash are the checks for that file. A `.deb` is extracted,
 because the packaged programs can be executed on Linux. Each must identify
-as exactly the tag, and the Debian package version must be `X.Y.Z-1` or
-`X.Y.Z~rcN-1` for an RC. A suffix such as `vX.Y.Z-<12 hex>` is an untagged
-build and is refused.
+as exactly the tag. The upstream part of the Debian version is taken from
+that tag: `X.Y.Z`, or `X.Y.Z~rcN` for an RC. The revision may be any `-N`,
+`N` a positive integer with no leading zero, because a packaging-only
+rebuild of the same tag is `-2` and should still stage. Staging runs from
+builder output and has no source tree, so it does not consult
+`debian/changelog`. Every `.deb` in the run must use the same revision; a
+mix such as `-1` and `-2` is refused and the message names both. A suffix
+such as `vX.Y.Z-<12 hex>` is an untagged build and is refused.
 
 ## Stage
 
@@ -259,7 +264,9 @@ The wrappers select the suite in the shared `build-debs.sh` driver. Each output
 directory must be empty. The driver clones the checked-out commit, builds both
 Debian packages at `-j6`, checks the generated exact-tag or commit stamp, and
 copies the `.deb`, debug packages, `.buildinfo` and `.changes` files into that
-directory.
+directory. It then runs `check-dbgsym.sh` on that directory: a fresh container
+of the same suite installs the packages with their `-dbgsym` debug packages,
+and the build fails if gdb cannot symbolise `main` with a file and a line.
 Each Dockerfile pins its Ubuntu image digest. Updating a pin requires a new
 package build, dependency inspection, and a fresh install and version check in
 that suite. The image itself is a build host, not a release artifact.

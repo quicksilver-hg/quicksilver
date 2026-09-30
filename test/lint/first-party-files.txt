@@ -29,6 +29,7 @@ contrib/genesis/derive-genesis.py
 contrib/release/build-debs.sh
 contrib/release/build-jammy-debs.sh
 contrib/release/build-noble-debs.sh
+contrib/release/check-dbgsym.sh
 contrib/release/gen-sha256sums.sh
 contrib/release/sign-release.sh
 contrib/release/stage-release.py
@@ -161,6 +162,8 @@ src/tor/bundled_tor.cpp
 src/tor/bundled_tor.h
 src/util/process/contained_child.cpp
 src/util/process/contained_child.h
+src/util/utf16.cpp
+src/util/utf16.h
 src/vault/archive.cpp
 src/vault/archive.h
 test/functional/calibration_disk_cost.py

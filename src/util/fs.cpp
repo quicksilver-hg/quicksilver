@@ -13,8 +13,8 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 #else
-#include <codecvt>
 #include <limits>
+#include <util/utf16.h>
 #include <windows.h>
 #endif
 
@@ -29,8 +29,7 @@ FILE *fopen(const fs::path& p, const char *mode)
 #ifndef WIN32
     return ::fopen(p.c_str(), mode);
 #else
-    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>,wchar_t> utf8_cvt;
-    return ::_wfopen(p.wstring().c_str(), utf8_cvt.from_bytes(mode).c_str());
+    return ::_wfopen(p.wstring().c_str(), util::Utf8ToUtf16(mode).c_str());
 #endif
 }
 
@@ -128,7 +127,7 @@ std::string get_filesystem_error_message(const fs::filesystem_error& e)
     std::wstring utf16_string(size, L'\0');
     MultiByteToWideChar(CP_ACP, 0, mb_string.data(), mb_string.size(), &*utf16_string.begin(), size);
     // Convert from utf-16 to utf-8
-    return std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>, wchar_t>().to_bytes(utf16_string);
+    return util::Utf16ToUtf8(utf16_string);
 #endif
 }
 

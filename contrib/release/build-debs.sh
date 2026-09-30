@@ -125,6 +125,9 @@ package_version=$(dpkg-parsechangelog -l"$repo/contrib/debian/changelog" -SVersi
 [[ -f "$output/quicksilver_${package_version}_amd64.deb" && \
    -f "$output/quicksilver-devtools_${package_version}_amd64.deb" ]]
 
+# F-391: a -dbgsym that gdb cannot symbolise fails the package build.
+"$(dirname "$0")/check-dbgsym.sh" "$suite" "$output"
+
 # A release build can leave the provenance record stage-release.py consumes.
 # The release procedure supplies the development SHA and captured version line,
 # which do not exist in the public source tree.
