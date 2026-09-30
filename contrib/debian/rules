@@ -3,6 +3,15 @@
 # copy Qt data (QGuiApplication::staticMetaObject, QCoreApplication::self)
 # into the binary. Distro -flto=auto stays on. optimize=-lto hid that crash
 # and is retired.
+# F-388: dh_dwz writes a multifile for quicksilver-devtools. Those binaries'
+# debug info then uses DW_FORM_GNU_ref_alt (0x1f20) and DW_FORM_GNU_strp_alt
+# (0x1f21). debugedit 5.0 rejects both forms in read_abbrev, aborts the
+# DWARF walk, and warns. dh_strip runs `debugedit --build-id` only: it does
+# not pass --list-file, --base-dir, or --dest-dir, so that walk is not a
+# source-file list and not a path rewrite. The command still prints a
+# build-id and exits 0; the id matches the .debug file and the alt file in
+# the same .ddeb. gdb symbolises the function and the file:line from that
+# pair. The GUI package gets no multifile, so debugedit does not warn on it.
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 %:

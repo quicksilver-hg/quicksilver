@@ -304,3 +304,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ci/prune-gha-caches.sh "${{ github.repository }}" "${{ github.ref }}" "${{ github.job }}-ccache-" 2 "${{ github.job }}-ccache-${{ github.run_id }}" --apply
+
+  # F-387. Distro -flto=auto is the only configuration where
+  # quicksilver_no_qt_copy_reloc can fail. No ccache: an LTO link is not what
+  # ccache saves, and a cache adds the restore, save and prune steps.
+  lto-qt-copy-reloc:
+    name: 'LTO, Qt COPY relocation'
+    runs-on: ubuntu-24.04
+    if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+    # Desktop ubuntu:24.04 container, --cpus=10, apt plus this script: 1023 s,
+    # peak 4.8 GiB. 90 sits above that run on a 4-vCPU runner.
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential cmake pkgconf libevent-dev libboost-dev libsqlite3-dev qtbase5-dev qtwayland5 libqrencode-dev dpkg-dev binutils -y
+
+      - name: Configure, build quicksilver, and run the COPY-relocation check
+        run: ./ci/lto-qt-copy-reloc.sh

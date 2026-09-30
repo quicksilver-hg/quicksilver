@@ -14,6 +14,7 @@
 # a Quicksilver line" -- cannot see either failure.
 #
 # One path per line. Repo-relative. Sorted.
+ci/lto-qt-copy-reloc.sh
 ci/prune-gha-caches.sh
 cmake/script/CheckNoQtCopyReloc.cmake
 contrib/calibration/mainnet_floor_model.py
