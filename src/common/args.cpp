@@ -843,21 +843,64 @@ void ArgsManager::LogArgs() const
 
 namespace common {
 #ifdef WIN32
+util::Result<std::vector<std::string>> WinCmdLineArgsToUtf8(const wchar_t* const* wargv, int argc)
+{
+    std::vector<std::string> utf8_args;
+    if (argc > 0) {
+        utf8_args.reserve(static_cast<std::size_t>(argc));
+    }
+    for (int i = 0; i < argc; i++) {
+        try {
+            utf8_args.push_back(util::Utf16ToUtf8(wargv[i]));
+        } catch (const std::range_error&) {
+            if (i == 0) {
+                return util::Error{Untranslated("The program path is not valid Unicode (it contains an unpaired UTF-16 surrogate).")};
+            }
+            return util::Error{Untranslated(strprintf("Command-line argument %d is not valid Unicode (it contains an unpaired UTF-16 surrogate).", i))};
+        }
+    }
+    return utf8_args;
+}
+
 WinCmdLineArgs::WinCmdLineArgs()
 {
-    wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    argv = new char*[argc];
-    args.resize(argc);
-    for (int i = 0; i < argc; i++) {
-        args[i] = util::Utf16ToUtf8(wargv[i]);
-        argv[i] = &*args[i].begin();
+    argc = 0;
+    argv = nullptr;
+
+    int wargc = 0;
+    wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    if (wargv == nullptr) {
+        const unsigned int win_error{static_cast<unsigned int>(GetLastError())};
+        m_error = strprintf("Windows could not read the command line (CommandLineToArgvW failed, GetLastError()=%u).", win_error);
+        argv = new char*[1];
+        argv[0] = nullptr;
+        return;
     }
+    auto converted = WinCmdLineArgsToUtf8(wargv, wargc);
     LocalFree(wargv);
+    if (!converted) {
+        m_error = util::ErrorString(converted).original;
+        argv = new char*[1];
+        argv[0] = nullptr;
+        return;
+    }
+
+    args = std::move(converted.value());
+    argc = static_cast<int>(args.size());
+    argv = new char*[static_cast<std::size_t>(argc)];
+    for (int i = 0; i < argc; i++) {
+        argv[i] = args[i].data();
+    }
 }
 
 WinCmdLineArgs::~WinCmdLineArgs()
 {
     delete[] argv;
+}
+
+const std::string& WinCmdLineArgs::error() const
+{
+    return m_error;
 }
 
 std::pair<int, char**> WinCmdLineArgs::get()

@@ -66,6 +66,23 @@ std::string Utf16ToUtf8(std::wstring_view in)
     return out;
 }
 
+std::wstring AcpToUtf16(std::string_view in)
+{
+    if (in.empty()) return {};
+    CheckInputSize(in);
+
+    const int input_size{static_cast<int>(in.size())};
+    // Lossy by design: a library message is decoded with flags 0, so CP_ACP substitutes instead of rejecting.
+    const int output_size{MultiByteToWideChar(CP_ACP, 0, in.data(), input_size, nullptr, 0)};
+    if (output_size == 0) ThrowConversionError("MultiByteToWideChar size query", GetLastError());
+
+    std::wstring out(output_size, L'\0');
+    if (MultiByteToWideChar(CP_ACP, 0, in.data(), input_size, out.data(), output_size) == 0) {
+        ThrowConversionError("MultiByteToWideChar conversion", GetLastError());
+    }
+    return out;
+}
+
 } // namespace util
 
 #endif // WIN32

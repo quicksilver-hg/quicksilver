@@ -24,7 +24,9 @@ private Q_SLOTS:
     void legacyDisplayUnitSettingIsIgnored();
     void displayUnitsAreFocused();
     void displayUnitSerializationIsCompact();
-    void languageChoicesDoNotDependOnCatalogResources();
+    void languageRowIsHiddenWhileNoCatalogueShips();
+    void hiddenLanguageRowLeavesStoredValueAlone();
+    void languageRowListsShippedCatalogues();
     void integerGetArgBug();
     void gpuSolverSettingPersistsAndRequiresRestart();
     void gpuSolverDialogRejectsInvalidPath();

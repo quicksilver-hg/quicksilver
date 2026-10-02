@@ -150,15 +150,71 @@ void OptionTests::displayUnitSerializationIsCompact()
     }
 }
 
-void OptionTests::languageChoicesDoNotDependOnCatalogResources()
+void OptionTests::languageRowIsHiddenWhileNoCatalogueShips()
 {
     OptionsDialog dialog(nullptr, /*enableVault=*/true);
     auto* languages = dialog.findChild<QComboBox*>(QStringLiteral("lang"));
+    auto* language_label = dialog.findChild<QLabel*>(QStringLiteral("langLabel"));
     QVERIFY(languages);
-    QCOMPARE(languages->count(), 2);
+    QVERIFY(language_label);
+    QVERIFY(languages->isHidden());
+    QVERIFY(language_label->isHidden());
+}
+
+void OptionTests::hiddenLanguageRowLeavesStoredValueAlone()
+{
+    QSettings settings;
+    const bool had_restart{settings.contains("fRestartRequired")};
+    const QVariant previous_restart{settings.value("fRestartRequired")};
+
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+
+    for (const QString& language : {QStringLiteral("de"), QStringLiteral("en")}) {
+        QVERIFY(options.setOption(OptionsModel::Language, language));
+        options.setRestartRequired(false);
+
+        OptionsDialog dialog(nullptr, /*enableVault=*/true);
+        dialog.setModel(&options);
+        auto* languages = dialog.findChild<QComboBox*>(QStringLiteral("lang"));
+        auto* ok_button = dialog.findChild<QPushButton*>(QStringLiteral("okButton"));
+        QVERIFY(languages);
+        QVERIFY(ok_button);
+        // A hidden control is not user-editable, but changing its internal state
+        // proves it has neither a mapper write path nor a restart-warning path.
+        languages->addItem(QStringLiteral("test-only different value"), language == QStringLiteral("de") ? QStringLiteral("en") : QString{});
+        languages->setCurrentIndex(languages->count() - 1);
+        QTest::mouseClick(ok_button, Qt::LeftButton);
+
+        QCOMPARE(options.getOption(OptionsModel::Language).toString(), language);
+        QVERIFY(!options.isRestartRequired());
+    }
+
+    if (had_restart) {
+        settings.setValue("fRestartRequired", previous_restart);
+    } else {
+        settings.remove("fRestartRequired");
+    }
+}
+
+void OptionTests::languageRowListsShippedCatalogues()
+{
+    OptionsDialog dialog(nullptr, /*enableVault=*/true);
+    auto* languages = dialog.findChild<QComboBox*>(QStringLiteral("lang"));
+    auto* language_label = dialog.findChild<QLabel*>(QStringLiteral("langLabel"));
+    QVERIFY(languages);
+    QVERIFY(language_label);
+
+    // The choices remain an explicit code list and never depend on catalogue
+    // resources, preserving the intent of the test this ruling replaced.
+    OptionsDialog::configureLanguageRow({QStringLiteral("de")}, languages, language_label);
+    QVERIFY(!languages->isHidden());
+    QVERIFY(!language_label->isHidden());
+    QCOMPARE(languages->count(), 3);
     QCOMPARE(languages->itemData(0).toString(), QString{});
     QCOMPARE(languages->itemData(1).toString(), QStringLiteral("en"));
-    QCOMPARE(languages->itemText(1), QStringLiteral("English (en)"));
+    QCOMPARE(languages->itemData(2).toString(), QStringLiteral("de"));
 }
 
 void OptionTests::integerGetArgBug()

@@ -2010,5 +2010,23 @@ BOOST_AUTO_TEST_CASE(utf16_unpaired_surrogate_throws)
 {
     BOOST_CHECK_THROW(util::Utf16ToUtf8(L"\xD83D"), std::range_error);
 }
+
+BOOST_AUTO_TEST_CASE(acp_to_utf16_ascii)
+{
+    BOOST_CHECK(util::AcpToUtf16("Quicksilver") == std::wstring{L"Quicksilver"});
+}
+
+BOOST_AUTO_TEST_CASE(acp_to_utf16_empty)
+{
+    BOOST_CHECK(util::AcpToUtf16("").empty());
+}
+
+BOOST_AUTO_TEST_CASE(filesystem_error_message_ascii)
+{
+    const fs::filesystem_error error{"qs-acp-ascii", fs::path{"C:/qs"}, std::error_code{}};
+    std::string message;
+    BOOST_CHECK_NO_THROW(message = fsbridge::get_filesystem_error_message(error));
+    BOOST_CHECK(message.find("qs-acp-ascii") != std::string::npos);
+}
 BOOST_AUTO_TEST_SUITE_END()
 #endif // WIN32

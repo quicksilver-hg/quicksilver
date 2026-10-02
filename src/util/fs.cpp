@@ -13,6 +13,7 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 #else
+#include <exception>
 #include <limits>
 #include <util/utf16.h>
 #include <windows.h>
@@ -120,14 +121,12 @@ std::string get_filesystem_error_message(const fs::filesystem_error& e)
 #ifndef WIN32
     return e.what();
 #else
-    // Convert from Multi Byte to utf-16
-    std::string mb_string(e.what());
-    int size = MultiByteToWideChar(CP_ACP, 0, mb_string.data(), mb_string.size(), nullptr, 0);
-
-    std::wstring utf16_string(size, L'\0');
-    MultiByteToWideChar(CP_ACP, 0, mb_string.data(), mb_string.size(), &*utf16_string.begin(), size);
-    // Convert from utf-16 to utf-8
-    return util::Utf16ToUtf8(utf16_string);
+    // Called while another exception is active, so a failed decode must not escape.
+    try {
+        return util::Utf16ToUtf8(util::AcpToUtf16(e.what()));
+    } catch (const std::exception&) {
+        return e.what();
+    }
 #endif
 }
 

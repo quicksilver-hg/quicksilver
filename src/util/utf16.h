@@ -14,6 +14,7 @@ namespace util {
 
 std::wstring Utf8ToUtf16(std::string_view in);
 std::string Utf16ToUtf8(std::wstring_view in);
+std::wstring AcpToUtf16(std::string_view in);
 
 } // namespace util
 

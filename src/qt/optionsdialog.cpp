@@ -32,6 +32,7 @@
 #include <QFrame>
 #include <QIntValidator>
 #include <QLabel>
+#include <QLocale>
 #include <QMessageBox>
 #include <QPointer>
 #include <QProcess>
@@ -39,6 +40,16 @@
 #include <QSystemTrayIcon>
 #include <QTimer>
 #include <QVBoxLayout>
+
+namespace {
+QStringList ShippedUiLanguages()
+{
+    // F-286 hook: add a language code here when its application catalogue
+    // ships. initTranslations (quicksilver.cpp:198) must then also install the
+    // application translator; deliberately, it installs no such translator today.
+    return {};
+}
+} // namespace
 
 int setFontChoice(QComboBox* cb, const OptionsModel::FontChoice& fc)
 {
@@ -199,11 +210,7 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
     ui->openQuicksilverConfButton->setToolTip(ui->openQuicksilverConfButton->toolTip().arg(CLIENT_NAME));
 
     ui->lang->setToolTip(ui->lang->toolTip().arg(CLIENT_NAME));
-    ui->lang->addItem(QString("(") + tr("default") + QString(")"), QVariant(""));
-    // Quicksilver's own UI is English-only. Keep an explicit English choice so
-    // users can also force Qt's standard dialog strings to English instead of
-    // inheriting the system locale.
-    ui->lang->addItem(tr("English (en)"), QStringLiteral("en"));
+    configureLanguageRow(ShippedUiLanguages(), ui->lang, ui->langLabel);
     ui->unit->setModel(new QuicksilverUnits(this));
 
     /* Widget-to-option mapper */
@@ -302,7 +309,9 @@ void OptionsDialog::setModel(OptionsModel *_model)
     connect(ui->connectSocks, &QCheckBox::clicked, this, &OptionsDialog::showRestartWarning);
     connect(ui->connectSocksTor, &QCheckBox::clicked, this, &OptionsDialog::showRestartWarning);
     /* Display */
-    connect(ui->lang, qOverload<>(&QValueComboBox::valueChanged), [this]{ showRestartWarning(); });
+    if (!ui->lang->isHidden()) {
+        connect(ui->lang, qOverload<>(&QValueComboBox::valueChanged), [this]{ showRestartWarning(); });
+    }
     connect(ui->thirdPartyTxUrls, &QLineEdit::textChanged, [this]{ showRestartWarning(); });
     validateGpuSolverPath();
 }
@@ -358,9 +367,27 @@ void OptionsDialog::setMapper()
 #endif
 
     /* Display */
-    mapper->addMapping(ui->lang, OptionsModel::Language);
+    if (!ui->lang->isHidden()) {
+        mapper->addMapping(ui->lang, OptionsModel::Language);
+    }
     mapper->addMapping(ui->unit, OptionsModel::DisplayUnit);
     mapper->addMapping(ui->thirdPartyTxUrls, OptionsModel::ThirdPartyTxUrls);
+}
+
+void OptionsDialog::configureLanguageRow(const QStringList& shipped_languages, QComboBox* languages, QLabel* language_label)
+{
+    const bool has_catalogues{!shipped_languages.isEmpty()};
+    languages->setVisible(has_catalogues);
+    language_label->setVisible(has_catalogues);
+    languages->clear();
+    if (!has_catalogues) return;
+
+    languages->addItem(QStringLiteral("(") + tr("default") + QStringLiteral(")"), QVariant{QString{}});
+    languages->addItem(tr("English (en)"), QStringLiteral("en"));
+    for (const QString& code : shipped_languages) {
+        const QString native_name{QLocale{code}.nativeLanguageName()};
+        languages->addItem(QStringLiteral("%1 (%2)").arg(native_name, code), code);
+    }
 }
 
 void OptionsDialog::setOkButtonState(bool fState)

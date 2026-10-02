@@ -11,6 +11,9 @@
 #include <sync.h>
 #include <util/chaintype.h>
 #include <util/fs.h>
+#ifdef WIN32
+#include <util/result.h>
+#endif
 
 #include <iosfwd>
 #include <list>
@@ -475,17 +478,28 @@ std::string HelpMessageOpt(const std::string& option, const std::string& message
 
 namespace common {
 #ifdef WIN32
+/**
+ * Convert Windows wide command-line arguments to UTF-8.
+ * An unpaired surrogate yields an error that names the argument index and
+ * leaves the argument text out: it cannot be printed faithfully. The only
+ * exception caught is std::range_error from util::Utf16ToUtf8.
+ */
+[[nodiscard]] util::Result<std::vector<std::string>> WinCmdLineArgsToUtf8(const wchar_t* const* wargv, int argc);
+
 class WinCmdLineArgs
 {
 public:
     WinCmdLineArgs();
     ~WinCmdLineArgs();
+    /** Empty when the command line converted. Otherwise the message to show before exit. */
+    const std::string& error() const;
     std::pair<int, char**> get();
 
 private:
     int argc;
     char** argv;
     std::vector<std::string> args;
+    std::string m_error;
 };
 #endif
 } // namespace common

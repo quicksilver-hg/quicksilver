@@ -262,6 +262,7 @@ BASE_SCRIPTS = [
     'relaypool_expiry.py',
     'vault_crosschain.py',
     'mining_basic.py',
+    'mining_unspendable_coinbase.py',
     'mining_service.py',
     'p2p_mutated_blocks.py',
     'rpc_named_arguments.py',

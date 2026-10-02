@@ -39,6 +39,10 @@
 #include <util/string.h>
 #include <util/threadnames.h>
 #include <util/translation.h>
+#ifdef WIN32
+#include <util/utf16.h>
+#include <windows.h>
+#endif
 #include <validation.h>
 
 #ifdef ENABLE_VAULT
@@ -702,6 +706,13 @@ int GuiMain(int argc, char* argv[])
 #ifdef WIN32
     common::WinCmdLineArgs winArgs;
     std::tie(argc, argv) = winArgs.get();
+    if (!winArgs.error().empty()) {
+        // QApplication does not exist yet, so the later QMessageBox path is unavailable.
+        const std::wstring title{util::Utf8ToUtf16(CLIENT_NAME)};
+        const std::wstring message{util::Utf8ToUtf16(winArgs.error())};
+        MessageBoxW(nullptr, message.c_str(), title.c_str(), MB_ICONERROR);
+        return EXIT_FAILURE;
+    }
 #endif
 
     std::unique_ptr<interfaces::Init> init = interfaces::MakeGuiInit();

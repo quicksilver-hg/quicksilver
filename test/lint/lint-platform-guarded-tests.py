@@ -88,12 +88,19 @@ CASE_END = re.compile(r"^\}")
 # --------------------------------------------------------------------------
 ALLOWED_WHOLE = {
     # -- BENIGN below: the API contract exists only on Windows.
+    ("src/test/util_tests.cpp", "acp_to_utf16_ascii"): "BENIGN: exercises the Win32 CP_ACP decode, which exists only on Windows",
+    ("src/test/util_tests.cpp", "acp_to_utf16_empty"): "BENIGN: empty input of the Win32 CP_ACP decode makes no API call",
+    ("src/test/util_tests.cpp", "filesystem_error_message_ascii"): "BENIGN: exercises the Windows filesystem-error message conversion",
     ("src/test/util_tests.cpp", "utf16_ascii_round_trip"): "BENIGN: exercises the Win32 UTF-8/UTF-16 conversion API",
     ("src/test/util_tests.cpp", "utf16_bmp_round_trip"): "BENIGN: exercises the Win32 UTF-8/UTF-16 conversion API",
     ("src/test/util_tests.cpp", "utf16_empty_input"): "BENIGN: exercises the Win32 UTF-8/UTF-16 conversion API",
     ("src/test/util_tests.cpp", "utf16_invalid_utf8_throws"): "BENIGN: exercises the Win32 UTF-8/UTF-16 conversion API",
     ("src/test/util_tests.cpp", "utf16_supplementary_round_trip"): "BENIGN: exercises the Win32 UTF-8/UTF-16 conversion API",
     ("src/test/util_tests.cpp", "utf16_unpaired_surrogate_throws"): "BENIGN: exercises the Win32 UTF-8/UTF-16 conversion API",
+    ("src/test/getarg_tests.cpp", "win_argv_valid_unicode_converts"): "BENIGN: exercises the Win32 command-line UTF-16 conversion, which exists only on Windows",
+    ("src/test/getarg_tests.cpp", "win_argv_trailing_lone_high_names_argument_2"): "BENIGN: an unpaired UTF-16 surrogate is refused only on Windows, where the command line is wide",
+    ("src/test/getarg_tests.cpp", "win_argv_lone_low_names_argument_1"): "BENIGN: an unpaired UTF-16 surrogate is refused only on Windows, where the command line is wide",
+    ("src/test/getarg_tests.cpp", "win_argv_lone_surrogate_names_program_path"): "BENIGN: an unpaired UTF-16 surrogate is refused only on Windows, where the command line is wide",
 }
 
 ALLOWED_PARTIAL = {

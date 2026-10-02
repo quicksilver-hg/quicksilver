@@ -7,6 +7,7 @@
 #define QUICKSILVER_QT_OPTIONSDIALOG_H
 
 #include <QDialog>
+#include <QStringList>
 #include <QValidator>
 
 #include <qt/sendcoinsdialog.h>
@@ -16,6 +17,8 @@ class OptionsModel;
 
 QT_BEGIN_NAMESPACE
 class QDataWidgetMapper;
+class QComboBox;
+class QLabel;
 class QProcess;
 QT_END_NAMESPACE
 
@@ -53,6 +56,7 @@ public:
     void setModel(OptionsModel *model);
     void setMapper();
     void setCurrentTab(OptionsDialog::Tab tab);
+    static void configureLanguageRow(const QStringList& shipped_languages, QComboBox* languages, QLabel* language_label);
 
 private Q_SLOTS:
     /* set OK button state (enabled / disabled) */

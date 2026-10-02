@@ -9,6 +9,9 @@
 #include <test/util/setup_common.h>
 #include <univalue.h>
 #include <util/strencodings.h>
+#ifdef WIN32
+#include <util/result.h>
+#endif
 
 #include <limits>
 #include <string>
@@ -454,5 +457,54 @@ BOOST_AUTO_TEST_CASE(logargs)
     BOOST_CHECK(str.find("dontlog=****") != std::string::npos);
     BOOST_CHECK(str.find("private42") == std::string::npos);
 }
+
+#ifdef WIN32
+// Surrogates are split literals. A single literal such as L"\xD83Db" swallows the next hex digit.
+std::string WinCmdLineConversionError(const std::vector<std::wstring>& wide_args)
+{
+    std::vector<const wchar_t*> wargv;
+    wargv.reserve(wide_args.size());
+    for (const std::wstring& wide_arg : wide_args) {
+        wargv.push_back(wide_arg.c_str());
+    }
+    const auto converted{common::WinCmdLineArgsToUtf8(wargv.data(), static_cast<int>(wide_args.size()))};
+    if (converted.has_value()) {
+        return {};
+    }
+    return util::ErrorString(converted).original;
+}
+
+BOOST_AUTO_TEST_CASE(win_argv_valid_unicode_converts)
+{
+    const std::wstring ascii{L"quicksilver-cli"};
+    const std::wstring bmp{L"\x00E9"};
+    const std::wstring pair{L"\xD83D" L"\xDE00"};
+    const wchar_t* wargv[]{ascii.c_str(), bmp.c_str(), pair.c_str()};
+    const auto converted{common::WinCmdLineArgsToUtf8(wargv, 3)};
+    BOOST_REQUIRE(converted.has_value());
+    BOOST_CHECK(converted->size() == std::size_t{3});
+    BOOST_CHECK_EQUAL(converted->at(0), "quicksilver-cli");
+    BOOST_CHECK_EQUAL(converted->at(1), "\xC3\xA9");
+    BOOST_CHECK_EQUAL(converted->at(2), "\xF0\x9F\x98\x80");
+}
+
+BOOST_AUTO_TEST_CASE(win_argv_trailing_lone_high_names_argument_2)
+{
+    const std::string error{WinCmdLineConversionError({L"quicksilver-cli", L"-datadir=C:\\qs", L"trail" L"\xD83D"})};
+    BOOST_CHECK_EQUAL(error, "Command-line argument 2 is not valid Unicode (it contains an unpaired UTF-16 surrogate).");
+}
+
+BOOST_AUTO_TEST_CASE(win_argv_lone_low_names_argument_1)
+{
+    const std::string error{WinCmdLineConversionError({L"quicksilver-cli", L"\xDC00"})};
+    BOOST_CHECK_EQUAL(error, "Command-line argument 1 is not valid Unicode (it contains an unpaired UTF-16 surrogate).");
+}
+
+BOOST_AUTO_TEST_CASE(win_argv_lone_surrogate_names_program_path)
+{
+    const std::string error{WinCmdLineConversionError({L"\xD83D"})};
+    BOOST_CHECK_EQUAL(error, "The program path is not valid Unicode (it contains an unpaired UTF-16 surrogate).");
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()

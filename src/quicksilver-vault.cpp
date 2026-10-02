@@ -99,6 +99,10 @@ MAIN_FUNCTION
 #ifdef WIN32
     common::WinCmdLineArgs winArgs;
     std::tie(argc, argv) = winArgs.get();
+    if (!winArgs.error().empty()) {
+        tfm::format(std::cerr, "Error: %s\n", winArgs.error());
+        return EXIT_FAILURE;
+    }
 #endif
 
     SetupEnvironment();
