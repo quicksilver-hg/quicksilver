@@ -26,9 +26,11 @@ private Q_SLOTS:
     void agentAllotmentImportsNodePeers();
     void agentAllotmentRelaysInBackgroundWithPeerFallback();
     void vaultTests();
+    void sendConfirmationNamesUnconfirmedChange();
     void mineMintPageRendersStatus();
     void mineMintPageNamesAnArmedMinerWithNoPermittedSolver();
     void mineMintPageRefusesToPresentIsolatedMiningAsSuccess();
+    void mineMintPageShowsARawScriptPayout();
     void networkPageFormatsStatus();
     void networkPageDiagnosesBootstrapAndAddsPeers();
     void networkPageHidesTheManualTorRecipeWhenAProxyIsCarryingOnions();

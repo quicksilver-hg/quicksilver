@@ -296,7 +296,7 @@ An agent can start one at any time, and it will use every core for several minut
           <item>
            <widget class="QCheckBox" name="spendZeroConfChange">
             <property name="toolTip">
-             <string>If you disable the spending of unconfirmed change, the change from a transaction cannot be used until that transaction has at least one confirmation. This also affects how your balance is computed.</string>
+             <string>When this is on, a transfer may spend change from a transfer that has not confirmed yet. The new transfer then depends on the earlier one. If the earlier one is dropped from the relay pool, the new one fails too and the proof of work spent on it is lost. Spending the change does not help the earlier transfer confirm.</string>
             </property>
             <property name="text">
              <string>&amp;Spend unconfirmed change</string>

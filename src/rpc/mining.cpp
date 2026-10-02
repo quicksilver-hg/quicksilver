@@ -500,11 +500,12 @@ static RPCHelpMan startmining()
         "Start the opt-in background block-mining role. Off by default.\n",
         {
             {"address", RPCArg::Type::STR, RPCArg::Optional::OMITTED,
-             "Payout address for mined coins. If omitted, uses -mineaddress."},
+             "Payout address for mined coins. If omitted, uses -mineaddress, then -minescript."},
         },
         RPCResult{RPCResult::Type::OBJ, "", "", {
             {RPCResult::Type::BOOL, "active", "Whether the mining role is now active"},
             {RPCResult::Type::STR, "address", "The payout address in use"},
+            {RPCResult::Type::STR_HEX, "payout_script", "Payout script in use, hex (empty if never started)"},
         }},
         RPCExamples{HelpExampleCli("startmining", "\"" + EXAMPLE_ADDRESS[0] + "\"")
             + HelpExampleRpc("startmining", "\"" + EXAMPLE_ADDRESS[0] + "\"")},
@@ -513,22 +514,31 @@ static RPCHelpMan startmining()
     NodeContext& node = EnsureAnyNodeContext(request.context);
     node::MiningService& svc = EnsureMiningService(node);
 
-    std::string addr_str;
     if (!request.params[0].isNull()) {
-        addr_str = request.params[0].get_str();
-    } else if (node.args) {
-        addr_str = node.args->GetArg("-mineaddress", "");
-    }
-    if (addr_str.empty()) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "No payout address: pass an address or set -mineaddress");
-    }
-    if (auto res = node::StartMining(svc, addr_str); !res) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, util::ErrorString(res).original);
+        if (auto res = node::StartMining(svc, request.params[0].get_str()); !res) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, util::ErrorString(res).original);
+        }
+    } else {
+        const std::string addr_str = node.args ? node.args->GetArg("-mineaddress", "") : "";
+        const std::string script_hex = node.args ? node.args->GetArg("-minescript", "") : "";
+        if (!addr_str.empty()) {
+            if (auto res = node::StartMining(svc, addr_str); !res) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, util::ErrorString(res).original);
+            }
+        } else if (!script_hex.empty()) {
+            const std::vector<unsigned char> bytes{ParseHex(script_hex)};
+            if (auto res = node::StartMining(svc, CScript{bytes.begin(), bytes.end()}); !res) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, util::ErrorString(res).original);
+            }
+        } else {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "No payout target: pass an address or set -mineaddress or -minescript");
+        }
     }
 
     UniValue obj(UniValue::VOBJ);
     obj.pushKV("active", svc.IsActive());
     obj.pushKV("address", svc.GetStatus().address);
+    obj.pushKV("payout_script", svc.GetStatus().payout_script);
     return obj;
 },
     };
@@ -563,6 +573,7 @@ static RPCHelpMan getminingstatus()
         RPCResult{RPCResult::Type::OBJ, "", "", {
             {RPCResult::Type::BOOL, "active", "Whether the mining role is active"},
             {RPCResult::Type::STR, "address", "Payout address (empty if never started)"},
+            {RPCResult::Type::STR_HEX, "payout_script", "Payout script in use, hex (empty if never started)"},
             {RPCResult::Type::NUM, "blocks_found", "Blocks mined this session"},
             {RPCResult::Type::STR_AMOUNT, "coins_minted_session", "Coins minted this session (" + CURRENCY_UNIT + ")"},
             {RPCResult::Type::NUM, "attempts_per_second", /*optional=*/true, "Cuckatoo graphs solved per second over the trailing " + util::ToString(node::AttemptRateWindow::WINDOW_SECONDS) + " seconds. This is the rate now, not a session average, so it falls away when a solver stops and recovers when one comes back. Omitted entirely while no attempt has been observed this session -- that state is unknown, not zero, and a caller must not substitute one"},
@@ -587,6 +598,7 @@ static RPCHelpMan getminingstatus()
     UniValue obj(UniValue::VOBJ);
     obj.pushKV("active", st.active);
     obj.pushKV("address", st.address);
+    obj.pushKV("payout_script", st.payout_script);
     obj.pushKV("blocks_found", st.blocks_found);
     obj.pushKV("coins_minted_session", ValueFromAmount(st.coins_minted_session));
     // Deliberately absent rather than 0 when unknown: a zero rate is a real

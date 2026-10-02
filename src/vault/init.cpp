@@ -55,7 +55,7 @@ void VaultInit::AddVaultOptions(ArgsManager& argsman) const
 #ifdef ENABLE_EXTERNAL_SIGNER
     argsman.AddArg("-signer=<cmd>", "External signing tool, see doc/external-signer.md", ArgsManager::ALLOW_ANY, OptionsCategory::VAULT);
 #endif
-    argsman.AddArg("-spendzeroconfchange", strprintf("Spend unconfirmed change when sending transactions (default: %u)", DEFAULT_SPEND_ZEROCONF_CHANGE), ArgsManager::ALLOW_ANY, OptionsCategory::VAULT);
+    argsman.AddArg("-spendzeroconfchange", strprintf("Spend change from transfers that have not confirmed yet. A transfer that does depends on the earlier one: if the earlier one is dropped from the relay pool, the new one fails too and its work is lost. Spending the change does not help the earlier transfer confirm (default: %u)", DEFAULT_SPEND_ZEROCONF_CHANGE), ArgsManager::ALLOW_ANY, OptionsCategory::VAULT);
     argsman.AddArg("-vault=<path>", "Specify vault path to load at startup. Can be used multiple times to load multiple vaults. Path is to a directory containing vault data. If the path is not absolute, it is interpreted relative to <vaultdir>. This only loads existing vaults and does not create new ones.", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::VAULT);
     argsman.AddArg("-vaultbroadcast",  strprintf("Make the vault broadcast transactions (default: %u)", DEFAULT_VAULTBROADCAST), ArgsManager::ALLOW_ANY, OptionsCategory::VAULT);
     argsman.AddArg("-vaultdir=<dir>", "Specify directory to hold vaults (default: <datadir>/vaults)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::VAULT);

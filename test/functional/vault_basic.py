@@ -618,6 +618,23 @@ class VaultTest(QuicksilverTestFramework):
 
         zeroconf_vault.sendtoaddress(zeroconf_vault.getnewaddress(), Decimal('0.5'))
 
+        self.log.info("send warns when spending unconfirmed change and stays silent for confirmed coins")
+        default_vault = self.nodes[0].get_vault_rpc(self.default_vault_name)
+        self.nodes[0].createvault(vault_name="zeroconfwarn", load_on_startup=True)
+        warn_vault = self.nodes[0].get_vault_rpc("zeroconfwarn")
+        default_vault.sendtoaddress(warn_vault.getnewaddress(), Decimal("1.0"))
+        self.generate(self.nodes[0], 1, sync_fun=self.no_op)
+        self.nodes[0].syncwithvalidationinterfacequeue()
+
+        confirmed = warn_vault.send(outputs=[{self.nodes[1].getnewaddress(): Decimal("0.2")}])
+        assert "warnings" not in confirmed
+
+        self.nodes[0].syncwithvalidationinterfacequeue()
+        unconfirmed = warn_vault.send(outputs=[{self.nodes[1].getnewaddress(): Decimal("0.2")}])
+        assert_equal(unconfirmed["warnings"], [
+            "This transfer spends change from an earlier transfer that has not confirmed yet. If that transfer is dropped, this one fails too and its work is lost. To avoid this, wait for the earlier transfer to confirm.",
+        ])
+
         self.test_chain_listunspent()
 
     def test_chain_listunspent(self):

@@ -53,6 +53,7 @@
 #include <validation.h>
 #include <vault/coincontrol.h>
 #include <vault/context.h>
+#include <vault/spend.h>
 #include <vault/test/util.h>
 #include <vault/vault.h>
 #include <vault/vaultdb.h>
@@ -382,6 +383,14 @@ uint256 SendCoins(CVault& vault, SendCoinsDialog& sendCoinsDialog, const CTxDest
     if (confirmation_ready.count() != 1) {
         QTest::qFail("successful send preparation did not open confirmation", __FILE__, __LINE__);
         return {};
+    }
+    // The click that records confirmation_text is deferred to the next turn.
+    // A Cancel send never waits on a txid, so without this the caller would
+    // observe the text before that turn runs.
+    if (confirmation_text) {
+        for (int i = 0; i < 50 && confirmation_text->isEmpty(); ++i) {
+            QTest::qWait(10);
+        }
     }
     assert(progress_graphs->text().startsWith(QStringLiteral("Graphs tried:")));
     for (int i = 0; i < 300 && txid.IsNull() && confirm_type == QMessageBox::Yes; ++i) {
@@ -1629,6 +1638,72 @@ void VaultTests::vaultTests()
     TestGUI(m_node);
 }
 
+void VaultTests::sendConfirmationNamesUnconfirmedChange()
+{
+    // Same chain the send-flow fixture uses: five mature coinbases, and the
+    // sandbox no-cycle proof so preparation finishes inside the helper's wait.
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    for (int i = 0; i < 5; ++i) {
+        test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+    }
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
+    MiniGUI mini_gui(m_node, platformStyle.get());
+    mini_gui.initModelForVault(m_node, vault, platformStyle.get());
+    SendCoinsDialog& sendCoinsDialog = mini_gui.sendCoinsDialog;
+
+    const QString warning = QStringLiteral(
+        "This transfer spends change from an earlier transfer that has not confirmed yet. "
+        "If that transfer is dropped, this one fails too and its work is lost. "
+        "To avoid this, wait for the earlier transfer to confirm.");
+
+    QString confirmed_text;
+    const uint256 confirmed_txid = SendCoins(*vault, sendCoinsDialog, PKHash(), COIN, QMessageBox::Cancel, &confirmed_text);
+    QVERIFY(confirmed_txid.IsNull());
+    QVERIFY(confirmed_text.contains(QStringLiteral("Sending uses proof-of-work")));
+    QVERIFY(!confirmed_text.contains(warning));
+
+    {
+        LOCK(vault->cs_vault);
+        const std::vector<vault::COutput> coins{vault::AvailableCoins(*vault).All()};
+        QVERIFY(coins.size() >= 2);
+        const vault::COutput* keep = &coins.front();
+        for (const vault::COutput& coin : coins) {
+            if (coin.txout.nValue > keep->txout.nValue) keep = &coin;
+        }
+        QVERIFY(keep->txout.nValue > 2 * COIN);
+        QVERIFY(keep->depth >= 1);
+        for (const vault::COutput& coin : coins) {
+            if (coin.outpoint == keep->outpoint) continue;
+            QVERIFY(vault->LockCoin(coin.outpoint));
+        }
+    }
+
+    QString parent_text;
+    const uint256 parent_txid = SendCoins(*vault, sendCoinsDialog, PKHash(), COIN, QMessageBox::Yes, &parent_text);
+    QVERIFY(!parent_txid.IsNull());
+    QVERIFY(!parent_text.contains(warning));
+
+    {
+        LOCK(vault->cs_vault);
+        const std::vector<vault::COutput> coins{vault::AvailableCoins(*vault).All()};
+        QCOMPARE(coins.size(), size_t{1});
+        QCOMPARE(coins.front().depth, 0);
+        QVERIFY(coins.front().from_me);
+        QVERIFY(coins.front().txout.nValue > COIN);
+    }
+
+    QString unconfirmed_text;
+    const uint256 unconfirmed_txid = SendCoins(*vault, sendCoinsDialog, PKHash(), COIN, QMessageBox::Cancel, &unconfirmed_text);
+    QVERIFY(unconfirmed_txid.IsNull());
+    QVERIFY(unconfirmed_text.contains(QStringLiteral("Sending uses proof-of-work")));
+    QVERIFY(unconfirmed_text.contains(warning));
+}
+
 void VaultTests::mineMintPageRendersStatus()
 {
     MineMintPage page;
@@ -1899,6 +1974,31 @@ void VaultTests::mineMintPageRefusesToPresentIsolatedMiningAsSuccess()
     QTRY_VERIFY_WITH_TIMEOUT(clicked_proceed, 2000);
     QTRY_COMPARE_WITH_TIMEOUT(start_spy.count(), 1, 2000);
     QCOMPARE(start_spy.takeFirst().at(0).toString(), QStringLiteral("hg1qexample"));
+}
+
+void VaultTests::mineMintPageShowsARawScriptPayout()
+{
+    MineMintPage page;
+    QLabel* payout = page.findChild<QLabel*>(QStringLiteral("payoutTargetValue"));
+    QVERIFY(payout);
+
+    interfaces::MiningStatus st;
+    auto rows = MineMintPage::statusTextForTesting(st);
+    QCOMPARE(rows.payout, QStringLiteral("None"));
+    page.setStatus(st);
+    QCOMPARE(payout->text(), rows.payout);
+
+    st.payout_script = "6a";
+    rows = MineMintPage::statusTextForTesting(st);
+    QCOMPARE(rows.payout, QStringLiteral("Raw script (provably unspendable)"));
+    page.setStatus(st);
+    QCOMPARE(payout->text(), rows.payout);
+
+    st.payout_script = "51";
+    rows = MineMintPage::statusTextForTesting(st);
+    QCOMPARE(rows.payout, QStringLiteral("Raw script 51"));
+    page.setStatus(st);
+    QCOMPARE(payout->text(), rows.payout);
 }
 
 //! F-108: "Peers: 0" is a reading, not an explanation, and the two states behind it

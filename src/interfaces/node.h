@@ -62,6 +62,7 @@ struct BlockAndHeaderTipInfo
 struct MiningStatus {
     bool active{false};
     std::string address;                 //!< payout address (empty if never started)
+    std::string payout_script;           //!< payout script, lowercase hex (empty if never started)
     int64_t blocks_found{0};
     CAmount coins_minted_session{0};
     //! Solver attempts per second over the trailing 120 s, NOT a session average:

@@ -36,10 +36,32 @@ std::vector<CRecipient> CreateRecipients(const std::vector<std::pair<CTxDestinat
     return recipients;
 }
 
+// Same rule as the transfer confirmation: an input spends unconfirmed change
+// when its previous transaction is this vault's own and still has depth 0.
+static bool SpendsUnconfirmedChange(const CVault& vault, const CMutableTransaction& tx)
+    EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault)
+{
+    AssertLockHeld(vault.cs_vault);
+    for (const CTxIn& input : tx.vin) {
+        const CVaultTx* prev = vault.GetVaultTx(input.prevout.hash);
+        if (!prev || !vault.IsFromMe(*prev->tx)) continue;
+        if (vault.GetTxDepthInMainChain(*prev) == 0) return true;
+    }
+    return false;
+}
+
 static UniValue FinishTransaction(const std::shared_ptr<CVault> pvault, const UniValue& options,
                                   const CMutableTransaction& rawTx,
                                   std::optional<uint64_t> estimated_pow_bytes = std::nullopt)
 {
+    std::vector<bilingual_str> unconfirmed_change_warnings;
+    {
+        LOCK(pvault->cs_vault);
+        if (SpendsUnconfirmedChange(*pvault, rawTx)) {
+            unconfirmed_change_warnings.emplace_back(_("This transfer spends change from an earlier transfer that has not confirmed yet. If that transfer is dropped, this one fails too and its work is lost. To avoid this, wait for the earlier transfer to confirm."));
+        }
+    }
+
     // Make a blank psqt
     PartiallySignedQuicksilverTransaction psqtx(rawTx);
 
@@ -182,6 +204,7 @@ static UniValue FinishTransaction(const std::shared_ptr<CVault> pvault, const Un
         }
     }
     result.pushKV("complete", complete);
+    ::PushWarnings(unconfirmed_change_warnings, result);
 
     return result;
 }
@@ -847,7 +870,11 @@ RPCHelpMan send()
                     {RPCResult::Type::BOOL, "complete", "If the transaction has a complete set of signatures"},
                     {RPCResult::Type::STR_HEX, "txid", /*optional=*/true, "The transaction id for the send. Only 1 transaction is created regardless of the number of addresses."},
                     {RPCResult::Type::STR_HEX, "hex", /*optional=*/true, "If add_to_vault is false, the hex-encoded raw transaction with signature(s)"},
-                    {RPCResult::Type::STR, "psqt", /*optional=*/true, "If more signatures are needed, or if add_to_vault is false, the base64-encoded (partially) signed transaction"}
+                    {RPCResult::Type::STR, "psqt", /*optional=*/true, "If more signatures are needed, or if add_to_vault is false, the base64-encoded (partially) signed transaction"},
+                    {RPCResult::Type::ARR, "warnings", /*optional=*/true, "Warnings about this transfer. Present only when there is one, such as when it spends change from an earlier transfer that has not confirmed yet.",
+                        {
+                            {RPCResult::Type::STR, "", ""},
+                        }},
                 }
         },
         RPCExamples{""
@@ -938,7 +965,11 @@ RPCHelpMan sendall()
                     {RPCResult::Type::BOOL, "complete", "If the transaction has a complete set of signatures"},
                     {RPCResult::Type::STR_HEX, "txid", /*optional=*/true, "The transaction id for the send. Only 1 transaction is created regardless of the number of addresses."},
                     {RPCResult::Type::STR_HEX, "hex", /*optional=*/true, "If add_to_vault is false, the hex-encoded raw transaction with signature(s)"},
-                    {RPCResult::Type::STR, "psqt", /*optional=*/true, "If more signatures are needed, or if add_to_vault is false, the base64-encoded (partially) signed transaction"}
+                    {RPCResult::Type::STR, "psqt", /*optional=*/true, "If more signatures are needed, or if add_to_vault is false, the base64-encoded (partially) signed transaction"},
+                    {RPCResult::Type::ARR, "warnings", /*optional=*/true, "Warnings about this transfer. Present only when there is one, such as when it spends change from an earlier transfer that has not confirmed yet.",
+                        {
+                            {RPCResult::Type::STR, "", ""},
+                        }},
                 }
         },
         RPCExamples{""

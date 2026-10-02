@@ -21,6 +21,7 @@
 #include <uint256.h>
 #include <util/check.h>
 #include <util/signalinterrupt.h>
+#include <util/strencodings.h>
 #include <util/thread.h>
 #include <util/time.h>
 #include <util/translation.h>
@@ -113,6 +114,7 @@ bool MiningService::Start(const CScript& payout_script, const std::string& payou
         m_status = MiningStatus{};
         m_status.active = true;
         m_status.address = payout_address;
+        m_status.payout_script = HexStr(payout_script);
         m_status.start_time = GetTime();
         // Publish the permit before the thread is observable. Run() reads it
         // again for the solve itself; both reads are live args, so a change
@@ -312,6 +314,7 @@ interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateM
     interfaces::MiningStatus out;
     out.active = s.active;
     out.address = s.address;
+    out.payout_script = s.payout_script;
     out.blocks_found = s.blocks_found;
     out.coins_minted_session = s.coins_minted_session;
     out.attempts_per_second = svc.RecentAttemptRate();
@@ -347,6 +350,17 @@ util::Result<void> StartMining(MiningService& svc, const std::string& payout_add
     const bool started = svc.Start(GetScriptForDestination(dest), payout_address);
     if (!started && svc.GetStatus().address != payout_address) {
         return util::Error{_("Mining already active with a different payout address; stopmining first")};
+    }
+    return {};
+}
+
+util::Result<void> StartMining(MiningService& svc, const CScript& payout_script)
+{
+    const std::string script_hex{HexStr(payout_script)};
+    const bool started = svc.Start(payout_script, /*payout_address=*/"");
+    const MiningStatus status{svc.GetStatus()};
+    if (!started && (!status.address.empty() || status.payout_script != script_hex)) {
+        return util::Error{_("Mining already active with a different payout target; stopmining first")};
     }
     return {};
 }

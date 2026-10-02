@@ -362,7 +362,8 @@ Serve compact block filters to peers per BIP 157 (default: 0)
 Listen for connections on <port> (default: 9555, publictest: 19557,
 sandbox: 19556). Not relevant for I2P (see doc/i2p.md). If \fB\-port\fR
 is set explicitly to a value x, the default onion listening port
-will be set to x+1.
+will be set to x+1; keep x+1 free for it, for example do not use
+it as \fB\-rpcport\fR.
 .HP
 \fB\-proxy=\fR<ip:port|path>
 .IP
@@ -476,7 +477,11 @@ agent/payment\-receipts.dat)
 .HP
 \fB\-spendzeroconfchange\fR
 .IP
-Spend unconfirmed change when sending transactions (default: 1)
+Spend change from transfers that have not confirmed yet. A transfer that
+does depends on the earlier one: if the earlier one is dropped
+from the relay pool, the new one fails too and its work is lost.
+Spending the change does not help the earlier transfer confirm
+(default: 1)
 .HP
 \fB\-vault=\fR<path>
 .IP
@@ -657,12 +662,18 @@ transaction the mining software may add to the block. (default:
 \fB\-mine\fR
 .IP
 Run the opt\-in background block\-mining role at startup (requires
-\fB\-mineaddress\fR) (default: 0)
+\fB\-mineaddress\fR or \fB\-minescript\fR) (default: 0)
 .HP
 \fB\-mineaddress=\fR<addr>
 .IP
 Payout address for the background mining role; also the default for
 startmining
+.HP
+\fB\-minescript=\fR<hex>
+.IP
+Raw payout script (hex) for the background mining role, instead of
+\fB\-mineaddress\fR. For example 6a pays a provably unspendable
+OP_RETURN output. Mutually exclusive with \fB\-mineaddress\fR.
 .PP
 RPC server options:
 .HP

@@ -544,7 +544,7 @@ void SetupServerArgs(ArgsManager& argsman)
     argsman.AddArg("-onlynet=<net>", "Make automatic outbound connections only to network <net> (" + Join(GetNetworkNames(), ", ") + "). Inbound and manual connections are not affected by this option. It can be specified multiple times to allow multiple networks.", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-v2transport", strprintf("Support v2 transport (default: %u)", DEFAULT_V2_TRANSPORT), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-peerblockfilters", strprintf("Serve compact block filters to peers per BIP 157 (default: %u)", DEFAULT_PEERBLOCKFILTERS), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
-    argsman.AddArg("-port=<port>", strprintf("Listen for connections on <port> (default: %u, publictest: %u, sandbox: %u). Not relevant for I2P (see doc/i2p.md). If -port is set explicitly to a value x, the default onion listening port will be set to x+1.", defaultChainParams->GetDefaultPort(), publictestChainParams->GetDefaultPort(), sandboxChainParams->GetDefaultPort()), ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-port=<port>", strprintf("Listen for connections on <port> (default: %u, publictest: %u, sandbox: %u). Not relevant for I2P (see doc/i2p.md). If -port is set explicitly to a value x, the default onion listening port will be set to x+1; keep x+1 free for it, for example do not use it as -rpcport.", defaultChainParams->GetDefaultPort(), publictestChainParams->GetDefaultPort(), sandboxChainParams->GetDefaultPort()), ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
 #ifdef HAVE_SOCKADDR_UN
     argsman.AddArg("-proxy=<ip:port|path>", "Connect through SOCKS5 proxy, set -noproxy to disable (default: disabled). May be a local file path prefixed with 'unix:' if the proxy supports it.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_ELISION, OptionsCategory::CONNECTION);
 #else
@@ -632,8 +632,9 @@ void SetupServerArgs(ArgsManager& argsman)
     argsman.AddArg("-blockmaxweight=<n>", strprintf("Set maximum BIP141 block weight (default: %d)", DEFAULT_BLOCK_MAX_WEIGHT), ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
     argsman.AddArg("-blockreservedweight=<n>", strprintf("Reserve space for the fixed-size block header plus the largest coinbase transaction the mining software may add to the block. (default: %d).", DEFAULT_BLOCK_RESERVED_WEIGHT), ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
     argsman.AddArg("-blockversion=<n>", "Override block version to test forking scenarios", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::BLOCK_CREATION);
-    argsman.AddArg("-mine", strprintf("Run the opt-in background block-mining role at startup (requires -mineaddress) (default: %u)", false), ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
+    argsman.AddArg("-mine", strprintf("Run the opt-in background block-mining role at startup (requires -mineaddress or -minescript) (default: %u)", false), ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
     argsman.AddArg("-mineaddress=<addr>", "Payout address for the background mining role; also the default for startmining", ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
+    argsman.AddArg("-minescript=<hex>", "Raw payout script (hex) for the background mining role, instead of -mineaddress. For example 6a pays a provably unspendable OP_RETURN output. Mutually exclusive with -mineaddress.", ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
 
     argsman.AddArg("-rest", strprintf("Accept public REST requests (default: %u)", DEFAULT_REST_ENABLE), ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     argsman.AddArg("-rpcallowip=<ip>", "Allow JSON-RPC connections from specified source. Valid values for <ip> are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0), a network/CIDR (e.g. 1.2.3.4/24), all ipv4 (0.0.0.0/0), or all ipv6 (::/0). This option can be specified multiple times", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
@@ -1163,6 +1164,35 @@ bool CheckHostPortOptions(const ArgsManager& args) {
     }
 
     return true;
+}
+
+static bool RPCServerBindsOnPort(const ArgsManager& args, uint16_t port)
+{
+    const uint16_t rpc_port{static_cast<uint16_t>(args.GetIntArg("-rpcport", BaseParams().RPCPort()))};
+    const std::vector<std::string> rpc_binds{args.GetArgs("-rpcbind")};
+
+    // HTTPBindAddresses ignores both lists unless they are specified together,
+    // then falls back to IPv4 and IPv6 loopback on -rpcport.
+    if (args.GetArgs("-rpcallowip").empty() || rpc_binds.empty()) {
+        return rpc_port == port;
+    }
+
+    for (const std::string& rpc_bind : rpc_binds) {
+        uint16_t bind_port{rpc_port};
+        std::string host;
+        if (!SplitHostPort(rpc_bind, bind_port, host) || bind_port != port) {
+            continue;
+        }
+        if (host.empty()) {
+            return true;
+        }
+        for (const CNetAddr& address : LookupHost(host, /*nMaxSolutions=*/0, /*fAllowLookup=*/true)) {
+            if (address.IsLocal() || address.IsBindAny()) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 // A GUI user may opt to retry once with do_reindex set if there is a failure during chainstate initialization.
@@ -1910,6 +1940,11 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
             onion_service_target = connOptions.vBinds.front();
         } else {
             onion_service_target = DefaultOnionServiceTarget(default_bind_port_onion);
+            if (args.GetBoolArg("-server", false) && RPCServerBindsOnPort(args, onion_service_target.GetPort())) {
+                return InitError(strprintf(
+                    _("-rpcport=%u is the onion service target port (-port + 1). Choose another -rpcport, or set -bind=...=onion to move the onion target."),
+                    onion_service_target.GetPort()));
+            }
             connOptions.onion_binds.push_back(onion_service_target);
         }
 
@@ -2015,11 +2050,35 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     StartupNotify(args);
 #endif
 
+    // Validate both payout front doors even when the role is not armed, so a bad
+    // configuration fails at startup rather than at the first startmining call.
+    const std::string mine_addr = args.GetArg("-mineaddress", "");
+    const bool mine_script_set = args.IsArgSet("-minescript");
+    const std::string mine_script_hex = args.GetArg("-minescript", "");
+    if (!mine_addr.empty() && !mine_script_hex.empty()) {
+        return InitError(_("-mineaddress and -minescript are mutually exclusive."));
+    }
+    std::optional<CScript> mine_script;
+    if (mine_script_set) {
+        if (!IsHex(mine_script_hex)) {
+            return InitError(_("Invalid -minescript: not a hex script."));
+        }
+        const std::vector<unsigned char> bytes = ParseHex(mine_script_hex);
+        if (bytes.size() > MAX_SCRIPT_SIZE) {
+            return InitError(strprintf(_("Invalid -minescript: script exceeds %u bytes."), MAX_SCRIPT_SIZE));
+        }
+        mine_script.emplace(bytes.begin(), bytes.end());
+    }
+
     // Quicksilver: opt-in background block-mining role (off by default).
     if (args.GetBoolArg("-mine", false)) {
-        const std::string mine_addr = args.GetArg("-mineaddress", "");
-        if (mine_addr.empty()) {
-            return InitError(_("-mine requires -mineaddress to be set."));
+        if (mine_addr.empty() && !mine_script) {
+            return InitError(_("-mine requires -mineaddress or -minescript to be set."));
+        }
+        if (mine_script) {
+            node.mining_service->Start(*mine_script, /*payout_address=*/"");
+            LogInfo(HgLog::INIT, "up miner=background payout=script:%s\n", HexStr(*mine_script));
+            return true;
         }
         const CTxDestination dest = DecodeDestination(mine_addr);
         if (!IsValidDestination(dest)) {

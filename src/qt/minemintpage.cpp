@@ -201,6 +201,15 @@ MineMintPage::StatusText MineMintPage::statusText(const interfaces::MiningStatus
     const bool halted{s.active && !s.block_solving_possible};
     StatusText rows;
     rows.block_mining = !s.active ? tr("Idle") : (halted ? tr("Halted") : tr("Active"));
+    if (!s.address.empty()) {
+        rows.payout = QString::fromStdString(s.address);
+    } else if (s.payout_script.empty()) {
+        rows.payout = tr("None");
+    } else if (s.payout_script.starts_with("6a")) {
+        rows.payout = tr("Raw script (provably unspendable)");
+    } else {
+        rows.payout = tr("Raw script %1").arg(QString::fromStdString(s.payout_script));
+    }
     if (s.gpu_solver) {
         rows.solver = tr("GPU bridge");
     } else if (halted) {
@@ -253,7 +262,7 @@ void MineMintPage::setStatus(const interfaces::MiningStatus& s)
 {
     const StatusText rows{statusText(s)};
     m_status_value->setText(rows.block_mining);
-    m_payout_value->setText(s.address.empty() ? tr("None") : QString::fromStdString(s.address));
+    m_payout_value->setText(rows.payout);
     m_solver_value->setText(rows.solver);
     m_minted_value->setText(QuicksilverUnits::formatWithUnit(
         QuicksilverUnits::Unit::HG, s.coins_minted_session));

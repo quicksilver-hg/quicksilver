@@ -7,6 +7,8 @@
 import time
 from decimal import Decimal
 
+from test_framework.address import address_to_scriptpubkey
+from test_framework.blocktools import quicksilver_sandbox_subsidy
 from test_framework.test_framework import QuicksilverTestFramework
 from test_framework.test_node import ErrorMatch
 from test_framework.util import assert_equal, assert_raises_rpc_error
@@ -24,7 +26,7 @@ class MiningServiceTest(QuicksilverTestFramework):
 
         self.log.info("Inactive status before starting")
         st = node.getminingstatus()
-        for key in ("active", "address", "blocks_found", "coins_minted_session",
+        for key in ("active", "address", "payout_script", "blocks_found", "coins_minted_session",
                     "graphs_attempted", "solver_ok",
                     "last_solver_error", "last_block_time", "elapsed_seconds",
                     "congestion_multiplier", "template_height",
@@ -35,14 +37,16 @@ class MiningServiceTest(QuicksilverTestFramework):
         # Reporting 0 here would read exactly like an armed miner whose card died.
         assert "attempts_per_second" not in st
         assert_equal(st["active"], False)
+        assert_equal(st["address"], "")
+        assert_equal(st["payout_script"], "")
         assert_equal(st["template_height"], 0)
         assert_equal(st["template_transactions"], 0)
         assert_equal(st["blocks_found"], 0)
         assert_equal(st["coins_minted_session"], Decimal(0))
         assert_equal(st["graphs_attempted"], 0)
 
-        self.log.info("No payout address -> error")
-        assert_raises_rpc_error(-8, "No payout address", node.startmining)
+        self.log.info("No payout target -> error")
+        assert_raises_rpc_error(-8, "No payout target", node.startmining)
 
         # Regression guard for the bootstrap launch blocker: a fresh height-0 chain
         # whose genesis is timestamped in the past reports initialblockdownload:true,
@@ -55,6 +59,7 @@ class MiningServiceTest(QuicksilverTestFramework):
         res = node.startmining(addr)
         assert_equal(res["active"], True)
         assert_equal(res["address"], addr)
+        assert_equal(res["payout_script"], address_to_scriptpubkey(addr).hex())
 
         # The worker publishes the block it is about to grind before its first
         # sweep, so an armed miner always names a height.
@@ -64,6 +69,7 @@ class MiningServiceTest(QuicksilverTestFramework):
         node.stopmining()
         st = node.getminingstatus()
         assert_equal(st["active"], False)
+        assert_equal(st["payout_script"], address_to_scriptpubkey(addr).hex())
         assert st["blocks_found"] >= 3
 
         self.log.info("The block being ground is reported apart from anyone else's template")
@@ -114,9 +120,35 @@ class MiningServiceTest(QuicksilverTestFramework):
         assert_equal(st["blocks_found"], 0)
         assert_equal(st["coins_minted_session"], Decimal(0))
 
-        self.log.info("-mine requires -mineaddress (fail fast)")
+        self.log.info("-mine requires -mineaddress or -minescript (fail fast)")
         self.stop_node(0)
-        node.assert_start_raises_init_error(["-mine"], "requires -mineaddress", match=ErrorMatch.PARTIAL_REGEX)
+        node.assert_start_raises_init_error(
+            ["-mine"],
+            "requires -mineaddress or -minescript",
+            match=ErrorMatch.PARTIAL_REGEX,
+        )
+
+        self.log.info("-mineaddress and -minescript are mutually exclusive")
+        node.assert_start_raises_init_error(
+            [f"-mineaddress={addr}", "-minescript=6a"],
+            "-mineaddress and -minescript are mutually exclusive.",
+            match=ErrorMatch.PARTIAL_REGEX,
+        )
+
+        self.log.info("Malformed and empty -minescript values fail at startup")
+        for malformed in ("0", "zz", ""):
+            node.assert_start_raises_init_error(
+                [f"-minescript={malformed}"],
+                "Invalid -minescript: not a hex script.",
+                match=ErrorMatch.PARTIAL_REGEX,
+            )
+
+        self.log.info("A script above MAX_SCRIPT_SIZE fails at startup")
+        node.assert_start_raises_init_error(
+            [f"-minescript={'00' * 10001}"],
+            "Invalid -minescript: script exceeds 10000 bytes.",
+            match=ErrorMatch.PARTIAL_REGEX,
+        )
 
         self.log.info("-mine with -mineaddress auto-starts")
         # Chain already has blocks (recent tips), so the node is past IBD and the
@@ -132,7 +164,45 @@ class MiningServiceTest(QuicksilverTestFramework):
         assert startup_log.index(b"mining service constructed") < startup_log.index(b"init message: Node online"), \
             "mining service was constructed after RPC became callable"
         self.wait_until(lambda: node.getminingstatus()["blocks_found"] >= 1, timeout=30)
-        assert_equal(node.getminingstatus()["active"], True)
+        st = node.getminingstatus()
+        assert_equal(st["active"], True)
+        assert_equal(st["address"], addr)
+        assert_equal(st["payout_script"], address_to_scriptpubkey(addr).hex())
+        node.stopmining()
+
+        self.log.info("-mine with -minescript mines the full subsidy to the raw script")
+        script_start_height = node.getblockcount()
+        self.stop_node(0)
+        log_offset = node.debug_log_path.stat().st_size
+        self.start_node(0, ["-mine", "-minescript=6A"])
+        self.wait_until(lambda: node.getblockcount() > script_start_height, timeout=30)
+        st = node.getminingstatus()
+        assert_equal(st["active"], True)
+        assert_equal(st["address"], "")
+        assert_equal(st["payout_script"], "6a")
+        startup_log = node.debug_log_path.read_bytes()[log_offset:]
+        assert b"up miner=background payout=script:6a" in startup_log
+
+        height = script_start_height + 1
+        coinbase = node.getblock(node.getblockhash(height), 2)["tx"][0]
+        assert_equal(coinbase["vout"][0]["output_script"]["hex"], "6a")
+        assert_equal(coinbase["vout"][0]["value"], quicksilver_sandbox_subsidy(height))
+
+        self.log.info("No-argument startmining resumes and is idempotent on -minescript")
+        node.stopmining()
+        res = node.startmining()
+        assert_equal(res["active"], True)
+        assert_equal(res["address"], "")
+        assert_equal(res["payout_script"], "6a")
+        again = node.startmining()
+        assert_equal(again["active"], True)
+        assert_equal(again["payout_script"], "6a")
+
+        self.log.info("An explicit address remains allowed with -minescript configured")
+        node.stopmining()
+        explicit = node.startmining(addr)
+        assert_equal(explicit["address"], addr)
+        assert_equal(explicit["payout_script"], address_to_scriptpubkey(addr).hex())
         node.stopmining()
 
 

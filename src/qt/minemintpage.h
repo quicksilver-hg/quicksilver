@@ -23,12 +23,13 @@ public:
 
     struct StatusText {
         QString block_mining;
+        QString payout;
         QString solver;
         QString attempts;
         QString health;
         bool show_configure_solver{false};
     };
-    //! The four Mine/Mint readings that depend on whether solving can run.
+    //! Pure formatting for the Mine/Mint status readings.
     //! Pure: no widget. setStatus applies this and nothing else decides those rows.
     static StatusText statusTextForTesting(const interfaces::MiningStatus& status);
 

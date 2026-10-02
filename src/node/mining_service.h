@@ -79,6 +79,7 @@ private:
 struct MiningStatus {
     bool active{false};
     std::string address;                 //!< payout address (empty if never started)
+    std::string payout_script;           //!< payout script, lowercase hex (empty if never started)
     int64_t blocks_found{0};             //!< blocks mined this session
     CAmount coins_minted_session{0};     //!< sum of coinbase value of blocks mined this session
     uint64_t attempts{0};                //!< graphs attempted this session
@@ -181,6 +182,10 @@ bool BlockSolvingPossible(uint8_t edgebits);
 //! Decode an address and start the service on it. Idempotent when the service
 //! is already active on the SAME address; errors when active on a different one.
 util::Result<void> StartMining(MiningService& svc, const std::string& payout_address);
+
+//! Start the service on a raw payout script. Idempotent when already active on
+//! the same script in raw-script mode; errors when active on a different target.
+util::Result<void> StartMining(MiningService& svc, const CScript& payout_script);
 
 // Returns true if the background miner should defer instead of building on the
 // current tip: the node is either still importing blocks from disk, or it knows
