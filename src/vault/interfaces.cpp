@@ -397,6 +397,11 @@ public:
         tx_status = MakeVaultTxStatus(*m_vault, mi->second);
         return true;
     }
+    bool spendsUnconfirmedChange(const CTransaction& tx) override
+    {
+        LOCK(m_vault->cs_vault);
+        return SpendsUnconfirmedChange(*m_vault, tx.vin);
+    }
     bool tryGetVaultTxDetails(const uint256& txid,
                               VaultTx& tx,
                               VaultTxStatus& tx_status,

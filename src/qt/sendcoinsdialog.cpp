@@ -49,23 +49,6 @@
 using common::PSQTError;
 using vault::CCoinControl;
 
-// An input spends unconfirmed change when its previous transaction is this
-// vault's own and still has depth 0. getVaultTx answers "own" (spendable
-// debit); it does not carry depth, so tryGetTxStatus answers that.
-static bool SpendsUnconfirmedChange(interfaces::Vault& vault, const CTransaction& tx)
-{
-    for (const CTxIn& input : tx.vin) {
-        const interfaces::VaultTx prev{vault.getVaultTx(input.prevout.hash)};
-        if (!prev.tx || prev.debit <= 0) continue;
-        interfaces::VaultTxStatus status;
-        int num_blocks{0};
-        int64_t block_time{0};
-        if (!vault.tryGetTxStatus(input.prevout.hash, status, num_blocks, block_time)) continue;
-        if (status.depth_in_main_chain == 0) return true;
-    }
-    return false;
-}
-
 namespace {
 struct PreparedSendResult {
     std::unique_ptr<VaultModelTransaction> transaction;
@@ -305,7 +288,7 @@ bool SendCoinsDialog::PrepareSendText(QString& question_string, QString& informa
     }
     question_string.append("<br /><br />");
     question_string.append(tr("Sending uses proof-of-work. Nothing is deducted from the amount; the full amount arrives after this desktop solves the required work."));
-    if (m_current_transaction->getWtx() && SpendsUnconfirmedChange(model->vault(), *m_current_transaction->getWtx())) {
+    if (m_current_transaction->getWtx() && model->vault().spendsUnconfirmedChange(*m_current_transaction->getWtx())) {
         question_string.append("<br /><br />");
         question_string.append(tr("This transfer spends change from an earlier transfer that has not confirmed yet. If that transfer is dropped, this one fails too and its work is lost. To avoid this, wait for the earlier transfer to confirm."));
     }

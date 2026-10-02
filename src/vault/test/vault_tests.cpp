@@ -10,6 +10,7 @@
 #include <future>
 #include <memory>
 #include <stdint.h>
+#include <thread>
 #include <vector>
 
 #include <addresstype.h>
@@ -111,6 +112,69 @@ private:
 };
 
 BOOST_FIXTURE_TEST_SUITE(vault_tests, VaultTestingSetup)
+
+BOOST_FIXTURE_TEST_CASE(spends_unconfirmed_change_waits_for_the_vault_lock, TestChain100Setup)
+{
+    std::unique_ptr<interfaces::VaultLoader> vault_loader = interfaces::MakeVaultLoader(*m_node.chain, *Assert(m_node.args));
+    std::shared_ptr<CVault> vault = CreateSyncedVault(
+        *m_node.chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey);
+    std::unique_ptr<interfaces::Vault> vault_interface = interfaces::MakeVault(*vault_loader->context(), vault);
+    BOOST_REQUIRE(vault_interface);
+
+    CMutableTransaction parent;
+    parent.vin.emplace_back(m_coinbase_txns.back()->GetHash(), 0);
+    parent.vout.emplace_back(COIN, CScript() << OP_TRUE);
+    vault->AddToVault(MakeTransactionRef(parent), TxStateInRelayPool{});
+    CMutableTransaction child;
+    child.vin.emplace_back(parent.GetHash(), 0);
+
+    // The holder keeps the lock until the non-blocking read has been checked, so
+    // that check cannot race the release however slowly this thread runs.
+    std::promise<void> lock_acquired;
+    std::promise<void> nonblocking_read_checked;
+    std::promise<void> lock_releasing;
+    std::future<void> nonblocking_read_checked_future = nonblocking_read_checked.get_future();
+    std::future<void> lock_releasing_future = lock_releasing.get_future();
+    std::future<void> lock_holder = std::async(std::launch::async, [&] {
+        LOCK(vault->cs_vault);
+        lock_acquired.set_value();
+        nonblocking_read_checked_future.wait();
+        std::this_thread::sleep_for(std::chrono::milliseconds{200});
+        lock_releasing.set_value();
+    });
+    lock_acquired.get_future().wait();
+
+    interfaces::VaultTxStatus status;
+    int num_blocks{0};
+    int64_t block_time{0};
+    BOOST_CHECK(!vault_interface->tryGetTxStatus(parent.GetHash(), status, num_blocks, block_time));
+    nonblocking_read_checked.set_value();
+    BOOST_CHECK(vault_interface->spendsUnconfirmedChange(CTransaction{child}));
+    BOOST_CHECK(lock_releasing_future.wait_for(std::chrono::milliseconds{0}) == std::future_status::ready);
+
+    lock_holder.get();
+
+    const CBlockIndex* tip{WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Tip())};
+    BOOST_REQUIRE(tip);
+    CMutableTransaction confirmed_parent;
+    confirmed_parent.vin.emplace_back(m_coinbase_txns[m_coinbase_txns.size() - 2]->GetHash(), 0);
+    confirmed_parent.vout.emplace_back(COIN, CScript() << OP_TRUE);
+    vault->AddToVault(MakeTransactionRef(confirmed_parent),
+                      TxStateConfirmed{tip->GetBlockHash(), tip->nHeight, /*index=*/0});
+    CMutableTransaction confirmed_child;
+    confirmed_child.vin.emplace_back(confirmed_parent.GetHash(), 0);
+    BOOST_CHECK(!vault_interface->spendsUnconfirmedChange(CTransaction{confirmed_child}));
+
+    CMutableTransaction foreign_parent;
+    foreign_parent.vin.emplace_back(Txid::FromUint256(m_rng.rand256()), 0);
+    foreign_parent.vout.emplace_back(COIN, CScript() << OP_TRUE);
+    vault->AddToVault(MakeTransactionRef(foreign_parent), TxStateInRelayPool{});
+    CMutableTransaction foreign_child;
+    foreign_child.vin.emplace_back(foreign_parent.GetHash(), 0);
+    BOOST_CHECK(!vault_interface->spendsUnconfirmedChange(CTransaction{foreign_child}));
+}
 
 BOOST_FIXTURE_TEST_CASE(transaction_creation_readiness_distinguishes_lock_contention, TestChain100Setup)
 {

@@ -51,6 +51,17 @@ TRACEPOINT_SEMAPHORE(coin_selection, aps_create_tx_internal);
 namespace vault {
 static constexpr size_t OUTPUT_GROUP_MAX_ENTRIES{100};
 
+bool SpendsUnconfirmedChange(const CVault& vault, const std::vector<CTxIn>& vin)
+{
+    AssertLockHeld(vault.cs_vault);
+    for (const CTxIn& input : vin) {
+        const CVaultTx* prev = vault.GetVaultTx(input.prevout.hash);
+        if (!prev || !vault.IsFromMe(*prev->tx)) continue;
+        if (vault.GetTxDepthInMainChain(*prev) == 0) return true;
+    }
+    return false;
+}
+
 //! Weight and with-witness byte size of one signed input. Two numbers because
 //! weight is 3*base + total: it cannot be divided back into bytes after the fact,
 //! so the split has to be carried from where it is known.

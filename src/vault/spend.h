@@ -41,6 +41,9 @@ static constexpr int VAULT_ANCHOR_DEPTH{6};
 /** The height a per-tx proof should anchor to: VAULT_ANCHOR_DEPTH below the tip. */
 util::Result<int> TxPowAnchorHeight(CVault& vault);
 
+//! True when any input's previous transaction is this vault's own and has depth 0 (G-09).
+bool SpendsUnconfirmedChange(const CVault& vault, const std::vector<CTxIn>& vin) EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault);
+
 /** Exact final transaction inputs to the byte-priced proof target. */
 struct FinalTxPow {
     uint64_t bytes;

@@ -206,6 +206,9 @@ public:
                                 int& num_blocks,
                                 int64_t& block_time) = 0;
 
+    //! Whether the transaction spends this vault's own unconfirmed change. Blocks on the vault lock.
+    virtual bool spendsUnconfirmedChange(const CTransaction& tx) = 0;
+
     //! Try to get transaction details, if possible without blocking and with an initialized vault tip.
     virtual bool tryGetVaultTxDetails(const uint256& txid,
                                       VaultTx& tx,

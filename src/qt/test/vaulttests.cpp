@@ -219,6 +219,7 @@ public:
     interfaces::VaultTx getVaultTx(const uint256&) override { return {}; }
     std::set<interfaces::VaultTx> getVaultTxs() override { return {}; }
     bool tryGetTxStatus(const uint256&, interfaces::VaultTxStatus&, int&, int64_t&) override { return false; }
+    bool spendsUnconfirmedChange(const CTransaction&) override { return false; }
     bool tryGetVaultTxDetails(const uint256&, interfaces::VaultTx&, interfaces::VaultTxStatus&, interfaces::VaultOrderForm&, bool&, int&) override { return false; }
     std::optional<common::PSQTError> fillPSQT(int, bool, bool, size_t*, PartiallySignedQuicksilverTransaction&, bool&) override { return {}; }
     interfaces::VaultBalances getBalances() override
