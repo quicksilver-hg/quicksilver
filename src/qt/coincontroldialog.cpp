@@ -578,6 +578,17 @@ void CoinControlDialog::updateView()
             itemOutput->setText(COLUMN_CONFIRMATIONS, QString::number(out.depth_in_main_chain));
             itemOutput->setData(COLUMN_CONFIRMATIONS, Qt::UserRole, QVariant((qlonglong)out.depth_in_main_chain));
 
+            // G-09: spending this vault's own unconfirmed change ties the new transfer to an earlier one that can still be dropped
+            if (out.is_unconfirmed_change) {
+                itemOutput->setText(COLUMN_CONFIRMATIONS, tr("%1 (unconfirmed change)").arg(out.depth_in_main_chain));
+                const QString tooltip = tr("Change from an earlier transfer that has not confirmed yet. "
+                                           "A transfer that spends it will fail if the earlier one is dropped. "
+                                           "To avoid this, wait for the earlier transfer to confirm.");
+                for (int column = 0; column < ui->treeWidget->columnCount(); ++column) {
+                    itemOutput->setToolTip(column, tooltip);
+                }
+            }
+
             // transaction hash
             itemOutput->setData(COLUMN_ADDRESS, TxHashRole, QString::fromStdString(output.hash.GetHex()));
 

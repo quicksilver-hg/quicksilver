@@ -51,13 +51,18 @@ TRACEPOINT_SEMAPHORE(coin_selection, aps_create_tx_internal);
 namespace vault {
 static constexpr size_t OUTPUT_GROUP_MAX_ENTRIES{100};
 
+bool IsUnconfirmedChange(const CVault& vault, const CVaultTx& prev)
+{
+    AssertLockHeld(vault.cs_vault);
+    return vault.IsFromMe(*prev.tx) && vault.GetTxDepthInMainChain(prev) == 0;
+}
+
 bool SpendsUnconfirmedChange(const CVault& vault, const std::vector<CTxIn>& vin)
 {
     AssertLockHeld(vault.cs_vault);
     for (const CTxIn& input : vin) {
         const CVaultTx* prev = vault.GetVaultTx(input.prevout.hash);
-        if (!prev || !vault.IsFromMe(*prev->tx)) continue;
-        if (vault.GetTxDepthInMainChain(*prev) == 0) return true;
+        if (prev && IsUnconfirmedChange(vault, *prev)) return true;
     }
     return false;
 }

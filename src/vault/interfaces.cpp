@@ -116,6 +116,7 @@ VaultTxOut MakeVaultTxOut(const CVault& vault,
     result.time = wtx.GetTxTime();
     result.depth_in_main_chain = depth;
     result.is_spent = vault.IsSpent(COutPoint(wtx.GetHash(), n));
+    result.is_unconfirmed_change = IsUnconfirmedChange(vault, wtx);
     return result;
 }
 
@@ -127,6 +128,8 @@ VaultTxOut MakeVaultTxOut(const CVault& vault,
     result.time = output.time;
     result.depth_in_main_chain = output.depth;
     result.is_spent = vault.IsSpent(output.outpoint);
+    const CVaultTx* wtx = vault.GetVaultTx(output.outpoint.hash);
+    result.is_unconfirmed_change = wtx && IsUnconfirmedChange(vault, *wtx);
     return result;
 }
 

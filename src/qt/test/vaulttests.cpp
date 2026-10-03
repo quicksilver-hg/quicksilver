@@ -21,6 +21,7 @@
 #include <qt/agentallotmentpage.h>
 #include <qt/askpassphrasedialog.h>
 #include <qt/clientmodel.h>
+#include <qt/coincontroldialog.h>
 #include <qt/desktoplaunchpage.h>
 #include <qt/minemintpage.h>
 #include <qt/miningmodel.h>
@@ -87,6 +88,7 @@
 #include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QScrollArea>
 #include <QScopedPointer>
 #include <QSettings>
@@ -98,6 +100,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QToolButton>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 
 using vault::AddVault;
@@ -1703,6 +1706,89 @@ void VaultTests::sendConfirmationNamesUnconfirmedChange()
     QVERIFY(unconfirmed_txid.IsNull());
     QVERIFY(unconfirmed_text.contains(QStringLiteral("Sending uses proof-of-work")));
     QVERIFY(unconfirmed_text.contains(warning));
+}
+
+void VaultTests::coinControlMarksUnconfirmedChange()
+{
+    // The send-flow chain again: five mature coinbases and the sandbox no-cycle
+    // proof, so one real transfer leaves this vault holding depth-0 change.
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    for (int i = 0; i < 5; ++i) {
+        test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+    }
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
+    MiniGUI mini_gui(m_node, platformStyle.get());
+    mini_gui.initModelForVault(m_node, vault, platformStyle.get());
+
+    const uint256 parent_txid = SendCoins(*vault, mini_gui.sendCoinsDialog, PKHash(), COIN);
+    QVERIFY(!parent_txid.IsNull());
+
+    COutPoint change_outpoint;
+    COutPoint confirmed_outpoint;
+    {
+        LOCK(vault->cs_vault);
+        for (const vault::COutput& coin : vault::AvailableCoins(*vault).All()) {
+            if (coin.outpoint.hash == parent_txid) {
+                QCOMPARE(coin.depth, 0);
+                change_outpoint = coin.outpoint;
+            } else if (coin.depth >= 1) {
+                confirmed_outpoint = coin.outpoint;
+            }
+        }
+    }
+    QVERIFY(!change_outpoint.IsNull());
+    QVERIFY(!confirmed_outpoint.IsNull());
+
+    vault::CCoinControl coin_control;
+    CoinControlDialog dialog(coin_control, mini_gui.vaultModel.get(), platformStyle.get());
+    dialog.findChild<QRadioButton*>("radioListMode")->click();
+    QTreeWidget* tree = dialog.findChild<QTreeWidget*>("treeWidget");
+    QVERIFY(tree);
+
+    // CoinControlDialog's column and role enums are private; these are their values.
+    constexpr int column_address{3};
+    constexpr int column_confirmations{5};
+    constexpr int tx_hash_role{Qt::UserRole};
+    constexpr int vout_role{Qt::UserRole + 1};
+    const auto find_row = [&](const COutPoint& outpoint) -> QTreeWidgetItem* {
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            QTreeWidgetItem* item = tree->topLevelItem(i);
+            if (item->data(column_address, tx_hash_role).toString() == QString::fromStdString(outpoint.hash.GetHex()) &&
+                item->data(column_address, vout_role).toUInt() == outpoint.n) {
+                return item;
+            }
+        }
+        return nullptr;
+    };
+
+    const QString tooltip = QStringLiteral(
+        "Change from an earlier transfer that has not confirmed yet. "
+        "A transfer that spends it will fail if the earlier one is dropped. "
+        "To avoid this, wait for the earlier transfer to confirm.");
+
+    QTreeWidgetItem* change_row = find_row(change_outpoint);
+    QVERIFY(change_row);
+    QCOMPARE(change_row->text(column_confirmations), QStringLiteral("0 (unconfirmed change)"));
+    QCOMPARE(change_row->data(column_confirmations, Qt::UserRole).toLongLong(), qlonglong{0});
+    for (int column = 0; column < tree->columnCount(); ++column) {
+        QCOMPARE(change_row->toolTip(column), tooltip);
+    }
+    QVERIFY(change_row->flags() & Qt::ItemIsEnabled);
+    QVERIFY(change_row->flags() & Qt::ItemIsUserCheckable);
+    QVERIFY(!change_row->isDisabled());
+
+    QTreeWidgetItem* confirmed_row = find_row(confirmed_outpoint);
+    QVERIFY(confirmed_row);
+    QVERIFY(confirmed_row->text(column_confirmations).toInt() >= 1);
+    QVERIFY(!confirmed_row->text(column_confirmations).contains(QStringLiteral("unconfirmed change")));
+    for (int column = 0; column < tree->columnCount(); ++column) {
+        QVERIFY(confirmed_row->toolTip(column) != tooltip);
+    }
 }
 
 void VaultTests::mineMintPageRendersStatus()

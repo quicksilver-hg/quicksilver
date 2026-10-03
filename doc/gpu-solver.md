@@ -137,8 +137,9 @@ another. Two consequences:
   an architecture mismatch gives, so it proves nothing about whether you picked
   `GPU_ARCH` correctly. Only a probe on the target card does that.
 
-The project's own `gpu_parity_tests` is skipped for the same reason when `ctest`
-runs on a machine with no CUDA device.
+The project's own `gpu_parity_tests` is skipped whenever `CUCKATOO_GPU_SOLVER`
+is unset, whether or not the machine has a card. With it set but no usable
+device, the solver exits 4 and the test fails; it does not skip.
 
 | Status | Meaning |
 | --- | --- |

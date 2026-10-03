@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <functional>
+#include <map>
 #include <future>
 #include <memory>
 #include <stdint.h>
@@ -174,6 +175,104 @@ BOOST_FIXTURE_TEST_CASE(spends_unconfirmed_change_waits_for_the_vault_lock, Test
     CMutableTransaction foreign_child;
     foreign_child.vin.emplace_back(foreign_parent.GetHash(), 0);
     BOOST_CHECK(!vault_interface->spendsUnconfirmedChange(CTransaction{foreign_child}));
+}
+
+//! The sandbox no-cycle proof lets a committed transfer reach the relay pool, so its change is listed at depth 0.
+struct NoCycleTestChain100Setup : TestChain100Setup {
+    NoCycleTestChain100Setup()
+        : TestChain100Setup{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}}
+    {
+    }
+};
+
+BOOST_FIXTURE_TEST_CASE(coin_list_marks_unconfirmed_change, NoCycleTestChain100Setup)
+{
+    // Two mature coinbases: one funds the transfer below, one stays confirmed.
+    for (int i = 0; i < 2; ++i) {
+        CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    }
+    std::unique_ptr<interfaces::VaultLoader> vault_loader = interfaces::MakeVaultLoader(*m_node.chain, *Assert(m_node.args));
+    std::shared_ptr<CVault> vault = CreateSyncedVault(
+        *m_node.chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey);
+    std::unique_ptr<interfaces::Vault> vault_interface = interfaces::MakeVault(*vault_loader->context(), vault);
+    BOOST_REQUIRE(vault_interface);
+
+    // An own transfer to someone else, left at depth 0: its change is this vault's unconfirmed change.
+    CTransactionRef parent;
+    {
+        CCoinControl coin_control;
+        auto res = CreateTransaction(*vault, {CRecipient{PKHash(GenerateRandomKey().GetPubKey()), COIN}}, /*change_pos=*/std::nullopt, coin_control);
+        BOOST_REQUIRE(res);
+        parent = res->tx;
+    }
+    vault->SetBroadcastTransactions(true);
+    vault->CommitTransaction(parent, {}, {});
+    // This vault is not subscribed to chain notifications, so record the relay-pool
+    // acceptance the notification would have, after checking it happened.
+    BOOST_REQUIRE(m_node.chain->isInRelayPool(parent->GetHash()));
+    WITH_LOCK(vault->cs_vault, vault->mapVault.at(parent->GetHash()).m_state = TxStateInRelayPool{});
+
+    const auto list_coins = [&] {
+        std::map<COutPoint, interfaces::VaultTxOut> by_outpoint;
+        interfaces::Vault::CoinsList coins;
+        BOOST_REQUIRE(vault_interface->tryListCoins(coins));
+        for (const auto& [dest, group] : coins) {
+            for (const auto& [outpoint, out] : group) by_outpoint.emplace(outpoint, out);
+        }
+        return by_outpoint;
+    };
+
+    COutPoint change_outpoint;
+    COutPoint confirmed_outpoint;
+    for (const auto& [outpoint, out] : list_coins()) {
+        if (outpoint.hash == parent->GetHash()) {
+            BOOST_CHECK_EQUAL(out.depth_in_main_chain, 0);
+            BOOST_CHECK(out.is_unconfirmed_change);
+            change_outpoint = outpoint;
+        } else {
+            BOOST_CHECK(out.depth_in_main_chain >= 1);
+            BOOST_CHECK(!out.is_unconfirmed_change);
+            confirmed_outpoint = outpoint;
+        }
+    }
+    BOOST_REQUIRE(!change_outpoint.IsNull());
+    BOOST_REQUIRE(!confirmed_outpoint.IsNull());
+
+    // A depth-0 transaction paying this vault that this vault did not send is not its change.
+    CMutableTransaction foreign;
+    foreign.vin.emplace_back(Txid::FromUint256(m_rng.rand256()), 0);
+    foreign.vout.emplace_back(COIN, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    vault->AddToVault(MakeTransactionRef(foreign), TxStateInRelayPool{});
+    const COutPoint foreign_outpoint{foreign.GetHash(), 0};
+
+    std::vector<interfaces::VaultTxOut> got;
+    BOOST_REQUIRE(vault_interface->tryGetCoins({change_outpoint, confirmed_outpoint, foreign_outpoint}, got));
+    BOOST_REQUIRE_EQUAL(got.size(), 3U);
+    BOOST_CHECK(got[0].is_unconfirmed_change);
+    BOOST_CHECK(!got[1].is_unconfirmed_change);
+    BOOST_CHECK_EQUAL(got[2].depth_in_main_chain, 0);
+    BOOST_CHECK(!got[2].is_unconfirmed_change);
+
+    // Once a block confirms the transfer, its change is no longer marked.
+    CreateAndProcessBlock({CMutableTransaction(*parent)}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    {
+        LOCK(vault->cs_vault);
+        LOCK(Assert(m_node.chainman)->GetMutex());
+        const CBlockIndex* tip{m_node.chainman->ActiveChain().Tip()};
+        vault->SetLastBlockProcessed(tip->nHeight, tip->GetBlockHash());
+        vault->mapVault.at(parent->GetHash()).m_state = TxStateConfirmed{tip->GetBlockHash(), tip->nHeight, /*index=*/1};
+    }
+    const auto confirmed_coins = list_coins();
+    const auto it = confirmed_coins.find(change_outpoint);
+    BOOST_REQUIRE(it != confirmed_coins.end());
+    BOOST_CHECK_EQUAL(it->second.depth_in_main_chain, 1);
+    BOOST_CHECK(!it->second.is_unconfirmed_change);
+    BOOST_REQUIRE(vault_interface->tryGetCoins({change_outpoint}, got));
+    BOOST_REQUIRE_EQUAL(got.size(), 1U);
+    BOOST_CHECK_EQUAL(got[0].depth_in_main_chain, 1);
+    BOOST_CHECK(!got[0].is_unconfirmed_change);
 }
 
 BOOST_FIXTURE_TEST_CASE(transaction_creation_readiness_distinguishes_lock_contention, TestChain100Setup)
