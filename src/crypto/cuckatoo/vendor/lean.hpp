@@ -113,6 +113,8 @@ public:
   u32 ntrims;
   bool mutatenonce;
   trim_barrier barry;
+  const char *f265_hdr = nullptr;  // Quicksilver (F-265 capture): the keyed header, for replay
+  u32 f265_len = 0;
 
   cuckoo_ctx(u32 n_threads, u32 n_trims, u32 max_sols, bool mutate_nonce) : alive(n_threads), nonleaf(NNODES1 >> PART_BITS),
       cg(MAXEDGES, MAXEDGES, max_sols, IDXSHIFT, (char *)nonleaf.bits), barry(n_threads) {
@@ -126,6 +128,8 @@ public:
   }
   void setheadernonce(char* headernonce, const u32 len, const u32 nce) {
     nonce = nce;
+    f265_hdr = headernonce;
+    f265_len = len;
     if (mutatenonce) {
       ((u32 *)headernonce)[len/sizeof(u32)-1] = htole32_internal(nonce); // place nonce at end
     }
@@ -266,6 +270,10 @@ void *worker(void *vp) {
     return nullptr;
   print_log("%d trims completed  %d edges left\n", round-1, alive.count());
   ctx->cg.reset();
+  ctx->cg.f265_hdr = ctx->f265_hdr;  // Quicksilver (F-265 capture): replay data, see graph.hpp
+  ctx->cg.f265_len = ctx->f265_len;
+  ctx->cg.f265_nonce = ctx->nonce;
+  ctx->cg.f265_nthreads = ctx->nthreads;
   word_t nloops = NEDGES / 64;
   for (word_t loop = 0; loop < nloops; loop++) {
     word_t block = 64 * loop;

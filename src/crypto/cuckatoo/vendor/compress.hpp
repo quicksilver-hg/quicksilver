@@ -16,6 +16,9 @@ public:
   const word_t NIL = ~(word_t)0;
   word_t *nodes;
   bool sharedmem;
+  // Quicksilver (F-265 capture): compress() silently maps a node to `parity` once the
+  // table is full. Counted so graph::add_compress_edge can log it; the mapping is unchanged.
+  word_t overflows = 0;
 
   compressor(u32 nodebits, u32 compressbits, char *bytes) {
     NODEBITS = nodebits;
@@ -55,6 +58,7 @@ public:
   void reset() {
     memset(nodes, (char)NIL, (SIZE * sizeof(word_t)));
     npairs = 0;
+    overflows = 0;
   }
 
   word_t compress(word_t u) {
@@ -66,6 +70,7 @@ public:
       if (cu == NIL) {
         if (npairs >= SIZE/2) {
           print_log("NODE OVERFLOW at %x\n", u << 1 | parity);
+          ++overflows;
           return parity;
         }
         nodes[ui] = u << SIZEBITS1 | npairs;

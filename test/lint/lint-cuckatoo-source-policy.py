@@ -183,9 +183,13 @@ def check_tree(repo_root: Path) -> list[str]:
 
     # Tokens match any include form (`"vendor/cuckatoo.h"` or
     # `<crypto/cuckatoo/vendor/cuckatoo.h>`). Allowlist is the filename stem
-    # plus the token it may mention — currently only the F-255 verify-code TU.
+    # plus the token it may mention — the F-255 verify-code TU, and the F-265
+    # capture TU, which drives the lean solver's graph directly in its own
+    # namespace (as bench/solve_one.cpp.in does) so a links[] overflow can be
+    # staged inside a real allocation.
     allowed_test_vendor_includes = {
         "cuckatoo_verify_codes_tests.cpp": ("vendor/cuckatoo.h",),
+        "cuckatoo_f265_capture_tests.cpp": ("vendor/lean.cpp",),
     }
     test_guarded_tokens = (
         "vendor/cuckatoo.h",

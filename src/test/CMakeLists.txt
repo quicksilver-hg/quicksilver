@@ -41,6 +41,7 @@ add_executable(test_quicksilver
   cuckatoo_bench_gpu_csv_tests.cpp
   cuckatoo_bench_registry_tests.cpp
   cuckatoo_bench_solve_tests.cpp
+  cuckatoo_f265_capture_tests.cpp
   cuckatoo_tests.cpp
   cuckatoo_verify_codes_tests.cpp
   cuckoocache_tests.cpp

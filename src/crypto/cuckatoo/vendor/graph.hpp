@@ -32,6 +32,35 @@ public:
   proof *sols;
   u32 nsols;
 
+  // Quicksilver (F-265 capture). links[] holds 2*MAXEDGES halfedges and add_edge never
+  // bounds nlinks, so a graph with more than MAXEDGES edges left after trimming writes
+  // past links[] into the compressor tables that follow it in the shared buffer. CI's ASan
+  // leg sees only the SEGV at the end of that chain. Owner ruling 2026-10-01: log the
+  // overflow once per graph, with what is needed to replay the graph offline, and carry on
+  // exactly as before -- the solve itself does not change. The caller sets the replay
+  // fields after reset(); f265_out == nullptr means stderr, which reaches the CI log.
+  const char *f265_hdr = nullptr;
+  u32 f265_len = 0, f265_nonce = 0, f265_nthreads = 0;
+  FILE *f265_out = nullptr;
+  u32 f265_logged = 0; // one bit per kind, cleared by reset()
+  static constexpr u32 F265_LINK_OVERFLOW = 1, F265_NODE_OVERFLOW = 2;
+
+  void f265_capture(u32 kind, const char *what, unsigned long long a, unsigned long long b) {
+    if (f265_logged & kind)
+      return;
+    f265_logged |= kind;
+    char line[1024];
+    int n = snprintf(line, sizeof(line),
+                     "F265-CAPTURE %s a=%llu b=%llu nlinks=%llu MAXEDGES=%llu MAXNODES=%llu EDGEBITS=%d nthreads=%u nonce=%u len=%u hdr=",
+                     what, a, b, (unsigned long long)nlinks, (unsigned long long)MAXEDGES,
+                     (unsigned long long)MAXNODES, (int)EDGEBITS, f265_nthreads, f265_nonce, f265_len);
+    for (u32 i = 0; f265_hdr && i < f265_len && n > 0 && n + 3 < (int)sizeof(line); i++)
+      n += snprintf(line + n, sizeof(line) - n, "%02x", (unsigned char)f265_hdr[i]);
+    FILE *out = f265_out ? f265_out : stderr;
+    fprintf(out, "%s\n", line); // one write, so a crash right after still leaves the whole line
+    fflush(out);
+  }
+
   graph(word_t maxedges, word_t maxnodes, u32 maxsols, u32 compressbits) : visited(maxedges) {
     MAXEDGES = maxedges;
     MAXNODES = maxnodes;
@@ -85,6 +114,7 @@ public:
       compressu->reset();
       compressv->reset();
     }
+    f265_logged = 0;
     resetcounts();
   }
 
@@ -125,6 +155,8 @@ public:
   }
 
   bool add_edge(word_t u, word_t v) {
+    if ((unsigned long long)nlinks + 2 > 2ULL * MAXEDGES)
+      f265_capture(F265_LINK_OVERFLOW, "LINK OVERFLOW", u, v);
     assert(u < MAXNODES);
     assert(v < MAXNODES);
     v += MAXNODES; // distinguish partitions
@@ -148,6 +180,9 @@ public:
   }
 
   bool add_compress_edge(word_t u, word_t v) {
-    return add_edge(compressu->compress(u), compressv->compress(v));
+    word_t cu = compressu->compress(u), cv = compressv->compress(v);
+    if (compressu->overflows || compressv->overflows)
+      f265_capture(F265_NODE_OVERFLOW, "NODE OVERFLOW", compressu->npairs, compressv->npairs);
+    return add_edge(cu, cv);
   }
 };

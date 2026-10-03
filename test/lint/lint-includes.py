@@ -40,6 +40,7 @@ EXPECTED_BOOST_INCLUDES = [
 EXPECTED_CUCKATOO_CPP_INCLUDES = [
     'src/crypto/cuckatoo/solve_19.cpp:#include "vendor/lean.cpp"',
     'src/crypto/cuckatoo/solve_28.cpp:#include "vendor/lean.cpp"',
+    'src/test/cuckatoo_f265_capture_tests.cpp:#include <crypto/cuckatoo/vendor/lean.cpp>',  # F-265 capture test
 ]
 
 EXPECTED_CUCKATOO_QUOTE_INCLUDES = [
