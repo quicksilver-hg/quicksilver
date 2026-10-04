@@ -2,12 +2,15 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 //
-// F-265 capture: the vendored lean solver's graph logs a links[] overflow and a
-// compressor node overflow once per graph, with the data needed to replay the
-// graph, and otherwise behaves exactly as before (owner ruling 2026-10-01).
+// F-265: the vendored lean solver's graph logs a links[] overflow and a compressor
+// node overflow once per graph, with the data needed to replay the graph (owner
+// ruling 2026-10-01), and refuses the edge and abandons the graph instead of
+// writing past it (owner ruling 2026-10-03). The solver skips a graph with more
+// edges left after trimming than it has room for.
 
 #include <crypto/cuckatoo/cuckatoo.h>
 #include <crypto/cuckatoo/vendor_prelude_solve.h>
+#include <test/data/f265_nonce84_prepow.raw.h>
 
 #define EDGEBITS 19
 #define PROOFSIZE 42
@@ -29,6 +32,7 @@ namespace cuckatoo_f265_capture_e19 {
 #include <boost/test/unit_test.hpp>
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -75,10 +79,10 @@ void SetReplay(Graph& cg, FILE* out)
 
 BOOST_AUTO_TEST_SUITE(cuckatoo_f265_capture_tests)
 
-BOOST_AUTO_TEST_CASE(link_overflow_is_logged_once_per_graph_and_the_edge_is_still_added)
+BOOST_AUTO_TEST_CASE(link_overflow_is_logged_once_per_graph_and_the_edge_is_refused)
 {
-    // Allocate room for 8 edges, then lower the bound to 2. The overflowing writes stay
-    // inside the real allocation, so the test is memory-safe and can watch add_edge carry on.
+    // Allocate room for 8 edges, then lower the bound to 2, so that a regression that
+    // writes past the bound again still stays inside the real allocation.
     Graph cg(/*maxedges=*/8, /*maxnodes=*/64, /*maxsols=*/4, /*compressbits=*/0);
     cg.MAXEDGES = 2;
     cg.reset();
@@ -90,9 +94,11 @@ BOOST_AUTO_TEST_CASE(link_overflow_is_logged_once_per_graph_and_the_edge_is_stil
     BOOST_CHECK(cg.add_edge(2, 3));
     BOOST_CHECK(Lines(out).empty()); // 4 halfedges is exactly full, not over
 
-    BOOST_CHECK(cg.add_edge(4, 5));
-    BOOST_CHECK(cg.add_edge(6, 7));
-    BOOST_CHECK_EQUAL(cg.nlinks, 8U); // the solve is unchanged: both edges were added
+    BOOST_CHECK(!cg.abandoned);
+    BOOST_CHECK(!cg.add_edge(4, 5));
+    BOOST_CHECK(!cg.add_edge(6, 7));
+    BOOST_CHECK_EQUAL(cg.nlinks, 4U); // neither edge was written
+    BOOST_CHECK(cg.abandoned);
 
     std::vector<std::string> lines = Lines(out);
     BOOST_REQUIRE_EQUAL(lines.size(), 1U);
@@ -101,8 +107,9 @@ BOOST_AUTO_TEST_CASE(link_overflow_is_logged_once_per_graph_and_the_edge_is_stil
     BOOST_CHECK_MESSAGE(Has(l, " nlinks=4 MAXEDGES=2 MAXNODES=64 EDGEBITS=19 nthreads=4 nonce=7 len=3 hdr=0a0bfe"), l);
     BOOST_CHECK_MESSAGE(l.size() >= 6 && l.compare(l.size() - 6, 6, "0a0bfe") == 0, l);
 
-    // A new graph logs again.
+    // A new graph starts whole and logs again.
     cg.reset();
+    BOOST_CHECK(!cg.abandoned);
     cg.add_edge(0, 1);
     cg.add_edge(2, 3);
     cg.add_edge(4, 5);
@@ -123,11 +130,13 @@ BOOST_AUTO_TEST_CASE(compressor_node_overflow_is_logged_once_per_graph)
     cg.add_compress_edge(4, 4);
     BOOST_CHECK(Lines(out).empty());
     BOOST_CHECK_EQUAL(cg.compressu->overflows, 0U);
+    BOOST_CHECK(!cg.abandoned);
 
-    cg.add_compress_edge(6, 6); // a third pair on each side: both tables overflow
-    cg.add_compress_edge(8, 8);
+    BOOST_CHECK(!cg.add_compress_edge(6, 6)); // a third pair on each side: both tables overflow
+    BOOST_CHECK(!cg.add_compress_edge(8, 8));
     BOOST_CHECK_EQUAL(cg.compressu->overflows, 2U);
-    BOOST_CHECK_EQUAL(cg.nlinks, 8U);
+    BOOST_CHECK_EQUAL(cg.nlinks, 4U); // neither edge was added
+    BOOST_CHECK(cg.abandoned);
 
     std::vector<std::string> lines = Lines(out);
     BOOST_REQUIRE_EQUAL(lines.size(), 1U);
@@ -136,6 +145,7 @@ BOOST_AUTO_TEST_CASE(compressor_node_overflow_is_logged_once_per_graph)
 
     cg.reset();
     BOOST_CHECK_EQUAL(cg.compressu->overflows, 0U);
+    BOOST_CHECK(!cg.abandoned);
     std::fclose(out);
 }
 
@@ -192,6 +202,62 @@ BOOST_AUTO_TEST_CASE(with_no_file_the_line_goes_to_the_installed_sink)
 
     BOOST_REQUIRE_EQUAL(g_sunk.size(), 1U);
     BOOST_CHECK_EQUAL(g_sunk[0], "F265-CAPTURE LINK OVERFLOW a=4 b=5 nlinks=4 MAXEDGES=2 MAXNODES=64 EDGEBITS=19 nthreads=4 nonce=7 len=3 hdr=0a0bfe");
+}
+
+//! Run the real e19 solver, as Solve19Bytes does, on the captured vault tx pre-image
+//! (slice DD, vault_create_tx.py, tx 10c23844...; regtest) at `nonce`.
+static E::SolverSolutions SolveCaptured(uint32_t nonce)
+{
+    const auto raw = test::data::f265_nonce84_prepow;
+    std::vector<char> buf(raw.size());
+    std::memcpy(buf.data(), raw.data(), raw.size());
+    const size_t len = buf.size();
+    for (int i = 0; i < 4; i++) buf[len - 4 + i] = (char)((nonce >> (8 * i)) & 0xff);
+    E::SolverParams params;
+    E::fill_default_params(&params);
+    params.mutate_nonce = 0;
+    params.nthreads = 4;
+    E::SolverCtx* ctx = E::create_solver_ctx(&params);
+    E::SolverSolutions sols{};
+    E::run_solver(ctx, buf.data(), (E::u32)len, nonce, /*range=*/1, &sols, nullptr);
+    E::destroy_solver_ctx(ctx);
+    return sols;
+}
+
+BOOST_AUTO_TEST_CASE(an_overfull_graph_is_skipped_and_logged)
+{
+    // The first real capture: at nonce 84 this pre-image keeps 2,239 edges after trimming
+    // (at any ntrims from 96 to 1000 and any thread count), and the e19 graph has room for
+    // 2,048. The solver used to add them all, write past links[] into the compressor tables
+    // and return 4 cycles that do not verify.
+    g_sunk.clear();
+    cuckatoo::SetF265CaptureSink(Sink);
+    const E::SolverSolutions sols = SolveCaptured(84);
+    cuckatoo::SetF265CaptureSink(nullptr);
+
+    BOOST_CHECK_EQUAL(sols.num_sols, 0U);
+    BOOST_REQUIRE_EQUAL(g_sunk.size(), 1U);
+    BOOST_CHECK_MESSAGE(g_sunk[0].rfind("F265-CAPTURE SKIP a=2239 b=2048 ", 0) == 0, g_sunk[0].substr(0, 200));
+    BOOST_CHECK_MESSAGE(Has(g_sunk[0], " nonce=84 len=12523 hdr="), g_sunk[0].substr(0, 200));
+}
+
+BOOST_AUTO_TEST_CASE(a_graph_that_fits_still_solves)
+{
+    // Nonce 173 is where the real sweep found this tx's proof.
+    g_sunk.clear();
+    cuckatoo::SetF265CaptureSink(Sink);
+    const E::SolverSolutions sols = SolveCaptured(173);
+    cuckatoo::SetF265CaptureSink(nullptr);
+
+    BOOST_CHECK(g_sunk.empty());
+    BOOST_REQUIRE_GE(sols.num_sols, 1U);
+    cuckatoo::Cycle cyc;
+    for (int j = 0; j < cuckatoo::PROOFSIZE; j++) cyc[j] = (uint32_t)sols.sols[0].proof[j];
+    const auto raw = test::data::f265_nonce84_prepow;
+    std::vector<unsigned char> buf(raw.size());
+    std::memcpy(buf.data(), raw.data(), raw.size());
+    for (int i = 0; i < 4; i++) buf[buf.size() - 4 + i] = (unsigned char)((173u >> (8 * i)) & 0xff);
+    BOOST_CHECK(cuckatoo::CuckatooVerify(cyc, cuckatoo::CuckatooSetHeader(buf.data(), (uint32_t)buf.size()), 19));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

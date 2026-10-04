@@ -274,8 +274,16 @@ void *worker(void *vp) {
   ctx->cg.f265_len = ctx->f265_len;
   ctx->cg.f265_nonce = ctx->nonce;
   ctx->cg.f265_nthreads = ctx->nthreads;
+  // Quicksilver (F-265, owner ruling 2026-10-03): a graph with more edges left than the
+  // cycle graph has room for is skipped, not built -- the vendored loop below wrote past
+  // links[] for it. The capture line is the record of the skip.
+  if (alive.count() > MAXEDGES) {
+    ctx->cg.f265_capture(ctx->cg.F265_SKIP, "SKIP", alive.count(), MAXEDGES);
+    ctx->nsols = 0;
+    return 0;
+  }
   word_t nloops = NEDGES / 64;
-  for (word_t loop = 0; loop < nloops; loop++) {
+  for (word_t loop = 0; loop < nloops && !ctx->cg.abandoned; loop++) {
     word_t block = 64 * loop;
     u64 alive64 = alive.block(block);
     for (word_t nonce = block-1; alive64; ) { // -1 compensates for 1-based ffs
@@ -283,8 +291,13 @@ void *worker(void *vp) {
       nonce += ffs; alive64 = ffs < 64 ? alive64 >> ffs : 0;  // shifting a u64 by 64 is UB
       word_t u=sipnode(&ctx->sip_keys, nonce, 0), v=sipnode(&ctx->sip_keys, nonce, 1);
       ctx->cg.add_compress_edge(u, v);
+      if (ctx->cg.abandoned) break; // a compressor is full (graph.hpp); the graph is skipped
       if (ffs & 64) break; // can't shift by 64
     }
+  }
+  if (ctx->cg.abandoned) {
+    ctx->nsols = 0;
+    return 0;
   }
   for (u32 s=0; s < ctx->cg.nsols; s++) {
     u32 j = 0, nalive = 0;

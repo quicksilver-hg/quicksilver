@@ -150,6 +150,7 @@ target_json_data_sources(test_quicksilver
 )
 target_raw_data_sources(test_quicksilver NAMESPACE test::data
   data/asmap.raw
+  data/f265_nonce84_prepow.raw
 )
 
 target_link_libraries(test_quicksilver
