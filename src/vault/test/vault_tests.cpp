@@ -177,14 +177,6 @@ BOOST_FIXTURE_TEST_CASE(spends_unconfirmed_change_waits_for_the_vault_lock, Test
     BOOST_CHECK(!vault_interface->spendsUnconfirmedChange(CTransaction{foreign_child}));
 }
 
-//! The sandbox no-cycle proof lets a committed transfer reach the relay pool, so its change is listed at depth 0.
-struct NoCycleTestChain100Setup : TestChain100Setup {
-    NoCycleTestChain100Setup()
-        : TestChain100Setup{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}}
-    {
-    }
-};
-
 BOOST_FIXTURE_TEST_CASE(coin_list_marks_unconfirmed_change, NoCycleTestChain100Setup)
 {
     // Two mature coinbases: one funds the transfer below, one stays confirmed.

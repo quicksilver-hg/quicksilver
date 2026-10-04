@@ -33,7 +33,14 @@ To add more unit tests, add `BOOST_AUTO_TEST_CASE` functions to the existing
 .cpp files in the `test/` directory or add new .cpp files that
 implement new `BOOST_AUTO_TEST_SUITE` sections.
 
-To run the GUI unit tests manually, launch `build/bin/test_quicksilver-qt`
+To run all GUI unit tests manually, launch `build/bin/test_quicksilver-qt`.
+Use `build/bin/test_quicksilver-qt <TestClass>` to run every slot in one class,
+or `build/bin/test_quicksilver-qt <TestClass> <QTest args...>` to pass the remaining
+arguments to QTest. Class names match exactly (for example, `VaultTests`).
+`build/bin/test_quicksilver-qt VaultTests coinControlMarksUnconfirmedChange` runs
+one slot; `build/bin/test_quicksilver-qt VaultTests -functions` lists its slots.
+An unknown class or a first argument starting with `-` prints usage and the
+available classes to stderr, runs no tests, and returns a non-zero exit code.
 
 To add more GUI unit tests, add them to the `src/qt/test/` directory and
 the `src/qt/test/test_main.cpp` file.

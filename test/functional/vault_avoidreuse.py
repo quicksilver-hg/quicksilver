@@ -5,6 +5,7 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the avoid_reuse and setvaultflag features."""
 
+from test_framework.authproxy import JSONRPCException
 from test_framework.test_framework import QuicksilverTestFramework
 from test_framework.util import (
     assert_approx,
@@ -274,14 +275,36 @@ class AvoidReuseTest(QuicksilverTestFramework):
         ret_addr = self.nodes[0].getnewaddress()
 
         # send multiple transactions, reusing one address
-        for _ in range(101):
-            self.nodes[0].sendtoaddress(new_addr, 1)
+        sent_txids = [self.nodes[0].sendtoaddress(new_addr, 1) for _ in range(101)]
 
-        self.generate(self.nodes[0], 1)
+        blockhash = self.generate(self.nodes[0], 1)[0]
 
         # send transaction that should not use all the available outputs
         # per the current coin selection algorithm
-        self.nodes[1].sendtoaddress(ret_addr, 5)
+        spend_txid = self.nodes[1].sendtoaddress(ret_addr, 5)
+
+        # F-10: this test fails rarely at the assert_unspent below. Log what tells the
+        # readings apart, after the spend so nothing is added between generate and the
+        # spend: listunspent0_sum ~96 means the spend took the wrong coins, 1 means the
+        # vault kept a spend its relaypool did not admit. gettransaction, not
+        # getrawtransaction, which throws in exactly that second state.
+        spend_wtx = self.nodes[1].gettransaction(spend_txid, True)
+        try:
+            relaypool_entry = "present vsize=%s" % self.nodes[1].getrelaypoolentry(spend_txid)["vsize"]
+        except JSONRPCException as e:
+            relaypool_entry = "absent error=%r" % e.error
+        unspent0 = self.nodes[1].listunspent(minconf=0)
+        block_txids = {tx["txid"] for tx in self.nodes[0].getblock(blockhash, 2)["tx"]}
+        self.log.info(
+            "F10_DIAG spend_txid=%s vin_count=%d in_relaypool=%s relaypool_entry=%s "
+            "spend_confirmations=%s spend_trusted=%s listunspent0_count=%d listunspent0_sum=%s "
+            "sent_mined=%d/%d",
+            spend_txid, len(spend_wtx["decoded"]["vin"]),
+            spend_txid in self.nodes[1].getrawrelaypool(), relaypool_entry,
+            spend_wtx.get("confirmations"), spend_wtx.get("trusted"),
+            len(unspent0), sum(u["amount"] for u in unspent0),
+            len(block_txids.intersection(sent_txids)), len(sent_txids),
+        )
 
         # getbalances and listunspent should show the remaining outputs
         # in the reused address as used/reused

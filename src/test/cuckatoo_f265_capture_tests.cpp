@@ -59,6 +59,9 @@ bool Has(const std::string& line, const std::string& part) { return line.find(pa
 
 const char HDR[] = {'\x0a', '\x0b', '\xfe'};
 
+std::vector<std::string> g_sunk;
+void Sink(const char* line) { g_sunk.emplace_back(line); }
+
 void SetReplay(Graph& cg, FILE* out)
 {
     cg.f265_hdr = HDR;
@@ -134,6 +137,61 @@ BOOST_AUTO_TEST_CASE(compressor_node_overflow_is_logged_once_per_graph)
     cg.reset();
     BOOST_CHECK_EQUAL(cg.compressu->overflows, 0U);
     std::fclose(out);
+}
+
+BOOST_AUTO_TEST_CASE(the_whole_header_is_logged_however_long)
+{
+    // F-413: a vault tx-PoW header runs to ~12 KB, and the line once stopped at 1,024
+    // characters, so the first real capture printed 447 of 12,523 bytes and could not be
+    // replayed. 4,096 bytes is past that old line by a margin.
+    std::vector<char> hdr(4096);
+    std::string hex;
+    for (size_t i = 0; i < hdr.size(); i++) {
+        hdr[i] = (char)(i * 7 + 3);
+        hex += "0123456789abcdef"[(unsigned char)hdr[i] >> 4];
+        hex += "0123456789abcdef"[(unsigned char)hdr[i] & 15];
+    }
+
+    Graph cg(/*maxedges=*/8, /*maxnodes=*/64, /*maxsols=*/4, /*compressbits=*/0);
+    cg.MAXEDGES = 2;
+    cg.reset();
+    FILE* out = std::tmpfile();
+    BOOST_REQUIRE(out);
+    SetReplay(cg, out);
+    cg.f265_hdr = hdr.data();
+    cg.f265_len = hdr.size();
+
+    cg.add_edge(0, 1);
+    cg.add_edge(2, 3);
+    cg.add_edge(4, 5);
+
+    std::vector<std::string> lines = Lines(out);
+    BOOST_REQUIRE_EQUAL(lines.size(), 1U);
+    const std::string& l = lines[0];
+    BOOST_CHECK(Has(l, " nonce=7 len=4096 hdr=" + hex));
+    BOOST_CHECK(l.size() >= hex.size() && l.compare(l.size() - hex.size(), hex.size(), hex) == 0);
+    BOOST_CHECK(!Has(l, "hdr_truncated"));
+    std::fclose(out);
+}
+
+BOOST_AUTO_TEST_CASE(with_no_file_the_line_goes_to_the_installed_sink)
+{
+    // F-414: the node installs a sink that writes to debug.log, so a capture no longer
+    // reaches stderr, which fails the functional test it happens in.
+    Graph cg(/*maxedges=*/8, /*maxnodes=*/64, /*maxsols=*/4, /*compressbits=*/0);
+    cg.MAXEDGES = 2;
+    cg.reset();
+    SetReplay(cg, /*out=*/nullptr);
+    g_sunk.clear();
+    cuckatoo::SetF265CaptureSink(Sink);
+
+    cg.add_edge(0, 1);
+    cg.add_edge(2, 3);
+    cg.add_edge(4, 5);
+    cuckatoo::SetF265CaptureSink(nullptr);
+
+    BOOST_REQUIRE_EQUAL(g_sunk.size(), 1U);
+    BOOST_CHECK_EQUAL(g_sunk[0], "F265-CAPTURE LINK OVERFLOW a=4 b=5 nlinks=4 MAXEDGES=2 MAXNODES=64 EDGEBITS=19 nthreads=4 nonce=7 len=3 hdr=0a0bfe");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

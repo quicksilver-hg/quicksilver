@@ -8,6 +8,7 @@
 #include <crypto/cuckatoo/cuckatoo.h>
 #include <crypto/cuckatoo/gpu_solver.h>
 
+#include <atomic>
 #include <cassert>
 #include <limits>
 #include <vector>
@@ -179,5 +180,12 @@ bool CuckatooSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebit
         },
         start_nonce, max_attempts, out, out_nonce, discarded_cycles);
 }
+
+namespace {
+std::atomic<F265CaptureSink> g_f265_capture_sink{nullptr};
+} // namespace
+
+void SetF265CaptureSink(F265CaptureSink sink) { g_f265_capture_sink.store(sink); }
+F265CaptureSink GetF265CaptureSink() { return g_f265_capture_sink.load(); }
 
 } // namespace cuckatoo

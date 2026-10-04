@@ -632,6 +632,7 @@ def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, ar
     print_results(test_results, max_len_name, runtime)
     if results_filepath:
         write_results(test_results, results_filepath, runtime)
+    report_f265_captures(tmpdir)
 
     if coverage:
         coverage_passed = coverage.report_rpc_coverage()
@@ -654,6 +655,17 @@ def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, ar
         os.killpg(os.getpgid(0), signal.SIGKILL)
 
     sys.exit(not all_passed)
+
+
+def report_f265_captures(tmpdir):
+    """F-414: an F-265 capture goes to a node's debug.log and leaves the test's verdict
+    alone, and the framework keeps that test's datadir. Name every one here, so that it
+    reaches the CI log whether the test passed or failed."""
+    for path in sorted(pathlib.Path(tmpdir).rglob("debug.log")):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if "F265-CAPTURE" in line:
+                    print(f"{BOLD[1]}F265-CAPTURE{BOLD[0]} in {path}: {line.rstrip()[:300]}")
 
 
 def print_results(test_results, max_len_name, runtime):

@@ -28,6 +28,14 @@ struct VaultTestingSetup : public TestingSetup {
     CVault m_vault;
     std::unique_ptr<interfaces::Handler> m_chain_notifications_handler;
 };
+
+//! The sandbox no-cycle proof lets a committed transfer reach the relay pool, so its change is listed at depth 0.
+struct NoCycleTestChain100Setup : TestChain100Setup {
+    NoCycleTestChain100Setup()
+        : TestChain100Setup{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}}
+    {
+    }
+};
 } // namespace vault
 
 #endif // QUICKSILVER_VAULT_TEST_VAULT_TEST_FIXTURE_H

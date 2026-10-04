@@ -111,6 +111,15 @@ bool CuckatooSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebit
                         GpuSolveStatus* gpu_status = nullptr,
                         uint32_t* discarded_cycles = nullptr);
 
+//! Where the solver's F-265 capture line goes (graph.hpp). The solver cannot reach
+//! the logger, so the node installs a sink that writes to debug.log (F-414, owner
+//! ruling 2026-10-03: a capture must not fail the test it happens in through stderr;
+//! CI greps debug.log for it instead). The sink gets one whole line without its
+//! newline. With no sink installed, the line goes to stderr.
+using F265CaptureSink = void (*)(const char* line);
+void SetF265CaptureSink(F265CaptureSink sink);
+F265CaptureSink GetF265CaptureSink();
+
 } // namespace cuckatoo
 
 #endif // QUICKSILVER_CRYPTO_CUCKATOO_CUCKATOO_H

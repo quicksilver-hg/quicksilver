@@ -37,6 +37,9 @@
 #include <cstdlib>
 #include <exception>
 #include <functional>
+#include <memory>
+#include <string_view>
+#include <vector>
 
 const std::function<void(const std::string&)> G_TEST_LOG_FUN{};
 
@@ -110,43 +113,63 @@ int main(int argc, char* argv[])
         QuicksilverApplication app;
         app.createNode(*init);
 
-        QuicksilverStyleTests style_tests;
-        num_test_failures += QTest::qExec(&style_tests);
-
-        GUIUtilTests guiutil_tests;
-        num_test_failures += QTest::qExec(&guiutil_tests);
-
-        IntroTests intro_tests;
-        num_test_failures += QTest::qExec(&intro_tests);
-
-        MaturityTests maturity_tests;
-        num_test_failures += QTest::qExec(&maturity_tests);
-
-        StorageCostsTests storage_costs_tests;
-        num_test_failures += QTest::qExec(&storage_costs_tests);
-
-        AppTests app_tests(app);
-        num_test_failures += QTest::qExec(&app_tests);
-
-        OptionTests options_tests(app.node());
-        num_test_failures += QTest::qExec(&options_tests);
-
-        URITests test1;
-        num_test_failures += QTest::qExec(&test1);
-
-        RPCNestedTests test3(app.node());
-        num_test_failures += QTest::qExec(&test3);
-
+        struct TestClass {
+            const QMetaObject* meta_object;
+            std::function<std::unique_ptr<QObject>()> create;
+        };
+        const TestClass test_classes[]{
+            {&QuicksilverStyleTests::staticMetaObject, [&] { return std::make_unique<QuicksilverStyleTests>(); }},
+            {&GUIUtilTests::staticMetaObject, [&] { return std::make_unique<GUIUtilTests>(); }},
+            {&IntroTests::staticMetaObject, [&] { return std::make_unique<IntroTests>(); }},
+            {&MaturityTests::staticMetaObject, [&] { return std::make_unique<MaturityTests>(); }},
+            {&StorageCostsTests::staticMetaObject, [&] { return std::make_unique<StorageCostsTests>(); }},
+            {&AppTests::staticMetaObject, [&] { return std::make_unique<AppTests>(app); }},
+            {&OptionTests::staticMetaObject, [&] { return std::make_unique<OptionTests>(app.node()); }},
+            {&URITests::staticMetaObject, [&] { return std::make_unique<URITests>(); }},
+            {&RPCNestedTests::staticMetaObject, [&] { return std::make_unique<RPCNestedTests>(app.node()); }},
 #ifdef ENABLE_VAULT
-        VaultSummaryTests vault_summary_tests;
-        num_test_failures += QTest::qExec(&vault_summary_tests);
-
-        VaultTests test5(app.node());
-        num_test_failures += QTest::qExec(&test5);
-
-        AddressBookTests test6(app.node());
-        num_test_failures += QTest::qExec(&test6);
+            {&VaultSummaryTests::staticMetaObject, [&] { return std::make_unique<VaultSummaryTests>(); }},
+            {&VaultTests::staticMetaObject, [&] { return std::make_unique<VaultTests>(app.node()); }},
+            {&AddressBookTests::staticMetaObject, [&] { return std::make_unique<AddressBookTests>(app.node()); }},
 #endif
+        };
+
+        const TestClass* selected{nullptr};
+        if (argc > 1) {
+            const std::string_view class_name{argv[1]};
+            for (const auto& test_class : test_classes) {
+                if (class_name == test_class.meta_object->className()) {
+                    selected = &test_class;
+                    break;
+                }
+            }
+            if (!selected) {
+                std::fputs("Usage: ", stderr);
+                std::fputs(argv[0], stderr);
+                std::fputs(" [<TestClass> [<QTest args...>]]\n", stderr);
+                for (const auto& test_class : test_classes) {
+                    std::fputs(test_class.meta_object->className(), stderr);
+                    std::fputc('\n', stderr);
+                }
+                return EXIT_FAILURE;
+            }
+        }
+
+        // Keep objects alive through the run, and construct each just before its tests.
+        std::vector<std::unique_ptr<QObject>> test_objects;
+        std::vector<char*> test_args;
+        if (selected) {
+            test_args.push_back(argv[0]);
+            test_args.insert(test_args.end(), argv + 2, argv + argc);
+            test_args.push_back(nullptr);
+        }
+        for (const auto& test_class : test_classes) {
+            if (selected && selected != &test_class) continue;
+            test_objects.push_back(test_class.create());
+            num_test_failures += selected
+                ? QTest::qExec(test_objects.back().get(), argc - 1, test_args.data())
+                : QTest::qExec(test_objects.back().get());
+        }
 
         if (num_test_failures) {
             qWarning("\nFailed tests: %d\n", num_test_failures);

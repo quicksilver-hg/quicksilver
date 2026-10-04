@@ -24,13 +24,6 @@
 namespace vault {
 BOOST_FIXTURE_TEST_SUITE(spend_tests, VaultTestingSetup)
 
-struct NoCycleTestChain100Setup : TestChain100Setup {
-    NoCycleTestChain100Setup()
-        : TestChain100Setup{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}}
-    {
-    }
-};
-
 BOOST_FIXTURE_TEST_CASE(ExactValueChange, TestChain100Setup)
 {
     CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));

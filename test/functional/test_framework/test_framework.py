@@ -313,16 +313,25 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
             if self.nodes:
                 self.stop_nodes()
 
+        # F-414: an F-265 capture goes to the node's debug.log and leaves the verdict alone.
+        # Report it, and keep the datadir: it holds what the capture's line points into.
+        f265_captures = self._f265_captures()
+        for path, line in f265_captures:
+            self.log.warning("F265-CAPTURE in %s: %s", path, line[:300])
         should_clean_up = (
             not self.options.nocleanup and
             self.success != TestStatus.FAILED and
-            not self.options.perf
+            not self.options.perf and
+            not f265_captures
         )
         if should_clean_up:
             self.log.info("Cleaning up {} on exit".format(self.options.tmpdir))
             cleanup_tree_on_exit = True
         elif self.options.perf:
             self.log.warning("Not cleaning up dir {} due to perf data".format(self.options.tmpdir))
+            cleanup_tree_on_exit = False
+        elif f265_captures and self.success != TestStatus.FAILED:
+            self.log.warning("Not cleaning up dir {} due to an F-265 capture".format(self.options.tmpdir))
             cleanup_tree_on_exit = False
         else:
             self.log.warning("Not cleaning up dir {}".format(self.options.tmpdir))
@@ -360,6 +369,17 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
 
         self.nodes.clear()
         return exit_code
+
+    def _f265_captures(self):
+        """Every F265-CAPTURE line in a node's debug.log, as (path, line)."""
+        captures = []
+        for node in self.nodes:
+            try:
+                with open(node.debug_log_path, encoding="utf-8", errors="replace") as f:
+                    captures.extend((str(node.debug_log_path), line.rstrip("\n")) for line in f if "F265-CAPTURE" in line)
+            except OSError:
+                pass
+        return captures
 
     # Methods to override in subclass test scripts.
     def set_test_params(self):

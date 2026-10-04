@@ -38,7 +38,8 @@ public:
   // leg sees only the SEGV at the end of that chain. Owner ruling 2026-10-01: log the
   // overflow once per graph, with what is needed to replay the graph offline, and carry on
   // exactly as before -- the solve itself does not change. The caller sets the replay
-  // fields after reset(); f265_out == nullptr means stderr, which reaches the CI log.
+  // fields after reset(); f265_out == nullptr means the sink the node installed
+  // (debug.log, F-414), or stderr if there is none (cuckatoo.h).
   const char *f265_hdr = nullptr;
   u32 f265_len = 0, f265_nonce = 0, f265_nthreads = 0;
   FILE *f265_out = nullptr;
@@ -49,16 +50,45 @@ public:
     if (f265_logged & kind)
       return;
     f265_logged |= kind;
-    char line[1024];
-    int n = snprintf(line, sizeof(line),
+    char prefix[256]; // the fields below are bounded, the header is not
+    int n = snprintf(prefix, sizeof(prefix),
                      "F265-CAPTURE %s a=%llu b=%llu nlinks=%llu MAXEDGES=%llu MAXNODES=%llu EDGEBITS=%d nthreads=%u nonce=%u len=%u hdr=",
                      what, a, b, (unsigned long long)nlinks, (unsigned long long)MAXEDGES,
                      (unsigned long long)MAXNODES, (int)EDGEBITS, f265_nthreads, f265_nonce, f265_len);
-    for (u32 i = 0; f265_hdr && i < f265_len && n > 0 && n + 3 < (int)sizeof(line); i++)
-      n += snprintf(line + n, sizeof(line) - n, "%02x", (unsigned char)f265_hdr[i]);
-    FILE *out = f265_out ? f265_out : stderr;
-    fprintf(out, "%s\n", line); // one write, so a crash right after still leaves the whole line
-    fflush(out);
+    if (n < 0 || n >= (int)sizeof(prefix))
+      return;
+    // F-413: the line holds the whole header, or the capture cannot be replayed (a vault
+    // tx-PoW header is ~12 KB; a fixed 1 KB line once kept 447 of 12,523 bytes). The capture
+    // runs before this graph's out-of-bounds write, so the heap is still sound. If even so
+    // the allocation fails, write what fits and say so, so a short line never reads as whole.
+    static const char HEX[] = "0123456789abcdef";
+    const u32 hdrlen = f265_hdr ? f265_len : 0;
+    char fallback[1024];
+    char *line = (char *)malloc((size_t)n + 2 * (size_t)hdrlen + 1);
+    size_t room = line ? (size_t)n + 2 * (size_t)hdrlen + 1 : sizeof(fallback) - sizeof(" hdr_truncated=1");
+    if (!line)
+      line = fallback;
+    memcpy(line, prefix, n);
+    size_t len = n;
+    u32 i = 0;
+    for (; i < hdrlen && len + 2 < room; i++) {
+      line[len++] = HEX[(unsigned char)f265_hdr[i] >> 4];
+      line[len++] = HEX[(unsigned char)f265_hdr[i] & 15];
+    }
+    if (i < hdrlen)
+      len += snprintf(line + len, sizeof(fallback) - len, " hdr_truncated=1");
+    line[len] = 0;
+    // F-414: the node's sink writes to debug.log, unbuffered, in one write.
+    ::cuckatoo::F265CaptureSink sink = f265_out ? nullptr : ::cuckatoo::GetF265CaptureSink();
+    if (sink) {
+      sink(line);
+    } else {
+      FILE *out = f265_out ? f265_out : stderr;
+      fprintf(out, "%s\n", line); // one write, so a crash right after still leaves the whole line
+      fflush(out);
+    }
+    if (line != fallback)
+      free(line);
   }
 
   graph(word_t maxedges, word_t maxnodes, u32 maxsols, u32 compressbits) : visited(maxedges) {

@@ -22,6 +22,7 @@
 #include <common/system.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
+#include <crypto/cuckatoo/cuckatoo.h>
 #include <deploymentstatus.h>
 #include <hash.h>
 #include <httprpc.h>
@@ -1305,6 +1306,12 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         // Detailed error printed inside StartLogging().
         return false;
     }
+    // F-414: an F-265 capture goes to debug.log, where CI greps for it, not to stderr,
+    // which fails the functional test it happens in. Not rate-limited: the line is the
+    // replay data, and the solver writes it at most twice per graph.
+    cuckatoo::SetF265CaptureSink([](const char* line) {
+        LogPrintLevel_(HgLog::LogFlags::ALL, HgLog::Level::Warning, /*should_ratelimit=*/false, "%s\n", line);
+    });
 
     LogInfo(HgLog::INIT, "ready max_auto_connections=%i available_fds=%i\n", nMaxConnections, available_fds);
 
