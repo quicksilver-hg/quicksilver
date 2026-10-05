@@ -158,6 +158,10 @@ int main(int argc, char** argv)
 
     SolverParams params;
     fill_default_params(&params);
+    // fill_default_params resets device to 0, and create_solver_ctx calls
+    // cudaSetDevice(params.device): without this the graphs run on device 0
+    // under --device's label (F-423).
+    params.device = device;
     params.mutate_nonce = 0;  // we place the nonce ourselves (alignment-safe)
     SolverCtx* ctx = create_solver_ctx(&params);
     if (ctx == nullptr) {
