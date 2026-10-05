@@ -234,11 +234,13 @@ jobs:
         if: matrix.job-type == 'standard'
         working-directory: build
         run: |
-          cmake -DBUILD_DIR=. -DCONFIG=Release -P ../cmake/script/CheckCtestManifest.cmake
+          # Quote each -D: PowerShell splits a bare -DNAME=value at its first '.', so
+          # -DBUILD_DIR=. arrives empty and -DRESULTS=ctest-results.xml as ctest-results.
+          cmake "-DBUILD_DIR=." "-DCONFIG=Release" -P ../cmake/script/CheckCtestManifest.cmake
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --output-on-failure --stop-on-failure -j $env:NUMBER_OF_PROCESSORS -C Release --output-junit ctest-results.xml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake -DBUILD_DIR=. -DCONFIG=Release -DRESULTS=ctest-results.xml -P ../cmake/script/CheckCtestManifest.cmake
+          cmake "-DBUILD_DIR=." "-DCONFIG=Release" "-DRESULTS=ctest-results.xml" -P ../cmake/script/CheckCtestManifest.cmake
 
       - name: Run functional tests
         if: matrix.job-type == 'standard'

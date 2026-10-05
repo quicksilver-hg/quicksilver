@@ -53,9 +53,10 @@ profile. The expected tests for your configuration are recorded in
 `cmake -DBUILD_DIR=build -P cmake/script/CheckCtestManifest.cmake` after
 configuring: it prints the expected total and fails on missing or unexpected
 tests. Run `ctest --test-dir build --output-junit ctest-results.xml`, then
-`cmake -DBUILD_DIR=build -DRESULTS=build/ctest-results.xml -P cmake/script/CheckCtestManifest.cmake`
+`cmake -DBUILD_DIR=build "-DRESULTS=build/ctest-results.xml" -P cmake/script/CheckCtestManifest.cmake`
 to check the results. For multi-config builds, pass `-C Release` to `ctest`
-and `-DCONFIG=Release` to the manifest check.
+and `-DCONFIG=Release` to the manifest check. In PowerShell, keep the quotes:
+an unquoted `-D` value containing a `.` is split there.
 
 If `CUCKATOO_GPU_SOLVER` is unset, `gpu_parity_tests` is skipped; set it to a
 `qsgpusolve` binary to run the test. On MSVC, `compilerbug_tests` also skips
