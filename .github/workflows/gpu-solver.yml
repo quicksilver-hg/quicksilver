@@ -1,0 +1,51 @@
+# Copyright (c) 2026 The Quicksilver developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or https://opensource.org/license/mit/.
+
+# Compiles the standalone GPU helper (qsgpusolve and qsgpucalibrate).
+# This is its own workflow, not a job in ci.yml: slice DH owns ci.yml in
+# this batch (F-422, F-419). Hosted runners have no GPU, so this only compiles.
+
+name: GPU solver
+on:
+  # See: https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#pull_request.
+  pull_request:
+  # See: https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#push.
+  push:
+    branches:
+      - '**'
+    tags-ignore:
+      - '**'
+
+concurrency:
+  # Distinct from ci.yml's group, or the two workflows would cancel each other.
+  group: gpu-solver-${{ github.event_name != 'pull_request' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gpu-solver:
+    name: 'compile qsgpusolve and qsgpucalibrate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install CUDA 12.9 nvcc
+        run: |
+          set -euo pipefail
+          wget -q -O /tmp/cuda-keyring.deb \
+            https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i /tmp/cuda-keyring.deb
+          sudo apt-get update
+          # Compiler and cudart headers only. cuda-nvcc-12-9 depends on
+          # cuda-cudart-dev-12-9, cuda-nvvm-12-9 and cuda-crt-12-9. This is
+          # not the full toolkit and it does not install a driver.
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            cuda-nvcc-12-9 cuda-cudart-dev-12-9
+          if [ ! -x /usr/local/cuda-12.9/bin/nvcc ]; then
+            echo "nvcc was not installed at /usr/local/cuda-12.9/bin" >&2
+            find /usr/local -name nvcc -type f >&2 || true
+            exit 1
+          fi
+          echo "/usr/local/cuda-12.9/bin" >> "$GITHUB_PATH"
+      - name: Compile the helper
+        run: make -C src/crypto/cuckatoo/gpu qsgpusolve qsgpucalibrate GPU_ARCH=sm_61

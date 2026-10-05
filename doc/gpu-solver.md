@@ -158,6 +158,31 @@ the solver's return value.
 
 ## Windows
 
+### Getting a CUDA 12.x toolkit
+
+The helper needs `nvcc` from a **CUDA 12.x** toolkit. CUDA 13.x cannot target
+`sm_52`, `sm_61` or `sm_70`, as above. NVIDIA's current download page offers a
+13.x toolkit, so take a 12.x release from the toolkit archive:
+
+<https://developer.nvidia.com/cuda-toolkit-archive>
+
+Choose a 12.x Windows installer. When a newer display driver is already
+installed, install the toolkit components only and leave the bundled display
+driver unselected, so the installer does not replace that driver. The toolkit
+is installed under
+
+`C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.<n>`
+
+which is the path `-CudaPath` takes. Check the compiler before building:
+
+```powershell
+& "$CudaPath\bin\nvcc.exe" --version
+```
+
+A `release 12.x` line can build for every architecture in the table above.
+
+### Building
+
 Use the maintained PowerShell wrapper from a Developer PowerShell prompt. Pass
 paths and versions that match the installed Visual Studio and CUDA toolchains:
 
@@ -171,11 +196,14 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 ```
 
 The default output is
-`src\crypto\cuckatoo\gpu\qsgpusolve.exe`. Every argument above is a value to
-adjust for the build machine, not a default to copy: set `-VcVarsVersion` to a
-toolset that exists under `<VsInstallPath>\VC\Tools\MSVC\`, `-CudaPath` to an
-installed **12.x** toolkit, and `-GpuArch` to the target card's compute
-capability.
+`src\crypto\cuckatoo\gpu\qsgpusolve.exe`. The script's default
+`-VsInstallPath` is Visual Studio 2022 Community, the same path as the example
+and the one the Windows build guide requires. Omit `-VcVarsVersion` to enter
+the developer shell with Visual Studio's own default toolset. The example
+passes `14.39` because the fleet builds with that toolset; it is not a default
+to copy. When you do pass `-VcVarsVersion`, that version must exist under
+`<VsInstallPath>\VC\Tools\MSVC` or the wrapper stops. Set `-CudaPath` to the
+12.x toolkit you installed and `-GpuArch` to the target card.
 
 `-Target qsgpucalibrate` builds the calibration twin instead, the Windows
 equivalent of `make -C src/crypto/cuckatoo/gpu qsgpucalibrate`. That binary is a
@@ -191,16 +219,18 @@ Probe it before configuring Quicksilver:
 ### Raise the GPU watchdog before solving
 
 Windows runs a **Timeout Detection and Recovery** watchdog that resets the
-display driver whenever a GPU kernel occupies a display-attached adapter for
-longer than `TdrDelay`, which defaults to **2 seconds**. A single Cuckatoo graph
-at the shipped size takes **several seconds**, so on any machine whose solving
-GPU also drives a monitor, every graph exceeds the limit and the driver resets
-mid-solve.
+display driver when a GPU operation runs longer than `TdrDelay`, which defaults
+to **2 seconds**. A single Cuckatoo graph at the shipped size takes **several
+seconds**, so a device on which that limit applies can be reset mid-solve.
 
-The helper detects this case and stops: it returns **exit status 5**, names the
-CUDA error, and points at `TdrDelay`. It also warns at startup, before any
-solving, whenever `TdrDelay` reads below 10 seconds or is unset — unset means
-Windows applies its 2-second default, which is the dangerous case. That warning
+The helper detects a fault mid-solve and stops: it returns **exit status 5**,
+names the CUDA error, and points at `TdrDelay`. It also warns at startup, before
+any solving, when the device it is about to use reports that a kernel run-time
+limit applies and `TdrDelay` is below 10 seconds or is unset — unset means
+Windows applies its 2-second default. CUDA reports that as
+`cudaDevAttrKernelExecTimeout`: 1 when a limit applies, 0 when it does not. A
+reported 0 prints nothing. If the query fails, the helper still warns on a
+short or unset value, so a failed query does not hide the warning. That warning
 is advisory: TDR bounds how long a single kernel may occupy the adapter, not
 total graph time, so a low value is a strong suspicion rather than a proof.
 
@@ -237,8 +267,18 @@ responding and has successfully recovered"* — timestamped during a solve is th
 signature of this problem. A solve that appears to succeed is not sufficient
 evidence on its own, because the reset does not occur on every graph.
 
-A headless GPU with no monitor attached is not subject to the watchdog, and
-Linux has no equivalent mechanism.
+Whether the startup warning was printed is the helper's own answer for the
+device it is using. To see the driver model of the card:
+
+```text
+nvidia-smi --query-gpu=name,driver_model.current --format=csv
+```
+
+`nvidia-smi -q` prints the same fact under **Driver Model** / **Current**. On
+Windows that value is TCC, WDDM, or MCDM. On Linux it is `N/A`, and the helper
+does not print this warning. The warning follows the device query above. It
+does not follow this column, and it does not follow whether a monitor is
+attached.
 
 ## Configure Quicksilver
 

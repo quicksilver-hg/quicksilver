@@ -73,7 +73,7 @@ jobs:
         run: |
           # Run tests on commits after the last merge commit and before the PR head commit
           # Use clang++, because it is a bit faster and uses less memory than g++
-          git rebase --exec "echo Running test-one-commit on \$( git log -1 ) && CC=clang CXX=clang++ cmake -B build -DWERROR=ON -DWITH_ZMQ=ON -DBUILD_GUI=ON -DBUILD_BENCH=ON -DBUILD_FUZZ_BINARY=ON -DWITH_USDT=ON -DCMAKE_CXX_FLAGS='-Wno-error=unused-member-function' && cmake --build build -j $(nproc) && ctest --output-on-failure --stop-on-failure --test-dir build -j $(nproc) && ./build/test/functional/test_runner.py -j $(( $(nproc) * 2 )) --combinedlogslen=99999999" ${{ env.TEST_BASE }}
+          git rebase --exec "echo Running test-one-commit on \$( git log -1 ) && CC=clang CXX=clang++ cmake -B build -DWERROR=ON -DWITH_ZMQ=ON -DBUILD_GUI=ON -DBUILD_BENCH=ON -DBUILD_FUZZ_BINARY=ON -DWITH_USDT=ON -DCMAKE_CXX_FLAGS='-Wno-error=unused-member-function' && cmake --build build -j $(nproc) && cmake -DBUILD_DIR=build -P cmake/script/CheckCtestManifest.cmake && ctest --output-on-failure --stop-on-failure --test-dir build -j $(nproc) --output-junit ctest-results.xml && cmake -DBUILD_DIR=build -DRESULTS=build/ctest-results.xml -P cmake/script/CheckCtestManifest.cmake && ./build/test/functional/test_runner.py -j $(( $(nproc) * 2 )) --combinedlogslen=99999999" ${{ env.TEST_BASE }}
 
   win64-native:
     name: ${{ matrix.job-name }}
@@ -234,7 +234,11 @@ jobs:
         if: matrix.job-type == 'standard'
         working-directory: build
         run: |
-          ctest --output-on-failure --stop-on-failure -j $env:NUMBER_OF_PROCESSORS -C Release
+          cmake -DBUILD_DIR=. -DCONFIG=Release -P ../cmake/script/CheckCtestManifest.cmake
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --output-on-failure --stop-on-failure -j $env:NUMBER_OF_PROCESSORS -C Release --output-junit ctest-results.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake -DBUILD_DIR=. -DCONFIG=Release -DRESULTS=ctest-results.xml -P ../cmake/script/CheckCtestManifest.cmake
 
       - name: Run functional tests
         if: matrix.job-type == 'standard'

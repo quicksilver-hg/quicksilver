@@ -99,9 +99,29 @@ static inline const char* gpu_health_hint()
 //! Warn at startup when the Windows GPU watchdog is short enough to kill a
 //! graph. Advisory only: TDR bounds single-kernel occupancy rather than total
 //! graph time, so a low value is a strong suspicion, not a proof.
+//!
+//! F-421: ask the device this helper is using before the registry. Both call
+//! sites have already selected it (qsgpusolve leaves the default current
+//! device; qsgpucalibrate has called cudaSetDevice). cudaDevAttrKernelExecTimeout
+//! is 1 when a run-time limit applies to kernels on that device and 0 when it
+//! does not. A reported 0 prints nothing. Any other reported value, and a
+//! failed query, keep the registry check: an advisory warning must not go
+//! quiet on an error. A failed query is discarded so it cannot become an exit 5.
 static inline void gpu_health_warn_if_watchdog_short(const char* tool)
 {
 #ifdef _WIN32
+    int device = 0;
+    int timeout = 1;
+    const cudaError_t dev_rc = cudaGetDevice(&device);
+    const cudaError_t attr_rc = dev_rc == cudaSuccess
+        ? cudaDeviceGetAttribute(&timeout, cudaDevAttrKernelExecTimeout, device)
+        : dev_rc;
+    if (attr_rc != cudaSuccess) {
+        cudaGetLastError();
+    } else if (timeout == 0) {
+        return;
+    }
+
     DWORD value = 0;
     DWORD size = sizeof(value);
     const LSTATUS st = RegGetValueA(HKEY_LOCAL_MACHINE,

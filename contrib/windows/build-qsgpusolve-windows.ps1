@@ -2,8 +2,10 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 param(
-    [string]$VsInstallPath = 'C:\Program Files\Microsoft Visual Studio\18\Community',
-    [string]$VcVarsVersion = '14.44',
+    [string]$VsInstallPath = 'C:\Program Files\Microsoft Visual Studio\2022\Community',
+    # Optional. Empty means Visual Studio's own default toolset: Enter-VsDevShell
+    # is called without -vcvars_ver. The fleet passes 14.39 explicitly.
+    [string]$VcVarsVersion = '',
     [string]$CudaPath = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9',
     [string]$GpuArch = 'sm_61',
     # Must match the shipped consensus graph size (chainparams nEdgeBits/nTxEdgeBits
@@ -38,12 +40,19 @@ if (!(Test-Path $devShellModule)) {
     throw "Visual Studio dev-shell module not found: $devShellModule"
 }
 
-$toolsetsPath = Join-Path $VsInstallPath 'VC\Tools\MSVC'
-$toolset = Get-ChildItem -Path $toolsetsPath -Directory -ErrorAction Stop |
-    Where-Object { $_.Name.StartsWith($VcVarsVersion) } |
-    Select-Object -First 1
-if ($null -eq $toolset) {
-    throw "MSVC toolset $VcVarsVersion not found under $toolsetsPath"
+# Without -VcVarsVersion, use the toolset Visual Studio selects. With one,
+# require that it is installed, which is the check a bare 14.44 default used
+# to fail with an unhelpful path.
+$devCmdArguments = '-arch=x64 -host_arch=x64'
+if ($VcVarsVersion) {
+    $toolsetsPath = Join-Path $VsInstallPath 'VC\Tools\MSVC'
+    $toolset = Get-ChildItem -Path $toolsetsPath -Directory -ErrorAction Stop |
+        Where-Object { $_.Name.StartsWith($VcVarsVersion) } |
+        Select-Object -First 1
+    if ($null -eq $toolset) {
+        throw "MSVC toolset $VcVarsVersion not found under $toolsetsPath"
+    }
+    $devCmdArguments += " -vcvars_ver=$VcVarsVersion"
 }
 
 $nvcc = Join-Path $CudaPath 'bin\nvcc.exe'
@@ -54,7 +63,7 @@ if (!(Test-Path $nvcc)) {
 Import-Module $devShellModule
 Enter-VsDevShell -VsInstallPath $VsInstallPath `
     -SkipAutomaticLocation `
-    -DevCmdArguments "-arch=x64 -host_arch=x64 -vcvars_ver=$VcVarsVersion"
+    -DevCmdArguments $devCmdArguments
 
 Push-Location $gpuDir
 try {

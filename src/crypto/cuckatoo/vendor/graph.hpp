@@ -40,8 +40,9 @@ public:
   // graph, with what is needed to replay the graph offline (2026-10-01); refuse the edge
   // and abandon the graph instead of writing past it (2026-10-03) -- the caller yields no
   // solutions for an abandoned graph. The caller sets the replay fields after reset();
-  // f265_out == nullptr means the sink the node installed (debug.log, F-414), or stderr
-  // if there is none (cuckatoo.h).
+  // f265_out == nullptr means stderr, unless this translation unit included the
+  // public cuckatoo.h, in which case it means the sink the node installed
+  // (debug.log, F-414) or stderr if none is installed.
   const char *f265_hdr = nullptr;
   u32 f265_len = 0, f265_nonce = 0, f265_nthreads = 0;
   FILE *f265_out = nullptr;
@@ -81,6 +82,20 @@ public:
     if (i < hdrlen)
       len += snprintf(line + len, sizeof(fallback) - len, " hdr_truncated=1");
     line[len] = 0;
+    // F-418. solve_19.cpp, solve_28.cpp, the capture test and the bench template
+    // include crypto/cuckatoo/cuckatoo.h at global scope before this header, which
+    // declares ::cuckatoo::GetF265CaptureSink and defines
+    // QUICKSILVER_CRYPTO_CUCKATOO_CUCKATOO_H. lean.hpp includes the vendored
+    // cuckatoo.h, a different file, so the solver chain does not provide that
+    // declaration. The GPU helper (lean.cu) and a standalone build of
+    // vendor/lean.cpp never include the public header and do not link
+    // dispatch.cpp. The include guard is set exactly when the declaration is
+    // visible, so neither build grows a -D a builder can forget. __CUDACC__ would
+    // fix the helper and miss that CPU standalone build. With the guard set, the
+    // line goes to the installed sink, or to f265_out / stderr when there is
+    // none (F-414). Without it, the line goes to f265_out or stderr, as it did
+    // before F-414.
+#ifdef QUICKSILVER_CRYPTO_CUCKATOO_CUCKATOO_H
     // F-414: the node's sink writes to debug.log, unbuffered, in one write.
     ::cuckatoo::F265CaptureSink sink = f265_out ? nullptr : ::cuckatoo::GetF265CaptureSink();
     if (sink) {
@@ -90,6 +105,11 @@ public:
       fprintf(out, "%s\n", line); // one write, so a crash right after still leaves the whole line
       fflush(out);
     }
+#else
+    FILE *out = f265_out ? f265_out : stderr;
+    fprintf(out, "%s\n", line); // one write, so a crash right after still leaves the whole line
+    fflush(out);
+#endif
     if (line != fallback)
       free(line);
   }

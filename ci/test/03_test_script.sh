@@ -103,7 +103,9 @@ fi
 if [ "$RUN_UNIT_TESTS" = "true" ]; then
   # Do not pass --stop-on-failure: the run must inventory every unit failure,
   # not stop at the first (F-300). --timeout still bounds a hung test.
-  LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" CTEST_OUTPUT_ON_FAILURE=ON ctest "${MAKEJOBS}" --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 ))
+  cmake -DBUILD_DIR=. -P "${BASE_ROOT_DIR}/cmake/script/CheckCtestManifest.cmake"
+  LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" CTEST_OUTPUT_ON_FAILURE=ON ctest "${MAKEJOBS}" --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 )) --output-junit ctest-results.xml
+  cmake -DBUILD_DIR=. -DRESULTS=ctest-results.xml -P "${BASE_ROOT_DIR}/cmake/script/CheckCtestManifest.cmake"
 fi
 
 if [ "$RUN_UNIT_TESTS_SEQUENTIAL" = "true" ]; then

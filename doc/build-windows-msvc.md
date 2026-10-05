@@ -9,13 +9,25 @@ For cross-compiling options, please see [`build-windows.md`](./build-windows.md)
 ### 1. Visual Studio
 
 This guide relies on using CMake and vcpkg package manager provided with the Visual Studio installation.
+Download Visual Studio 2022 from Microsoft's [Visual Studio 2022 download page](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history#evergreen-bootstrappers).
+Any edition works; Community is free.
 Here are requirements for the Visual Studio installation:
-1. Minimum required version: Visual Studio 2022 version 17.6.
+1. Minimum required version: Visual Studio 2022 version 17.6. The presets use the "Visual Studio 17 2022" generator, so VS 2022 is required; a newer Visual Studio major version is not a substitute.
 2. Installed components:
-- The "Desktop development with C++" workload.
+- The "Desktop development with C++" workload (`Microsoft.VisualStudio.Workload.NativeDesktop`).
+- MSVC x64/x86 build tools (`Microsoft.VisualStudio.Component.VC.Tools.x86.x64`).
+- C++ CMake tools for Windows (`Microsoft.VisualStudio.Component.VC.CMake.Project`).
+- vcpkg package manager (`Microsoft.VisualStudio.Component.Vcpkg`).
+- A Windows SDK (Windows 10 or Windows 11).
+
+The installer GUI selects these components with the workload. A scripted `--add` of the workload omits recommended components unless `--includeRecommended` is also passed. For an existing Community installation, the unattended form in an elevated PowerShell is (adjust the quoted installation path for another edition):
+
+```powershell
+& "C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe" modify --installPath "C:\Program Files\Microsoft Visual Studio\2022\Community" --add Microsoft.VisualStudio.Workload.NativeDesktop --includeRecommended --quiet --norestart
+```
 
 The commands in this guide should be executed in "Developer PowerShell for VS 2022" or "Developer Command Prompt for VS 2022".
-The former is assumed hereinafter.
+The former is assumed hereinafter. It sets `VCPKG_ROOT`, which both presets require to locate the vcpkg toolchain; configuring from a plain PowerShell without this variable fails.
 
 ### 2. Git
 
@@ -23,11 +35,13 @@ Download and install [Git for Windows](https://git-scm.com/download/win). Once i
 
 ### 3. Clone Quicksilver Repository
 
-Clone the Quicksilver repository to a directory. All build scripts and commands will run from this directory.
+Clone the Quicksilver repository to a short path without spaces, such as `C:\src\quicksilver`. All build scripts and commands will run from this directory. Even a short path can trigger vcpkg long-path warnings; see §7 for workarounds.
 ```
-git clone https://github.com/quicksilver-hg/quicksilver.git
-cd quicksilver
+git clone https://github.com/quicksilver-hg/quicksilver.git C:\src\quicksilver
+cd C:\src\quicksilver
 ```
+
+Python is optional. Installing Python 3.10 or newer from [python.org](https://www.python.org/downloads/windows/) and making it available on `PATH` enables `util_test_runner` and `util_rpcauth_test`. The Microsoft Store `python` stub does not count as an installed interpreter. After configuring, `cmake -DBUILD_DIR=build -DCONFIG=Release -P cmake/script/CheckCtestManifest.cmake` checks `test/ctest-manifest.txt` and prints exactly how many tests your configuration registers, including without Python.
 
 
 ### 4. Tor (desktop only)
@@ -90,7 +104,7 @@ In the following instructions, the "Debug" configuration can be specified instea
 ```
 cmake -B build --preset vs2022-static          # It might take a while if the vcpkg binary cache is unpopulated or invalidated.
 cmake --build build --config Release           # Append "-j N" for N parallel jobs.
-ctest --test-dir build --build-config Release  # Append "-j N" for N parallel tests. Some tests are disabled if Python 3 is not available.
+ctest --test-dir build --build-config Release  # Append "-j N" for N parallel tests. Python enables the two additional tests described in §3.
 cmake --install build --config Release         # Optional.
 ```
 
@@ -99,7 +113,7 @@ cmake --install build --config Release         # Optional.
 ```
 cmake -B build --preset vs2022 -DBUILD_GUI=OFF # It might take a while if the vcpkg binary cache is unpopulated or invalidated.
 cmake --build build --config Release           # Append "-j N" for N parallel jobs.
-ctest --test-dir build --build-config Release  # Append "-j N" for N parallel tests. Some tests are disabled if Python 3 is not available.
+ctest --test-dir build --build-config Release  # Append "-j N" for N parallel tests. Python enables the two additional tests described in §3.
 ```
 
 ### 7. vcpkg-specific Issues and Workarounds

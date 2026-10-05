@@ -1,0 +1,169 @@
+# Copyright (c) 2026 The Quicksilver developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or https://opensource.org/license/mit/.
+#
+# Expected CTest names, generated initially from ctest --show-only=json-v1.
+# Adding or removing a test requires editing this file in the same commit.
+# cmake/script/CheckCtestManifest.cmake enforces registration and skip policy.
+#
+# Format: name  registration-conditions  skip-policy  reason
+# Conditions are comma-separated AND terms: always, tests, gui, gui-tests,
+# bench, fuzz, vault, tx, python, linux, windows, msvc, not-coverage.
+# Build options come from CMakeCache.txt, with BUILD_FOR_FUZZING overrides.
+# Platform/compiler identities come from the cache or generated metadata
+# in CMakeFiles/<version>/CMake{System,CXXCompiler}.cmake.
+# Python means a discovered interpreter (unless package discovery is disabled).
+# not-coverage means CMAKE_BUILD_TYPE is not Coverage (secp256k1's guard).
+# fuzz currently adds no CTest names. tests guards enable_testing().
+# Skip policies: never; gpu-unset (CUCKATOO_GPU_SOLVER absent, including no
+# empty-value exemption); msvc (MSVC compiler or MSVC simulation ABI).
+# Results may cover a targeted subset; every reported test is checked.
+#
+addrman_tests  tests  never  -
+agent_headerchain_tests  tests  never  -
+allocator_tests  tests  never  -
+amount_tests  tests  never  -
+argsman_tests  tests  never  -
+arith_uint256_tests  tests  never  -
+banman_tests  tests  never  -
+base32_tests  tests  never  -
+base58_tests  tests  never  -
+base64_tests  tests  never  -
+bech32_tests  tests  never  -
+bench_sanity_check_high_priority  tests,bench  never  -
+bip324_tests  tests  never  -
+bip32_tests  tests  never  -
+blockchain_tests  tests  never  -
+blockencodings_tests  tests  never  -
+blockfilter_index_tests  tests  never  -
+blockfilter_tests  tests  never  -
+blockmanager_tests  tests  never  -
+bloom_tests  tests  never  -
+bswap_tests  tests  never  -
+bundled_tor_tests  tests  never  -
+chaintype_tests  tests  never  -
+checkqueue_tests  tests  never  -
+coins_tests  tests  never  -
+coinscachepair_tests  tests  never  -
+coinselector_tests  tests,vault  never  -
+coinstatsindex_tests  tests  never  -
+common_url_tests  tests  never  -
+compilerbug_tests  tests  msvc  The only case is compiled under __GNUC__; MSVC has an empty suite.
+compress_tests  tests  never  -
+contained_child_tests  tests  never  -
+crypto_tests  tests  never  -
+cuckatoo_bench_gpu_csv_tests  tests  never  -
+cuckatoo_bench_registry_tests  tests  never  -
+cuckatoo_bench_solve_tests  tests  never  -
+cuckatoo_f265_capture_tests  tests  never  -
+cuckatoo_tests  tests  never  -
+cuckatoo_verify_codes_tests  tests  never  -
+cuckoocache_tests  tests  never  -
+db_tests  tests,vault  never  -
+dbwrapper_tests  tests  never  -
+denialofservice_tests  tests  never  -
+descriptor_tests  tests  never  -
+disconnected_transactions  tests  never  -
+flatfile_tests  tests  never  -
+fs_tests  tests  never  -
+getarg_tests  tests  never  -
+gpu_detection_tests  tests  never  -
+gpu_parity_tests  tests  gpu-unset  CUCKATOO_GPU_SOLVER is unset; set it to a qsgpusolve binary to run parity.
+gpu_solver_tests  tests  never  -
+group_outputs_tests  tests,vault  never  -
+hash_tests  tests  never  -
+headers_sync_chainwork_tests  tests  never  -
+httpserver_tests  tests  never  -
+i2p_tests  tests  never  -
+init_tests  tests,vault  never  -
+interfaces_tests  tests  never  -
+key_io_tests  tests  never  -
+key_tests  tests  never  -
+logging_tests  tests  never  -
+merkle_tests  tests  never  -
+merkleblock_tests  tests  never  -
+miner_tests  tests  never  -
+mining_anchor_tests  tests  never  -
+mining_service_tests  tests  never  -
+miniscript_tests  tests  never  -
+mint_tests  tests  never  -
+multisig_tests  tests  never  -
+net_peer_connection_tests  tests  never  -
+net_peer_eviction_tests  tests  never  -
+net_tests  tests  never  -
+netbase_tests  tests  never  -
+node_warnings_tests  tests  never  -
+orphanage_tests  tests  never  -
+outputtype_tests  tests  never  -
+pcp_tests  tests  never  -
+peerman_tests  tests  never  -
+pmt_tests  tests  never  -
+pool_tests  tests  never  -
+pow_tests  tests  never  -
+prevector_tests  tests  never  -
+psqt_vault_tests  tests,vault  never  -
+quicksilver_no_qt_copy_reloc  tests,gui,linux  never  -
+raii_event_tests  tests  never  -
+random_tests  tests  never  -
+relaypool_tests  tests  never  -
+replacement_tests  tests  never  -
+rest_tests  tests  never  -
+result_tests  tests  never  -
+reverselock_tests  tests  never  -
+rpc_tests  tests  never  -
+sanity_tests  tests  never  -
+scheduler_tests  tests  never  -
+script_p2sh_tests  tests  never  -
+script_parse_tests  tests  never  -
+script_segwit_tests  tests  never  -
+script_standard_tests  tests  never  -
+script_tests  tests  never  -
+scriptnum_tests  tests  never  -
+scriptpubkeyman_tests  tests,vault  never  -
+secp256k1_exhaustive_tests  tests  never  -
+secp256k1_noverify_tests  tests  never  -
+secp256k1_tests  tests,not-coverage  never  -
+serialize_tests  tests  never  -
+settings_tests  tests  never  -
+sighash_tests  tests  never  -
+sigopcount_tests  tests  never  -
+skiplist_tests  tests  never  -
+sock_tests  tests  never  -
+span_tests  tests  never  -
+spend_tests  tests,vault  never  -
+streams_tests  tests  never  -
+sync_tests  tests  never  -
+system_tests  tests  never  -
+test_quicksilver-qt  tests,gui,gui-tests  never  -
+timeoffsets_tests  tests  never  -
+torcontrol_tests  tests  never  -
+transaction_tests  tests  never  -
+translation_tests  tests  never  -
+txdownload_tests  tests  never  -
+txindex_tests  tests  never  -
+txpackage_tests  tests  never  -
+txpow_tests  tests  never  -
+txrequest_tests  tests  never  -
+txvalidation_tests  tests  never  -
+txvalidationcache_tests  tests  never  -
+txwork_ranking_tests  tests  never  -
+uint256_tests  tests  never  -
+univalue_object_test  tests  never  -
+univalue_test  tests  never  -
+util_rpcauth_test  tests,python  never  -
+util_string_tests  tests  never  -
+util_test_runner  tests,python,tx  never  -
+util_tests  tests  never  -
+util_threadnames_tests  tests  never  -
+util_trace_tests  tests  never  -
+validation_block_tests  tests  never  -
+validation_chainstate_tests  tests  never  -
+validation_chainstatemanager_tests  tests  never  -
+validation_flush_tests  tests  never  -
+validation_tests  tests  never  -
+validationinterface_tests  tests  never  -
+vault_crypto_tests  tests,vault  never  -
+vault_tests  tests,vault  never  -
+vault_transaction_tests  tests,vault  never  -
+vaultload_tests  tests,vault  never  -
+versionbits_tests  tests  never  -

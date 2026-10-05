@@ -14,8 +14,10 @@
 # a Quicksilver line" -- cannot see either failure.
 #
 # One path per line. Repo-relative. Sorted.
+.github/workflows/gpu-solver.yml
 ci/lto-qt-copy-reloc.sh
 ci/prune-gha-caches.sh
+cmake/script/CheckCtestManifest.cmake
 cmake/script/CheckNoQtCopyReloc.cmake
 contrib/calibration/mainnet_floor_model.py
 contrib/calibration/test_mainnet_floor_model.py
@@ -167,6 +169,7 @@ src/util/utf16.cpp
 src/util/utf16.h
 src/vault/archive.cpp
 src/vault/archive.h
+test/ctest-manifest.txt
 test/functional/calibration_disk_cost.py
 test/functional/calibration_tx_sizes.py
 test/functional/feature_blockfilter_agreement.py

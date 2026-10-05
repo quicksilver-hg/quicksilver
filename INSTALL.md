@@ -48,12 +48,21 @@ than minutes. `nproc` is Linux; use `$(sysctl -n hw.ncpu)` on the BSDs, or an
 explicit count such as `-j 8` anywhere else.
 
 `ctest --test-dir build` runs serially and takes about 9 minutes for the GUI
-profile. A good GUI run ends `100% tests passed, 0 tests failed out of 146`;
-a headless build without `-DBUILD_GUI=ON` ends at `144`. If
-`CUCKATOO_GPU_SOLVER` is unset, `gpu_parity_tests` is skipped; set it to a
-`qsgpusolve` binary to run the test. A skipped test is still counted in that
-`100%` — see [GPU Solver](doc/gpu-solver.md) for what that test needs. Add `-j`
-to `ctest` as well if you want it to finish sooner.
+profile. The expected tests for your configuration are recorded in
+`test/ctest-manifest.txt`. Run
+`cmake -DBUILD_DIR=build -P cmake/script/CheckCtestManifest.cmake` after
+configuring: it prints the expected total and fails on missing or unexpected
+tests. Run `ctest --test-dir build --output-junit ctest-results.xml`, then
+`cmake -DBUILD_DIR=build -DRESULTS=build/ctest-results.xml -P cmake/script/CheckCtestManifest.cmake`
+to check the results. For multi-config builds, pass `-C Release` to `ctest`
+and `-DCONFIG=Release` to the manifest check.
+
+If `CUCKATOO_GPU_SOLVER` is unset, `gpu_parity_tests` is skipped; set it to a
+`qsgpusolve` binary to run the test. On MSVC, `compilerbug_tests` also skips
+because its only case is GNU-specific. A skipped test is still counted in
+`100%` — the results check rejects other skips. See [GPU Solver](doc/gpu-solver.md)
+for what the parity test needs. Add `-j` to `ctest` as well if you want it to
+finish sooner.
 
 Useful focused configurations include:
 
