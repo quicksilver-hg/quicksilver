@@ -110,6 +110,7 @@ to network selection, peer discovery, and first health checks.
 - [Design and scope](doc/design/README.md)
 - [Transaction relay policy](doc/policy/README.md)
 - [Mining integration](doc/mining/README.md)
+- [Founding vault and developer income](doc/founding-vault-and-developer-income.md)
 - [0.1.x release notes](doc/release-notes.md)
 - [Source publication procedure](doc/source-publication.md)
 - [Verifying a binary release](doc/release-verification.md)
