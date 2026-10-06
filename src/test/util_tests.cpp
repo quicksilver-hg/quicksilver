@@ -23,6 +23,7 @@
 #include <util/strencodings.h>
 #include <util/subprocess.h>
 #include <util/string.h>
+#include <util/syserror.h>
 #include <util/time.h>
 #include <util/vector.h>
 #include <util/utf16.h>
@@ -42,7 +43,16 @@
 
 #include <sys/types.h>
 
+#include <cerrno>
+
 #include <boost/test/unit_test.hpp>
+
+#ifndef WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#else
+#include <windows.h>
+#endif
 
 using namespace std::literals;
 using namespace util::hex_literals;
@@ -1184,14 +1194,112 @@ bool AwaitStubFile(const fs::path& path)
     return false;
 }
 
-//! The stub's reported outcome, or '?' if it never reported one.
-char StubOutcome(const fs::path& path)
+//! One observation of a stub marker. A wrong outcome byte is still `Char`:
+//! only a failure to obtain a byte is an open, read, or empty result.
+enum class StubReadKind {
+    Char,
+    OpenFailed,
+    ReadFailed,
+    Empty,
+};
+
+struct StubRead {
+    StubReadKind kind{StubReadKind::OpenFailed};
+    char outcome{'?'};
+    std::string detail;
+};
+
+//! What `BOOST_CHECK_EQUAL` prints. The outcome char is compared exactly; the
+//! detail is only the failure text, and it is empty once a byte was read.
+struct StubMarker {
+    char outcome{'?'};
+    std::string detail;
+
+    friend bool operator==(const StubMarker& marker, char expected)
+    {
+        return marker.outcome == expected;
+    }
+    friend bool operator==(char expected, const StubMarker& marker)
+    {
+        return marker == expected;
+    }
+    friend std::ostream& operator<<(std::ostream& os, const StubMarker& marker)
+    {
+        os << '\'' << marker.outcome << '\'';
+        if (!marker.detail.empty()) {
+            os << " (" << marker.detail << ')';
+        }
+        return os;
+    }
+};
+
+//! Open the marker and read one byte. The platform error is taken from the
+//! call that failed: `GetLastError()` on Windows, `errno` elsewhere.
+StubRead ReadStubMarker(const fs::path& path)
 {
-    if (!AwaitStubFile(path)) return '?';
-    std::ifstream in{path, std::ios::binary};
-    char ch{'?'};
-    in.get(ch);
-    return ch;
+#ifdef WIN32
+    // Same access and share as the MSVC `ifstream` open (`_SH_DENYNO`): a
+    // non-exclusive read. An exclusive holder still fails this open.
+    const HANDLE handle{CreateFileW(path.wstring().c_str(), GENERIC_READ,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
+    if (handle == INVALID_HANDLE_VALUE) {
+        const DWORD err{GetLastError()};
+        return StubRead{StubReadKind::OpenFailed, '?', "open failed: " + Win32ErrorString(static_cast<int>(err))};
+    }
+    char ch{0};
+    DWORD nread{0};
+    const BOOL ok{ReadFile(handle, &ch, 1, &nread, nullptr)};
+    const DWORD err{GetLastError()};
+    CloseHandle(handle);
+    if (!ok) {
+        return StubRead{StubReadKind::ReadFailed, '?', "read failed: " + Win32ErrorString(static_cast<int>(err))};
+    }
+    if (nread == 0) {
+        return StubRead{StubReadKind::Empty, '?', "opened but empty"};
+    }
+    return StubRead{StubReadKind::Char, ch, {}};
+#else
+    const int fd{::open(path.c_str(), O_RDONLY)};
+    if (fd < 0) {
+        const int err{errno};
+        return StubRead{StubReadKind::OpenFailed, '?', "open failed: " + SysErrorString(err)};
+    }
+    char ch{0};
+    const ssize_t nread{::read(fd, &ch, 1)};
+    const int err{errno};
+    ::close(fd);
+    if (nread < 0) {
+        return StubRead{StubReadKind::ReadFailed, '?', "read failed: " + SysErrorString(err)};
+    }
+    if (nread == 0) {
+        return StubRead{StubReadKind::Empty, '?', "opened but empty"};
+    }
+    return StubRead{StubReadKind::Char, ch, {}};
+#endif
+}
+
+//! The stub's reported outcome. A failure to obtain a byte is retried until
+//! `kStubTimeout`: the file is not there yet, the open failed, the read failed,
+//! or the file was empty. A byte, including a wrong one, is returned at once.
+//! On Windows the marker can be briefly unopenable just after the stub renames
+//! it into place (ERROR_SHARING_VIOLATION, F-438). The last reason is what a
+//! deadline expiry reports.
+StubMarker StubOutcome(const fs::path& path)
+{
+    const auto deadline{std::chrono::steady_clock::now() + kStubTimeout};
+    std::string last{"never appeared"};
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (!fs::exists(path)) {
+            last = "never appeared";
+        } else {
+            const StubRead read{ReadStubMarker(path)};
+            if (read.kind == StubReadKind::Char) return {read.outcome, {}};
+            last = read.detail;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return {'?', last};
 }
 
 void TouchStubFile(const fs::path& path)
