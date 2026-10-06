@@ -12,30 +12,20 @@
 #include <QString>
 
 namespace qsvaultsummary {
-namespace {
-QString Amount(QuicksilverUnit unit, const CAmount& amount, bool privacy)
-{
-    // formatWithPrivacy() right-justifies to a fixed width so the Home HUD's stacked
-    // labels line up, and the ALWAYS separator style then threads thin spaces through
-    // that padding. Inline in a sentence the padding is just a ragged gap, so drop it.
-    return QuicksilverUnits::formatWithPrivacy(unit, amount, QuicksilverUnits::SeparatorStyle::ALWAYS, privacy).trimmed();
-}
-} // namespace
-
 QStringList FormatHoldings(const interfaces::VaultBalances& balances, QuicksilverUnit unit, bool privacy)
 {
     // The labels match the Home HUD ("Pending", "Immature", "Delegated") so the same
     // holding is not called two different things on two screens.
     QStringList holdings;
-    holdings << QObject::tr("Balance: %1").arg(Amount(unit, balances.balance, privacy));
+    holdings << QObject::tr("Balance: %1").arg(QuicksilverUnits::formatInlineWithPrivacy(unit, balances.balance, QuicksilverUnits::SeparatorStyle::ALWAYS, privacy));
     if (balances.unconfirmed_balance != 0) {
-        holdings << QObject::tr("Pending: %1").arg(Amount(unit, balances.unconfirmed_balance, privacy));
+        holdings << QObject::tr("Pending: %1").arg(QuicksilverUnits::formatInlineWithPrivacy(unit, balances.unconfirmed_balance, QuicksilverUnits::SeparatorStyle::ALWAYS, privacy));
     }
     if (balances.immature_balance != 0) {
-        holdings << QObject::tr("Immature: %1").arg(Amount(unit, balances.immature_balance, privacy));
+        holdings << QObject::tr("Immature: %1").arg(QuicksilverUnits::formatInlineWithPrivacy(unit, balances.immature_balance, QuicksilverUnits::SeparatorStyle::ALWAYS, privacy));
     }
     if (balances.delegated_balance != 0) {
-        holdings << QObject::tr("Delegated: %1").arg(Amount(unit, balances.delegated_balance, privacy));
+        holdings << QObject::tr("Delegated: %1").arg(QuicksilverUnits::formatInlineWithPrivacy(unit, balances.delegated_balance, QuicksilverUnits::SeparatorStyle::ALWAYS, privacy));
     }
     return holdings;
 }

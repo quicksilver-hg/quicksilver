@@ -56,6 +56,8 @@ private Q_SLOTS:
     void sendWorkResourceTextClassifiesGpuSolver();
     void cpuFallbackWarningPolicyMatchesNetworkAndPreference();
     void transferPageShowsItsFormAndTransmitButtonTogether();
+    void transferCoinControlQuantityAndBytesUseSeparateRows();
+    void coinControlDialogQuantityAndBytesUseSeparateRows();
     void transferSolverTextNamesRealMenuAndSetting();
     void transferPrecheckRefusesOverBalanceBeforeUnlock();
     void transferPrecheckRefusesDuplicateBeforeUnlock();

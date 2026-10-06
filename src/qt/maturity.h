@@ -6,6 +6,7 @@
 #define QUICKSILVER_QT_MATURITY_H
 
 #include <consensus/amount.h>
+#include <qt/quicksilverunits.h>
 
 #include <QString>
 
@@ -50,6 +51,11 @@ MaturingSummary SummarizeMaturing(const std::vector<std::pair<int, CAmount>>& ro
  * `soonest_amount` is already formatted, so privacy masking stays the caller's job.
  */
 QString FormatMaturingHint(int soonest, const QString& soonest_amount, int latest, int64_t target_spacing_seconds);
+
+/** Format the overview hint from its amounts, with inline spacing and privacy masking. */
+QString FormatMaturingHint(const MaturingSummary& summary, QuicksilverUnit unit,
+                           QuicksilverUnits::SeparatorStyle separators, bool privacy,
+                           int64_t target_spacing_seconds);
 
 } // namespace qsmaturity
 

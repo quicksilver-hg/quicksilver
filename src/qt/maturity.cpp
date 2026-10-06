@@ -86,4 +86,12 @@ QString FormatMaturingHint(int soonest, const QString& soonest_amount, int lates
              WaitPhrase(RoundWait(latest, target_spacing_seconds)));
 }
 
+QString FormatMaturingHint(const MaturingSummary& summary, QuicksilverUnit unit,
+                           QuicksilverUnits::SeparatorStyle separators, bool privacy,
+                           int64_t target_spacing_seconds)
+{
+    const QString amount = QuicksilverUnits::formatInlineWithPrivacy(unit, summary.soonest_amount, separators, privacy);
+    return FormatMaturingHint(summary.soonest, amount, summary.latest, target_spacing_seconds);
+}
+
 } // namespace qsmaturity

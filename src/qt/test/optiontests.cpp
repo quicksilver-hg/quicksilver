@@ -12,6 +12,7 @@
 #include <qt/guiutil.h>
 #include <qt/optionsdialog.h>
 #include <qt/quicksilverunits.h>
+#include <qt/quicksilverstyle.h>
 #include <qt/test/optiontests.h>
 #include <qt/test/util.h>
 #include <test/util/setup_common.h>
@@ -33,6 +34,10 @@
 #include <QScrollBar>
 #include <QSpinBox>
 #include <QTest>
+#include <QTabWidget>
+#include <QTabBar>
+#include <QStyle>
+#include <QStyleFactory>
 
 #include <univalue.h>
 
@@ -668,6 +673,85 @@ void OptionTests::mainTabFitsAtTheOpeningSize()
     QVERIFY2(dialog.width() <= 1366 && dialog.height() <= 700,
              qPrintable(QStringLiteral("laptop size %1x%2").arg(dialog.width()).arg(dialog.height())));
     QVERIFY2(rows_fit(true), qPrintable(problem));
+}
+
+namespace {
+// Apply replaces the base style as well as the palette and stylesheet. Restore
+// all three even when a pixel assertion returns early.
+struct RestoreApplicationStyle {
+    QString style{qApp->style()->objectName()};
+    QPalette palette{qApp->palette()};
+    QString stylesheet{qApp->styleSheet()};
+    QVariant base_style{qApp->property("quicksilverBaseStyle")};
+    ~RestoreApplicationStyle()
+    {
+        qApp->setStyleSheet(QString());
+        qApp->setStyle(QStyleFactory::create(style));
+        qApp->setPalette(palette);
+        qApp->setStyleSheet(stylesheet);
+        qApp->setProperty("quicksilverBaseStyle", base_style);
+    }
+};
+} // namespace
+
+void OptionTests::mainTabMatchesCardSurface()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, /*enableVault=*/true);
+    dialog.setModel(&options);
+    dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+    auto* tabs = dialog.findChild<QTabWidget*>(QStringLiteral("tabWidget"));
+    auto* contents = dialog.findChild<QWidget*>(QStringLiteral("tabMainScrollContents"));
+    auto* network = dialog.findChild<QWidget*>(QStringLiteral("tabNetwork"));
+    QVERIFY(tabs);
+    QVERIFY(contents);
+    QVERIFY(network);
+    tabs->setCurrentIndex(0);
+    QCoreApplication::processEvents();
+    // The top-left layout margin is outside every child control.
+    const QPoint main_point = contents->mapTo(&dialog, QPoint(2, 2));
+    QVERIFY(!contents->childAt(QPoint(2, 2)));
+    const QImage main = dialog.grab().toImage();
+    const QColor main_color = main.pixelColor(main_point * main.devicePixelRatio());
+    qInfo() << "Main sample" << main_point << main_color.name();
+    tabs->setCurrentWidget(network);
+    QCoreApplication::processEvents();
+    QVERIFY(!network->childAt(QPoint(2, 2)));
+    const QImage other = dialog.grab().toImage();
+    const QColor network_color = other.pixelColor(network->mapTo(&dialog, QPoint(2, 2)) * other.devicePixelRatio());
+    qInfo() << "Network sample" << network_color.name();
+    QCOMPARE(main_color, network_color);
+    QCOMPARE(main_color, QColor(QStringLiteral("#171b1f")));
+}
+
+void OptionTests::documentModeStripHasNoLightBase()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    OptionsDialog dialog(nullptr, /*enableVault=*/true);
+    dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+    auto* tabs = dialog.findChild<QTabWidget*>(QStringLiteral("tabWidget"));
+    QVERIFY(tabs);
+    auto* bar = tabs->tabBar();
+    QVERIFY(tabs->documentMode());
+    QCoreApplication::processEvents();
+    const QImage image = dialog.grab().toImage();
+    const int x = bar->tabRect(bar->count() - 1).right() + 12;
+    QVERIFY(x < bar->width());
+    // Fusion's document-mode base used to draw a white line one pixel
+    // below the top of this strip. Scan the column so DPI/font changes cannot
+    // move the line past the assertion.
+    for (int y = 0; y < bar->height(); ++y) {
+        const QPoint point = bar->mapTo(&dialog, QPoint(x, y));
+        const QColor color = image.pixelColor(point * image.devicePixelRatio());
+        QVERIFY2(color.lightness() < 100, qPrintable(color.name()));
+    }
 }
 
 void OptionTests::parametersInteraction()

@@ -125,14 +125,13 @@ process in [SECURITY.md](SECURITY.md).
 
 ## License and provenance
 
-Quicksilver is distributed under the MIT software license. See
-[COPYING](COPYING).
+Quicksilver is released under the MIT license. See [COPYING](COPYING).
 
-Quicksilver is a fork of [Bitcoin Core](https://github.com/bitcoin/bitcoin)
-29.1. Much of this tree is Bitcoin Core's work, still under its copyright and
-the same MIT terms.
+Quicksilver builds on the [Bitcoin Core](https://github.com/bitcoin/bitcoin)
+29.1 codebase. Code inherited from Bitcoin Core keeps its original copyright
+and MIT terms.
 
-Parts of the tree are third-party code under other licences — notably the
-vendored Cuckoo Cycle solver, which is John Tromp's under the FAIR MINING
-License, not MIT. COPYING lists them; `contrib/debian/copyright` is the
-authoritative per-file record.
+Some third-party components carry their own licenses. The most notable is the
+Cuckoo Cycle solver by John Tromp, which is under the FAIR MINING License
+rather than MIT. COPYING lists these components, and `contrib/debian/copyright`
+is the authoritative per-file record.

@@ -463,10 +463,13 @@ QFrame#agentAllotmentSignedSpendPanel {
     border-color: #514567;
 }
 QScrollArea#agentAllotmentScrollArea,
-QWidget#agentAllotmentScrollContents,
+QWidget#agentAllotmentScrollContents {
+    background-color: #101214;
+    border: 0;
+}
 QScrollArea#tabMainScrollArea,
 QWidget#tabMainScrollContents {
-    background-color: #101214;
+    background-color: #171b1f;
     border: 0;
 }
 QWidget#SendCoinsEntry {
@@ -565,6 +568,7 @@ QTabWidget > QWidget {
     background-color: #171b1f;
 }
 QTabBar {
+    qproperty-drawBase: 0;
     background: transparent;
 }
 QTabBar::tab {

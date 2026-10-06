@@ -141,6 +141,13 @@ QString QuicksilverUnits::formatWithPrivacy(Unit unit, const CAmount& amount, Se
     return value + QString(" ") + shortName(unit);
 }
 
+QString QuicksilverUnits::formatInlineWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy)
+{
+    // Keep the stacked labels' formatting and privacy mask, but remove the
+    // column padding (including thin spaces inserted into it by ALWAYS).
+    return formatWithPrivacy(unit, amount, separators, privacy).trimmed();
+}
+
 bool QuicksilverUnits::parse(Unit unit, const QString& value, CAmount* val_out)
 {
     if (value.isEmpty()) {

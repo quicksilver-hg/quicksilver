@@ -23,6 +23,9 @@ private Q_SLOTS:
     void reportedCaseShowsNextAndAll();
     void singularAtBothEnds();
     void amountStringPassesThroughUnchanged();
+    void reportedAmountUsesInlineFormatting();
+    void inlineThousandsKeepTheirSeparator();
+    void inlinePrivacyHasNoPadding();
 };
 
 #endif // QUICKSILVER_QT_TEST_MATURITYTESTS_H

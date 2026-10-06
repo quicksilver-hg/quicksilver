@@ -72,29 +72,30 @@
 #include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
-#include <QDialog>
 #include <QCheckBox>
-#include <QComboBox>
 #include <QClipboard>
+#include <QComboBox>
+#include <QDialog>
 #include <QDialogButtonBox>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QFormLayout>
 #include <QFrame>
 #include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
 #include <QMenuBar>
-#include <QRegularExpression>
 #include <QObject>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
-#include <QScrollArea>
+#include <QRegularExpression>
 #include <QScopedPointer>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QStackedWidget>
@@ -3160,6 +3161,184 @@ void VaultTests::transferPageShowsItsFormAndTransmitButtonTogether()
     QVERIFY2(viewport.contains(in_viewport(transmit)),
              qPrintable(QStringLiteral("Transmit button (%1) is outside the viewport (%2).%3")
                             .arg(describe(in_viewport(transmit)), describe(viewport), pages)));
+}
+
+namespace {
+//! Records Qt messages while a form is built, and puts the previous handler back
+//! on every exit, including an assertion failure.
+class FormOccupancyCapture
+{
+public:
+    QStringList messages;
+    QtMessageHandler previous{nullptr};
+
+    FormOccupancyCapture()
+    {
+        current = this;
+        previous = qInstallMessageHandler(&FormOccupancyCapture::handle);
+    }
+
+    ~FormOccupancyCapture()
+    {
+        current = nullptr;
+        qInstallMessageHandler(previous);
+    }
+
+    FormOccupancyCapture(const FormOccupancyCapture&) = delete;
+    FormOccupancyCapture& operator=(const FormOccupancyCapture&) = delete;
+
+    static void handle(QtMsgType type, const QMessageLogContext& context, const QString& message)
+    {
+        if (current) {
+            QString line = message;
+            if (context.function && context.function[0] != '\0') {
+                line = QLatin1String(context.function) + QLatin1String(": ") + message;
+            }
+            current->messages.append(line);
+            if (current->previous) {
+                current->previous(type, context, message);
+            }
+        }
+    }
+
+    static FormOccupancyCapture* current;
+};
+
+FormOccupancyCapture* FormOccupancyCapture::current = nullptr;
+
+struct CoinControlFormSetup {
+    TestChain100Setup chain;
+    std::unique_ptr<interfaces::VaultLoader> loader;
+    ScopedNodeContext context;
+    std::unique_ptr<const PlatformStyle> style;
+    OptionsModel options;
+    std::unique_ptr<VaultModel> model;
+    bool ok{false};
+
+    explicit CoinControlFormSetup(interfaces::Node& node)
+        : loader(interfaces::MakeVaultLoader(*chain.m_node.chain, *Assert(chain.m_node.args))),
+          context(node, chain.m_node),
+          style(PlatformStyle::instantiate("other")),
+          options(node)
+    {
+        chain.m_node.vault_loader = loader.get();
+        bilingual_str error;
+        if (!options.Init(error)) {
+            QTest::qFail(error.original.c_str(), __FILE__, __LINE__);
+            return;
+        }
+        if (!options.setOption(OptionsModel::CoinControlFeatures, true)) {
+            QTest::qFail("could not enable coin control features", __FILE__, __LINE__);
+            return;
+        }
+        model = std::make_unique<VaultModel>(std::make_unique<PollMarkerVault>(), node, &options, style.get());
+        ok = true;
+    }
+};
+
+QString describeFormCell(const char* name, QFormLayout* layout, QWidget* widget)
+{
+    if (!widget) return QStringLiteral("%1: missing widget").arg(QLatin1String(name));
+    if (!layout) return QStringLiteral("%1: missing layout").arg(QLatin1String(name));
+    int row = -1;
+    QFormLayout::ItemRole role = QFormLayout::SpanningRole;
+    layout->getWidgetPosition(widget, &row, &role);
+    if (row < 0) return QStringLiteral("%1: row -1").arg(QLatin1String(name));
+    const char* role_name = "other";
+    if (role == QFormLayout::LabelRole)
+        role_name = "LabelRole";
+    else if (role == QFormLayout::FieldRole)
+        role_name = "FieldRole";
+    return QStringLiteral("%1: row %2 %3").arg(QLatin1String(name)).arg(row).arg(QLatin1String(role_name));
+}
+
+bool cellIs(QFormLayout* layout, QWidget* widget, int expected_row, QFormLayout::ItemRole expected_role)
+{
+    if (!layout || !widget) return false;
+    int row = -1;
+    QFormLayout::ItemRole role = QFormLayout::SpanningRole;
+    layout->getWidgetPosition(widget, &row, &role);
+    return row == expected_row && role == expected_role;
+}
+
+//! Quantity on row 0 and Bytes on row 1, labels in LabelRole and fields in
+//! FieldRole. A widget the layout refused is row -1.
+bool quantityAndBytesUseSeparateRows(QWidget* root, const QStringList& messages)
+{
+    auto* layout = root->findChild<QFormLayout*>(QStringLiteral("formLayoutCoinControl1"));
+    auto* quantity_text = root->findChild<QLabel*>(QStringLiteral("labelCoinControlQuantityText"));
+    auto* quantity = root->findChild<QLabel*>(QStringLiteral("labelCoinControlQuantity"));
+    auto* bytes_text = root->findChild<QLabel*>(QStringLiteral("labelCoinControlBytesText"));
+    auto* bytes = root->findChild<QLabel*>(QStringLiteral("labelCoinControlBytes"));
+
+    const QString detail = QStringLiteral("formLayoutCoinControl1 rowCount=%1\n%2\n%3\n%4\n%5\ncaptured:\n%6")
+                               .arg(layout ? layout->rowCount() : -1)
+                               .arg(describeFormCell("Quantity label", layout, quantity_text))
+                               .arg(describeFormCell("Quantity field", layout, quantity))
+                               .arg(describeFormCell("Bytes label", layout, bytes_text))
+                               .arg(describeFormCell("Bytes field", layout, bytes))
+                               .arg(messages.join(QLatin1Char('\n')));
+    const QByteArray detail_bytes = detail.toUtf8();
+
+    const bool positions_ok = cellIs(layout, quantity_text, 0, QFormLayout::LabelRole) &&
+                              cellIs(layout, quantity, 0, QFormLayout::FieldRole) &&
+                              cellIs(layout, bytes_text, 1, QFormLayout::LabelRole) &&
+                              cellIs(layout, bytes, 1, QFormLayout::FieldRole);
+    const bool positions_pass = QTest::qVerify(positions_ok,
+                                               "Quantity row 0 and Bytes row 1 in formLayoutCoinControl1",
+                                               detail_bytes.constData(), __FILE__, __LINE__);
+
+    QStringList occupied;
+    for (const QString& line : messages) {
+        if (line.contains(QStringLiteral("already occupied"))) occupied.append(line);
+    }
+    const QByteArray occupied_bytes = occupied.join(QLatin1Char('\n')).toUtf8();
+    const bool messages_pass = QTest::qVerify(occupied.isEmpty(),
+                                              "no QFormLayout cell already occupied",
+                                              occupied_bytes.constData(), __FILE__, __LINE__);
+    return positions_pass && messages_pass;
+}
+
+} // namespace
+
+//! Quantity and Bytes were both declared at form row 0. QFormLayout keeps the
+//! first pair and refuses the second, so Bytes is not in the layout at all.
+void VaultTests::transferCoinControlQuantityAndBytesUseSeparateRows()
+{
+    CoinControlFormSetup setup(m_node);
+    if (!setup.ok) return;
+
+    // setupUi runs in the constructor, so the handler has to be installed first.
+    std::unique_ptr<SendCoinsDialog> dialog;
+    QStringList messages;
+    {
+        FormOccupancyCapture capture;
+        dialog = std::make_unique<SendCoinsDialog>(setup.style.get());
+        dialog->setModel(setup.model.get());
+        messages = capture.messages;
+    }
+
+    QWidget* frame = dialog->findChild<QWidget*>(QStringLiteral("frameCoinControl"));
+    QVERIFY(frame);
+    QVERIFY(!frame->isHidden());
+    if (!quantityAndBytesUseSeparateRows(dialog.get(), messages)) return;
+}
+
+void VaultTests::coinControlDialogQuantityAndBytesUseSeparateRows()
+{
+    CoinControlFormSetup setup(m_node);
+    if (!setup.ok) return;
+
+    vault::CCoinControl coin_control;
+    std::unique_ptr<CoinControlDialog> dialog;
+    QStringList messages;
+    {
+        FormOccupancyCapture capture;
+        dialog = std::make_unique<CoinControlDialog>(coin_control, setup.model.get(), setup.style.get());
+        messages = capture.messages;
+    }
+
+    if (!quantityAndBytesUseSeparateRows(dialog.get(), messages)) return;
 }
 
 void VaultTests::transferSolverTextNamesRealMenuAndSetting()

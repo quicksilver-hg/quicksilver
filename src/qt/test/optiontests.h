@@ -34,6 +34,8 @@ private Q_SLOTS:
     void cpuFallbackWarningPreferencePersists();
     void allowCpuBlockMiningPersistsWithoutRestart();
     void mainTabFitsAtTheOpeningSize();
+    void mainTabMatchesCardSurface();
+    void documentModeStripHasNoLightBase();
     void allowCpuAgentTxPowPersists();
     void allowCpuAgentTxPowCancelLeavesTheSettingOff();
     void parametersInteraction();

@@ -306,15 +306,14 @@ void OverviewPage::updateMaturityCountdown()
         }
     }
     const qsmaturity::MaturingSummary summary{qsmaturity::SummarizeMaturing(maturing)};
-    QString soonest_amount;
+    // Keep the existing no-options fallback; amounts always use the inline formatter.
+    QString text = qsmaturity::FormatMaturingHint(
+        summary.soonest, QString(), summary.latest, Params().GetConsensus().nPowTargetSpacing);
     if (summary.soonest > 0 && vaultModel && vaultModel->getOptionsModel()) {
-        // Formatted like labelImmature above it, privacy mask included.
-        soonest_amount = QuicksilverUnits::formatWithPrivacy(vaultModel->getOptionsModel()->getDisplayUnit(),
-                                                             summary.soonest_amount,
-                                                             QuicksilverUnits::SeparatorStyle::ALWAYS, m_privacy);
+        text = qsmaturity::FormatMaturingHint(summary, vaultModel->getOptionsModel()->getDisplayUnit(),
+                                             QuicksilverUnits::SeparatorStyle::ALWAYS, m_privacy,
+                                             Params().GetConsensus().nPowTargetSpacing);
     }
-    const QString text = qsmaturity::FormatMaturingHint(
-        summary.soonest, soonest_amount, summary.latest, Params().GetConsensus().nPowTargetSpacing);
     ui->labelImmatureCountdown->setText(text);
     ui->labelImmatureCountdown->setVisible(!text.isEmpty());
 }
