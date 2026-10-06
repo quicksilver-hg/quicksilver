@@ -197,8 +197,11 @@ void MineMintPage::refreshIsolationState()
 MineMintPage::StatusText MineMintPage::statusText(const interfaces::MiningStatus& s)
 {
     // Armed with nothing permitted to run is not "warming up" and not "CPU".
-    // The other three branches are the ones this page already got right.
+    // Idle with nothing permitted is not "CPU" either: the permit is a fact
+    // about the configuration, and it is known before anyone presses Start.
+    // That row stays Idle. Nothing was refused, because nothing was armed.
     const bool halted{s.active && !s.block_solving_possible};
+    const bool idle_unconfigured{!s.active && !s.gpu_solver && !s.block_solving_possible};
     StatusText rows;
     rows.block_mining = !s.active ? tr("Idle") : (halted ? tr("Halted") : tr("Active"));
     if (!s.address.empty()) {
@@ -212,7 +215,7 @@ MineMintPage::StatusText MineMintPage::statusText(const interfaces::MiningStatus
     }
     if (s.gpu_solver) {
         rows.solver = tr("GPU bridge");
-    } else if (halted) {
+    } else if (halted || idle_unconfigured) {
         rows.solver = tr("None");
     } else {
         rows.solver = tr("CPU");
@@ -230,10 +233,12 @@ MineMintPage::StatusText MineMintPage::statusText(const interfaces::MiningStatus
     const QString graph_count{graphs == 1 ? tr("1 graph attempted")
                                           : tr("%1 graphs attempted").arg(graphs)};
     rows.attempts = rate + QStringLiteral(" (") + graph_count + QStringLiteral(")");
-    if (!s.active) {
+    if (!s.active && !idle_unconfigured) {
         rows.health = tr("Not running");
-    } else if (halted) {
-        rows.health = tr("No graphics solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Controls > Options > Main.");
+    } else if (halted || idle_unconfigured) {
+        // The same sentence the halted row already uses. It describes the
+        // configuration, so it is true before arming as well as after a refusal.
+        rows.health = tr("No GPU solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Controls > Options > Main.");
         rows.show_configure_solver = true;
     } else if (s.solver_ok) {
         // "armed but nothing finished yet" must not read the same as "armed

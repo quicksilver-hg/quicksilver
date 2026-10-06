@@ -1,11 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Quicksilver brand mark: the alchemical Mercury glyph (U+263F, "quicksilver")
-  knocked out of a Cinnabar disc.
+  in black on a brushed-silver disc, framed by a black band and a thin Cinnabar
+  ring. Every layer is opaque, so the mark reads the same on light and dark
+  backgrounds.
 
   Traced as vector primitives (no font glyph) so the mark renders identically on
-  any build machine. Palette is Direction-C: Cinnabar #d2402d disc, transparent
-  mark. Regenerate the raster set with contrib/devtools/gen-brand-icons.sh.
+  any build machine. The Mercury stroke group inside mask "mercury-knockout" is
+  also read by contrib/devtools/gen-qt-hud-icons.py; keep its coordinates in the
+  full 1024 space and scale the disc around it instead. Regenerate the raster
+  set with contrib/devtools/gen-brand-icons.sh.
 
   Copyright (c) 2026 The Quicksilver developers
   Distributed under the MIT software license, see the accompanying file COPYING
@@ -13,6 +17,12 @@
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
+    <linearGradient id="silver" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f5f7f9"/>
+      <stop offset="0.45" stop-color="#ccd5dc"/>
+      <stop offset="0.7" stop-color="#9aa6af"/>
+      <stop offset="1" stop-color="#dfe5ea"/>
+    </linearGradient>
     <mask id="mercury-knockout" maskUnits="userSpaceOnUse">
       <rect width="1024" height="1024" fill="white"/>
       <!-- Mercury glyph knockout, stroked primitives (round caps/joins) -->
@@ -30,6 +40,12 @@
     </mask>
   </defs>
 
-  <!-- Cinnabar disc with transparent Mercury glyph knockout -->
-  <circle cx="512" cy="512" r="480" fill="#d2402d" mask="url(#mercury-knockout)"/>
+  <!-- Black field: fills the band between disc and ring and shows through the glyph -->
+  <circle cx="512" cy="512" r="456" fill="#000000"/>
+  <!-- Silver disc (r 408) with the glyph knocked out; the transform scales disc and mask together -->
+  <g transform="translate(76.8 76.8) scale(0.85)">
+    <circle cx="512" cy="512" r="480" fill="url(#silver)" mask="url(#mercury-knockout)"/>
+  </g>
+  <!-- Cinnabar ring, outer edge at r 480 -->
+  <circle cx="512" cy="512" r="468" fill="none" stroke="#d84b3e" stroke-width="24"/>
 </svg>

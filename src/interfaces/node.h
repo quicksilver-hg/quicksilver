@@ -98,8 +98,10 @@ struct MiningStatus {
     bool solver_missing{false};
     //! Whether block solving can run at all in this configuration. The node
     //! decides (GPU solver configured, or CPU block mining permitted); the GUI
-    //! must not re-derive the policy. False is armed-and-halted. Not published
-    //! on getminingstatus — same precedent as solver_missing.
+    //! must not re-derive the policy. False while active is armed-and-halted;
+    //! false while idle means nothing is permitted, and the page says Idle with
+    //! Solver: None rather than Halted (F-426). Not published on
+    //! getminingstatus — same precedent as solver_missing.
     bool block_solving_possible{true};
     //! The block this node is grinding right now. Distinct from getmininginfo's
     //! currentblocktx, which reports whatever was assembled last by any caller.

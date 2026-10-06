@@ -231,6 +231,10 @@ public:
     //! Get balances if possible without blocking.
     virtual bool tryGetBalances(VaultBalances& balances, uint256& block_hash) = 0;
 
+    //! Trusted balance, if it bounds automatic safe-input selection under the given
+    //! reuse policy and can be read without blocking; otherwise nullopt.
+    virtual std::optional<CAmount> tryGetAutoSelectionBound(bool avoid_address_reuse) = 0;
+
     //! Get balance refresh marker if possible without blocking.
     virtual bool tryGetBalanceUpdateBlockHash(uint256& block_hash) = 0;
 

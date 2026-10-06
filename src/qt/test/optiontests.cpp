@@ -27,7 +27,11 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPoint>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QSpinBox>
 #include <QTest>
 
 #include <univalue.h>
@@ -562,6 +566,108 @@ void OptionTests::allowCpuBlockMiningPersistsWithoutRestart()
     QVERIFY(!overridden.isRestartRequired());
 
     restore_allowcpu();
+}
+
+//! F-427: the Main tab's rows used to be crushed into the dialog's 700x540
+//! minimum. Each label, checkbox and spin box has to receive its height, and
+//! sit fully inside the scroll viewport's width. What does not fit vertically
+//! has to be reachable by scrolling. A 1366x768 laptop, after a taskbar and a
+//! title bar, is checked by sizing the client to 1366x700.
+void OptionTests::mainTabFitsAtTheOpeningSize()
+{
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, /*enableVault=*/true);
+    dialog.setModel(&options);
+    dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+    QWidget* tab = dialog.findChild<QWidget*>(QStringLiteral("tabMain"));
+    QVERIFY(tab);
+
+    const char* required[]{"allowCpuBlockMining", "allowCpuAgentTxPow", "gpuSolverStatusLabel",
+                           "pruneSize", "databaseCache", "threadsScriptVerif"};
+    for (const char* name : required) {
+        QVERIFY2(tab->findChild<QWidget*>(QString::fromLatin1(name)), name);
+    }
+
+    QString problem;
+    // horizontal is for a screen wide enough to give the rows their width.
+    // The opening-size check does not ask for it: this platform's screen is
+    // 240x320, so the dialog cannot grow past 700 and a wide font sticks out.
+    auto rows_fit = [&](bool horizontal) {
+        QScrollArea* scroll = tab->findChild<QScrollArea*>(QStringLiteral("tabMainScrollArea"));
+        const auto widgets = tab->findChildren<QWidget*>();
+        for (QWidget* widget : widgets) {
+            const bool tracked = qobject_cast<QLabel*>(widget) || qobject_cast<QCheckBox*>(widget) || qobject_cast<QSpinBox*>(widget);
+            if (!tracked || widget->isHidden()) continue;
+            // A word-wrapped label's sizeHint height is the height at its
+            // preferred width. At the width it actually has, the height it
+            // needs is heightForWidth.
+            const int hint = widget->hasHeightForWidth()
+                ? widget->heightForWidth(qMax(1, widget->width()))
+                : widget->sizeHint().height();
+            if (widget->height() < hint) {
+                problem = widget->objectName()
+                    + QStringLiteral(" height ") + QString::number(widget->height())
+                    + QStringLiteral(" < needed ") + QString::number(hint)
+                    + QStringLiteral(" dialog ") + QString::number(dialog.width()) + QLatin1Char('x') + QString::number(dialog.height())
+                    + QStringLiteral(" tab given ") + QString::number(tab->width()) + QLatin1Char('x') + QString::number(tab->height())
+                    + QStringLiteral(" tab sizeHint ") + QString::number(tab->sizeHint().width()) + QLatin1Char('x') + QString::number(tab->sizeHint().height())
+                    + QStringLiteral(" tab minHint ") + QString::number(tab->minimumSizeHint().width()) + QLatin1Char('x') + QString::number(tab->minimumSizeHint().height());
+                return false;
+            }
+            if (!scroll || !scroll->widget() || !scroll->widget()->isAncestorOf(widget)) continue;
+            const int bottom = widget->mapTo(scroll->widget(), QPoint(0, widget->height())).y();
+            const int reach = scroll->verticalScrollBar()->maximum() + scroll->viewport()->height();
+            if (reach < bottom) {
+                problem = widget->objectName()
+                    + QStringLiteral(" bottom ") + QString::number(bottom)
+                    + QStringLiteral(" is past the scroll range ") + QString::number(reach);
+                return false;
+            }
+            if (!horizontal) continue;
+            const QPoint origin = widget->mapTo(scroll->viewport(), QPoint(0, 0));
+            if (origin.x() < 0 || origin.x() + widget->width() > scroll->viewport()->width()) {
+                problem = widget->objectName()
+                    + QStringLiteral(" x ") + QString::number(origin.x())
+                    + QStringLiteral(" width ") + QString::number(widget->width())
+                    + QStringLiteral(" outside viewport width ") + QString::number(scroll->viewport()->width());
+                return false;
+            }
+        }
+        return true;
+    };
+
+    // Opening size. On this platform that is the 700x540 minimum, which is the
+    // size the desktop opened at when the rows were crushed.
+    QVERIFY2(rows_fit(false), qPrintable(problem));
+
+    // A 1920x1080 desktop gives the rows their own size. This platform cannot:
+    // its screen is 240x320, and the dialog will not grow past the screen.
+    // Apply the desktop size, then the client area a 1366x768 laptop has left
+    // after a taskbar and a title bar.
+    QScrollArea* scroll = tab->findChild<QScrollArea*>(QStringLiteral("tabMainScrollArea"));
+    QVERIFY(scroll);
+    QVERIFY(scroll->widget());
+    const int chrome_w = dialog.width() - scroll->viewport()->width();
+    const int chrome_h = dialog.height() - scroll->viewport()->height();
+    const QSize contents = scroll->widget()->sizeHint().expandedTo(scroll->widget()->minimumSizeHint());
+    dialog.resize(qMax(dialog.minimumWidth(), contents.width() + qMax(0, chrome_w)),
+                  qMax(dialog.minimumHeight(), contents.height() + qMax(0, chrome_h)));
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+    const int overflow = scroll->widget()->width() - scroll->viewport()->width();
+    if (overflow > 0) {
+        dialog.resize(dialog.width() + overflow, dialog.height());
+        QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+    }
+    QVERIFY2(rows_fit(true), qPrintable(problem));
+
+    dialog.resize(qMin(dialog.width(), 1366), qMin(dialog.height(), 700));
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+    QVERIFY2(dialog.width() <= 1366 && dialog.height() <= 700,
+             qPrintable(QStringLiteral("laptop size %1x%2").arg(dialog.width()).arg(dialog.height())));
+    QVERIFY2(rows_fit(true), qPrintable(problem));
 }
 
 void OptionTests::parametersInteraction()

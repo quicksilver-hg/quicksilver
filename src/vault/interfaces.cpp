@@ -461,6 +461,19 @@ public:
         balances = getBalances();
         return true;
     }
+    std::optional<CAmount> tryGetAutoSelectionBound(bool avoid_address_reuse) override
+    {
+        TRY_LOCK(m_vault->cs_vault, locked_vault);
+        if (!locked_vault) return std::nullopt;
+        uint256 block_hash;
+        if (!m_vault->TryGetLastBlockHash(block_hash)) return std::nullopt;
+        // Hold policy and balance reads together: permitting used addresses can
+        // admit coins omitted from the trusted balance when reuse avoidance is set.
+        if (!avoid_address_reuse && m_vault->IsVaultFlagSet(VAULT_FLAG_AVOID_REUSE)) return std::nullopt;
+        const CAmount balance = GetBalance(*m_vault).m_mine_trusted;
+        if (!MoneyRange(balance)) return std::nullopt;
+        return balance;
+    }
     bool tryGetBalanceUpdateBlockHash(uint256& block_hash) override
     {
         TRY_LOCK(m_vault->cs_vault, locked_vault);

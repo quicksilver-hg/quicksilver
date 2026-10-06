@@ -32,6 +32,7 @@ private Q_SLOTS:
     void mineMintPageNamesAnArmedMinerWithNoPermittedSolver();
     void mineMintPageRefusesToPresentIsolatedMiningAsSuccess();
     void mineMintPageShowsARawScriptPayout();
+    void mineMintPageNamesAnIdleNodeWithNothingPermitted();
     void networkPageFormatsStatus();
     void networkPageDiagnosesBootstrapAndAddsPeers();
     void networkPageHidesTheManualTorRecipeWhenAProxyIsCarryingOnions();
@@ -55,6 +56,14 @@ private Q_SLOTS:
     void sendWorkResourceTextClassifiesGpuSolver();
     void cpuFallbackWarningPolicyMatchesNetworkAndPreference();
     void transferPageShowsItsFormAndTransmitButtonTogether();
+    void transferSolverTextNamesRealMenuAndSetting();
+    void transferPrecheckRefusesOverBalanceBeforeUnlock();
+    void transferPrecheckRefusesDuplicateBeforeUnlock();
+    void transferPrecheckRefusesZeroBeforeUnlock();
+    void transferPrecheckAllowsStaleLowBalance();
+    void transferPrecheckDefersUncertainBalance_data();
+    void transferPrecheckDefersUncertainBalance();
+    void transferPreparationFailureWithoutGraphsHidesProgress();
     void requestPageAddressTypeCopyHasNoBitcoinVocabulary();
     void signVerifyMessageRejectsNonBase58WithoutBitcoinVocabulary();
     void sendEntryAddressBookFillsDestinationWithoutNestedEventLoop();

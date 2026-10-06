@@ -85,7 +85,7 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
 
     auto* mark = new QLabel(header);
     mark->setObjectName(QStringLiteral("desktopLaunchMark"));
-    mark->setPixmap(platform_style->TextColorIcon(QIcon(QStringLiteral(":/icons/quicksilver"))).pixmap(QSize(42, 42)));
+    mark->setPixmap(QIcon(QStringLiteral(":/icons/quicksilver")).pixmap(QSize(48, 48)));
     mark->setFixedSize(QSize(48, 48));
     mark->setAlignment(Qt::AlignCenter);
     header_layout->addWidget(mark);
@@ -97,7 +97,7 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     title->setObjectName(QStringLiteral("desktopLaunchTitle"));
     title->setProperty("class", QStringLiteral("pageTitle"));
     title_block->addWidget(title);
-    auto* subtitle = new QLabel(tr("Vault first. Consensus only when you choose it."), header);
+    auto* subtitle = new QLabel(tr("Crypto without transaction fees."), header);
     subtitle->setObjectName(QStringLiteral("desktopLaunchSubtitle"));
     subtitle->setProperty("class", QStringLiteral("muted"));
     subtitle->setWordWrap(true);
@@ -253,12 +253,14 @@ void DesktopLaunchPage::setVaultSummary(bool has_vault, const QString& vault_nam
     m_vault_privacy_button->setToolTip(m_privacy
         ? tr("Show this vault balance on the launch screen.")
         : tr("Hide this vault balance on the launch screen."));
+    // One item per line. Backup state is left to the Backup panel, which knows
+    // whether a backup was recorded.
     QStringList summary;
+    summary << tr("Vault: %1").arg(vault_name);
     summary << holdings;
     summary << (agent_summary.isEmpty() ? tr("Agent setups: none") : agent_summary);
-    summary << tr("Backup: check required");
     summary << (last_activity.isEmpty() ? tr("Recent activity: none yet") : tr("Recent activity: %1").arg(last_activity));
-    m_vault_summary->setText(tr("%1 is available. %2.").arg(vault_name, summary.join(QStringLiteral(" | "))));
+    m_vault_summary->setText(summary.join(QLatin1Char('\n')));
 }
 
 void DesktopLaunchPage::setVaultRuntimeAvailable(bool available)

@@ -33,6 +33,7 @@ private Q_SLOTS:
     void externalSignerSurfacesAreHiddenNotGreyedOut();
     void cpuFallbackWarningPreferencePersists();
     void allowCpuBlockMiningPersistsWithoutRestart();
+    void mainTabFitsAtTheOpeningSize();
     void allowCpuAgentTxPowPersists();
     void allowCpuAgentTxPowCancelLeavesTheSettingOff();
     void parametersInteraction();

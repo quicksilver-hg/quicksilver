@@ -20,6 +20,7 @@ class QDataWidgetMapper;
 class QComboBox;
 class QLabel;
 class QProcess;
+class QShowEvent;
 QT_END_NAMESPACE
 
 namespace Ui {
@@ -78,6 +79,9 @@ private Q_SLOTS:
     void updateDefaultProxyNets();
     void updateOkButtonState();
     void stopGpuSolverProbe();
+
+protected:
+    void showEvent(QShowEvent* event) override;
 
 Q_SIGNALS:
     void quitOnReset();

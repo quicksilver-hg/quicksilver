@@ -78,6 +78,7 @@ public:
     void bumpSolveGeneration();
     bool acceptSolveResult(quint64 gen) const { return gen == m_solve_generation; }
     static QString sendWorkResourceTextForTesting(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status = GpuSolverProbeStatus::Unchecked);
+    static QStringList startupAccelerationTextForTesting(bool has_gpu) { return startupAccelerationText(has_gpu); }
     static QStringList gpuSolverProbeArguments(uint8_t edgebits);
     static bool cpuFallbackWarningRequiredForTesting(bool slow_network, GpuSolverProbeStatus probe_status, bool warning_enabled);
 
@@ -93,6 +94,7 @@ Q_SIGNALS:
     void coinsSent(const uint256& txid);
     void solverSettingsRequested();
     void prepareSendConfirmationReadyForTesting();
+    void cpuFallbackCheckReachedForTesting();
     //! Always emitted once an accepted asynchronous preparation finishes, including
     //! failures. This keeps tests from misreporting a preparation error as a timeout.
     void sendPreparationFinishedForTesting(int status, const QString& reason);
@@ -109,6 +111,7 @@ private:
     bool fNewRecipientAllowed{true};
     const PlatformStyle *platformStyle;
     quint64 m_solve_generation{0};
+    bool m_send_work_graph_attempted{false};
     QElapsedTimer m_send_work_started;
     QTimer m_send_work_update_timer;
     QProcess* m_gpu_solver_probe{nullptr};
@@ -144,6 +147,7 @@ private:
     void refreshGpuSolverProbe(bool requires_configured_gpu_solver, const QString& solver_path);
     void stopGpuSolverProbe();
     static QString sendWorkResourceText(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status);
+    static QStringList startupAccelerationText(bool has_gpu);
     void showStartupAccelerationWarningIfNeeded();
     void confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<VaultModelTransaction> transaction, vault::CCoinControl coin_control);
     void startAsyncSendPrepare(std::unique_ptr<VaultModelTransaction> transaction, vault::CCoinControl coin_control);

@@ -27,6 +27,10 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QGuiApplication>
+#include <QScreen>
+#include <QShowEvent>
+#include <QSizePolicy>
 #include <QDataWidgetMapper>
 #include <QFileInfo>
 #include <QFrame>
@@ -119,6 +123,19 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
     ui->setupUi(this);
     setProperty("class", QStringLiteral("quicksilverDialog"));
     setMinimumSize(QSize(700, 540));
+    // QCheckBox reports these multi-line labels as wider than the dialog.
+    // setMinimumSize above then resizes to 700x540 and marks that as the user's
+    // size, so showing the dialog does not grow it, and the layout crushes
+    // every Main-tab control into what is left. Take the dialog's width, keep
+    // the height of the lines, and let the scroll area move when a short screen
+    // cannot show them all.
+    for (QCheckBox* box : {ui->allowCpuBlockMining, ui->allowCpuAgentTxPow}) {
+        QSizePolicy policy = box->sizePolicy();
+        policy.setHorizontalPolicy(QSizePolicy::Ignored);
+        policy.setVerticalPolicy(QSizePolicy::Fixed);
+        box->setSizePolicy(policy);
+        box->setFixedHeight(box->sizeHint().height());
+    }
     ui->verticalLayout->setContentsMargins(18, 16, 18, 18);
     ui->verticalLayout->setSpacing(12);
     ui->tabWidget->setDocumentMode(true);
@@ -316,6 +333,38 @@ void OptionsDialog::setModel(OptionsModel *_model)
     validateGpuSolverPath();
 }
 
+void OptionsDialog::showEvent(QShowEvent* event)
+{
+    QDialog::showEvent(event);
+    // setMinimumSize resized this dialog to 700x540 before the rows existed,
+    // and that counts as a user resize, so showing it does not grow it. Ask
+    // the Main tab for the size of its rows at the width they actually need,
+    // then stop at the screen. A shorter screen scrolls instead of crushing
+    // the rows; the scroll area is what keeps a 1366x768 laptop honest.
+    if (ui->tabMainScrollArea->viewport()->width() <= 0) return;
+    layout()->activate();
+    const QSize contents = ui->tabMainScrollContents->sizeHint().expandedTo(ui->tabMainScrollContents->minimumSizeHint());
+    const int chrome_w = width() - ui->tabMainScrollArea->viewport()->width();
+    const int chrome_h = height() - ui->tabMainScrollArea->viewport()->height();
+    int want_w = qMax(minimumWidth(), contents.width() + qMax(0, chrome_w));
+    int want_h = qMax(minimumHeight(), contents.height() + qMax(0, chrome_h));
+    QScreen* screen = this->screen() ? this->screen() : QGuiApplication::primaryScreen();
+    const QRect avail = screen ? screen->availableGeometry() : QRect();
+    // availableGeometry is the screen area the window frame may occupy.
+    // resize() sets the client size, so leave a margin for the title bar.
+    if (avail.width() > 0) want_w = qMin(want_w, qMax(minimumWidth(), avail.width() - 32));
+    if (avail.height() > 0) want_h = qMin(want_h, qMax(minimumHeight(), avail.height() - 48));
+    resize(want_w, want_h);
+    // The vertical bar can appear or go as the height changes, which changes
+    // the width the rows actually get. One more pass covers that difference.
+    layout()->activate();
+    const int overflow = ui->tabMainScrollContents->width() - ui->tabMainScrollArea->viewport()->width();
+    if (overflow > 0) {
+        const int limit = avail.width() > 0 ? qMax(minimumWidth(), avail.width() - 32) : want_w + overflow;
+        resize(qMin(width() + overflow, limit), height());
+    }
+}
+
 void OptionsDialog::setCurrentTab(OptionsDialog::Tab tab)
 {
     QWidget *tab_widget = nullptr;
@@ -431,7 +480,7 @@ void OptionsDialog::validateGpuSolverPath()
     if (path.isEmpty()) {
         m_gpu_solver_probe_status = SendCoinsDialog::GpuSolverProbeStatus::Unchecked;
         m_gpu_solver_valid = true;
-        ui->gpuSolverStatusLabel->setText(tr("No graphics solver is configured. Transfers fall back to this computer's processor and may take many minutes; block mining stays off unless processor block mining is enabled above."));
+        ui->gpuSolverStatusLabel->setText(tr("No GPU solver is configured. Transfers fall back to this computer's processor and may take many minutes; block mining stays off unless processor block mining is enabled above."));
         updateOkButtonState();
         return;
     }
@@ -582,7 +631,7 @@ void OptionsDialog::on_okButton_clicked()
 
     auto* box = new QMessageBox{QMessageBox::Warning,
                                  tr("Let agent spends use this computer's processor?"),
-                                 tr("Agent spends will be prepared by this computer's processor whenever no graphics solver is available."),
+                                 tr("Agent spends will be prepared by this computer's processor whenever no GPU solver is available."),
                                  QMessageBox::NoButton,
                                  this};
     box->setObjectName(QStringLiteral("cpuAgentTxPowWarning"));
@@ -590,7 +639,7 @@ void OptionsDialog::on_okButton_clicked()
         "An agent decides for itself when to spend. It can begin while you are working, playing, or away from the computer, and it will not ask first.\n\n"
         "Preparing a single spend on a processor takes many minutes. A measured reference for this kind of work is about 16 minutes on an eight-thread desktop; a slower computer or a larger spend takes longer. That figure is a calibration result, not a promise.\n\n"
         "While that work runs it uses every processor core. The rest of the computer will feel slow, and video, calls, and games may stutter until it finishes.\n\n"
-        "A graphics solver does the same work in a fraction of the time. This setting is for computers that do not have one."));
+        "A GPU solver does the same work in a fraction of the time. This setting is for computers that do not have one."));
     auto* acknowledge = new QCheckBox{tr("I understand that an agent may start a long job that slows this computer."), box};
     acknowledge->setObjectName(QStringLiteral("cpuAgentTxPowAcknowledge"));
     box->setCheckBox(acknowledge);

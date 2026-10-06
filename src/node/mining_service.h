@@ -99,8 +99,10 @@ struct MiningStatus {
     //! Whether a block can be solved in this configuration: a GPU solver is
     //! configured, or CPU block mining is permitted. False is the halted state
     //! — armed, with no solver and no permitted fallback — and it is known at
-    //! arming, not after the first solve attempt. Default true so an idle
-    //! snapshot is not reported as halted.
+    //! arming, not after the first solve attempt. This member is the permit
+    //! Start() published for the armed worker; an idle reading asks
+    //! BlockSolvingPossible live instead (BuildMiningStatus, F-426), so the
+    //! default true is not what an idle snapshot reports.
     bool block_solving_possible{true};
     //! The block the worker is grinding right now, as opposed to the last block
     //! anybody assembled. BlockAssembler's currentblocktx/currentblockweight are

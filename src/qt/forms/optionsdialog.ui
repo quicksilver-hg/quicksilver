@@ -26,7 +26,43 @@
       <attribute name="title">
        <string>&amp;Main</string>
       </attribute>
-      <layout class="QVBoxLayout" name="verticalLayout_Main">
+      <layout class="QVBoxLayout" name="verticalLayout_Main_Scroll">
+       <property name="leftMargin">
+        <number>0</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
+       <item>
+        <widget class="QScrollArea" name="tabMainScrollArea">
+         <property name="frameShape">
+          <enum>QFrame::NoFrame</enum>
+         </property>
+         <property name="widgetResizable">
+          <bool>true</bool>
+         </property>
+         <property name="horizontalScrollBarPolicy">
+          <enum>Qt::ScrollBarAlwaysOff</enum>
+         </property>
+         <property name="verticalScrollBarPolicy">
+          <enum>Qt::ScrollBarAsNeeded</enum>
+         </property>
+         <widget class="QWidget" name="tabMainScrollContents">
+          <property name="geometry">
+           <rect>
+            <x>0</x>
+            <y>0</y>
+            <width>680</width>
+            <height>480</height>
+           </rect>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayout_Main">
        <item>
         <widget class="QCheckBox" name="quicksilverAtStartup">
          <property name="toolTip">
@@ -230,7 +266,7 @@
           <string>Block mining is a continuous race. This computer's processor can run it, but a graphics card will almost always find the block first. The change applies the next time you start mining, not to a search that is already running.</string>
          </property>
          <property name="text">
-          <string>&amp;Allow this computer's processor to mine blocks when no graphics solver is configured.
+          <string>&amp;Allow this computer's processor to mine blocks when no GPU solver is configured.
 It keeps searching and is very unlikely to find a block before a graphics card does.
 Applies the next time mining starts.</string>
          </property>
@@ -239,10 +275,10 @@ Applies the next time mining starts.</string>
        <item>
         <widget class="QCheckBox" name="allowCpuAgentTxPow">
          <property name="toolTip">
-          <string>An agent decides for itself when to spend and does not ask first. Preparing one spend on this computer's processor takes many minutes and uses every core. A graphics solver does the same work much faster. Applies to the next agent spend prepared here, not to one already running.</string>
+          <string>An agent decides for itself when to spend and does not ask first. Preparing one spend on this computer's processor takes many minutes and uses every core. A GPU solver does the same work much faster. Applies to the next agent spend prepared here, not to one already running.</string>
          </property>
          <property name="text">
-          <string>Allow a&amp;gent spends to be prepared by this computer's processor when no graphics solver is configured.
+          <string>Allow a&amp;gent spends to be prepared by this computer's processor when no GPU solver is configured.
 An agent can start one at any time, and it will use every core for several minutes.</string>
          </property>
         </widget>
@@ -269,6 +305,10 @@ An agent can start one at any time, and it will use every core for several minut
           </size>
          </property>
         </spacer>
+       </item>
+          </layout>
+         </widget>
+        </widget>
        </item>
       </layout>
      </widget>

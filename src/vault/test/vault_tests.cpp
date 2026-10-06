@@ -114,6 +114,54 @@ private:
 
 BOOST_FIXTURE_TEST_SUITE(vault_tests, VaultTestingSetup)
 
+BOOST_FIXTURE_TEST_CASE(auto_selection_bound_policy_and_nonblocking_read, TestChain100Setup)
+{
+    auto loader = interfaces::MakeVaultLoader(*m_node.chain, *Assert(m_node.args));
+    std::shared_ptr<CVault> vault = CreateSyncedVault(
+        *m_node.chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey);
+    auto vault_interface = interfaces::MakeVault(*loader->context(), vault);
+    // The fixture's coinbase outputs are still immature. Add a confirmed
+    // ordinary output so the policy table verifies a nonzero trusted bound.
+    const CBlockIndex* tip = WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Tip());
+    BOOST_REQUIRE(tip);
+    CMutableTransaction funded;
+    funded.vin.emplace_back(m_coinbase_txns.back()->GetHash(), 0);
+    funded.vout.emplace_back(COIN, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    vault->AddToVault(MakeTransactionRef(funded), TxStateConfirmed{tip->GetBlockHash(), tip->nHeight, /*index=*/1});
+    const CAmount balance = vault_interface->getBalances().balance;
+    BOOST_REQUIRE_GT(balance, 0);
+
+    vault->SetVaultFlag(VAULT_FLAG_AVOID_REUSE);
+    BOOST_CHECK(!vault_interface->tryGetAutoSelectionBound(false));
+    BOOST_CHECK(vault_interface->tryGetAutoSelectionBound(true) == std::optional<CAmount>{balance});
+    vault->UnsetVaultFlag(VAULT_FLAG_AVOID_REUSE);
+    BOOST_CHECK(vault_interface->tryGetAutoSelectionBound(false) == std::optional<CAmount>{balance});
+    BOOST_CHECK(vault_interface->tryGetAutoSelectionBound(true) == std::optional<CAmount>{balance});
+
+    std::promise<void> acquired;
+    std::promise<void> release;
+    auto release_future = release.get_future();
+    auto holder = std::async(std::launch::async, [&] {
+        LOCK(vault->cs_vault);
+        acquired.set_value();
+        release_future.wait();
+    });
+    acquired.get_future().wait();
+    const auto busy_bound = vault_interface->tryGetAutoSelectionBound(true);
+    release.set_value();
+    holder.get();
+    BOOST_CHECK(!busy_bound);
+    BOOST_CHECK(vault_interface->tryGetAutoSelectionBound(true) == std::optional<CAmount>{balance});
+
+    // An absent processed block must defer even if policy and lock are known.
+    auto uninitialized = std::make_shared<CVault>(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    auto uninitialized_interface = interfaces::MakeVault(*loader->context(), uninitialized);
+    BOOST_CHECK(!uninitialized_interface->tryGetAutoSelectionBound(true));
+    BOOST_CHECK(!uninitialized_interface->tryGetAutoSelectionBound(false));
+}
+
 BOOST_FIXTURE_TEST_CASE(spends_unconfirmed_change_waits_for_the_vault_lock, TestChain100Setup)
 {
     std::unique_ptr<interfaces::VaultLoader> vault_loader = interfaces::MakeVaultLoader(*m_node.chain, *Assert(m_node.args));

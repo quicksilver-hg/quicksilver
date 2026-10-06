@@ -269,6 +269,78 @@ BOOST_AUTO_TEST_CASE(block_solving_possible_rereads_allowcpumining_without_resta
     BOOST_CHECK(!svc.GetStatus().active);
 }
 
+//! Sandbox is edgebits 19, and CPU block mining is always permitted there, so
+//! an idle BuildMiningStatus on the suite fixture cannot report false. Mainnet
+//! is the chain the desktop runs, and its edgebits is 28.
+struct MainnetMiningSetup : public TestingSetup {
+    MainnetMiningSetup() : TestingSetup{ChainType::MAIN, {.setup_net = false}} {}
+};
+
+BOOST_FIXTURE_TEST_CASE(idle_build_mining_status_reads_block_solving_possible, MainnetMiningSetup)
+{
+    BOOST_CHECK_EQUAL(static_cast<int>(m_node.chainman->GetConsensus().nEdgeBits), 28);
+
+    std::optional<common::SettingsValue> original_rw;
+    std::optional<common::SettingsValue> original_forced;
+    std::optional<std::vector<common::SettingsValue>> original_cli;
+    gArgs.LockSettings([&](common::Settings& settings) {
+        const auto rw = settings.rw_settings.find("allowcpumining");
+        if (rw != settings.rw_settings.end()) original_rw = rw->second;
+        const auto forced = settings.forced_settings.find("allowcpumining");
+        if (forced != settings.forced_settings.end()) original_forced = forced->second;
+        const auto cli = settings.command_line_options.find("allowcpumining");
+        if (cli != settings.command_line_options.end()) original_cli = cli->second;
+        settings.rw_settings["allowcpumining"] = false;
+        settings.forced_settings.erase("allowcpumining");
+        settings.command_line_options.erase("allowcpumining");
+    });
+    const char* original_solver = std::getenv("CUCKATOO_GPU_SOLVER");
+    const std::optional<std::string> original_env = original_solver
+        ? std::optional<std::string>{original_solver}
+        : std::nullopt;
+    struct Restore {
+        std::optional<common::SettingsValue> rw;
+        std::optional<common::SettingsValue> forced;
+        std::optional<std::vector<common::SettingsValue>> cli;
+        std::optional<std::string> environment;
+        ~Restore()
+        {
+            gArgs.LockSettings([&](common::Settings& settings) {
+                if (rw) settings.rw_settings["allowcpumining"] = *rw;
+                else settings.rw_settings.erase("allowcpumining");
+                if (forced) settings.forced_settings["allowcpumining"] = *forced;
+                else settings.forced_settings.erase("allowcpumining");
+                if (cli) settings.command_line_options["allowcpumining"] = *cli;
+                else settings.command_line_options.erase("allowcpumining");
+            });
+            if (environment) SetSolverEnv(*environment);
+            else UnsetSolverEnv();
+        }
+    } restore{original_rw, original_forced, original_cli, original_env};
+    // The bridge this process can launch, not the path queued for next start.
+    UnsetSolverEnv();
+    BOOST_REQUIRE(!cuckatoo::GpuSolverPath().has_value());
+
+    auto mining = interfaces::MakeMining(m_node);
+    BOOST_REQUIRE(mining);
+    MiningService svc(*m_node.chainman, *mining);
+    BOOST_CHECK(!svc.IsActive());
+
+    const interfaces::MiningStatus denied = node::BuildMiningStatus(svc, *m_node.chainman);
+    BOOST_CHECK(!denied.active);
+    BOOST_CHECK(!denied.gpu_solver);
+    BOOST_CHECK(!denied.block_solving_possible);
+
+    // The desktop writes the opt-in into rw settings and does not restart.
+    gArgs.LockSettings([&](common::Settings& settings) {
+        settings.rw_settings["allowcpumining"] = true;
+    });
+    const interfaces::MiningStatus allowed = node::BuildMiningStatus(svc, *m_node.chainman);
+    BOOST_CHECK(!allowed.active);
+    BOOST_CHECK(!allowed.gpu_solver);
+    BOOST_CHECK(allowed.block_solving_possible);
+}
+
 //! The window is fed explicit instants rather than a clock so every case below is
 //! an exact expected value, not a tolerance around whatever the machine did.
 static SteadySeconds At(int64_t s) { return SteadySeconds{std::chrono::seconds{s}}; }

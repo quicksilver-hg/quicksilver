@@ -329,7 +329,15 @@ interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateM
     out.solver_ok = s.solver_ok;
     out.last_solver_error = s.last_solver_error;
     out.solver_missing = s.solver_missing;
-    out.block_solving_possible = s.block_solving_possible;
+    // Idle has no arming snapshot. The struct default is true, which made an
+    // unarmed node with no solver and processor mining off read as CPU. Ask
+    // the live permit while nothing is armed: the desktop writes
+    // -allowcpumining without a restart, and the next reading has to follow
+    // it. While the worker is active, keep the snapshot Start() published.
+    // That is the permit the running search is actually using.
+    out.block_solving_possible = s.active
+        ? s.block_solving_possible
+        : BlockSolvingPossible(chainman.GetConsensus().nEdgeBits);
     out.template_height = s.template_height;
     out.template_transactions = s.template_transactions;
     {

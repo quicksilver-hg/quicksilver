@@ -381,11 +381,6 @@ QFrame#desktopLaunchHeader {
     background: transparent;
     border: 0;
 }
-QLabel#desktopLaunchMark {
-    background-color: #2d2222;
-    border: 1px solid #6b3431;
-    border-radius: 24px;
-}
 QFrame#consensusReviewHeader {
     background: transparent;
     border: 0;
@@ -468,7 +463,9 @@ QFrame#agentAllotmentSignedSpendPanel {
     border-color: #514567;
 }
 QScrollArea#agentAllotmentScrollArea,
-QWidget#agentAllotmentScrollContents {
+QWidget#agentAllotmentScrollContents,
+QScrollArea#tabMainScrollArea,
+QWidget#tabMainScrollContents {
     background-color: #101214;
     border: 0;
 }
@@ -606,12 +603,6 @@ QFrame#noVaultState {
     background-color: #171b1f;
     border: 1px solid #39434b;
     border-radius: 6px;
-}
-QLabel#emptyVaultMark {
-    background-color: #2d2222;
-    border: 1px solid #6b3431;
-    border-radius: 24px;
-    color: #ff7a6c;
 }
 QFrame#nodeWindowHeader {
     background-color: #171b1f;

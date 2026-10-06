@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Regenerate the Quicksilver brand raster set from the single source SVG.
 #
-# Source of truth: src/qt/res/src/quicksilver.svg (☿ on a Cinnabar disc). Every
+# Source of truth: src/qt/res/src/quicksilver.svg (☿ on a silver disc, Cinnabar ring). Every
 # raster below is derived from it, so edit the SVG and re-run this script rather
-# than touching the generated PNG/ICO/ICNS/BMP files by hand.
+# than touching the generated PNG/ICO/ICNS/BMP/XPM files by hand.
 #
 # Requires: rsvg-convert (librsvg), ImageMagick `convert`, and python3 (for the
 # self-contained .icns packer — ImageMagick has no ICNS coder here).
@@ -47,12 +47,13 @@ for size, ostype in types.items():
 with open(out,"wb") as f:
     f.write(b'icns' + struct.pack(">I", len(body)+8) + body)
 PY
-# Public-test tint (hue-rotate the disc for network distinction)
+# Public-test tint (hue-rotate the Cinnabar ring for network distinction)
 convert "$ICONS/quicksilver.png" -modulate 100,100,60  -define icon:auto-resize=256,128,64,48,32,16 "$ICONS/quicksilver_publictest.ico"
 
 # Linux desktop pixmaps
 for s in 16 32 64 128 256; do rsvg-convert -w "$s" -h "$s" "$SVG" -o "$PIX/quicksilver${s}.png"; done
 convert -background none "$PIX/quicksilver256.png" -define icon:auto-resize=256,128,64,48,32,16 "$PIX/quicksilver.ico"
+for s in 16 32 64 128 256; do convert "$PIX/quicksilver${s}.png" "$PIX/quicksilver${s}.xpm"; done
 
 # Doxygen logo, constrained by Doxyfile.in's 55px maximum height.
 rsvg-convert -w 55 -h 55 "$SVG" -o "$DOCDIR/quicksilver_logo_doxygen.png"

@@ -26,6 +26,8 @@
 #include <qt/minemintpage.h>
 #include <qt/miningmodel.h>
 #include <qt/networkpage.h>
+#include <qt/networkstyle.h>
+#include <qt/quicksilvergui.h>
 #include <qt/optionsmodel.h>
 #include <qt/overviewpage.h>
 #include <qt/platformstyle.h>
@@ -83,6 +85,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
+#include <QMenuBar>
+#include <QRegularExpression>
 #include <QObject>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -147,6 +151,9 @@ public:
     std::vector<interfaces::VaultTxOut> selected_coins;
     int marker_calls{0};
     int balance_calls{0};
+    int auto_selection_bound_calls{0};
+    bool auto_selection_bound_busy{false};
+    bool auto_selection_bound_uninitialized{false};
     int selected_balance_calls{0};
     int try_list_coin_calls{0};
     int try_get_coin_calls{0};
@@ -237,6 +244,15 @@ public:
         hash = block_hash;
         balances = getBalances();
         return true;
+    }
+    std::optional<CAmount> tryGetAutoSelectionBound(bool avoid_address_reuse) override
+    {
+        ++auto_selection_bound_calls;
+        // This fake cannot certify reuse policy when used addresses are allowed.
+        if (!avoid_address_reuse || auto_selection_bound_busy || auto_selection_bound_uninitialized || !MoneyRange(balance)) {
+            return std::nullopt;
+        }
+        return balance;
     }
     bool tryGetBalanceUpdateBlockHash(uint256& hash) override
     {
@@ -703,8 +719,15 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
         QuicksilverUnits::SeparatorStyle::ALWAYS)));
     QVERIFY(launch_summary_text.contains(QStringLiteral("Agent setups: none")));
     QVERIFY(!launch_summary_text.contains(QStringLiteral("Funded")));
-    QVERIFY(launch_summary_text.contains(QStringLiteral("Backup: check required")));
+    // Backup state belongs to the Backup panel, which knows whether one was recorded.
+    QVERIFY(!launch_summary_text.contains(QStringLiteral("Backup")));
     QVERIFY(launch_summary_text.contains(QStringLiteral("Recent activity: ")));
+    // One item per line, led by the vault name.
+    const QStringList launch_summary_lines = launch_summary_text.split(QLatin1Char('\n'));
+    QCOMPARE(launch_summary_lines.first(), QStringLiteral("Vault: %1").arg(vaultModel.getDisplayName()));
+    QVERIFY(launch_summary_lines.at(1).startsWith(QStringLiteral("Balance: ")));
+    QVERIFY(launch_summary_lines.contains(QStringLiteral("Agent setups: none")));
+    QVERIFY(launch_summary_lines.last().startsWith(QStringLiteral("Recent activity: ")));
     QCOMPARE(vaultFrame.findChild<QPushButton*>(QStringLiteral("launchVaultCardButton"))->text(), QStringLiteral("Open vault"));
     QPushButton* launch_privacy = vaultFrame.findChild<QPushButton*>(QStringLiteral("launchVaultBalancePrivacyButton"));
     QVERIFY(launch_privacy);
@@ -1926,7 +1949,7 @@ void VaultTests::mineMintPageNamesAnArmedMinerWithNoPermittedSolver()
     QCOMPARE(halted.block_mining, QStringLiteral("Halted"));
     QCOMPARE(halted.solver, QStringLiteral("None"));
     QCOMPARE(halted.attempts, QStringLiteral("Not solving (0 graphs attempted)"));
-    QCOMPARE(halted.health, QStringLiteral("No graphics solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Controls > Options > Main."));
+    QCOMPARE(halted.health, QStringLiteral("No GPU solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Controls > Options > Main."));
     QVERIFY(!halted.health.contains(QStringLiteral("-cuckatoosolver")));
     QVERIFY(!halted.health.contains(QStringLiteral("-allowcpumining")));
     QVERIFY(halted.show_configure_solver);
@@ -2086,6 +2109,76 @@ void VaultTests::mineMintPageShowsARawScriptPayout()
     QCOMPARE(rows.payout, QStringLiteral("Raw script 51"));
     page.setStatus(st);
     QCOMPARE(payout->text(), rows.payout);
+}
+
+//! Idle with nothing permitted used to read Solver: CPU, because the permit
+//! defaults true until arming. The halted sentence is about the configuration,
+//! so it is the right health row before anyone presses Start. The other three
+//! idle combinations keep the text they already had.
+void VaultTests::mineMintPageNamesAnIdleNodeWithNothingPermitted()
+{
+    const auto rows = [](bool gpu, bool possible) {
+        interfaces::MiningStatus st;
+        st.active = false;
+        st.gpu_solver = gpu;
+        st.block_solving_possible = possible;
+        return MineMintPage::statusTextForTesting(st);
+    };
+    const QString sentence = QStringLiteral("No GPU solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Controls > Options > Main.");
+
+    const auto cpu = rows(false, true);
+    QCOMPARE(cpu.block_mining, QStringLiteral("Idle"));
+    QCOMPARE(cpu.solver, QStringLiteral("CPU"));
+    QCOMPARE(cpu.attempts, QStringLiteral("None (0 graphs attempted)"));
+    QCOMPARE(cpu.health, QStringLiteral("Not running"));
+    QVERIFY(!cpu.show_configure_solver);
+
+    const auto gpu = rows(true, true);
+    QCOMPARE(gpu.block_mining, QStringLiteral("Idle"));
+    QCOMPARE(gpu.solver, QStringLiteral("GPU bridge"));
+    QCOMPARE(gpu.attempts, QStringLiteral("None (0 graphs attempted)"));
+    QCOMPARE(gpu.health, QStringLiteral("Not running"));
+    QVERIFY(!gpu.show_configure_solver);
+
+    // A GPU solver is configured, so the permit bit is not what the row
+    // is allowed to contradict. This input is not one BuildMiningStatus emits
+    // while idle; the page must still not call the solver CPU.
+    const auto gpu_denied = rows(true, false);
+    QCOMPARE(gpu_denied.block_mining, QStringLiteral("Idle"));
+    QCOMPARE(gpu_denied.solver, QStringLiteral("GPU bridge"));
+    QCOMPARE(gpu_denied.attempts, QStringLiteral("None (0 graphs attempted)"));
+    QCOMPARE(gpu_denied.health, QStringLiteral("Not running"));
+    QVERIFY(!gpu_denied.show_configure_solver);
+
+    const auto denied = rows(false, false);
+    QCOMPARE(denied.block_mining, QStringLiteral("Idle"));
+    QCOMPARE(denied.solver, QStringLiteral("None"));
+    QCOMPARE(denied.attempts, QStringLiteral("None (0 graphs attempted)"));
+    QCOMPARE(denied.health, sentence);
+    QVERIFY(!denied.health.contains(QStringLiteral("-cuckatoosolver")));
+    QVERIFY(!denied.health.contains(QStringLiteral("-allowcpumining")));
+    QVERIFY(denied.show_configure_solver);
+
+    MineMintPage page;
+    interfaces::MiningStatus st;
+    st.active = false;
+    st.gpu_solver = false;
+    st.block_solving_possible = false;
+    page.setStatus(st);
+    QCOMPARE(page.findChild<QLabel*>(QStringLiteral("miningStatusValue"))->text(), denied.block_mining);
+    QCOMPARE(page.findChild<QLabel*>(QStringLiteral("solverStatusValue"))->text(), denied.solver);
+    QCOMPARE(page.findChild<QLabel*>(QStringLiteral("attemptsRateValue"))->text(), denied.attempts);
+    QCOMPARE(page.findChild<QLabel*>(QStringLiteral("solverHealthValue"))->text(), denied.health);
+    QPushButton* configure = page.findChild<QPushButton*>(QStringLiteral("configureSolverButton"));
+    QVERIFY(configure);
+    QVERIFY(configure->isVisibleTo(&page));
+    QSignalSpy solver_settings_spy(&page, &MineMintPage::solverSettingsRequested);
+    QVERIFY(solver_settings_spy.isValid());
+    configure->click();
+    QCOMPARE(solver_settings_spy.count(), 1);
+    // Still idle: Start is the control, Stop stays disabled.
+    QVERIFY(page.findChild<QPushButton*>(QStringLiteral("startMiningButton"))->isEnabled());
+    QVERIFY(!page.findChild<QPushButton*>(QStringLiteral("stopMiningButton"))->isEnabled());
 }
 
 //! F-108: "Peers: 0" is a reading, not an explanation, and the two states behind it
@@ -2904,7 +2997,7 @@ void VaultTests::sendWorkResourceTextClassifiesGpuSolver()
 
     const QString missing_arg_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, QString());
     QVERIFY(missing_arg_text.contains(QStringLiteral("processor will take over")));
-    QVERIFY(missing_arg_text.contains(QStringLiteral("Settings → Options → Main")));
+    QVERIFY(missing_arg_text.contains(QStringLiteral("Controls > Options > Main")));
 
     QTemporaryDir temp_dir;
     QVERIFY(temp_dir.isValid());
@@ -2912,7 +3005,7 @@ void VaultTests::sendWorkResourceTextClassifiesGpuSolver()
     const QString absent_solver_path = temp_dir.filePath(QStringLiteral("missing-solver"));
     const QString absent_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, absent_solver_path);
     QVERIFY(absent_solver_text.contains(QStringLiteral("could not be found")));
-    QVERIFY(absent_solver_text.contains(QStringLiteral("Settings → Options → Main")));
+    QVERIFY(absent_solver_text.contains(QStringLiteral("Controls > Options > Main")));
 
     const QString directory_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, temp_dir.path());
     QVERIFY(directory_solver_text.contains(QStringLiteral("cannot be started")));
@@ -2944,7 +3037,7 @@ void VaultTests::sendWorkResourceTextClassifiesGpuSolver()
     QVERIFY(solver_file.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
     QVERIFY(QFileInfo(solver_path).isExecutable());
     const QString executable_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, solver_path);
-    QVERIFY(executable_solver_text.contains(QStringLiteral("transfer helper is configured")));
+    QVERIFY(executable_solver_text.contains(QStringLiteral("GPU solver is configured")));
     QVERIFY(executable_solver_text.contains(QStringLiteral("will check it before preparation starts")));
 
     const QString checking_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, solver_path, SendCoinsDialog::GpuSolverProbeStatus::Checking);
@@ -3067,6 +3160,227 @@ void VaultTests::transferPageShowsItsFormAndTransmitButtonTogether()
     QVERIFY2(viewport.contains(in_viewport(transmit)),
              qPrintable(QStringLiteral("Transmit button (%1) is outside the viewport (%2).%3")
                             .arg(describe(in_viewport(transmit)), describe(viewport), pages)));
+}
+
+void VaultTests::transferSolverTextNamesRealMenuAndSetting()
+{
+    TestChain100Setup test;
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    std::unique_ptr<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.get());
+    QStringList menus;
+    for (QAction* action : window.menuBar()->actions()) {
+        menus << QString(action->text()).remove(QLatin1Char('&'));
+    }
+    QVERIFY(menus.contains(QStringLiteral("Controls")));
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+#ifdef Q_OS_WIN
+    const QString solver_path = dir.filePath(QStringLiteral("solver.exe"));
+#else
+    const QString solver_path = dir.filePath(QStringLiteral("solver"));
+#endif
+    QFile solver(solver_path);
+    QVERIFY(solver.open(QIODevice::WriteOnly));
+    solver.close();
+    QVERIFY(solver.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+    QVERIFY(QFileInfo(solver_path).isExecutable());
+
+    QStringList texts{
+        SendCoinsDialog::sendWorkResourceTextForTesting(false, QString()),
+        SendCoinsDialog::sendWorkResourceTextForTesting(true, QString()),
+        SendCoinsDialog::sendWorkResourceTextForTesting(true, dir.filePath(QStringLiteral("absent"))),
+        SendCoinsDialog::sendWorkResourceTextForTesting(true, dir.path()),
+    };
+    using Status = SendCoinsDialog::GpuSolverProbeStatus;
+    for (const auto status : {Status::Unchecked, Status::Checking, Status::Available, Status::Failed, Status::TimedOut}) {
+        texts << SendCoinsDialog::sendWorkResourceTextForTesting(true, solver_path, status);
+    }
+    texts << SendCoinsDialog::startupAccelerationTextForTesting(true)
+          << SendCoinsDialog::startupAccelerationTextForTesting(false);
+    const QRegularExpression path(QStringLiteral("([A-Za-z]+) (?:>|→) [A-Za-z]+ (?:>|→) [A-Za-z]+"));
+    int paths = 0;
+    for (const QString& text : texts) {
+        auto matches = path.globalMatch(text);
+        while (matches.hasNext()) {
+            const auto match = matches.next();
+            QVERIFY2(menus.contains(match.captured(1)), qPrintable(text));
+            QCOMPARE(match.captured(0), QStringLiteral("Controls > Options > Main"));
+            ++paths;
+        }
+        QVERIFY2(!text.contains(QStringLiteral("transfer helper")), qPrintable(text));
+        QVERIFY2(!text.contains(QStringLiteral("Settings")), qPrintable(text));
+    }
+    QCOMPARE(paths, 5);
+}
+
+namespace {
+class TransferPrecheckFixture
+{
+public:
+    TestChain100Setup chain;
+    std::unique_ptr<interfaces::VaultLoader> loader;
+    ScopedNodeContext context;
+    std::unique_ptr<const PlatformStyle> style;
+    OptionsModel options;
+    PollMarkerVault* vault;
+    std::unique_ptr<VaultModel> model;
+    std::unique_ptr<SendCoinsDialog> dialog;
+    QString address;
+
+    explicit TransferPrecheckFixture(interfaces::Node& node)
+        : loader(interfaces::MakeVaultLoader(*chain.m_node.chain, *Assert(chain.m_node.args))),
+          context(node, chain.m_node), style(PlatformStyle::instantiate("other")), options(node)
+    {
+        chain.m_node.vault_loader = loader.get();
+        bilingual_str error;
+        if (!options.Init(error)) throw std::runtime_error("transfer test options initialization failed");
+        auto mock = std::make_unique<PollMarkerVault>();
+        vault = mock.get();
+        vault->crypted = true;
+        vault->locked = true;
+        vault->coin_listing_available = true;
+        vault->transaction_creation_available = true;
+        model = std::make_unique<VaultModel>(std::move(mock), node, &options, style.get());
+        dialog = std::make_unique<SendCoinsDialog>(style.get());
+        dialog->setModel(model.get());
+        dialog->getCoinControl()->m_avoid_address_reuse = true;
+        address = QString::fromStdString(EncodeDestination(PKHash(chain.coinbaseKey.GetPubKey().GetID())));
+    }
+
+    void recipient(CAmount amount)
+    {
+        SendCoinsRecipient recipient;
+        recipient.address = address;
+        recipient.amount = amount;
+        dialog->pasteEntry(recipient);
+    }
+
+    void transmit()
+    {
+        QMetaObject::invokeMethod(dialog.get(), "sendButtonClicked", Qt::DirectConnection, Q_ARG(bool, false));
+    }
+};
+} // namespace
+
+void VaultTests::transferPrecheckRefusesOverBalanceBeforeUnlock()
+{
+    TransferPrecheckFixture fixture(m_node);
+    fixture.recipient(COIN);
+    QSignalSpy unlock(fixture.model.get(), &VaultModel::requireUnlock);
+    QSignalSpy cpu_check(fixture.dialog.get(), &SendCoinsDialog::cpuFallbackCheckReachedForTesting);
+    QSignalSpy messages(fixture.dialog.get(), &SendCoinsDialog::message);
+    fixture.transmit();
+    QCOMPARE(unlock.size(), 0);
+    QCOMPARE(cpu_check.size(), 0);
+    QVERIFY(!fixture.dialog->findChild<QMessageBox*>(QStringLiteral("cpuFallbackSendWarning")));
+    QCOMPARE(messages.size(), 1);
+    QCOMPARE(messages.at(0).at(1).toString(), QStringLiteral("The amount exceeds your balance."));
+    QVERIFY(fixture.dialog->findChild<QWidget*>(QStringLiteral("sendWorkProgressPanel"))->isHidden());
+    // An early refusal must leave another recipient/send attempt possible.
+    fixture.recipient(COIN);
+    QCOMPARE(fixture.dialog->findChildren<SendCoinsEntry*>().size(), 2);
+}
+
+void VaultTests::transferPrecheckRefusesDuplicateBeforeUnlock()
+{
+    TransferPrecheckFixture fixture(m_node);
+    fixture.recipient(COIN);
+    fixture.recipient(COIN);
+    QSignalSpy unlock(fixture.model.get(), &VaultModel::requireUnlock);
+    QSignalSpy cpu_check(fixture.dialog.get(), &SendCoinsDialog::cpuFallbackCheckReachedForTesting);
+    QSignalSpy messages(fixture.dialog.get(), &SendCoinsDialog::message);
+    fixture.transmit();
+    QCOMPARE(unlock.size(), 0);
+    QCOMPARE(cpu_check.size(), 0);
+    QVERIFY(!fixture.dialog->findChild<QMessageBox*>(QStringLiteral("cpuFallbackSendWarning")));
+    QCOMPARE(messages.size(), 1);
+    QCOMPARE(messages.at(0).at(1).toString(), QStringLiteral("Duplicate address found: addresses should only be used once each."));
+}
+
+void VaultTests::transferPrecheckRefusesZeroBeforeUnlock()
+{
+    TransferPrecheckFixture fixture(m_node);
+    fixture.recipient(0);
+    QSignalSpy unlock(fixture.model.get(), &VaultModel::requireUnlock);
+    QSignalSpy cpu_check(fixture.dialog.get(), &SendCoinsDialog::cpuFallbackCheckReachedForTesting);
+    QSignalSpy messages(fixture.dialog.get(), &SendCoinsDialog::message);
+    fixture.transmit();
+    QCOMPARE(unlock.size(), 0);
+    QCOMPARE(cpu_check.size(), 0);
+    QVERIFY(!fixture.dialog->findChild<QMessageBox*>(QStringLiteral("cpuFallbackSendWarning")));
+    QCOMPARE(messages.size(), 1);
+    QCOMPARE(messages.at(0).at(1).toString(), QStringLiteral("The transfer amount must be larger than 0."));
+}
+
+void VaultTests::transferPrecheckAllowsStaleLowBalance()
+{
+    TransferPrecheckFixture fixture(m_node);
+    fixture.recipient(COIN);
+    fixture.vault->balance = 2 * COIN;
+    QCOMPARE(fixture.model->getCachedBalance().balance, CAmount{0});
+    QSignalSpy unlock(fixture.model.get(), &VaultModel::requireUnlock);
+    QSignalSpy cpu_check(fixture.dialog.get(), &SendCoinsDialog::cpuFallbackCheckReachedForTesting);
+    QSignalSpy finished(fixture.dialog.get(), &SendCoinsDialog::sendPreparationFinishedForTesting);
+    // Complete the real unlock continuation and let the worker run its own
+    // balance check. The mock fails creation only after that check has passed.
+    QObject::connect(fixture.model.get(), &VaultModel::requireUnlock, fixture.dialog.get(), [&] {
+        fixture.vault->locked = false;
+    });
+    fixture.transmit();
+    QCOMPARE(unlock.size(), 1);
+    QCOMPARE(cpu_check.size(), 1);
+    QTRY_COMPARE(finished.size(), 1);
+    QCOMPARE(finished.at(0).at(0).toInt(), static_cast<int>(VaultModel::TransactionCreationFailed));
+    QCOMPARE(fixture.vault->create_calls, 1);
+    QCOMPARE(fixture.vault->auto_selection_bound_calls, 1);
+}
+
+void VaultTests::transferPrecheckDefersUncertainBalance_data()
+{
+    QTest::addColumn<int>("uncertainty");
+    QTest::newRow("uncertain-reuse-policy") << 0;
+    QTest::newRow("selected-inputs") << 1;
+    QTest::newRow("unsafe-inputs") << 2;
+    QTest::newRow("busy-vault") << 3;
+    QTest::newRow("uninitialized-vault") << 4;
+}
+
+void VaultTests::transferPrecheckDefersUncertainBalance()
+{
+    QFETCH(int, uncertainty);
+    TransferPrecheckFixture fixture(m_node);
+    fixture.recipient(COIN);
+    if (uncertainty == 0) fixture.dialog->getCoinControl()->m_avoid_address_reuse = false;
+    if (uncertainty == 1) fixture.dialog->getCoinControl()->Select(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+    if (uncertainty == 2) fixture.dialog->getCoinControl()->m_include_unsafe_inputs = true;
+    if (uncertainty == 3) fixture.vault->auto_selection_bound_busy = true;
+    if (uncertainty == 4) fixture.vault->auto_selection_bound_uninitialized = true;
+    QSignalSpy unlock(fixture.model.get(), &VaultModel::requireUnlock);
+    QSignalSpy messages(fixture.dialog.get(), &SendCoinsDialog::message);
+    fixture.transmit();
+    QCOMPARE(unlock.size(), 1);
+    QCOMPARE(messages.size(), 0);
+}
+
+void VaultTests::transferPreparationFailureWithoutGraphsHidesProgress()
+{
+    TransferPrecheckFixture fixture(m_node);
+    fixture.recipient(COIN);
+    fixture.vault->locked = false;
+    // Selected inputs defer the GUI check; the worker's unchanged balance
+    // check refuses. This reproduces the old "Stopped" panel path itself.
+    fixture.dialog->getCoinControl()->Select(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+    QSignalSpy finished(fixture.dialog.get(), &SendCoinsDialog::sendPreparationFinishedForTesting);
+    QSignalSpy messages(fixture.dialog.get(), &SendCoinsDialog::message);
+    fixture.transmit();
+    QTRY_COMPARE(finished.size(), 1);
+    QCOMPARE(finished.at(0).at(0).toInt(), static_cast<int>(VaultModel::AmountExceedsBalance));
+    QCOMPARE(messages.size(), 1);
+    QCOMPARE(messages.at(0).at(1).toString(), QStringLiteral("The amount exceeds your balance."));
+    QVERIFY(fixture.dialog->findChild<QWidget*>(QStringLiteral("sendWorkProgressPanel"))->isHidden());
 }
 
 void VaultTests::requestPageAddressTypeCopyHasNoBitcoinVocabulary()

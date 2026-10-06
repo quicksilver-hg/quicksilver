@@ -200,8 +200,21 @@ reopened:**
 - **The subtitle stays as written** — *"Vault first. Consensus only when you
   choose it."* The slot was once deliberately empty; it is now filled and the copy
   states the application's actual priority, which is what the slot was for.
+  *Superseded 2026-10-05:* the slot reads as a slogan, and that line was an
+  instruction, so the owner replaced it with the project slogan, *"Crypto without
+  transaction fees."* The vault-first priority is still carried by the cards
+  themselves and the cost copy beneath them.
 - **Branding remains as shipped.** Alternative branding ideas were raised and the
   current copy was kept.
+
+**Brand mark changed 2026-10-05.** The owner moved the mark off the Cinnabar
+disc: the Mercury glyph is now black on a brushed-silver disc, framed by a black
+band and a thin Cinnabar ring. On a solid red disc the horned glyph read to most
+people as a devil figure; with silver as the dominant colour and Cinnabar only as
+the ring, that reading fades while both meanings stay. Every layer is opaque, so
+the mark looks the same on light and dark backgrounds. The launch header and the
+no-vault state show the full-colour mark instead of a text-colour silhouette.
+The source is `src/qt/res/src/quicksilver.svg`.
 
 Current Qt status: the launch vault card now says "Create or open vault" until a
 vault is active, then says "Open vault" for returning users. When no vault is

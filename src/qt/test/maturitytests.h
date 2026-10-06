@@ -17,6 +17,12 @@ private Q_SLOTS:
     void wholeAndPartialHours();
     void roundsToMinutesUnderAnHour();
     void fullMaturityAtShippedParameters();
+    void summaryOfNothingMaturing();
+    void summarySumsEveryRowAtTheSoonestHeight();
+    void oneHeightKeepsTheSingleText();
+    void reportedCaseShowsNextAndAll();
+    void singularAtBothEnds();
+    void amountStringPassesThroughUnchanged();
 };
 
 #endif // QUICKSILVER_QT_TEST_MATURITYTESTS_H

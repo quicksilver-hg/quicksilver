@@ -32,6 +32,7 @@
 #include <chrono>
 #include <fstream>
 #include <memory>
+#include <optional>
 
 #include <QDebug>
 #include <QCheckBox>
@@ -40,6 +41,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QSet>
 #include <QSharedPointer>
 #include <QShowEvent>
 #include <QStringList>
@@ -205,33 +207,56 @@ bool SendCoinsDialog::prepareTransactionForAsync(std::unique_ptr<VaultModelTrans
 {
     QList<SendCoinsRecipient> recipients;
     bool valid = true;
+    bool non_positive_amount = false;
 
-    for(int i = 0; i < ui->entries->count(); ++i)
-    {
-        SendCoinsEntry *entry = qobject_cast<SendCoinsEntry*>(ui->entries->itemAt(i)->widget());
-        if(entry)
-        {
-            if(entry->validate())
-            {
-                recipients.append(entry->getValue());
-            }
-            else if (valid)
-            {
-                ui->scrollArea->ensureWidgetVisible(entry);
-                valid = false;
-            }
+    for (int i = 0; i < ui->entries->count(); ++i) {
+        auto* entry = qobject_cast<SendCoinsEntry*>(ui->entries->itemAt(i)->widget());
+        if (!entry) continue;
+        const SendCoinsRecipient recipient = entry->getValue();
+        // Keep the entry's field highlighting, while reporting a non-positive
+        // amount through the same status/message path as the worker.
+        if (model->validateAddress(recipient.address) && recipient.amount <= 0) {
+            non_positive_amount = true;
+        }
+        if (entry->validate()) {
+            recipients.append(recipient);
+        } else {
+            if (valid) ui->scrollArea->ensureWidgetVisible(entry);
+            valid = false;
         }
     }
 
-    if(!valid || recipients.isEmpty())
-    {
+    const auto refuse = [this](VaultModel::StatusCode status) {
+        fNewRecipientAllowed = true;
+        hideSendWorkProgress();
+        processSendCoinsReturn(status);
         return false;
-    }
+    };
+    if (non_positive_amount) return refuse(VaultModel::InvalidAmount);
+    if (!valid || recipients.isEmpty()) return false;
 
-    fNewRecipientAllowed = false;
+    QSet<QString> addresses;
+    CAmount total = 0;
+    for (const auto& recipient : recipients) {
+        addresses.insert(recipient.address);
+        // Bound the sum without overflowing, including maliciously large input.
+        if (!MoneyRange(recipient.amount) || recipient.amount > MAX_MONEY - total) {
+            return refuse(VaultModel::AmountExceedsBalance);
+        }
+        total += recipient.amount;
+    }
+    if (addresses.size() != recipients.size()) return refuse(VaultModel::DuplicateAddress);
 
     coin_control = *m_coin_control;
     coin_control.m_allow_other_inputs = !coin_control.HasSelected();
+    // Selected/unsafe inputs are outside the automatic safe-input bound.
+    // A busy, uninitialized or uncertain-policy vault defers to the worker.
+    if (!coin_control.HasSelected() && !coin_control.m_include_unsafe_inputs) {
+        const auto balance = model->vault().tryGetAutoSelectionBound(coin_control.m_avoid_address_reuse);
+        if (balance && total > *balance) return refuse(VaultModel::AmountExceedsBalance);
+    }
+
+    fNewRecipientAllowed = false;
     transaction = std::make_unique<VaultModelTransaction>(recipients);
     return true;
 }
@@ -530,6 +555,7 @@ void SendCoinsDialog::setSendControlsEnabled(bool enabled)
 
 void SendCoinsDialog::beginSendWorkProgress()
 {
+    m_send_work_graph_attempted = false;
     m_send_work_started.restart();
     ui->sendWorkStatusLabel->setText(tr("Solving transfer proof-of-work"));
     ui->sendWorkGraphsLabel->setText(tr("Graphs tried: pending"));
@@ -555,6 +581,10 @@ void SendCoinsDialog::completeSendWorkProgress()
 
 void SendCoinsDialog::failSendWorkProgress()
 {
+    if (!m_send_work_graph_attempted) {
+        hideSendWorkProgress();
+        return;
+    }
     m_send_work_update_timer.stop();
     updateSendWorkElapsed();
     ui->sendWorkStatusLabel->setText(tr("Proof-of-work was not completed"));
@@ -586,6 +616,7 @@ void SendCoinsDialog::updateSendWorkDisclosure()
 
 void SendCoinsDialog::updateSendWorkGraphs(uint32_t nonce)
 {
+    m_send_work_graph_attempted = true;
     ui->sendWorkGraphsLabel->setText(tr("Graphs tried: at least %1").arg(QLocale().toString(static_cast<quint64>(nonce) + 1)));
 }
 
@@ -705,13 +736,13 @@ QString SendCoinsDialog::sendWorkResourceText(bool requires_configured_gpu_solve
     if (requires_configured_gpu_solver) {
         const QString trimmed_solver_path = solver_path.trimmed();
         if (trimmed_solver_path.isEmpty()) {
-            disclosure << tr("Graphics acceleration is not configured. The processor will take over, which may take many minutes. Choose a transfer helper in Settings → Options → Main for faster preparation.");
+            disclosure << tr("Graphics acceleration is not configured. The processor will take over, which may take many minutes. Choose a GPU solver in Controls > Options > Main for faster preparation.");
         } else {
             const QFileInfo solver_info(trimmed_solver_path);
             if (!solver_info.exists()) {
-                disclosure << tr("The configured transfer helper could not be found. The processor will take over, which may take many minutes. Choose a working helper in Settings → Options → Main.");
+                disclosure << tr("The configured GPU solver could not be found. The processor will take over, which may take many minutes. Choose a working GPU solver in Controls > Options > Main.");
             } else if (!solver_info.isFile() || !solver_info.isExecutable()) {
-                disclosure << tr("The configured transfer helper cannot be started. The processor will take over, which may take many minutes. Choose a working helper in Settings → Options → Main.");
+                disclosure << tr("The configured GPU solver cannot be started. The processor will take over, which may take many minutes. Choose a working GPU solver in Controls > Options > Main.");
             } else {
                 switch (probe_status) {
                 case GpuSolverProbeStatus::Checking:
@@ -727,13 +758,13 @@ QString SendCoinsDialog::sendWorkResourceText(bool requires_configured_gpu_solve
                     disclosure << tr("Graphics acceleration is ready for this network. Preparing a transfer usually takes one to two minutes, but the search is random: some transfers finish in seconds and some run past five minutes. You can stop the work at any time.");
                     break;
                 case GpuSolverProbeStatus::Failed:
-                    disclosure << tr("Graphics acceleration did not start. The processor will take over, which may take many minutes. Check the transfer helper in Settings → Options → Main.");
+                    disclosure << tr("Graphics acceleration did not start. The processor will take over, which may take many minutes. Check the GPU solver in Controls > Options > Main.");
                     break;
                 case GpuSolverProbeStatus::TimedOut:
                     disclosure << tr("The graphics acceleration check timed out. The processor will take over, which may take many minutes.");
                     break;
                 case GpuSolverProbeStatus::Unchecked:
-                    disclosure << tr("A transfer helper is configured. The desktop will check it before preparation starts.");
+                    disclosure << tr("A GPU solver is configured. The desktop will check it before preparation starts.");
                     break;
                 }
             }
@@ -750,6 +781,19 @@ bool SendCoinsDialog::cpuFallbackWarningRequired(bool slow_network, GpuSolverPro
     return slow_network && probe_status != GpuSolverProbeStatus::Available && warning_enabled;
 }
 
+QStringList SendCoinsDialog::startupAccelerationText(bool has_gpu)
+{
+    QStringList text;
+    if (has_gpu) {
+        text << tr("Graphics acceleration is available, but no GPU solver is configured.");
+        text << tr("Quicksilver can still send using this computer's processor, but preparing a transfer may take many minutes. Choose a GPU solver in Controls > Options > Main for faster preparation.");
+    } else {
+        text << tr("Graphics acceleration was not detected on this computer.");
+        text << tr("Quicksilver can still send using this computer's processor, but preparing a transfer may take many minutes. The transfer screen will stay responsive and lets you stop the work at any time.");
+    }
+    return text;
+}
+
 void SendCoinsDialog::showStartupAccelerationWarningIfNeeded()
 {
     if (g_startup_acceleration_warning_shown || Params().GetConsensus().nTxEdgeBits != 28) return;
@@ -758,13 +802,9 @@ void SendCoinsDialog::showStartupAccelerationWarningIfNeeded()
     g_startup_acceleration_warning_shown = true;
     auto* box = new QMessageBox{QMessageBox::Information, tr("Transfer acceleration"), QString(), QMessageBox::NoButton, this};
     box->setObjectName(QStringLiteral("cpuFallbackStartupWarning"));
-    if (m_gpu_state.has_gpu) {
-        box->setText(tr("Graphics acceleration is available, but no transfer helper is configured."));
-        box->setInformativeText(tr("Quicksilver can still send using this computer's processor, but preparing a transfer may take many minutes. Choose a transfer helper in Settings for faster preparation."));
-    } else {
-        box->setText(tr("Graphics acceleration was not detected on this computer."));
-        box->setInformativeText(tr("Quicksilver can still send using this computer's processor, but preparing a transfer may take many minutes. The transfer screen will stay responsive and lets you stop the work at any time."));
-    }
+    const QStringList text = startupAccelerationText(m_gpu_state.has_gpu);
+    box->setText(text.at(0));
+    box->setInformativeText(text.at(1));
     QPushButton* settings_button{box->addButton(tr("Open settings"), QMessageBox::ActionRole)};
     QPushButton* continue_button{box->addButton(tr("Continue"), QMessageBox::AcceptRole)};
     box->setDefaultButton(continue_button);
@@ -776,6 +816,7 @@ void SendCoinsDialog::showStartupAccelerationWarningIfNeeded()
 
 void SendCoinsDialog::confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<VaultModelTransaction> transaction, CCoinControl coin_control)
 {
+    Q_EMIT cpuFallbackCheckReachedForTesting();
     const bool warning_enabled{model && model->getOptionsModel()
         ? model->getOptionsModel()->getOption(OptionsModel::ShowCpuFallbackWarning).toBool()
         : true};

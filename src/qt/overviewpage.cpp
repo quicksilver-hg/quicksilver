@@ -37,6 +37,8 @@
 
 #include <algorithm>
 #include <map>
+#include <utility>
+#include <vector>
 
 #define DECORATION_SIZE 54
 #define NUM_ITEMS 5
@@ -290,21 +292,29 @@ void OverviewPage::setBalance(const interfaces::VaultBalances& balances)
 
 void OverviewPage::updateMaturityCountdown()
 {
-    // The soonest maturity is the honest answer to "when can I spend anything",
-    // so take the minimum across every immature row rather than the last one.
-    int soonest = 0;
+    // Every immature row counts: the soonest says when anything can be spent, the
+    // latest when all of it can, and the rows at the soonest height say how much (F-432).
+    std::vector<std::pair<int, CAmount>> maturing;
     if (vaultModel && vaultModel->getTransactionTableModel()) {
         const TransactionTableModel* model = vaultModel->getTransactionTableModel();
         for (int row = 0; row < model->rowCount(QModelIndex()); ++row) {
             const QModelIndex idx = model->index(row, 0);
             const int status = idx.data(TransactionTableModel::StatusRole).toInt();
             if (status != TransactionStatus::Immature) continue;
-            const int matures_in = idx.data(TransactionTableModel::MaturesInRole).toInt();
-            if (matures_in > 0 && (soonest == 0 || matures_in < soonest)) soonest = matures_in;
+            maturing.emplace_back(idx.data(TransactionTableModel::MaturesInRole).toInt(),
+                                  idx.data(TransactionTableModel::AmountRole).toLongLong());
         }
     }
-    const QString text = qsmaturity::FormatMaturityCountdown(
-        soonest, Params().GetConsensus().nPowTargetSpacing);
+    const qsmaturity::MaturingSummary summary{qsmaturity::SummarizeMaturing(maturing)};
+    QString soonest_amount;
+    if (summary.soonest > 0 && vaultModel && vaultModel->getOptionsModel()) {
+        // Formatted like labelImmature above it, privacy mask included.
+        soonest_amount = QuicksilverUnits::formatWithPrivacy(vaultModel->getOptionsModel()->getDisplayUnit(),
+                                                             summary.soonest_amount,
+                                                             QuicksilverUnits::SeparatorStyle::ALWAYS, m_privacy);
+    }
+    const QString text = qsmaturity::FormatMaturingHint(
+        summary.soonest, soonest_amount, summary.latest, Params().GetConsensus().nPowTargetSpacing);
     ui->labelImmatureCountdown->setText(text);
     ui->labelImmatureCountdown->setVisible(!text.isEmpty());
 }

@@ -104,7 +104,7 @@ VaultFrame::VaultFrame(const PlatformStyle* _platformStyle, QWidget* parent)
 
     auto* mark = new QLabel(no_vault_state);
     mark->setObjectName(QStringLiteral("emptyVaultMark"));
-    mark->setPixmap(platformStyle->TextColorIcon(QIcon(QStringLiteral(":/icons/quicksilver"))).pixmap(QSize(30, 30)));
+    mark->setPixmap(QIcon(QStringLiteral(":/icons/quicksilver")).pixmap(QSize(50, 50)));
     mark->setAlignment(Qt::AlignCenter);
     mark->setFixedSize(QSize(50, 50));
     no_vault_layout->addWidget(mark, 0, Qt::AlignHCenter);
