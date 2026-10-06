@@ -1219,10 +1219,6 @@ struct StubMarker {
     {
         return marker.outcome == expected;
     }
-    friend bool operator==(char expected, const StubMarker& marker)
-    {
-        return marker == expected;
-    }
     friend std::ostream& operator<<(std::ostream& os, const StubMarker& marker)
     {
         os << '\'' << marker.outcome << '\'';
