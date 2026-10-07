@@ -48,6 +48,7 @@
 #include <qt/vaultframe.h>
 #include <qt/vaultmodel.h>
 #include <qt/vaultview.h>
+#include <rpc/server.h>
 #include <script/solver.h>
 #include <test/util/setup_common.h>
 #include <util/fs.h>
@@ -1508,6 +1509,9 @@ void VaultTests::agentAllotmentImportsNodePeers()
     QLabel* state = agent_allotment_page.findChild<QLabel*>(QStringLiteral("agentAllotmentSignedSpendState"));
     QVERIFY(state);
 
+    // The RPC table leaves warmup only once a node finishes init. Clear it here, so the
+    // slot does not depend on RPCNestedTests having run first (F-437).
+    if (RPCIsInWarmup(nullptr)) SetRPCWarmupFinished();
     UniValue add_peer_params{UniValue::VARR};
     add_peer_params.push_back("1.2.3.4");
     add_peer_params.push_back(Params().GetDefaultPort());

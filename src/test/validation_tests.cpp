@@ -3,6 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <chain.h>
 #include <chainparams.h>
 #include <consensus/amount.h>
 #include <consensus/merkle.h>
@@ -17,9 +18,13 @@
 #include <test/util/mining.h>
 #include <uint256.h>
 #include <util/chaintype.h>
+#include <util/time.h>
 #include <validation.h>
 
 #include <algorithm>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
 #include <string>
 
 #include <test/util/setup_common.h>
@@ -644,6 +649,47 @@ BOOST_FIXTURE_TEST_CASE(test_block_validity_rejects_bad_congestion, TestChain100
     BOOST_CHECK(!valid);
     BOOST_CHECK_EQUAL(state.GetResult(), BlockValidationResult::BLOCK_CONSENSUS);
     BOOST_CHECK_EQUAL(state.GetRejectReason(), "bad-congestion");
+}
+
+BOOST_AUTO_TEST_CASE(mainnet_chaintxdata_bounds_guess_verification_progress)
+{
+    // F-425. All-zero mainnet ChainTxData makes GuessVerificationProgress
+    // return 1.0 for every tip. Pin the release reading through that function.
+    BOOST_REQUIRE(m_node.chainman);
+    BOOST_REQUIRE(Params().GetChainType() == ChainType::MAIN);
+    BOOST_REQUIRE(m_node.chainman->GetParams().GetChainType() == ChainType::MAIN);
+
+    const ChainTxData& data = Params().TxData();
+    BOOST_CHECK_MESSAGE(data.nTime != 0, "F-425: mainnet ChainTxData.nTime is 0; sync progress reads 100%");
+    BOOST_CHECK_MESSAGE(data.tx_count != 0, "F-425: mainnet ChainTxData.tx_count is 0; sync progress reads 100%");
+    BOOST_CHECK_MESSAGE(data.dTxRate != 0.0, "F-425: mainnet ChainTxData.dTxRate is 0; sync progress reads 100%");
+    BOOST_CHECK_EQUAL(data.nTime, 1791342428);
+    BOOST_CHECK_EQUAL(data.tx_count, uint64_t{6547});
+    BOOST_CHECK_EQUAL(data.dTxRate, 0.003290358911000451);
+
+    SetMockTime(1791342428);
+
+    CBlockIndex genesis;
+    genesis.m_chain_tx_count = 1;
+    genesis.nTime = Params().GenesisBlock().nTime;
+    const double genesis_progress = m_node.chainman->GuessVerificationProgress(&genesis);
+
+    CBlockIndex at_reading;
+    at_reading.m_chain_tx_count = 6547;
+    at_reading.nTime = uint32_t{1791342428};
+    const double reading_progress = m_node.chainman->GuessVerificationProgress(&at_reading);
+
+    SetMockTime(0s);
+
+    std::ostringstream printed;
+    printed << std::setprecision(17)
+            << "F-425 genesis-like progress=" << genesis_progress
+            << " reading progress=" << reading_progress;
+    std::cout << printed.str() << std::endl;
+    BOOST_TEST_MESSAGE(printed.str());
+
+    BOOST_CHECK_MESSAGE(genesis_progress < 0.01, "F-425 genesis-like progress=" << genesis_progress);
+    BOOST_CHECK_MESSAGE(reading_progress >= 0.99, "F-425 reading progress=" << reading_progress);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

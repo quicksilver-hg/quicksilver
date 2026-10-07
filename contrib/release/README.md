@@ -38,6 +38,37 @@ commit and tag.
 If post-tag verification fails, never move a published tag: fix the problem
 and cut the next version.
 
+## Mainnet chain transaction data before tagging
+
+Sync progress is `ChainstateManager::GuessVerificationProgress`. It estimates
+how many transactions the chain holds from mainnet `chainTxData` in
+`src/kernel/chainparams.cpp`. With `nTime`, `tx_count` and `dTxRate` all zero,
+every tip, including genesis, is reported as 100%. Refresh those three fields
+from the chain before every release. Do it before the version bump above, and
+commit it before the source is published.
+
+1. Use a synced mainnet node. Run `quicksilver-cli getchaintxstats 4096`.
+   The window of 4096 blocks is the one upstream's release process uses.
+2. A node with an `rpcwhitelist` that does not name `getchaintxstats` refuses
+   the call. The desktop node's whitelist refuses it. Take the reading on a
+   node that allows the RPC. Do not take it from the desktop.
+3. Copy `time` to `nTime`, `txcount` to `tx_count`, and `txrate` to `dTxRate`
+   for mainnet only.
+4. Replace the comment above mainnet `chainTxData` with the RPC, the window,
+   the full `window_final_block_hash`, and the height:
+   `// Data from RPC: getchaintxstats 4096 <64 hex>` and `// height <n>`.
+5. Commit that change. The hash and the height belong in the comment, not
+   only in the commit message.
+6. A reviewer repeats `quicksilver-cli getchaintxstats 4096 <hash>` on a
+   synced node that accepts the call. `time`, `txcount` and `txrate` must
+   match the three committed fields, and the height must match the comment.
+
+Public test and sandbox stay all zeros. There is no public-test reading to
+commit. Sandbox is local and mockable, as upstream regtest is, and zeros are
+the right data there. Both still report verification progress of 1.0. Do not
+invent a reading for either, and do not add a height fallback in
+`GuessVerificationProgress` to hide the zero data.
+
 ## Build each leg from the public tag
 
 One public tag covers Ubuntu 22.04, Ubuntu 24.04, and Windows x64. The binary

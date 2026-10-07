@@ -202,11 +202,12 @@ public:
         fDefaultConsistencyChecks = false;
         m_is_mockable_chain = false;
 
+        // Data from RPC: getchaintxstats 4096 4d3dbaae82daeb1bd7ab4577c1b66f1f3293b13dab507eba745e4e5da6fa7709
+        // height 6546
         chainTxData = ChainTxData{
-            // Quicksilver: fresh chain.
-            .nTime    = 0,
-            .tx_count = 0,
-            .dTxRate  = 0,
+            .nTime    = 1791342428,
+            .tx_count = 6547,
+            .dTxRate  = 0.003290358911000451,
         };
     }
 };
@@ -326,7 +327,7 @@ public:
         m_is_mockable_chain = false;
 
         chainTxData = ChainTxData{
-            // Quicksilver: fresh chain.
+            // No public-test reading; left at zero, so verification progress stays 1.0 (F-425).
             .nTime    = 0,
             .tx_count = 0,
             .dTxRate  = 0,
@@ -458,6 +459,7 @@ public:
         m_is_mockable_chain = true;
 
         chainTxData = ChainTxData{
+            // Local and mockable, like upstream regtest; left at zero, so verification progress stays 1.0 (F-425).
             0,
             0,
             0

@@ -585,6 +585,10 @@ void check_public_chain_trust_anchors_reset(const CChainParams& params)
     const auto& consensus = params.GetConsensus();
     BOOST_CHECK(consensus.nMinimumChainWork.IsNull());
     BOOST_CHECK(consensus.defaultAssumeValid.IsNull());
+}
+
+void check_chain_tx_data_left_unset(const CChainParams& params)
+{
     BOOST_CHECK_EQUAL(params.TxData().nTime, 0);
     BOOST_CHECK_EQUAL(params.TxData().tx_count, 0U);
     BOOST_CHECK_EQUAL(params.TxData().dTxRate, 0);
@@ -759,6 +763,8 @@ BOOST_AUTO_TEST_CASE(quicksilver_public_trust_anchors_are_reset)
 
     check_public_chain_trust_anchors_reset(*main);
     check_public_chain_trust_anchors_reset(*publictest);
+    // Mainnet ChainTxData is filled per release (F-425). Public test stays unset.
+    check_chain_tx_data_left_unset(*publictest);
 }
 
 BOOST_AUTO_TEST_CASE(ChainParams_MAIN_sanity)

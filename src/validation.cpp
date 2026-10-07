@@ -5197,7 +5197,8 @@ double ChainstateManager::GuessVerificationProgress(const CBlockIndex* pindex) c
         return 0.0;
     }
 
-    int64_t nNow = time(nullptr);
+    // GetTime() honors SetMockTime. time() does not, so a test cannot pin this estimate (F-425).
+    int64_t nNow = GetTime();
 
     double fTxTotal;
 
