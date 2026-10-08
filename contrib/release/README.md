@@ -228,8 +228,11 @@ Create the release key offline, on a machine that is not the one that will
 build or upload the artifacts:
 
 ```bash
-gpg --quick-gen-key "Quicksilver Release <address the owner chooses>" ed25519 cert never
+gpg --quick-gen-key "Quicksilver Release <address the owner chooses>" ed25519 sign,cert never
 ```
+
+The key needs both usages. With `cert` alone, gpg refuses to sign
+(`Unusable secret key`), and `sign-release.sh` fails.
 
 GnuPG writes a revocation certificate under `openpgp-revocs.d` in that
 `GNUPGHOME` when the key is created. Store that certificate, and an
@@ -358,7 +361,7 @@ subdirectories.
 
 ## How these artifacts were produced
 
-Built on `precision`, Linux Mint 22.3 (Ubuntu 24.04 userland), Linux
+Built on Linux Mint 22.3 (Ubuntu 24.04 userland), Linux
 6.17.0-42-generic x86_64, glibc 2.39 (`ldd (Ubuntu GLIBC 2.39-0ubuntu8.9)`).
 Compiler `g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0`. CMake 3.28.3.
 debhelper 13.14.1ubuntu5. The source commit is `0a1a39be7eeaae3e878ffc46fbf6f452641d89d7`

@@ -99,7 +99,7 @@ BOOST_AUTO_TEST_CASE(binary_search_order_is_override_then_beside_us_then_path)
     // picked rather than which directory the search chose -- and passes here
     // while failing on Windows, where "/usr/local/lib/quicksilver" + "tor"
     // composes "/usr/local/lib/quicksilver\tor" and misses the set. It went
-    // undetected until windowsqs2's first gate on this suite. Match
+    // undetected until this suite's first Windows gate. Match
     // (parent, filename), as the Windows-shapes case below already does.
     const std::set<std::string> present_dirs{
         "/opt/custom",

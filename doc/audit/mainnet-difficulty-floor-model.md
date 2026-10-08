@@ -179,16 +179,16 @@ arithmetic is pinned by `contrib/calibration/test_mainnet_floor_model.py`.
 Each input is an E28 `qs-solver --check` result over SSH: the node stopped, no
 solver process, display duty off the mining card, six graphs per sample, and the
 median of three samples. Each card was already in its final launch slot. Linux
-had no other compute client. `windowsqs1` was also clear; `windowsqs2` retained
-seven idle desktop/UWP contexts, which is part of its stated condition. Full
-measurement record: `qs-planning/plans/assets/2026-09-06-baselines.md`.
+had no other compute client. `windows-1` was also clear; `windows-2` retained
+seven idle desktop/UWP contexts, which is part of its stated condition. Measured
+2026-09-06.
 
 | card | host | quiet s/graph | cycles/s at pooled point yield | alone at floor |
 | --- | --- | ---: | ---: | ---: |
-| P104-100 | `linuxqs1` | 1.4667 | 0.0159337 | 251.0 s (0.84× target) |
-| GTX 950 | `linuxqs2` | 3.4383 | 0.0067970 | 588.5 s (1.96×) |
-| GTX 1050 Ti | `windowsqs1` | 3.1912 | 0.0073233 | 546.2 s (1.82×) |
-| GTX 960 | `windowsqs2` | 3.2093 | 0.0072820 | 549.3 s (1.83×) |
+| P104-100 | `linux-1` | 1.4667 | 0.0159337 | 251.0 s (0.84× target) |
+| GTX 950 | `linux-2` | 3.4383 | 0.0067970 | 588.5 s (1.96×) |
+| GTX 1050 Ti | `windows-1` | 3.1912 | 0.0073233 | 546.2 s (1.82×) |
+| GTX 960 | `windows-2` | 3.2093 | 0.0072820 | 549.3 s (1.83×) |
 | **all four** | | | **0.0373359** | **107.1 s (0.36×)** |
 
 Graph throughput and cycle yield are separate measurements. The table converts

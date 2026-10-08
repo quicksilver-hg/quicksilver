@@ -45,14 +45,14 @@ DEGRADED_GRAPH_TIME_MULTIPLIER = 1.25
 # Final-slot E28 seconds per graph, measured by qs-solver under a stated quiet
 # condition: node stopped, no solver process, display duty off the mining card,
 # six graphs per sample, and the median of three samples. Windows probes ran in
-# SSH session 0; windowsqs2 retained seven idle desktop/UWP compute contexts.
+# SSH session 0; windows-2 retained seven idle desktop/UWP compute contexts.
 # These are standardized solver-capacity inputs, not production node counters.
-# Full conditions: qs-planning/plans/assets/2026-09-06-baselines.md.
+# Measured 2026-09-06.
 LAUNCH_FLEET_QUIET = {
-    "P104-100":    1.4667,  # linuxqs1, Slot 1 / PCIe x4
-    "GTX 950":     3.4383,  # linuxqs2, Slot 1 / PCIe x4
-    "GTX 1050 Ti": 3.1912,  # windowsqs1, Slot 1 / PCIe x4
-    "GTX 960":     3.2093,  # windowsqs2, Slot 1 / PCIe x4
+    "P104-100":    1.4667,  # linux-1, Slot 1 / PCIe x4
+    "GTX 950":     3.4383,  # linux-2, Slot 1 / PCIe x4
+    "GTX 1050 Ti": 3.1912,  # windows-1, Slot 1 / PCIe x4
+    "GTX 960":     3.2093,  # windows-2, Slot 1 / PCIe x4
 }
 
 

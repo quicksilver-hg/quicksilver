@@ -40,8 +40,7 @@ Two shapes are detected, and they are NOT the same problem:
           case is present, named, and green with half its checks gone. This is
           the shape that hid the datadir lock gap (see test_LockDirectory).
 
-See flag-register entry (w) 2026-09-02 for the full classification of the
-current set, and `~/qs-planning/F-91/` for the sweep this was built from.
+The current set was classified in a sweep on 2026-09-02.
 """
 import re
 import subprocess

@@ -12,6 +12,7 @@ Nothing here contacts the network or uses a project key.
 import hashlib
 import importlib.util
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,7 @@ HERE = Path(__file__).resolve().parent
 STAGE = HERE / "stage-release.py"
 SIGN = HERE / "sign-release.sh"
 VERIFY = HERE / "verify-release.sh"
+README = HERE / "README.md"
 BUILD_DEBS = HERE / "build-debs.sh"
 CHECK_DBGSYM = HERE / "check-dbgsym.sh"
 # Transcripts from real gdb -batch runs, kept byte for byte.
@@ -39,6 +41,17 @@ FIXTURE_NO_LINE = 'Breakpoint 1 at 0x1131\n[Thread debugging using libthread_db 
 FIXTURE_COULD_NOT_FIND = '\nwarning: could not find \'.gnu_debugaltlink\' file for /usr/lib/debug/.build-id/a4/2eaeae5010b5f47c7dbe416099ef64eefe06bf.debug\ncould not read \'.gnu_debugaltlink\' section\ncould not read \'.gnu_debugaltlink\' section\n[Thread debugging using libthread_db enabled]\nUsing host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".\nQuicksilver RPC client version v0.1.1-833e06c522e9\nCopyright (C) 2026 The Quicksilver developers\nCopyright (C) 2009-2026 The Bitcoin Core developers\n\nPlease contribute if you find Quicksilver useful. Visit\n<https://github.com/quicksilver-hg/quicksilver> for further information about\nthe software.\nThe source code is available from\n<https://github.com/quicksilver-hg/quicksilver>.\n\nThis is experimental software.\nDistributed under the MIT software license, see the accompanying file COPYING\nor <https://opensource.org/licenses/MIT>\n[Inferior 1 (process 1766) exited normally]\nNo stack.\n'
 FIXTURE_DWZ_FILE = 'Dwarf Error: .debug_types section not supported in dwz file\nBreakpoint 1 at 0x1131\n[Thread debugging using libthread_db enabled]\nUsing host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".\n\nBreakpoint 1, 0x0000555555555131 in main ()\n#0  0x0000555555555131 in main ()\n'
 VERSION = "v1.2.3"
+
+
+def documented_key_spec():
+    """Algorithm, usage and expiry from the README's Key custody keygen line."""
+    for line in README.read_text(encoding="utf8").splitlines():
+        if line.startswith("gpg --quick-gen-key "):
+            parts = shlex.split(line)
+            return parts[3], parts[4], parts[5]
+    raise AssertionError("README.md has no 'gpg --quick-gen-key' line")
+
+
 PUBLIC = "a" * 40
 DEV = "b" * 40
 PROVENANCE_ORDER = (
@@ -158,7 +171,7 @@ class ReleaseToolingTest(unittest.TestCase):
         return env
 
     @classmethod
-    def generate_key(cls, env, uid):
+    def generate_key(cls, env, uid, algo="default", usage="default", expire="never"):
         result = subprocess.run(
             [
                 "gpg",
@@ -169,9 +182,9 @@ class ReleaseToolingTest(unittest.TestCase):
                 "",
                 "--quick-gen-key",
                 uid,
-                "default",
-                "default",
-                "never",
+                algo,
+                usage,
+                expire,
             ],
             capture_output=True,
             text=True,
@@ -363,6 +376,28 @@ class ReleaseToolingTest(unittest.TestCase):
             self.assertEqual(checked.returncode, 0, checked.stderr)
             self.assertTrue((staged / "INDEX.asc").is_file())
             self.assertTrue((staged / "windows-x64" / "SHA256SUMS.asc").is_file())
+
+    def test_documented_release_key_can_sign_a_release(self):
+        algo, usage, expire = documented_key_spec()
+        fingerprint = self.generate_key(
+            self.gpg_env(), "Documented Key <documented-test@example.invalid>", algo, usage, expire
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            windows = root / "in" / "windows-x64"
+            windows.mkdir(parents=True)
+            (windows / "installer.exe").write_bytes(b"installer-bytes")
+            (windows / "PROVENANCE").write_text(
+                provenance_text("windows-x64", ["installer.exe"]),
+                encoding="utf8",
+            )
+            output = root / "out"
+            staged = self.run_stage(output, [("windows-x64", windows)])
+            self.assertEqual(staged.returncode, 0, staged.stderr)
+            signed = self.sign(output / VERSION, fingerprint)
+            self.assertEqual(signed.returncode, 0, signed.stderr)
+            checked = self.verify(output / VERSION, fingerprint)
+            self.assertEqual(checked.returncode, 0, checked.stderr)
 
     def test_hook_byte_change_is_hashed_after_the_hook(self):
         with tempfile.TemporaryDirectory() as tmp:

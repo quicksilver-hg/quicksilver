@@ -9,7 +9,7 @@
 
 [M8](../m8-launch-card-rate/README.md) closed the launch card and ended by naming
 the one input still missing: "the remaining open input is the GTX 960 on
-`windowsqs2`, which is unmeasured." M9 measures it. It is the last card in the
+`windows-2`, which is unmeasured." M9 measures it. It is the last card in the
 arming schedule and the only one that mines under Windows, so it is also the only
 measurement where the display-driver watchdog is a live hazard rather than a
 footnote.
@@ -168,14 +168,14 @@ Every card that can mine at launch is now measured. Rates are
 
 | card | host | s/graph | cycles/s | 4-cycle block, alone |
 | --- | --- | ---: | ---: | ---: |
-| P104-100 | `linuxqs1` (GPU0) | 1.472141 | 0.0158748 | 252.0 s |
-| GTX 950 | `linuxqs2` | 3.4262 | 0.0068210 | 586.4 s |
-| **GTX 960** | **`windowsqs2`** | **4.207628** | **0.0055542** | **720.2 s** |
-| GTX 1050 Ti | `linuxqs1` (GPU1) | 3.1697 | 0.0073729 | 542.5 s |
+| P104-100 | `linux-1` (GPU0) | 1.472141 | 0.0158748 | 252.0 s |
+| GTX 950 | `linux-2` | 3.4262 | 0.0068210 | 586.4 s |
+| **GTX 960** | **`windows-2`** | **4.207628** | **0.0055542** | **720.2 s** |
+| GTX 1050 Ti | `linux-1` (GPU1) | 3.1697 | 0.0073729 | 542.5 s |
 
 The GTX 1050 Ti is listed for completeness but is **not** an arming card: it
-drives Xorg on `linuxqs1` while the P104 mines beside it. The GTX 960 in
-`windowsqs1` is likewise excluded — that box is a node and ctest host, not a
+drives Xorg on `linux-1` while the P104 mines beside it. The GTX 960 in
+`windows-1` is likewise excluded — that box is a node and ctest host, not a
 miner.
 
 ## Consequence for the arming schedule

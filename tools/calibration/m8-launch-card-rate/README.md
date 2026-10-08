@@ -98,7 +98,7 @@ value, which is the corroboration a 30-event sample can legitimately provide.
 | card | E28 s/graph | cycles/s | 4-cycle block time |
 | --- | ---: | ---: | ---: |
 | P104-100, M7 anchor (rig, borrowed) | 1.5648 | 0.014935 | 267.8 s |
-| **P104-100, M8 launch card (`linuxqs1`)** | **1.472141** | **0.015875** | **252.0 s** |
+| **P104-100, M8 launch card (`linux-1`)** | **1.472141** | **0.015875** | **252.0 s** |
 
 Same card model, same harness, same method, one idle card each: the launch card
 is **6.3% faster per graph** than the anchor card. That is ordinary part-to-part
@@ -147,7 +147,7 @@ opens 16% fast of the 300 s target, not slow.**
 
 That is a mild condition, not a problem. 252 s against 300 s is well inside a
 single retarget step, so it resolves within one 144-block window. Adding the
-GTX 950 gives ~0.02270 cycles/s (~176 s/block), and the GTX 960 on `windowsqs2`
+GTX 950 gives ~0.02270 cycles/s (~176 s/block), and the GTX 960 on `windows-2`
 takes the full fleet to ~0.02825 cycles/s (~142 s/block); difficulty then rises
 off the floor, which is the mechanism working, not a fault.
 

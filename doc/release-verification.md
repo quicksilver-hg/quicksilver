@@ -40,11 +40,31 @@ and each file's name, size, and SHA-256.
 
 ## The signing key
 
-The key fingerprint is published with the first signed release, in that
-release's notes and in this document. Compare the fingerprint `gpg` reports
-with that published value. A signature that checks under some other key is
-not a Quicksilver release signature. This document does not carry a
-fingerprint until that first signed release exists.
+Releases from v0.1.1 on are signed by this key:
+
+```text
+Quicksilver Release <quicksilver.maintainers@gmail.com>
+3CF8 CC6D 475E C728 6025  D729 585F 5CE5 1B57 972C
+```
+
+Each release's notes carry the same fingerprint. Compare the fingerprint
+`gpg` reports with this value. A signature that checks under some other key
+is not a Quicksilver release signature.
+
+The public key:
+
+```text
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mDMEasa3BRYJKwYBBAHaRw8BAQdAIV6+A7uQsCIE4SCcIoXChz7FgRR7pvqa9VN5
+WCrNApK0N1F1aWNrc2lsdmVyIFJlbGVhc2UgPHF1aWNrc2lsdmVyLm1haW50YWlu
+ZXJzQGdtYWlsLmNvbT6IkwQTFgoAOxYhBDz4zG1HXscoYCXXKVhfXOUbV5csBQJq
+xrcFAhsDBQsJCAcCAiICBhUKCQgLAgQWAgMBAh4HAheAAAoJEFhfXOUbV5csxZkA
+/3N+VgSyBav0LjpgaMb7cy1KNt7NJvCIGS93Me0IziSWAP0ZQ36t7cDArzYHiGJo
+iADX2i5upkkS6IBW2JmOaiUIAg==
+=N6DK
+-----END PGP PUBLIC KEY BLOCK-----
+```
 
 ## Linux
 

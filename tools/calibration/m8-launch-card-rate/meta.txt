@@ -1,5 +1,5 @@
 date: 2026-08-28T18:11:47Z
-host: linuxqs1 (Linux Mint 22.3, kernel 6.14.0-37-generic, 4 cores, 23 GB)
+host: linux-1 (Linux Mint 22.3, kernel 6.14.0-37-generic, 4 cores, 23 GB)
 NVIDIA P104-100, 8192 MiB, 580.178.04
 Cuda compilation tools, release 12.0, V12.0.140
 Build cuda_12.0.r12.0/compiler.32267302_0
