@@ -17,6 +17,8 @@
 #include <interfaces/node.h>
 #include <key.h>
 #include <key_io.h>
+#include <node/context.h>
+#include <node/warnings.h>
 #include <outputtype.h>
 #include <psqt.h>
 #include <streams.h>
@@ -748,16 +750,21 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
 
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     VaultFrame vaultFrame(platformStyle.get(), nullptr);
+    // The node's warnings read in Home's Node panel. The test raises one itself: a
+    // release build has no unreleased-build warning, so the list can be empty.
+    QVERIFY(node.context() && node.context()->warnings);
+    const QString clock_warning = QStringLiteral("Test: the clock is out of sync.");
+    QVERIFY(node.context()->warnings->Set(node::Warning::CLOCK_OUT_OF_SYNC, Untranslated(clock_warning.toStdString())));
     vaultFrame.setClientModel(mini_gui.clientModel.get());
-    // The node's warnings (this build is not a release) read in Home's Node panel.
     {
         QLabel* node_alerts = vaultFrame.findChild<QLabel*>(QStringLiteral("homeNodeAlerts"));
         QVERIFY(node_alerts);
         const QString warnings = mini_gui.clientModel->getStatusBarWarnings();
-        QVERIFY(!warnings.isEmpty());
+        QVERIFY(warnings.contains(clock_warning));
         QCOMPARE(node_alerts->text(), warnings);
         QVERIFY(!node_alerts->isHidden());
     }
+    QVERIFY(node.context()->warnings->Unset(node::Warning::CLOCK_OUT_OF_SYNC));
     auto* routedVaultView = new VaultView(&vaultModel, platformStyle.get(), &vaultFrame);
     QVERIFY(vaultFrame.addView(routedVaultView));
     vaultFrame.setCurrentVault(&vaultModel);

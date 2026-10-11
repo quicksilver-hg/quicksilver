@@ -1,10 +1,10 @@
-quicksilver (0.1.2-1) UNRELEASED; urgency=low
+quicksilver (0.1.2-1) unstable; urgency=low
 
-  * Development series after the 0.1.1 release. Not a release: the 0.1.1 tag
-    is what a release build identifies itself as, and this tree carries work
-    that has not been tagged.
+  * Quicksilver 0.1.2: the Windows installer bundles Tor, the desktop is
+    redesigned, and agent allotments are co-signed. Ubuntu 22.04, Ubuntu
+    24.04 and Windows x64, from public tag v0.1.2.
 
- -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Thu, 08 Oct 2026 00:00:00 +0000
+ -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Sun, 11 Oct 2026 16:50:36 +0000
 
 quicksilver (0.1.1-1) unstable; urgency=low
 
@@ -17,4 +17,4 @@ quicksilver (0.1.0-1) unstable; urgency=low
 
   * Initial Quicksilver packaging for the public pre-1.0 0.1.x source tree.
 
- -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Mon, 13 Jul 2026 00:00:00 +0000
+ -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Mon, 14 Sep 2026 11:50:39 +0000
