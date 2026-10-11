@@ -244,6 +244,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $env:QS_QT_TEST_LOG_DIR | Out-Null
           ctest --output-on-failure --stop-on-failure -j $env:NUMBER_OF_PROCESSORS -C Release --output-junit ctest-results.xml
           $ctest_rc = $LASTEXITCODE
+          Write-Output "::group::Qt test summary"
+          Get-ChildItem $env:QS_QT_TEST_LOG_DIR -Filter *.txt | Select-String -Pattern '^(FAIL!|SKIP|Totals)|not checked' | ForEach-Object { "$($_.Filename): $($_.Line)" }
+          Write-Output "::endgroup::"
           if ($ctest_rc -ne 0) {
             Get-ChildItem $env:QS_QT_TEST_LOG_DIR -Filter *.txt | ForEach-Object {
               Write-Output "::group::Qt test log $($_.Name)"

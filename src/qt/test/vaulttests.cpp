@@ -111,6 +111,7 @@
 #include <QRadioButton>
 #include <QRegularExpression>
 #include <QScopedPointer>
+#include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -2509,8 +2510,16 @@ void VaultTests::homeAndLedgerReadTransactionsAlike()
     // metrics; "minimal" measures text with a placeholder font database, about
     // twice as wide, so the fit runs where fonts are real (as on Home's layout).
     const bool real_fonts = !QFontDatabase().families().isEmpty();
+    // The fit is a claim about the 1200x800 design size. Windows will not make a
+    // window larger than its screen, and a CI runner's screen can be smaller.
+    const bool design_size = window.width() >= 1200 && window.height() >= 800;
+    if (!design_size) {
+        const QRect screen = window.screen()->availableGeometry();
+        qWarning("Label fit not checked: below the 1200x800 design size, window %dx%d on a %dx%d screen",
+                 window.width(), window.height(), screen.width(), screen.height());
+    }
     const int label_need = home_cells->sizeHintForColumn(TransactionTableModel::ToAddress);
-    if (real_fonts) {
+    if (real_fonts && design_size) {
         QVERIFY2(home_table->columnWidth(TransactionTableModel::ToAddress) >= label_need,
                  qPrintable(QStringLiteral("Label %1 px of %2").arg(home_table->columnWidth(TransactionTableModel::ToAddress)).arg(label_need)));
         QVERIFY(home_table->fontMetrics().horizontalAdvance(payout_label) < home_table->columnWidth(TransactionTableModel::ToAddress));
