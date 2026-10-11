@@ -1132,6 +1132,66 @@ BOOST_AUTO_TEST_CASE(agent_allotment_setup_records_vault_metadata)
     BOOST_CHECK_EQUAL(records[1].stopped_time, 0);
 }
 
+//! The agent allotment record layout before 0.1.2, kept only so a test can write one.
+struct AgentAllotmentRecordV1 {
+    int version{1};
+    std::string id;
+    std::string label;
+    CAmount funding_limit{0};
+    CAmount daily_limit{0};
+    int64_t risk_accepted_time{0};
+    bool backend_created{false};
+    std::string funding_address;
+    uint8_t policy_status{0};
+
+    SERIALIZE_METHODS(AgentAllotmentRecordV1, obj)
+    {
+        READWRITE(obj.version, obj.id, obj.label, obj.funding_limit, obj.daily_limit, obj.risk_accepted_time, obj.backend_created, obj.funding_address, obj.policy_status);
+    }
+};
+
+BOOST_AUTO_TEST_CASE(agent_allotment_setup_replaces_pre_012_records)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    EnableDescriptorVault(vault);
+
+    const auto records_key{std::make_pair(DBKeys::SETTINGS, std::string{"agent_allotment_records"})};
+    const std::vector<AgentAllotmentRecordV1> old_records{{.id = "agent-1", .label = "old-agent", .funding_limit = COIN, .funding_address = "old-funding-address"}};
+    BOOST_REQUIRE(vault.GetDatabase().MakeBatch()->Write(records_key, old_records));
+    const COutPoint old_funding{Txid::FromUint256(uint256::ONE), 0};
+    {
+        LOCK(vault.cs_vault);
+        VaultBatch batch{vault.GetDatabase()};
+        BOOST_REQUIRE(vault.LockCoin(old_funding, &batch));
+    }
+    BOOST_CHECK(vault.ListAgentAllotmentRecords().empty());
+
+    {
+        ASSERT_DEBUG_LOG("Agent allotment records from before 0.1.2 were not loaded");
+        auto record{vault.RecordAgentAllotmentSetup("new-agent", COIN, 0)};
+        BOOST_REQUIRE(record);
+        BOOST_CHECK_EQUAL(record->id, "agent-1");
+    }
+
+    auto records{vault.ListAgentAllotmentRecords()};
+    BOOST_REQUIRE_EQUAL(records.size(), 1U);
+    BOOST_CHECK_EQUAL(records[0].label, "new-agent");
+    BOOST_CHECK_EQUAL(records[0].version, AgentAllotmentRecord::CURRENT_VERSION);
+    {
+        LOCK(vault.cs_vault);
+        BOOST_CHECK(vault.IsLockedCoin(old_funding));
+    }
+    BOOST_CHECK(vault.GetDatabase().MakeBatch()->Exists(std::make_pair(DBKeys::LOCKED_UTXO, std::make_pair(old_funding.hash, old_funding.n))));
+
+    // The key now holds a current record, so a second setup reads it and appends.
+    auto second{vault.RecordAgentAllotmentSetup("second-agent", COIN, 0)};
+    BOOST_REQUIRE(second);
+    BOOST_CHECK_EQUAL(second->id, "agent-2");
+    records = vault.ListAgentAllotmentRecords();
+    BOOST_REQUIRE_EQUAL(records.size(), 2U);
+    BOOST_CHECK_EQUAL(records[0].label, "new-agent");
+}
+
 BOOST_AUTO_TEST_CASE(agent_allotment_setup_imports_cosigned_taproot_descriptor)
 {
     CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());

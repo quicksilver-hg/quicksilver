@@ -872,7 +872,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QVERIFY(agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentCompromisedHostRisk"))->text().contains(QStringLiteral("refuses every later request")));
     QLabel* guarantee_risk = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentGuaranteeRisk"));
     QVERIFY(guarantee_risk);
-    QVERIFY(guarantee_risk->text().contains(QStringLiteral("no limit is a guarantee")));
+    QVERIFY(guarantee_risk->text().contains(QStringLiteral("limits are not guaranteed")));
     QLineEdit* agent_name = agent_allotment_page->findChild<QLineEdit*>(QStringLiteral("agentAllotmentNameEdit"));
     QVERIFY(agent_name);
     QuicksilverAmountField* agent_funding = agent_allotment_page->findChild<QuicksilverAmountField*>(QStringLiteral("agentAllotmentFundingLimit"));
@@ -1360,7 +1360,7 @@ void VaultTests::agentAllotmentRiskTextNamesTheCosigner()
     AgentAllotmentPage page;
     QCOMPARE(page.findChild<QLabel*>("agentAllotmentDishonestAgentRisk")->text(), QStringLiteral("The agent holds one key and this vault holds the other. The agent cannot spend without this vault's signature."));
     QCOMPARE(page.findChild<QLabel*>("agentAllotmentCompromisedHostRisk")->text(), QStringLiteral("Stop an allotment and this vault refuses every later request. A request the vault has already signed and broadcast still confirms."));
-    QCOMPARE(page.findChild<QLabel*>("agentAllotmentGuaranteeRisk")->text(), QStringLiteral("Spending limits are the agent's own check. This vault does not enforce them, and no limit is a guarantee."));
+    QCOMPARE(page.findChild<QLabel*>("agentAllotmentGuaranteeRisk")->text(), QStringLiteral("Spending limits are the agent's own check. This vault does not enforce them, and limits are not guaranteed."));
     for (QLabel* label : page.findChildren<QLabel*>()) {
         QVERIFY(!label->text().contains("dishonest agent"));
         QVERIFY(!label->text().contains("compromised host"));
@@ -2243,7 +2243,7 @@ void VaultTests::benchSpinAndCheckControlsStayWhole()
     disabled->setValue(5);
     disabled->setEnabled(false);
     auto* unchecked = new QCheckBox(QStringLiteral("Route change to custom address"), &host);
-    auto* checked = new QCheckBox(QStringLiteral("I accept the shared-key risk"), &host);
+    auto* checked = new QCheckBox(QStringLiteral("Visible checkbox"), &host);
     checked->setChecked(true);
     for (QAbstractSpinBox* spin : {static_cast<QAbstractSpinBox*>(at_min), static_cast<QAbstractSpinBox*>(at_max), static_cast<QAbstractSpinBox*>(disabled)}) {
         spin->setMinimumWidth(140);

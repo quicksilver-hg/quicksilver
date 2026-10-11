@@ -52,6 +52,10 @@ Notable changes
 Changes in 0.1.2
 ================
 
+- The desktop is redesigned. Pages sit on a rail at the left, a top bar holds the
+  total balance and the Request and Transfer actions, and Home shows the ten most
+  recent ledger rows with a link to the full Ledger page. The menus are now
+  Vault, Settings, Window and Help.
 - The Windows installer ships the Tor Project's `tor.exe` (Tor Expert Bundle
   15.0.24, tor 0.4.9.13) beside `quicksilver.exe`, with its licenses in
   `LICENSE-tor.txt`. In 0.1.1 it shipped none, so a desktop installed from it

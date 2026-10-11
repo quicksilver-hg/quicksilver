@@ -16,6 +16,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -140,6 +141,45 @@ def write_hook(path, body):
 
 
 class ReleaseToolingTest(unittest.TestCase):
+    def test_deb_provenance_names_a_role_not_a_host(self):
+        script = BUILD_DEBS.read_text(encoding="utf8")
+        self.assertNotIn("hostname", script)
+        self.assertNotIn("HOSTNAME", script)
+        self.assertIn("builder_label=${QS_BUILDER_LABEL:-linux-release-builder}", script)
+        self.assertIn("$builder_label =~ ^[a-z0-9][a-z0-9.-]{0,63}$", script)
+        self.assertIn("printf 'builder_host=%s\\n' \"$builder_label\"", script)
+
+    def test_documented_release_tars_record_no_builder_identity(self):
+        lines = [
+            line for line in README.read_text(encoding="utf8").splitlines()
+            if line.startswith('tar -C "$STAGE" ') and " -cf " in line
+        ]
+        self.assertEqual(len(lines), 3)
+        for line in lines:
+            args = shlex.split(line.replace("$MTIME", "@1700000000"))
+            flags = [arg for arg in args if arg.startswith("--")]
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "stage" / "plat").mkdir(parents=True)
+                # Created in reverse, so directory order is not name order
+                # (tmpfs lists newest first, ext4 lists by hash).
+                names = [f"file-{i:02d}" for i in range(20)]
+                for name in reversed(names):
+                    (root / "stage" / "plat" / name).write_bytes(b"x")
+                out = root / "out.tar"
+                subprocess.run(
+                    ["tar", "-C", str(root / "stage"), *flags, "-cf", str(out), "plat"],
+                    check=True,
+                )
+                with tarfile.open(out) as archive:
+                    members = archive.getmembers()
+                    self.assertEqual(len(members), 21)
+                    self.assertEqual([m.name for m in members[1:]], [f"plat/{name}" for name in names])
+                    for member in members:
+                        self.assertEqual((member.uid, member.gid), (0, 0))
+                        self.assertEqual((member.uname, member.gname), ("", ""))
+                        self.assertEqual(member.mtime, 1700000000)
+
     gpg_home = None
     fingerprint = None
     other_fingerprint = None

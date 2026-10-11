@@ -131,6 +131,9 @@ package_version=$(dpkg-parsechangelog -l"$repo/contrib/debian/changelog" -SVersi
 # A release build can leave the provenance record stage-release.py consumes.
 # The release procedure supplies the development SHA and captured version line,
 # which do not exist in the public source tree.
+# PROVENANCE is copied into the signed, published INDEX, so it names the
+# builder's role, never the machine.
+builder_label=${QS_BUILDER_LABEL:-linux-release-builder}
 if [[ -n ${QS_DEVELOPMENT_SHA:-} && -n ${QS_VERSION_LINE:-} ]]; then
     public_sha=$(git -C "$repo" rev-parse HEAD)
     public_tag=$(git -C "$repo" describe --exact-match --tags HEAD 2>/dev/null || true)
@@ -145,13 +148,14 @@ if [[ -n ${QS_DEVELOPMENT_SHA:-} && -n ${QS_VERSION_LINE:-} ]]; then
         && $public_sha =~ ^[0-9a-f]{40}$ \
         && $dev_sha =~ ^[0-9a-f]{40}$ \
         && $image_digest == sha256:* \
-        && $version_line_ok == 1 ]]; then
+        && $version_line_ok == 1 \
+        && $builder_label =~ ^[a-z0-9][a-z0-9.-]{0,63}$ ]]; then
         {
             printf 'platform=%s\n' "$platform"
             printf 'public_tag=%s\n' "$public_tag"
             printf 'public_sha=%s\n' "$public_sha"
             printf 'development_sha=%s\n' "$dev_sha"
-            printf 'builder_host=%s\n' "$(hostname)"
+            printf 'builder_host=%s\n' "$builder_label"
             printf 'os_userland=%s\n' "$userland"
             printf 'compiler=g++ from build-essential in the pinned %s image\n' "$suite"
             printf 'image_digest=%s\n' "$image_digest"
@@ -160,6 +164,6 @@ if [[ -n ${QS_DEVELOPMENT_SHA:-} && -n ${QS_VERSION_LINE:-} ]]; then
             write_file_records "$output"
         } >"$output/PROVENANCE"
     else
-        echo 'provenance record not written: public tag, development SHA, image digest, or version line is missing or not in the required form' >&2
+        echo 'provenance record not written: public tag, development SHA, image digest, version line, or builder label is missing or not in the required form' >&2
     fi
 fi

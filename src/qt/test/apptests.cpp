@@ -978,7 +978,9 @@ void AppTests::consensusTorPreflight()
     args->ForceSetArg("-bundledtorpath", "/opt/tor/bin/tor");
     QVERIFY(QuicksilverApplication::consensusTorAvailableForTesting(*args, locator(fs::u8path("/opt/tor/bin/tor"))));
     QCOMPARE(calls, 1);
-    QCOMPARE(fs::PathToString(asked), std::string{"/opt/tor/bin/tor"});
+    // GetPathArg() normalizes, so on Windows the locator is asked for the
+    // same path with native separators.
+    QCOMPARE(fs::PathToString(asked), fs::PathToString(fs::PathFromString("/opt/tor/bin/tor").lexically_normal()));
 
     // Bundled Tor will start and none is found: refuse (the F-441 exit).
     calls = 0;

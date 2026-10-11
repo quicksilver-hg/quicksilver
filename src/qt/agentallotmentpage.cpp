@@ -228,7 +228,7 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent)
     compromised_host->setObjectName(QStringLiteral("agentAllotmentCompromisedHostRisk"));
     risk_layout->addWidget(compromised_host);
 
-    auto* guarantee = MakeMutedLabel(tr("Spending limits are the agent's own check. This vault does not enforce them, and no limit is a guarantee."), risk_panel);
+    auto* guarantee = MakeMutedLabel(tr("Spending limits are the agent's own check. This vault does not enforce them, and limits are not guaranteed."), risk_panel);
     guarantee->setObjectName(QStringLiteral("agentAllotmentGuaranteeRisk"));
     risk_layout->addWidget(guarantee);
 

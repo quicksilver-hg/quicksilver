@@ -1413,7 +1413,11 @@ void SendCoinsDialog::createTransferSummary()
     for (QWidget* widget : {ui->sendButton, ui->clearButton, ui->addButton}) {
         ui->horizontalLayout->removeWidget(widget);
     }
+    // removeItem() leaves the row with no parent, so it is ours to free; its
+    // buttons were taken out above and stay children of this dialog.
     ui->verticalLayout->removeItem(ui->horizontalLayout);
+    delete ui->horizontalLayout;
+    ui->horizontalLayout = nullptr;
     ui->verticalLayout->setContentsMargins(14, 14, 14, 14);
 
     // TRANSFER · RECIPIENTS: one line per recipient under column heads, then

@@ -108,7 +108,7 @@ platform=ubuntu-22.04
 public_tag=vX.Y.Z
 public_sha=<40 hex>
 development_sha=<40 hex>
-builder_host=<hostname>
+builder_host=<the builder's role, never a hostname: linux-release-builder or windows-release-builder>
 os_userland=<distribution and version>
 compiler=<compiler and version>
 image_digest=<sha256:...> or none
@@ -193,9 +193,10 @@ checkout, and do not run it as part of preparing the tooling.
 VERSION=vX.Y.Z
 STAGE=/path/to/staging/$VERSION
 DIST=$(mktemp -d)
-tar -C "$STAGE" -cf "$DIST/ubuntu-22.04.tar" ubuntu-22.04
-tar -C "$STAGE" -cf "$DIST/ubuntu-24.04.tar" ubuntu-24.04
-tar -C "$STAGE" -cf "$DIST/windows-x64.tar" windows-x64
+MTIME=@$(git log -1 --format=%ct "$VERSION")
+tar -C "$STAGE" --sort=name --owner=0 --group=0 --numeric-owner --mtime="$MTIME" -cf "$DIST/ubuntu-22.04.tar" ubuntu-22.04
+tar -C "$STAGE" --sort=name --owner=0 --group=0 --numeric-owner --mtime="$MTIME" -cf "$DIST/ubuntu-24.04.tar" ubuntu-24.04
+tar -C "$STAGE" --sort=name --owner=0 --group=0 --numeric-owner --mtime="$MTIME" -cf "$DIST/windows-x64.tar" windows-x64
 cp "$STAGE/INDEX" "$STAGE/INDEX.asc" "$STAGE/SHA256SUMS" "$STAGE/SHA256SUMS.asc" "$DIST/"
 gh release create "$VERSION" --repo quicksilver-hg/quicksilver \
   --title "$VERSION" \
@@ -203,6 +204,10 @@ gh release create "$VERSION" --repo quicksilver-hg/quicksilver \
   "$DIST/INDEX" "$DIST/INDEX.asc" "$DIST/SHA256SUMS" "$DIST/SHA256SUMS.asc" \
   "$DIST/ubuntu-22.04.tar" "$DIST/ubuntu-24.04.tar" "$DIST/windows-x64.tar"
 ```
+
+The tar flags keep the builder's username, uid and clock out of the archive
+headers. Every file takes the tag's commit time, so two runs over the same tree
+give the same archives.
 
 The notes file carries the key fingerprint and a pointer to
 `doc/release-verification.md`. The fingerprint is published there and in
@@ -313,6 +318,10 @@ public tree does not contain the development SHA, and the script does not
 execute the packaged binaries, so it cannot invent those two values. If
 either is unset, or `HEAD` is not exactly `vX.Y.Z` or `vX.Y.ZrcN`, the
 script writes no record and its result is unchanged.
+
+`QS_BUILDER_LABEL` sets the `builder_host` role (default
+`linux-release-builder`). It must match `[a-z0-9][a-z0-9.-]*` and be at most
+64 characters, or no `PROVENANCE` is written.
 
 The Ubuntu 24.04 packages declare `t64` library names and
 `libstdc++6 (>= 13.1)`, which Ubuntu 22.04 cannot satisfy. Building the
