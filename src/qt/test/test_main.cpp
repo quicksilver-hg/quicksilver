@@ -155,18 +155,20 @@ int main(int argc, char* argv[])
 
         // Keep objects alive through the run, and construct each just before its tests.
         std::vector<std::unique_ptr<QObject>> test_objects;
-        std::vector<char*> test_args;
-        if (selected) {
-            test_args.push_back(argv[0]);
-            test_args.insert(test_args.end(), argv + 2, argv + argc);
-            test_args.push_back(nullptr);
-        }
+        // QS_QT_TEST_LOG_DIR also writes each class's log to <dir>/<class>.txt,
+        // for runners whose job log never shows QtTest's output.
+        const char* log_dir{std::getenv("QS_QT_TEST_LOG_DIR")};
         for (const auto& test_class : test_classes) {
             if (selected && selected != &test_class) continue;
+            std::vector<std::string> log_args;
+            if (log_dir && *log_dir) {
+                log_args = {"-o", std::string{log_dir} + "/" + test_class.meta_object->className() + ".txt,txt", "-o", "-,txt"};
+            }
+            std::vector<char*> test_args{argv[0]};
+            if (selected) test_args.insert(test_args.end(), argv + 2, argv + argc);
+            for (std::string& arg : log_args) test_args.push_back(arg.data());
             test_objects.push_back(test_class.create());
-            num_test_failures += selected
-                ? QTest::qExec(test_objects.back().get(), argc - 1, test_args.data())
-                : QTest::qExec(test_objects.back().get());
+            num_test_failures += QTest::qExec(test_objects.back().get(), static_cast<int>(test_args.size()), test_args.data());
         }
 
         if (num_test_failures) {

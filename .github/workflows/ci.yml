@@ -238,8 +238,20 @@ jobs:
           # -DBUILD_DIR=. arrives empty and -DRESULTS=ctest-results.xml as ctest-results.
           cmake "-DBUILD_DIR=." "-DCONFIG=Release" -P ../cmake/script/CheckCtestManifest.cmake
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # QtTest's output does not reach this log on Windows, so test_quicksilver-qt
+          # also writes each class's log to a file, printed here if anything fails.
+          $env:QS_QT_TEST_LOG_DIR = "$PWD\qt-test-logs"
+          New-Item -ItemType Directory -Force -Path $env:QS_QT_TEST_LOG_DIR | Out-Null
           ctest --output-on-failure --stop-on-failure -j $env:NUMBER_OF_PROCESSORS -C Release --output-junit ctest-results.xml
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $ctest_rc = $LASTEXITCODE
+          if ($ctest_rc -ne 0) {
+            Get-ChildItem $env:QS_QT_TEST_LOG_DIR -Filter *.txt | ForEach-Object {
+              Write-Output "::group::Qt test log $($_.Name)"
+              Get-Content $_.FullName
+              Write-Output "::endgroup::"
+            }
+            exit $ctest_rc
+          }
           cmake "-DBUILD_DIR=." "-DCONFIG=Release" "-DRESULTS=ctest-results.xml" -P ../cmake/script/CheckCtestManifest.cmake
 
       - name: Run functional tests
