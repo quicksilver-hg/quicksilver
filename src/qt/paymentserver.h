@@ -58,7 +58,7 @@ class PaymentServer : public QObject
     Q_OBJECT
 
 public:
-    // Parse BIP21 URIs on the command line.
+    // Parse quicksilver: URIs on the command line.
     static void ipcParseCommandLine(int argc, char *argv[]);
 
     // Returns true if there were URIs on the command line

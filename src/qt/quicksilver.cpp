@@ -50,6 +50,7 @@
 #include <qt/vaultcontroller.h>
 #include <qt/vaultmodel.h>
 #include <vault/types.h>
+#include <vault/vault.h> // For DEFAULT_DISABLE_VAULT
 #endif // ENABLE_VAULT
 
 #include <boost/signals2/connection.hpp>
@@ -88,6 +89,28 @@ constexpr const char* CONSENSUS_ENABLED_SETTING = "Desktop/ConsensusEnabled";
 bool ConsensusEnabledOnThisDesktop()
 {
     return QSettings().value(QLatin1String(CONSENSUS_ENABLED_SETTING), false).toBool();
+}
+
+//! True unless node startup would start a bundled Tor and `locate` finds none.
+//! Asked before a node is started, so a missing Tor is reported by the desktop
+//! instead of ending it through a startup InitError (F-441).
+bool ConsensusTorAvailable(const ArgsManager& args, const QuicksilverApplication::TorLocator& locate)
+{
+    if (!tor::BundledTorWouldStart(args)) return true;
+    return locate(args.GetPathArg("-bundledtorpath")).has_value();
+}
+
+//! A saved consensus opt-in whose Tor is missing opens the vault on its own, so
+//! the desktop stays up and says why. Without a vault there is nothing to open,
+//! and node startup's own error names the remedy.
+bool LaunchOpensVaultOnly(const ArgsManager& args, const QuicksilverApplication::TorLocator& locate)
+{
+#ifdef ENABLE_VAULT
+    if (args.GetBoolArg("-disablevault", vault::DEFAULT_DISABLE_VAULT)) return false;
+    return !ConsensusTorAvailable(args, locate);
+#else
+    return false;
+#endif // ENABLE_VAULT
 }
 
 bool IsChainSelectorArgument(QString arg)
@@ -344,6 +367,9 @@ bool QuicksilverApplication::createOptionsModel(bool resetSettings)
 void QuicksilverApplication::createWindow(const NetworkStyle *networkStyle)
 {
     window = new QuicksilverGUI(node(), platformStyle, networkStyle, nullptr);
+#ifdef ENABLE_VAULT
+    window->setConsensusPreflight([] { return ConsensusTorAvailable(gArgs, tor::LocateBundledTor); });
+#endif
     connect(window, &QuicksilverGUI::quitRequested, this, &QuicksilverApplication::requestShutdown);
     connect(window, &QuicksilverGUI::consensusActivationRequested, this, &QuicksilverApplication::requestInitialize);
     connect(window, &QuicksilverGUI::networkRestartRequested, this, &QuicksilverApplication::requestRestart);
@@ -465,6 +491,33 @@ void QuicksilverApplication::parameterSetup()
 void QuicksilverApplication::InitPruneSetting(int64_t prune_MiB)
 {
     optionsModel->SetPruneTargetGB(PruneMiBtoGB(prune_MiB));
+}
+
+bool QuicksilverApplication::consensusTorAvailableForTesting(const ArgsManager& args, const TorLocator& locate)
+{
+    return ConsensusTorAvailable(args, locate);
+}
+
+bool QuicksilverApplication::launchOpensVaultOnlyForTesting(const ArgsManager& args, const TorLocator& locate)
+{
+    return LaunchOpensVaultOnly(args, locate);
+}
+
+void QuicksilverApplication::startPersistedConsensus()
+{
+#ifdef ENABLE_VAULT
+    if (window && LaunchOpensVaultOnly(gArgs, tor::LocateBundledTor)) {
+        // baseInitialize() left the vault to AppInitMain because consensus was
+        // on; nothing will start it now, so the desktop opens its vault itself.
+        delete m_splash;
+        m_splash = nullptr;
+        createVaultController();
+        showWindow();
+        window->markConsensusTorMissing();
+        return;
+    }
+#endif // ENABLE_VAULT
+    requestInitialize();
 }
 
 void QuicksilverApplication::requestInitialize()
@@ -911,7 +964,7 @@ int GuiMain(int argc, char* argv[])
         // so the GUI thread won't be held up.
         if (app.baseInitialize()) {
             if (consensus_enabled) {
-                app.requestInitialize();
+                app.startPersistedConsensus();
             } else {
                 app.showWindow();
             }

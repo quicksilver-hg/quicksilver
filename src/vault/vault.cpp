@@ -3109,17 +3109,56 @@ util::Result<AgentAllotmentRecord> CVault::RecordAgentAllotmentSetup(const std::
     if (!MoneyRange(daily_limit)) {
         return util::Error{_("Agent allotment setup has an invalid daily guardrail amount.")};
     }
-
-    const std::string address_label{strprintf("agent:%s", trimmed_label)};
-    auto funding_dest = GetNewDestination(DEFAULT_ADDRESS_TYPE, address_label);
-    if (!funding_dest) {
-        return util::Error{util::ErrorString(funding_dest)};
+    LOCK(cs_vault);
+    if (IsLocked()) {
+        return util::Error{_("Unlock this vault to create an agent allotment.")};
+    }
+    if (IsVaultFlagSet(VAULT_FLAG_DISABLE_PRIVATE_KEYS)) {
+        return util::Error{_("Agent allotment setup requires a vault with private keys.")};
+    }
+    if (!IsVaultFlagSet(VAULT_FLAG_DESCRIPTORS)) {
+        return util::Error{_("This vault does not support agent allotment setup.")};
     }
 
-    LOCK(cs_vault);
+    const CKey vault_key{GenerateRandomKey()};
+    const CKey agent_key{GenerateRandomKey()};
+    const CKey cosigner_key{GenerateRandomKey()};
+    const std::string private_descriptor{strprintf("tr(%s,multi_a(2,%s,%s))", EncodeSecret(vault_key), EncodeSecret(agent_key), EncodeSecret(cosigner_key))};
+
+    FlatSigningProvider provider;
+    std::string parse_error;
+    auto parsed{Parse(private_descriptor, provider, parse_error, /*require_checksum=*/false)};
+    if (parsed.size() != 1) {
+        return util::Error{_("Agent allotment descriptor could not be parsed.")};
+    }
+    std::shared_ptr<Descriptor> descriptor{std::move(parsed.at(0))};
+
+    std::vector<CScript> scripts;
+    FlatSigningProvider expanded;
+    if (!descriptor->Expand(0, provider, scripts, expanded) || scripts.size() != 1) {
+        return util::Error{_("Agent allotment descriptor did not produce a funding address.")};
+    }
+    CTxDestination funding_dest;
+    if (!ExtractDestination(scripts[0], funding_dest) || !std::holds_alternative<WitnessV1Taproot>(funding_dest)) {
+        return util::Error{_("Agent allotment descriptor did not produce a taproot funding address.")};
+    }
+
+    const std::string address_label{strprintf("agent:%s", trimmed_label)};
+    VaultDescriptor vault_descriptor{descriptor, /*creation_time=*/static_cast<uint64_t>(GetTime()), /*range_start=*/0, /*range_end=*/0, /*next_index=*/0};
+    if (!AddVaultDescriptor(vault_descriptor, provider, address_label, /*internal=*/false)) {
+        return util::Error{_("Agent allotment descriptor could not be imported.")};
+    }
+
     VaultBatch batch(GetDatabase());
     std::vector<AgentAllotmentRecord> records;
-    batch.ReadAgentAllotmentRecords(records);
+    if (!batch.ReadAgentAllotmentRecords(records)) {
+        // A missing key is a first allotment. A present key that does not deserialize is a
+        // pre-0.1.2 record: do not append to whatever a failed read left behind.
+        if (batch.HasAgentAllotmentRecords()) {
+            VaultLogPrintf("Agent allotment records from before 0.1.2 were not loaded; their funding outputs stay locked. See doc/design/agent-client.md, \"Bundles exported before 0.1.2\".");
+        }
+        records.clear();
+    }
 
     unsigned int next_index{static_cast<unsigned int>(records.size() + 1)};
     auto id_exists = [&](const std::string& id) {
@@ -3136,15 +3175,35 @@ util::Result<AgentAllotmentRecord> CVault::RecordAgentAllotmentSetup(const std::
     record.funding_limit = funding_limit;
     record.daily_limit = daily_limit;
     record.risk_accepted_time = GetTime();
-    record.backend_created = false;
-    record.funding_address = EncodeDestination(*funding_dest);
-    record.policy_status = AgentAllotmentPolicyStatus::PendingIntegration;
+    record.funding_address = EncodeDestination(funding_dest);
+    record.funding_descriptor = descriptor->ToString();
+    record.stopped_time = 0;
 
     records.push_back(record);
+    if (!SetBackupRecorded(false)) {
+        return util::Error{_("Agent allotment setup could not clear the recorded backup.")};
+    }
     if (!batch.WriteAgentAllotmentRecords(records)) {
         return util::Error{_("Agent allotment setup could not be saved to this vault.")};
     }
     return record;
+}
+
+bool CVault::StopAgentAllotment(const std::string& id)
+{
+    LOCK(cs_vault);
+    VaultBatch batch(GetDatabase());
+    std::vector<AgentAllotmentRecord> records;
+    if (!batch.ReadAgentAllotmentRecords(records)) return false;
+
+    const auto record_it{std::find_if(records.begin(), records.end(), [&](const AgentAllotmentRecord& record) {
+        return record.id == id;
+    })};
+    if (record_it == records.end()) return false;
+    if (record_it->stopped_time != 0) return true;
+
+    record_it->stopped_time = GetTime();
+    return batch.WriteAgentAllotmentRecords(records);
 }
 
 std::vector<AgentAllotmentRecord> CVault::ListAgentAllotmentRecords() const
@@ -3160,12 +3219,13 @@ std::string CVault::AgentAllotmentPolicyRequest(const AgentAllotmentRecord& reco
 {
     UniValue policy{UniValue::VOBJ};
     policy.pushKV("type", "quicksilver.agent_allotment_policy_request");
-    policy.pushKV("version", 1);
+    policy.pushKV("version", 2);
     policy.pushKV("chain", Params().GetChainTypeString());
     policy.pushKV("genesis_hash", Params().GenesisBlock().GetHash().ToString());
     policy.pushKV("id", record.id);
     policy.pushKV("label", record.label);
     policy.pushKV("funding_address", record.funding_address);
+    policy.pushKV("funding_descriptor", record.funding_descriptor);
     // Amounts and times cross a machine boundary as JSON strings, not numbers: cinnabar
     // is atomic and MAX_MONEY exceeds 2^53, so a JSON number would lose precision in any
     // reader backed by a double. DecodeAllotmentPolicyRequest requires the string form.
@@ -3174,8 +3234,6 @@ std::string CVault::AgentAllotmentPolicyRequest(const AgentAllotmentRecord& reco
     policy.pushKV("daily_limit_cinnabar", util::ToString(record.daily_limit));
     policy.pushKV("risk_accepted_time", util::ToString(record.risk_accepted_time));
     policy.pushKV("request_created_time", util::ToString(GetTime()));
-    policy.pushKV("policy_status", record.policy_status == AgentAllotmentPolicyStatus::Enforced ? "enforced" : "pending_integration");
-    policy.pushKV("backend_created", record.backend_created);
     return policy.write();
 }
 
@@ -3202,14 +3260,12 @@ util::Result<AgentAllotmentPolicyRequestMetadata> CVault::ValidateAgentAllotment
         return util::Error{Untranslated("Agent allotment policy request is not recorded in this vault.")};
     }
     const AgentAllotmentRecord& record{*record_it};
-    const AgentAllotmentPolicyStatus policy_status{artifact->policy_status == "enforced" ? AgentAllotmentPolicyStatus::Enforced : AgentAllotmentPolicyStatus::PendingIntegration};
     if (record.label != artifact->label ||
         record.funding_address != artifact->funding_address ||
+        record.funding_descriptor != artifact->funding_descriptor ||
         record.funding_limit != artifact->policy.funding_limit ||
         record.daily_limit != artifact->policy.daily_limit ||
-        record.risk_accepted_time != artifact->risk_accepted_time ||
-        record.backend_created != artifact->backend_created ||
-        record.policy_status != policy_status) {
+        record.risk_accepted_time != artifact->risk_accepted_time) {
         return util::Error{Untranslated("Agent allotment policy request no longer matches this vault's recorded setup.")};
     }
 
@@ -3217,13 +3273,12 @@ util::Result<AgentAllotmentPolicyRequestMetadata> CVault::ValidateAgentAllotment
     request.id = artifact->id;
     request.label = artifact->label;
     request.funding_address = artifact->funding_address;
+    request.funding_descriptor = artifact->funding_descriptor;
     request.funding_limit = artifact->policy.funding_limit;
     request.funding_available = artifact->funding_available;
     request.daily_limit = artifact->policy.daily_limit;
     request.risk_accepted_time = artifact->risk_accepted_time;
     request.request_created_time = artifact->request_created_time;
-    request.backend_created = artifact->backend_created;
-    request.policy_status = policy_status;
     return request;
 }
 

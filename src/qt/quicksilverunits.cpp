@@ -141,6 +141,14 @@ QString QuicksilverUnits::formatWithPrivacy(Unit unit, const CAmount& amount, Se
     return value + QString(" ") + shortName(unit);
 }
 
+QString QuicksilverUnits::formatInlineValueWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy)
+{
+    assert(amount >= 0);
+    const QString value = privacy ? format(unit, 0, false, separators, true).replace('0', '#')
+                                  : format(unit, amount, false, separators, true);
+    return value.trimmed();
+}
+
 QString QuicksilverUnits::formatInlineWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy)
 {
     // Keep the stacked labels' formatting and privacy mask, but remove the

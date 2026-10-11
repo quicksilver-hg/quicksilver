@@ -370,125 +370,6 @@ void OptionTests::cpuFallbackWarningPreferencePersists()
     }
 }
 
-void OptionTests::allowCpuAgentTxPowPersists()
-{
-    constexpr auto SETTING_KEY{"allow_cpu_agent_txpow"};
-    QSettings settings;
-    const bool had_previous_value{settings.contains(SETTING_KEY)};
-    const QVariant previous_value{settings.value(SETTING_KEY)};
-    const bool had_restart{settings.contains("fRestartRequired")};
-    const QVariant previous_restart{settings.value("fRestartRequired")};
-    settings.remove(SETTING_KEY);
-    settings.setValue("fRestartRequired", false);
-
-    OptionsModel first{m_node};
-    QVERIFY(!first.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
-    QVERIFY(first.setOption(OptionsModel::AllowCpuAgentTxPow, true));
-    QVERIFY(!first.isRestartRequired());
-
-    OptionsModel second{m_node};
-    QVERIFY(second.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
-    QVERIFY(second.setOption(OptionsModel::AllowCpuAgentTxPow, false));
-    QVERIFY(!second.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
-    QVERIFY(!second.isRestartRequired());
-
-    if (had_previous_value) {
-        settings.setValue(SETTING_KEY, previous_value);
-    } else {
-        settings.remove(SETTING_KEY);
-    }
-    if (had_restart) {
-        settings.setValue("fRestartRequired", previous_restart);
-    } else {
-        settings.remove("fRestartRequired");
-    }
-}
-
-void OptionTests::allowCpuAgentTxPowCancelLeavesTheSettingOff()
-{
-    constexpr auto SETTING_KEY{"allow_cpu_agent_txpow"};
-    QSettings settings;
-    const bool had_previous_value{settings.contains(SETTING_KEY)};
-    const QVariant previous_value{settings.value(SETTING_KEY)};
-    const bool had_restart{settings.contains("fRestartRequired")};
-    const QVariant previous_restart{settings.value("fRestartRequired")};
-    settings.remove(SETTING_KEY);
-    settings.setValue("fRestartRequired", false);
-
-    OptionsModel options{m_node};
-    bilingual_str error;
-    QVERIFY(options.Init(error));
-    QVERIFY(!options.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
-
-    OptionsDialog dialog(nullptr, /*enableVault=*/true);
-    dialog.setModel(&options);
-    dialog.show();
-    auto* box = dialog.findChild<QCheckBox*>(QStringLiteral("allowCpuAgentTxPow"));
-    auto* ok_button = dialog.findChild<QPushButton*>(QStringLiteral("okButton"));
-    QVERIFY(box);
-    QVERIFY(ok_button);
-    QVERIFY(!box->isChecked());
-    QVERIFY(box->text().contains(QStringLiteral("processor")));
-    QVERIFY(box->text().contains(QStringLiteral("every core")));
-    QVERIFY(!box->text().contains(QStringLiteral("infeasible"), Qt::CaseInsensitive));
-    QVERIFY(!box->text().contains(QStringLiteral("impossible"), Qt::CaseInsensitive));
-    QVERIFY(!box->text().contains(QStringLiteral("not supported"), Qt::CaseInsensitive));
-
-    box->setChecked(true);
-    QTest::mouseClick(ok_button, Qt::LeftButton);
-    auto* warning = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
-    QVERIFY(warning);
-    QCOMPARE(warning->objectName(), QStringLiteral("cpuAgentTxPowWarning"));
-    QVERIFY(warning->isVisible());
-    auto* acknowledge = warning->findChild<QCheckBox*>(QStringLiteral("cpuAgentTxPowAcknowledge"));
-    auto* proceed = warning->findChild<QPushButton*>(QStringLiteral("cpuAgentTxPowProceedButton"));
-    QVERIFY(acknowledge);
-    QVERIFY(proceed);
-    QVERIFY(!proceed->isEnabled());
-    QVERIFY(!acknowledge->isChecked());
-    QAbstractButton* cancel = warning->button(QMessageBox::Cancel);
-    QVERIFY(cancel);
-    QVERIFY(warning->defaultButton() == cancel);
-    QVERIFY(!warning->text().contains(QStringLiteral("infeasible"), Qt::CaseInsensitive));
-    QVERIFY(!warning->informativeText().contains(QStringLiteral("impossible"), Qt::CaseInsensitive));
-    QVERIFY(warning->informativeText().contains(QStringLiteral("calibration result")));
-    QVERIFY(warning->informativeText().contains(QStringLiteral("16 minutes")));
-
-    cancel->click();
-    QTRY_VERIFY(!box->isChecked());
-    QVERIFY(!options.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
-    QVERIFY(dialog.isVisible());
-
-    box->setChecked(true);
-    QTest::mouseClick(ok_button, Qt::LeftButton);
-    warning = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
-    QVERIFY(warning);
-    QCOMPARE(warning->objectName(), QStringLiteral("cpuAgentTxPowWarning"));
-    acknowledge = warning->findChild<QCheckBox*>(QStringLiteral("cpuAgentTxPowAcknowledge"));
-    proceed = warning->findChild<QPushButton*>(QStringLiteral("cpuAgentTxPowProceedButton"));
-    QVERIFY(acknowledge);
-    QVERIFY(proceed);
-    acknowledge->setChecked(true);
-    QVERIFY(proceed->isEnabled());
-    proceed->click();
-    QTRY_VERIFY(options.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
-    QVERIFY(!options.isRestartRequired());
-
-    OptionsModel reloaded{m_node};
-    QVERIFY(reloaded.getOption(OptionsModel::AllowCpuAgentTxPow).toBool());
-
-    if (had_previous_value) {
-        settings.setValue(SETTING_KEY, previous_value);
-    } else {
-        settings.remove(SETTING_KEY);
-    }
-    if (had_restart) {
-        settings.setValue("fRestartRequired", previous_restart);
-    } else {
-        settings.remove("fRestartRequired");
-    }
-}
-
 void OptionTests::allowCpuBlockMiningPersistsWithoutRestart()
 {
     // The mining thread reads -allowcpumining from the live args at each
@@ -590,7 +471,8 @@ void OptionTests::mainTabFitsAtTheOpeningSize()
     QWidget* tab = dialog.findChild<QWidget*>(QStringLiteral("tabMain"));
     QVERIFY(tab);
 
-    const char* required[]{"allowCpuBlockMining", "allowCpuAgentTxPow", "gpuSolverStatusLabel",
+    QVERIFY(!tab->findChild<QCheckBox*>(QStringLiteral("allowCpuAgentTxPow")));
+    const char* required[]{"allowCpuBlockMining", "gpuSolverStatusLabel",
                            "pruneSize", "databaseCache", "threadsScriptVerif"};
     for (const char* name : required) {
         QVERIFY2(tab->findChild<QWidget*>(QString::fromLatin1(name)), name);
@@ -675,24 +557,25 @@ void OptionTests::mainTabFitsAtTheOpeningSize()
     QVERIFY2(rows_fit(true), qPrintable(problem));
 }
 
-namespace {
-// Apply replaces the base style as well as the palette and stylesheet. Restore
-// all three even when a pixel assertion returns early.
-struct RestoreApplicationStyle {
-    QString style{qApp->style()->objectName()};
-    QPalette palette{qApp->palette()};
-    QString stylesheet{qApp->styleSheet()};
-    QVariant base_style{qApp->property("quicksilverBaseStyle")};
-    ~RestoreApplicationStyle()
-    {
-        qApp->setStyleSheet(QString());
-        qApp->setStyle(QStyleFactory::create(style));
-        qApp->setPalette(palette);
-        qApp->setStyleSheet(stylesheet);
-        qApp->setProperty("quicksilverBaseStyle", base_style);
-    }
-};
-} // namespace
+void OptionTests::optionsUseBenchPanelAndExplainAutomaticThreads()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    OptionsDialog dialog(nullptr, true);
+    QVERIFY(!dialog.findChild<QLabel*>(QStringLiteral("optionsEyebrow")));
+    auto* panel = dialog.findChild<QFrame*>(QStringLiteral("optionsPanel"));
+    QVERIFY(panel);
+    QVERIFY(panel->isAncestorOf(dialog.findChild<QTabWidget*>(QStringLiteral("tabWidget"))));
+    auto* spin = dialog.findChild<QSpinBox*>(QStringLiteral("threadsScriptVerif"));
+    QVERIFY(spin);
+    spin->setValue(0);
+    QVERIFY(spin->toolTip().contains(QStringLiteral("0")));
+    QVERIFY(spin->toolTip().contains(QStringLiteral("automatic")));
+    auto* label = dialog.findChild<QLabel*>(QStringLiteral("threadsScriptVerifLabel"));
+    QVERIFY(label);
+    QCOMPARE(label->property("class").toString(), QStringLiteral("benchKey"));
+    QVERIFY(label->text().contains(QStringLiteral("0 = automatic")));
+}
 
 void OptionTests::mainTabMatchesCardSurface()
 {
@@ -830,17 +713,26 @@ void OptionTests::gpuSolverBrowseDoesNotNestEventLoop()
     });
 }
 
-void OptionTests::customFontDoesNotNestEventLoop()
+void OptionTests::displayTabHasNoDeadFontChoiceAndAlignsItsFields()
 {
     OptionsModel options{m_node};
     bilingual_str error;
     QVERIFY(options.Init(error));
     OptionsDialog dialog(nullptr, /*enableVault=*/true);
     dialog.setModel(&options);
-    QComboBox* money_font = dialog.findChild<QComboBox*>(QStringLiteral("moneyFont"));
-    QVERIFY(money_font);
-    QVERIFY(money_font->count() >= 3);
-    ExpectModalWithoutNestedEventLoop("QFontDialog", [&] {
-        money_font->setCurrentIndex(money_font->count() - 1);
-    });
+    // The font choice set the face of the old HUD page's amounts. That page is gone
+    // and nothing else read the setting, so the row changed nothing.
+    QVERIFY(!dialog.findChild<QComboBox*>(QStringLiteral("moneyFont")));
+    QVERIFY(!dialog.findChild<QLabel*>(QStringLiteral("moneyFontLabel")));
+
+    QTabWidget* tabs = dialog.findChild<QTabWidget*>(QStringLiteral("tabWidget"));
+    QWidget* display = dialog.findChild<QWidget*>(QStringLiteral("tabDisplay"));
+    QVERIFY(tabs && display);
+    tabs->setCurrentWidget(display);
+    dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+    QWidget* unit = dialog.findChild<QWidget*>(QStringLiteral("unit"));
+    QWidget* urls = dialog.findChild<QWidget*>(QStringLiteral("thirdPartyTxUrls"));
+    QVERIFY(unit && urls);
+    QCOMPARE(unit->mapTo(display, QPoint{}).x(), urls->mapTo(display, QPoint{}).x());
 }

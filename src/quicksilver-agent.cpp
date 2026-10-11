@@ -95,7 +95,7 @@ static void SetupAgentArgs(ArgsManager& argsman)
     argsman.AddArg("-scantxoutset=<json>", "JSON result from quicksilver-cli scantxoutset start. Use '-' to read from standard input.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-fundingaddress=<address>", "Agent funding address for importrecovery.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-policyrequest=<json>", "Agent Allotment Gateway policy request JSON. Use '-' to read from standard input.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
-    argsman.AddArg("-policybundle=<json>", "Agent Allotment Gateway policy, key, and funding-output bundle JSON. Use '-' to read from standard input.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
+    argsman.AddArg("-policybundle=<json>", "Agent Allotment Gateway policy, agent key, public descriptor, and funding-output co-sign bundle JSON. Use '-' to read from standard input.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-paymentreceipt=<json>", "Agent payment receipt JSON with a post-handoff funding output. May be specified multiple times; use '-' to read one receipt from standard input.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-spendamount=<cinnabar>", "Spend amount in cinnabar for checkpolicy/checkbundle/signbundle.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-spenttoday=<cinnabar>", "Amount already spent today in cinnabar for checkpolicy/checkbundle/signbundle. If omitted, checkbundle and signbundle sum today's SPENT receipt activity; checkpolicy defaults to 0.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
@@ -126,8 +126,8 @@ static void SetupAgentArgs(ArgsManager& argsman)
     argsman.AddCommand("syncheaderspeer", "Connect to configured relay peers, request headers, process returned headers, and save the local header store");
     argsman.AddCommand("sendtxpeer", "Connect to configured relay peers, complete a minimal handshake, and send a hex-encoded tx payload");
     argsman.AddCommand("checkpolicy", "Decode an agent allotment policy request and check a spend against its daily guardrail");
-    argsman.AddCommand("checkbundle", "Decode an agent allotment policy bundle, merge payment receipts, verify its funding key, and check a spend against its daily guardrail");
-    argsman.AddCommand("signbundle", "Create and sign an agent allotment spend from a desktop policy bundle and optional payment receipts");
+    argsman.AddCommand("checkbundle", "Decode an agent allotment policy bundle, merge payment receipts, verify its agent key matches the bundle descriptor, and check a spend against its daily guardrail");
+    argsman.AddCommand("signbundle", "Sign the agent half of an allotment PSQT request for the desktop to co-sign and broadcast");
     argsman.AddCommand("importreceipt", "Import one or more agent payment receipts into the local receipt store");
     argsman.AddCommand("importrecovery", "Import recovered funding outputs from a scantxoutset result into the local receipt store");
     argsman.AddCommand("scanreceipts", "Scan a directory of agent payment receipt JSON files and import newly discovered receipts");
@@ -154,7 +154,7 @@ static int AppInitAgent(ArgsManager& args, int argc, char* argv[])
         } else {
             usage += "\n"
                      "The quicksilver-agent tool is the local command-line consumer of the agent client core.\n\n"
-                     "It manages the thin header store used by software agents, checks desktop-issued agent allotment policy requests and key bundles, scans a local payment receipt inbox, imports scantxoutset recovery output, can sign a bundle spend from recorded funding outputs, and can relay a signed tx payload to configured peers. It can import local-node addrman exports, sync headers, and discover peers from explicit, stored, or fixed-seed peers, but does not perform durable coin refresh. Fixed onion seeds require a reachable SOCKS5 proxy configured with -proxy or -onion.\n"
+                     "It manages the thin header store used by software agents, checks desktop-issued agent allotment policy requests and co-sign bundles, scans a local payment receipt inbox, imports scantxoutset recovery output, signs its half of a bundle spend from recorded funding outputs for the desktop to co-sign and broadcast, and can relay a signed tx payload to configured peers. It can import local-node addrman exports, sync headers, and discover peers from explicit, stored, or fixed-seed peers, but does not perform durable coin refresh. Fixed onion seeds require a reachable SOCKS5 proxy configured with -proxy or -onion.\n"
                      "\n"
                      "Usage: quicksilver-agent [options] <command>\n"
                      "or:    quicksilver-agent [options] status\n"
@@ -176,8 +176,8 @@ static int AppInitAgent(ArgsManager& args, int argc, char* argv[])
                      "or:    quicksilver-agent [options] [-peer=<host[:port]>] -message=<hex|-> sendtxpeer\n"
                      "or:    quicksilver-agent [options] -policyrequest=<json|-> -spendamount=<cinnabar> [-spenttoday=<cinnabar>] checkpolicy\n"
                      "or:    quicksilver-agent [options] -policybundle=<json|-> [-paymentreceipt=<json|->...] -spendamount=<cinnabar> [-spenttoday=<cinnabar>] checkbundle\n"
-                     "or:    quicksilver-agent [options] -policybundle=<json|-> [-paymentreceipt=<json|->...] -destination=<address> -spendamount=<cinnabar> [-spenttoday=<cinnabar>] signbundle\n"
-                     "or:    quicksilver-agent [options] -policybundle=<json|-> -prevtxid=<hex> -prevout=<n> -prevamount=<cinnabar> -destination=<address> -spendamount=<cinnabar> [-spenttoday=<cinnabar>] signbundle\n"
+                     "or:    quicksilver-agent [options] -policybundle=<json|-> [-paymentreceipt=<json|->...] -destination=<address> -spendamount=<cinnabar> [-spenttoday=<cinnabar>] signbundle (agent half; desktop co-signs and broadcasts)\n"
+                     "or:    quicksilver-agent [options] -policybundle=<json|-> -prevtxid=<hex> -prevout=<n> -prevamount=<cinnabar> -destination=<address> -spendamount=<cinnabar> [-spenttoday=<cinnabar>] signbundle (agent half; desktop co-signs and broadcasts)\n"
                      "or:    quicksilver-agent [options] -paymentreceipt=<json|->... importreceipt\n"
                      "or:    quicksilver-agent [options] -fundingaddress=<address> -scantxoutset=<json|-> importrecovery\n"
                      "or:    quicksilver-agent [options] [-paymentreceiptdir=<dir>] scanreceipts\n"
@@ -366,15 +366,6 @@ static void PrintOutboundMessages(std::vector<CSerializedNetMsg> messages)
         tfm::format(std::cout, "outbound_%s_type=%s\n", util::ToString(i), messages[i].m_type);
         tfm::format(std::cout, "outbound_%s_payload=%s\n", util::ToString(i), agent::AgentMessagePayloadHex(messages[i]));
     }
-}
-
-static void PrintTransactionRelayPayloads(const CTransaction& transaction)
-{
-    const CSerializedNetMsg tx_message{agent::MakeTxMessage(transaction)};
-    const CInv inventory{MSG_WTX, transaction.GetWitnessHash()};
-    const CSerializedNetMsg inv_message{agent::MakeTxInvMessage(std::span{&inventory, 1})};
-    tfm::format(std::cout, "tx_payload=%s\n", agent::AgentMessagePayloadHex(tx_message));
-    tfm::format(std::cout, "inv_payload=%s\n", agent::AgentMessagePayloadHex(inv_message));
 }
 
 static std::string AgentPaymentReceiptJson(const std::string& funding_address,
@@ -604,32 +595,6 @@ static std::optional<Txid> ParseTxidArg(const ArgsManager& args, const char* arg
         return std::nullopt;
     }
     return *txid;
-}
-
-static bool FundingSecretMatchesAddress(const std::string& funding_secret, const std::string& funding_address, std::string& error)
-{
-    const CKey key{DecodeSecret(funding_secret)};
-    if (!key.IsValid()) {
-        error = "funding_secret_wif is not a valid private key for this chain";
-        return false;
-    }
-
-    const CTxDestination dest{DecodeDestination(funding_address)};
-    if (!IsValidDestination(dest)) {
-        error = "funding_address is not valid for this chain";
-        return false;
-    }
-
-    const CKeyID key_id{key.GetPubKey().GetID()};
-    if (const auto* pkhash{std::get_if<PKHash>(&dest)}) {
-        return ToKeyID(*pkhash) == key_id;
-    }
-    if (const auto* witness_hash{std::get_if<WitnessV0KeyHash>(&dest)}) {
-        return ToKeyID(*witness_hash) == key_id;
-    }
-
-    error = "funding_address does not map to an importable single-key agent address";
-    return false;
 }
 
 static util::Result<agent::AllotmentReceiptStoreData> LoadStoredPaymentReceiptStore(const ArgsManager& args)
@@ -883,7 +848,6 @@ static int CheckPolicyArtifact(const agent::AllotmentPolicyArtifact& artifact, C
 
     tfm::format(std::cout, "policy_id=%s\n", artifact.id);
     tfm::format(std::cout, "policy_label=%s\n", artifact.label);
-    tfm::format(std::cout, "policy_status=%s\n", artifact.policy_status);
     tfm::format(std::cout, "funding_address=%s\n", artifact.funding_address);
     tfm::format(std::cout, "funding_limit_cinnabar=%s\n", util::ToString(artifact.policy.funding_limit));
     tfm::format(std::cout, "funding_available_cinnabar=%s\n", util::ToString(artifact.funding_available));
@@ -951,15 +915,15 @@ static int CheckBundle(const ArgsManager& args)
     const std::optional<CAmount> spent_today{ResolveSpentToday(args, &*store, bundle->funding_address)};
     if (!spent_today.has_value()) return EXIT_FAILURE;
 
-    std::string key_error;
-    if (!FundingSecretMatchesAddress(bundle->funding_secret, bundle->funding_address, key_error)) {
-        tfm::format(std::cerr, "Error: %s\n", key_error);
+    auto context{agent::ImportAllotmentBundle(*policy_bundle, Params().GetChainTypeString(), Params().GenesisBlock().GetHash().ToString())};
+    if (!context) {
+        tfm::format(std::cerr, "Error: %s\n", util::ErrorString(context).original);
         return EXIT_FAILURE;
     }
 
-    tfm::format(std::cout, "bundle_type=quicksilver.agent_allotment_key_bundle\n");
-    tfm::format(std::cout, "funding_secret_valid=true\n");
-    tfm::format(std::cout, "funding_secret_matches_address=true\n");
+    tfm::format(std::cout, "bundle_type=quicksilver.agent_allotment_cosign_bundle\n");
+    tfm::format(std::cout, "agent_secret_valid=true\n");
+    tfm::format(std::cout, "agent_secret_matches_descriptor=true\n");
     CAmount funding_output_total{0};
     for (const agent::AllotmentFundingOutputArtifact& output : bundle->funding_outputs) {
         if (!MoneyRange(funding_output_total + output.amount)) {
@@ -1296,8 +1260,10 @@ static int SignBundle(const ArgsManager& args)
     tfm::format(std::cout, "anchor_height=%s\n", util::ToString(signed_spend->transaction.nAnchorHeight));
     tfm::format(std::cout, "anchor_hash=%s\n", client.HeaderTip().GetBlockHash().ToString());
     PrintTransaction(signed_spend->transaction);
-    tfm::format(std::cout, "hex=%s\n", EncodeHexTx(signed_spend->transaction));
-    PrintTransactionRelayPayloads(signed_spend->transaction);
+    DataStream psqt_stream;
+    psqt_stream << signed_spend->psqt;
+    tfm::format(std::cout, "psqt=%s\n", EncodeBase64(psqt_stream));
+    tfm::format(std::cout, "next_step=paste the psqt into the desktop's Agent spend request panel\n");
     if (change_receipt.has_value()) {
         tfm::format(std::cout,
                     "change_paymentreceipt=%s\n",

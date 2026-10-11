@@ -81,6 +81,10 @@ Section -Main SEC0000
     File /oname=readme.txt "@nsis_readme_windows@"
     File "@nsis_example_conf@"
     File "@nsis_release_dir@@QUICKSILVER_AGENT_NAME@@EXEEXT@"
+    # The desktop starts its own Tor and looks for it beside quicksilver.exe;
+    # without it, enabling Consensus cannot reach the onion-only seed.
+    File "@nsis_tor_exe@"
+    File /oname=LICENSE-tor.txt "@nsis_tor_license@"
     SetOutPath $INSTDIR\share\rpcauth
     File "@nsis_rpcauth_dir@*.*"
     SetOutPath $INSTDIR
@@ -108,8 +112,10 @@ Section -post SEC0001
     !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
     CreateDirectory $SMPROGRAMS\$StartMenuGroup
     CreateShortcut "$SMPROGRAMS\$StartMenuGroup\$(^Name).lnk" $INSTDIR\@QUICKSILVER_GUI_NAME@@EXEEXT@
-    CreateShortcut "$SMPROGRAMS\$StartMenuGroup\@CLIENT_NAME@ (publictest).lnk" "$INSTDIR\@QUICKSILVER_GUI_NAME@@EXEEXT@" "-publictest" "$INSTDIR\@QUICKSILVER_GUI_NAME@@EXEEXT@" 1
     CreateShortcut "$SMPROGRAMS\$StartMenuGroup\Uninstall $(^Name).lnk" $INSTDIR\uninstall.exe
+    # Older installers also created a publictest link; main and publictest are
+    # now switched from the Network page.
+    Delete "$SMPROGRAMS\$StartMenuGroup\@CLIENT_NAME@ (publictest).lnk"
     !insertmacro MUI_STARTMENU_WRITE_END
     WriteRegStr HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(^Name)" DisplayName "$(^Name)"
     WriteRegStr HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(^Name)" DisplayVersion "@CLIENT_VERSION_STRING@"
@@ -146,6 +152,8 @@ Section /o -un.Main UNSEC0000
     Delete /REBOOTOK $INSTDIR\quicksilver.conf
     RMDir /r /REBOOTOK $INSTDIR\share
     Delete /REBOOTOK $INSTDIR\@QUICKSILVER_AGENT_NAME@@EXEEXT@
+    Delete /REBOOTOK $INSTDIR\tor.exe
+    Delete /REBOOTOK $INSTDIR\LICENSE-tor.txt
     RMDir /r /REBOOTOK $INSTDIR\developer-tools
     DeleteRegValue HKCU "${REGKEY}\Components" DeveloperTools
     DeleteRegValue HKCU "${REGKEY}\Components" Main
@@ -155,6 +163,8 @@ Section -un.post UNSEC0001
     DeleteRegKey HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$(^Name)"
     Delete /REBOOTOK "$SMPROGRAMS\$StartMenuGroup\Uninstall $(^Name).lnk"
     Delete /REBOOTOK "$SMPROGRAMS\$StartMenuGroup\$(^Name).lnk"
+    # No longer created (main and publictest are switched from the Network
+    # page), but an upgrade from an older installer still leaves one behind.
     Delete /REBOOTOK "$SMPROGRAMS\$StartMenuGroup\@CLIENT_NAME@ (publictest).lnk"
     Delete /REBOOTOK "$SMSTARTUP\Quicksilver.lnk"
     Delete /REBOOTOK $INSTDIR\uninstall.exe

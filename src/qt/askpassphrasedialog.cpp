@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <qt/askpassphrasedialog.h>
+#include <qt/benchpanel.h>
 #include <qt/forms/ui_askpassphrasedialog.h>
 
 #include <qt/guiconstants.h>
@@ -13,6 +14,7 @@
 #include <support/allocators/secure.h>
 
 #include <QKeyEvent>
+#include <QLabel>
 #include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
@@ -58,6 +60,16 @@ AskPassphraseDialog::AskPassphraseDialog(Mode _mode, QWidget *parent, SecureStri
             setWindowTitle(tr("Change passphrase"));
             ui->warningLabel->setText(tr("Enter the old passphrase and new passphrase for the vault."));
             break;
+    }
+    // The page grammar: the form in one panel titled for its mode, the dialog's
+    // own buttons below it, quiet commands.
+    BenchPanel::Adopt(this, ui->buttonBox, QStringLiteral("passphrasePanel"), windowTitle());
+    ui->warningLabel->setProperty("class", QStringLiteral("benchNote"));
+    for (QLabel* label : {ui->passLabel1, ui->passLabel2, ui->passLabel3}) {
+        label->setProperty("class", QStringLiteral("benchKey"));
+    }
+    for (QPushButton* button : findChildren<QPushButton*>()) {
+        button->setProperty("class", QStringLiteral("benchQuiet"));
     }
     textChanged();
     connect(ui->toggleShowPasswordButton, &QPushButton::toggled, this, &AskPassphraseDialog::toggleShowPassword);

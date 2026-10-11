@@ -81,6 +81,14 @@ public:
     QModelIndex index(int row, int column, const QModelIndex & parent = QModelIndex()) const override;
     bool processingQueuedTransactions() const { return fProcessingQueuedTransactions; }
 
+    //! The words every ledger view reads a transaction with: Home's and the
+    //! Ledger page's. One source, so the two never disagree.
+    static QString typeWord(int type);
+    static QString stateWord(int status);
+    //! The net amount with its sign ("+ 2.00000000", "− 1.50000000"); masked
+    //! when \p privacy is set.
+    static QString signedAmount(QuicksilverUnit unit, qint64 net, bool privacy);
+
 private:
     VaultModel *vaultModel;
     std::unique_ptr<interfaces::Handler> m_handler_transaction_changed;

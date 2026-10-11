@@ -858,6 +858,9 @@ public:
     bool IsBackupRecorded() const;
     bool SetBackupRecorded(bool recorded) const;
     util::Result<AgentAllotmentRecord> RecordAgentAllotmentSetup(const std::string& label, CAmount funding_limit, CAmount daily_limit);
+    //! Stop an allotment once. A second call leaves the recorded time unchanged.
+    bool StopAgentAllotment(const std::string& id);
+    util::Result<CTransactionRef> CosignAgentAllotmentSpend(const std::string& psqt_base64) EXCLUSIVE_LOCKS_REQUIRED(!cs_vault);
     std::vector<AgentAllotmentRecord> ListAgentAllotmentRecords() const;
     std::string AgentAllotmentPolicyRequest(const AgentAllotmentRecord& record, CAmount funding_available) const;
     util::Result<AgentAllotmentPolicyRequestMetadata> ValidateAgentAllotmentPolicyRequest(const std::string& request_json) const;

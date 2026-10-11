@@ -20,6 +20,10 @@ function(generate_setup_nsi)
   file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/doc/README_windows.txt" nsis_readme_windows)
   file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/share/examples/quicksilver.conf" nsis_example_conf)
   file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/doc/developer-tools.md" nsis_developer_tools_doc)
+  # Staged into release/ by the deploy target after its hash check, never taken
+  # from wherever QUICKSILVER_BUNDLED_TOR_EXE points.
+  file(TO_NATIVE_PATH "${PROJECT_BINARY_DIR}/release/tor.exe" nsis_tor_exe)
+  file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/share/tor/LICENSE-tor.txt" nsis_tor_license)
   set(CLIENT_URL ${PROJECT_HOMEPAGE_URL})
   set(CLIENT_TARNAME "quicksilver")
   set(QUICKSILVER_GUI_NAME "quicksilver")

@@ -23,6 +23,7 @@ public:
 
 private Q_SLOTS:
     void restartArgumentsForDeveloperNetwork();
+    void consensusTorPreflight();
     void appTests();
     void guiTests(QuicksilverGUI* window);
     void consoleTests(RPCConsole* console);

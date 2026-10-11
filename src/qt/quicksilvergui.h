@@ -47,6 +47,7 @@ namespace interfaces {
 class Handler;
 class Node;
 struct BlockAndHeaderTipInfo;
+struct MiningStatus;
 }
 
 QT_BEGIN_NAMESPACE
@@ -54,6 +55,7 @@ class QAction;
 class QComboBox;
 class QDateTime;
 class QProgressBar;
+class QPushButton;
 class QProgressDialog;
 QT_END_NAMESPACE
 
@@ -84,6 +86,13 @@ public:
     void setVaultController(VaultController* vault_controller, bool show_loading_minimized);
     VaultController* getVaultController();
     void markConsensusInitializationFailed();
+    /** Consensus was not started because the Tor it needs was not found (F-441). */
+    void markConsensusTorMissing();
+    /**
+     * Asked before consensus is started from this window; false refuses the
+     * start, before an open vault is handed over, and shows why. Unset: proceed.
+     */
+    void setConsensusPreflight(std::function<bool()> preflight) { m_consensus_preflight = std::move(preflight); }
 #endif
 
 #ifdef ENABLE_VAULT
@@ -123,6 +132,7 @@ private:
     ClientModel* clientModel = nullptr;
     VaultFrame* vaultFrame = nullptr;
     bool m_consensus_enabled{false};
+    std::function<bool()> m_consensus_preflight;
 
     UnitDisplayStatusBarControl* unitDisplayControl = nullptr;
     GUIUtil::ThemedLabel* labelVaultEncryptionIcon = nullptr;
@@ -172,6 +182,35 @@ private:
     QLabel *m_vault_selector_label = nullptr;
     QComboBox* m_vault_selector = nullptr;
 
+    QFrame* m_bench_top_bar{nullptr};
+    QFrame* m_rail_brand{nullptr};
+    QLabel* m_bench_breadcrumb{nullptr};
+    QWidget* m_ticker_figures{nullptr};
+    QLabel* m_ticker_empty{nullptr};
+    QLabel* m_ticker_spendable{nullptr};
+    QLabel* m_ticker_pending{nullptr};
+    QLabel* m_ticker_maturing{nullptr};
+    QLabel* m_ticker_delegated{nullptr};
+    QWidget* m_ticker_delegated_box{nullptr};
+    QLabel* m_ticker_total{nullptr};
+    QPushButton* m_bench_request_button{nullptr};
+    QPushButton* m_bench_transfer_button{nullptr};
+    QFrame* m_bench_status_strip{nullptr};
+    QLabel* m_status_dot{nullptr};
+    QLabel* m_status_sync{nullptr};
+    QLabel* m_status_tip{nullptr};
+    QLabel* m_status_height{nullptr};
+    QLabel* m_status_peers{nullptr};
+    QLabel* m_status_mining{nullptr};
+    QLabel* m_status_vault{nullptr};
+    int m_reported_blocks{-1};
+    int m_reported_peers{-1};
+    bool m_reported_synced{false};
+    bool m_have_mining_status{false};
+    QString m_mining_status_word;
+    QMetaObject::Connection m_ticker_balance_connection{};
+    VaultModel* m_ticker_model{nullptr};
+
     QSystemTrayIcon* trayIcon = nullptr;
     const std::unique_ptr<QMenu> trayIconMenu;
     Notificator* notificator = nullptr;
@@ -198,6 +237,16 @@ private:
     void createMenuBar();
     /** Create the toolbars */
     void createToolBars();
+    /** Top bar and the persistent status strip around the page area. */
+    void createBenchChrome(QWidget* content);
+    //! The top bar's Request and Transfer buttons follow the rail actions.
+    void connectBenchCommands();
+    void refreshBenchChrome();
+    void refreshTicker();
+    void refreshStatusStrip();
+    //! Miner status from VaultFrame. The strip keeps this wording until the
+    //! client model goes away; before the first report it uses the launch card.
+    void applyMiningStatus(const interfaces::MiningStatus& status);
     /** Create system tray icon and notification */
     void createTrayIcon();
     /** Create system tray menu (or setup the dock menu) */
@@ -292,8 +341,8 @@ private:
 
 public Q_SLOTS:
 #ifdef ENABLE_VAULT
-    /** Switch to overview (home) page */
-    void gotoOverviewPage();
+    /** Switch to Home */
+    void gotoHomePage();
     /** Switch to history (transactions) page */
     void gotoHistoryPage();
     /** Switch to agent allotments page */

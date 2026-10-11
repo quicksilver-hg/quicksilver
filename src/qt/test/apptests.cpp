@@ -8,6 +8,8 @@
 #include <quicksilver-build-config.h> // IWYU pragma: keep
 
 #include <chainparams.h>
+#include <common/args.h>
+#include <interfaces/node.h>
 #include <key.h>
 #include <logging.h>
 #include <node/interface_ui.h>
@@ -15,6 +17,7 @@
 #include <qt/modaloverlay.h>
 #include <qt/quicksilver.h>
 #include <qt/quicksilvergui.h>
+#include <qt/quicksilverstyle.h>
 #include <qt/networkstyle.h>
 #include <qt/platformstyle.h>
 #include <qt/rpcconsole.h>
@@ -24,6 +27,8 @@
 #endif
 #include <qt/test/util.h>
 #include <test/util/setup_common.h>
+#include <tor/bundled_tor.h>
+#include <util/fs.h>
 #include <util/translation.h>
 #include <validation.h>
 
@@ -31,6 +36,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
+#include <optional>
 #include <thread>
 
 #include <QAbstractButton>
@@ -43,6 +50,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScopedPointer>
@@ -50,6 +58,8 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
+#include <QStatusBar>
+#include <QStatusTipEvent>
 #include <QSignalSpy>
 #include <QString>
 #include <QStackedWidget>
@@ -135,23 +145,405 @@ void TestRpcCommand(RPCConsole* console)
     QCOMPARE(FindInConsole(output, pattern), QString("sandbox"));
 }
 
+void TestAssayBenchChrome(QuicksilverGUI* window)
+{
+    QToolBar* rail = window->findChild<QToolBar*>(QStringLiteral("primaryCommandRail"));
+    QVERIFY(rail);
+    QCOMPARE(rail->minimumWidth(), 196);
+    QCOMPARE(rail->maximumWidth(), 196);
+    QCOMPARE(rail->width(), 196);
+    QLabel* brand = rail->findChild<QLabel*>(QStringLiteral("commandRailBrandTitle"));
+    QVERIFY(brand);
+    QCOMPARE(brand->text(), QStringLiteral("QUICKSILVER"));
+
+    QFrame* top = window->findChild<QFrame*>(QStringLiteral("benchTopBar"));
+    QVERIFY(top);
+    QVERIFY(qobject_cast<QToolBar*>(top) == nullptr);
+    QScrollArea* scroll = window->findChild<QScrollArea*>(QStringLiteral("mainContentScrollArea"));
+    QVERIFY(scroll);
+    QVERIFY(top->mapTo(window, QPoint(0, top->height())).y() <= scroll->mapTo(window, QPoint(0, 0)).y());
+
+    QLabel* crumb = top->findChild<QLabel*>(QStringLiteral("benchBreadcrumb"));
+    QVERIFY(crumb);
+    QCOMPARE(crumb->text(), crumb->text().toUpper());
+    QVERIFY(crumb->text().contains(QStringLiteral(" / ")));
+    QString checked_page;
+    const char* action_names[] = {
+        "homeBootstrapAction", "sendCoinsAction", "receiveCoinsAction", "historyAction",
+        "agentAllotmentAction", "mineMintAction", "networkAction",
+    };
+    for (const char* name : action_names) {
+        QAction* action = window->findChild<QAction*>(QString::fromLatin1(name));
+        QVERIFY(action);
+        if (!action->isChecked()) continue;
+        checked_page = action->text();
+        checked_page.remove(QLatin1Char('&'));
+        break;
+    }
+    QVERIFY(!checked_page.isEmpty());
+    QVERIFY(crumb->text().endsWith(QStringLiteral(" / ") + checked_page.toUpper()));
+
+    QVERIFY(top->findChild<QLabel*>(QStringLiteral("benchTickerSpendable")));
+    QVERIFY(top->findChild<QLabel*>(QStringLiteral("benchTickerPending")));
+    QVERIFY(top->findChild<QLabel*>(QStringLiteral("benchTickerMaturing")));
+    QVERIFY(top->findChild<QLabel*>(QStringLiteral("benchTickerDelegated")));
+
+    VaultFrame* frame = window->findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    if (!frame->currentVaultModel()) {
+        QLabel* empty = top->findChild<QLabel*>(QStringLiteral("benchTickerEmpty"));
+        QVERIFY(empty);
+        QCOMPARE(empty->text(), QStringLiteral("No vault open"));
+        QVERIFY(!empty->isHidden());
+        QWidget* figures = top->findChild<QWidget*>(QStringLiteral("benchTickerFigures"));
+        QVERIFY(figures);
+        QVERIFY(figures->isHidden());
+        QVERIFY(crumb->text().startsWith(QStringLiteral("NO VAULT OPEN / ")));
+    }
+
+    QFrame* strip = window->statusBar()->findChild<QFrame*>(QStringLiteral("benchStatusStrip"));
+    QVERIFY(strip);
+    QLabel* sync = strip->findChild<QLabel*>(QStringLiteral("benchStatusSync"));
+    QLabel* height = strip->findChild<QLabel*>(QStringLiteral("benchStatusHeight"));
+    QLabel* peers = strip->findChild<QLabel*>(QStringLiteral("benchStatusPeers"));
+    QLabel* mining = strip->findChild<QLabel*>(QStringLiteral("benchStatusMining"));
+    QLabel* vault = strip->findChild<QLabel*>(QStringLiteral("benchStatusVault"));
+    QVERIFY(sync);
+    QVERIFY(height);
+    QVERIFY(peers);
+    QVERIFY(mining);
+    QVERIFY(vault);
+    // The sync progress bar lives in the strip (Home's node panel has its own).
+    QVERIFY(strip->findChild<QProgressBar*>());
+
+    const QString peers_before = peers->text();
+    window->setNumConnections(999);
+    QCOMPARE(peers->text(), peers_before);
+    QVERIFY(!peers->text().contains(QStringLiteral("999")));
+
+    QString mining_state;
+    if (QLabel* live = window->findChild<QLabel*>(QStringLiteral("miningStatusValue"))) {
+        if (!live->text().isEmpty() && live->text() != QStringLiteral("Not connected")) mining_state = live->text();
+    }
+    if (mining_state.isEmpty()) {
+        if (QLabel* card = window->findChild<QLabel*>(QStringLiteral("launchMiningCardState"))) mining_state = card->text();
+    }
+    QCOMPARE(mining->text(), mining_state.isEmpty() ? QStringLiteral("Mining locked") : QStringLiteral("Mining %1").arg(mining_state.toLower()));
+    if (!frame->currentVaultModel()) QCOMPARE(vault->text(), QStringLiteral("No vault open"));
+
+    ModalOverlay* overlay = window->findChild<ModalOverlay*>();
+    QVERIFY(overlay);
+    const QDateTime stamp = QDateTime::currentDateTime();
+    // Known header height only moves upward. Catch the tip up to a fresh height,
+    // then name a taller header, then catch up again so the overlay ends hidden.
+    overlay->setKnownBestHeight(700, stamp, /*presync=*/false);
+    window->setNumBlocks(700, stamp, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QCOMPARE(sync->text(), QStringLiteral("Synchronized"));
+    QCOMPARE(height->text(), QStringLiteral("Height 700"));
+    QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("good"));
+    QVERIFY(!overlay->isLayerVisible());
+
+    overlay->setKnownBestHeight(740, stamp, /*presync=*/false);
+    window->setNumBlocks(700, stamp, 0.5, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QCOMPARE(sync->text(), QStringLiteral("Catching up"));
+    QCOMPARE(height->text(), QStringLiteral("Height 700"));
+    QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("plain"));
+    QVERIFY(overlay->isLayerVisible());
+
+    window->setNumBlocks(740, stamp, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QCOMPARE(sync->text(), QStringLiteral("Synchronized"));
+    QVERIFY(!overlay->isLayerVisible());
+}
+
+//! The mining field follows a miner status change on its own.
+//!
+//! A halt that arrives with no new block, peer, or vault event used to leave the
+//! strip on the previous wording, because the field was copied from a page label
+//! and only repainted from those other events.
+void TestStatusStripFollowsMiningStatus(QuicksilverGUI* window)
+{
+    VaultFrame* frame = window->findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    QLabel* mining = window->statusBar()->findChild<QLabel*>(QStringLiteral("benchStatusMining"));
+    QVERIFY(mining);
+    QLabel* page_state = window->findChild<QLabel*>(QStringLiteral("miningStatusValue"));
+    const QString page_before = page_state ? page_state->text() : QString();
+    const QString height_before = window->statusBar()->findChild<QLabel*>(QStringLiteral("benchStatusHeight"))->text();
+    const QString peers_before = window->statusBar()->findChild<QLabel*>(QStringLiteral("benchStatusPeers"))->text();
+    const QString vault_before = window->statusBar()->findChild<QLabel*>(QStringLiteral("benchStatusVault"))->text();
+
+    interfaces::MiningStatus active;
+    active.active = true;
+    active.block_solving_possible = true;
+    frame->setMiningStatus(active);
+    QCOMPARE(mining->text(), QStringLiteral("Mining active"));
+
+    interfaces::MiningStatus halted;
+    halted.active = true;
+    halted.block_solving_possible = false;
+    frame->setMiningStatus(halted);
+    QCOMPARE(mining->text(), QStringLiteral("Mining halted"));
+
+    // This path does not repaint the mine page, and it does not ride a block,
+    // peer, or vault refresh.
+    if (page_state) QCOMPARE(page_state->text(), page_before);
+    QCOMPARE(window->statusBar()->findChild<QLabel*>(QStringLiteral("benchStatusHeight"))->text(), height_before);
+    QCOMPARE(window->statusBar()->findChild<QLabel*>(QStringLiteral("benchStatusPeers"))->text(), peers_before);
+    QCOMPARE(window->statusBar()->findChild<QLabel*>(QStringLiteral("benchStatusVault"))->text(), vault_before);
+}
+
+//! The rail, top bar and strip as the Assay Bench concept lays them out.
+//!
+//! The first port recoloured the old chrome and kept its shapes: centred
+//! auto-width rail buttons, a breadcrumb beside the ticker, no total and no
+//! transfer controls, and a strip any rail hover replaced.
+QToolButton* RailButtonFor(QToolBar* rail, QAction* action)
+{
+    for (QToolButton* button : rail->findChildren<QToolButton*>()) {
+        if (button->defaultAction() == action) return button;
+    }
+    return nullptr;
+}
+
+void TestAssayBenchChromeLayout(QuicksilverGUI* window)
+{
+    // The layout under test is the 1200x800 window; the test platform's
+    // screen would otherwise leave the window too short for the rail.
+    const QSize restore_size = window->size();
+    struct RestoreSize {
+        QWidget* window;
+        QSize size;
+        ~RestoreSize() { window->resize(size); }
+    } restore{window, restore_size};
+    window->resize(1200, 800);
+    QCoreApplication::processEvents();
+
+    QToolBar* rail = window->findChild<QToolBar*>(QStringLiteral("primaryCommandRail"));
+    QVERIFY(rail);
+    const char* action_names[] = {
+        "homeBootstrapAction", "sendCoinsAction", "receiveCoinsAction", "agentAllotmentAction",
+        "historyAction", "mineMintAction", "networkAction",
+    };
+    int previous_top = -1;
+    for (const char* name : action_names) {
+        QAction* action = window->findChild<QAction*>(QString::fromLatin1(name));
+        QVERIFY2(action, name);
+        QToolButton* button = RailButtonFor(rail, action);
+        QVERIFY2(button, name);
+        // A full-width row, in the existing order.
+        QVERIFY2(button->width() >= rail->width() - 1,
+                 qPrintable(QStringLiteral("%1 is %2 px wide in a %3 px rail").arg(QString::fromLatin1(name)).arg(button->width()).arg(rail->width())));
+        QCOMPARE(button->mapTo(rail, QPoint(0, 0)).x(), 0);
+        QVERIFY(button->height() >= 36 && button->height() <= 44);
+        const int top = button->mapTo(rail, QPoint(0, 0)).y();
+        QVERIFY(top > previous_top);
+        previous_top = top;
+    }
+
+    // The checked row carries the 2 px cinnabar edge; an unchecked row does not.
+    QAction* home = window->findChild<QAction*>(QStringLiteral("homeBootstrapAction"));
+    QAction* network = window->findChild<QAction*>(QStringLiteral("networkAction"));
+    QVERIFY(home);
+    QVERIFY(network);
+    home->setEnabled(true);
+    home->trigger();
+    QVERIFY(home->isChecked());
+    const auto edge = [](QToolButton* button, int x) {
+        const QImage image = button->grab().toImage();
+        return image.pixelColor(QPoint(x, button->height() / 2) * image.devicePixelRatio());
+    };
+    const QColor cinnabar = QuicksilverStyle::Color(QuicksilverStyle::Token::Cinnabar);
+    QToolButton* home_button = RailButtonFor(rail, home);
+    QToolButton* network_button = RailButtonFor(rail, network);
+    QCOMPARE(edge(home_button, 0), cinnabar);
+    QCOMPARE(edge(home_button, 1), cinnabar);
+    QVERIFY(edge(network_button, 0) != cinnabar);
+
+    // Breadcrumb above the ticker, a total, and the two transfer controls.
+    QFrame* top = window->findChild<QFrame*>(QStringLiteral("benchTopBar"));
+    QVERIFY(top);
+    QLabel* crumb = top->findChild<QLabel*>(QStringLiteral("benchBreadcrumb"));
+    QWidget* figures = top->findChild<QWidget*>(QStringLiteral("benchTickerFigures"));
+    QLabel* empty = top->findChild<QLabel*>(QStringLiteral("benchTickerEmpty"));
+    QVERIFY(crumb);
+    QVERIFY(figures);
+    QVERIFY(empty);
+    QVERIFY(top->findChild<QLabel*>(QStringLiteral("benchTickerTotal")));
+    const int crumb_bottom = crumb->mapTo(top, QPoint(0, crumb->height())).y();
+    QWidget* ticker = figures->isHidden() ? static_cast<QWidget*>(empty) : figures;
+    QVERIFY(!ticker->isHidden());
+    QVERIFY(crumb_bottom <= ticker->mapTo(top, QPoint(0, 0)).y());
+
+    // The rail's brand cell and the top bar share one bottom rule.
+    QFrame* brand = rail->findChild<QFrame*>(QStringLiteral("commandRailBrand"));
+    QVERIFY(brand);
+    QCOMPARE(brand->mapTo(window, QPoint(0, brand->height())).y(), top->mapTo(window, QPoint(0, top->height())).y());
+
+    QPushButton* request = top->findChild<QPushButton*>(QStringLiteral("benchRequestButton"));
+    QPushButton* transfer = top->findChild<QPushButton*>(QStringLiteral("benchTransferButton"));
+    QVERIFY(request);
+    QVERIFY(transfer);
+    QAction* receive_action = window->findChild<QAction*>(QStringLiteral("receiveCoinsAction"));
+    QAction* send_action = window->findChild<QAction*>(QStringLiteral("sendCoinsAction"));
+    QVERIFY(receive_action);
+    QVERIFY(send_action);
+    QCOMPARE(request->isEnabled(), receive_action->isEnabled());
+    QCOMPARE(transfer->isEnabled(), send_action->isEnabled());
+    const bool receive_was = receive_action->isEnabled();
+    const bool send_was = send_action->isEnabled();
+    receive_action->setEnabled(true);
+    send_action->setEnabled(true);
+    QVERIFY(request->isEnabled());
+    QVERIFY(transfer->isEnabled());
+    request->click();
+    QVERIFY(receive_action->isChecked());
+    transfer->click();
+    QVERIFY(send_action->isChecked());
+    home->trigger();
+    receive_action->setEnabled(receive_was);
+    send_action->setEnabled(send_was);
+    QCOMPARE(request->isEnabled(), receive_was);
+    QCOMPARE(transfer->isEnabled(), send_was);
+
+    // The strip stays in place while a rail item is hovered; the tip shows
+    // beside it instead of replacing it.
+    QFrame* strip = window->statusBar()->findChild<QFrame*>(QStringLiteral("benchStatusStrip"));
+    QVERIFY(strip);
+    QLabel* tip = strip->findChild<QLabel*>(QStringLiteral("benchStatusTip"));
+    QVERIFY(tip);
+    QVERIFY(strip->isVisible());
+    QStatusTipEvent hover(network->statusTip());
+    QApplication::sendEvent(network_button, &hover);
+    QVERIFY(strip->isVisible());
+    QVERIFY(window->statusBar()->currentMessage().isEmpty());
+    QCOMPARE(tip->text(), network->statusTip());
+    QStatusTipEvent leave{QString()};
+    QApplication::sendEvent(network_button, &leave);
+    QVERIFY(strip->isVisible());
+    QVERIFY(tip->text().isEmpty());
+
+    // A dot before the sync word, toned by the same sync state.
+    QLabel* sync = strip->findChild<QLabel*>(QStringLiteral("benchStatusSync"));
+    QLabel* dot = strip->findChild<QLabel*>(QStringLiteral("benchStatusDot"));
+    QVERIFY(sync);
+    QVERIFY(dot);
+    QVERIFY(dot->mapTo(strip, QPoint(0, 0)).x() < sync->mapTo(strip, QPoint(0, 0)).x());
+    QCOMPARE(dot->property("benchTone").toString(), sync->property("benchTone").toString());
+}
+
+void TestAssayBenchHome(QuicksilverGUI* window)
+{
+    QAction* home = window->findChild<QAction*>(QStringLiteral("homeBootstrapAction"));
+    QVERIFY(home);
+    home->trigger();
+
+    QStackedWidget* stack = window->findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+    QVERIFY(stack);
+    QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("desktopLaunchPage"));
+    QVERIFY(window->findChild<QFrame*>(QStringLiteral("noVaultState")));
+
+    QWidget* launch = stack->currentWidget();
+    QLabel* empty = launch->findChild<QLabel*>(QStringLiteral("homeLedgerEmpty"));
+    QVERIFY(empty);
+    QCOMPARE(empty->text(), QStringLiteral("No vault is open"));
+    QVERIFY(!empty->isHidden());
+    // The LEDGER panel stays; with no vault it holds the empty line, not rows.
+    QWidget* ledger = launch->findChild<QWidget*>(QStringLiteral("homeLedger"));
+    QVERIFY(ledger);
+    QVERIFY(!ledger->isHidden());
+    QVERIFY(ledger->isAncestorOf(empty));
+    QWidget* ledger_table = ledger->findChild<QWidget*>(QStringLiteral("homeLedgerTable"));
+    QVERIFY(ledger_table);
+    QVERIFY(ledger_table->isHidden());
+
+    QFrame* node = launch->findChild<QFrame*>(QStringLiteral("launchConsensusCard"));
+    QFrame* mining = launch->findChild<QFrame*>(QStringLiteral("launchMiningCard"));
+    QFrame* vault = launch->findChild<QFrame*>(QStringLiteral("launchVaultCard"));
+    QVERIFY(node);
+    QVERIFY(mining);
+    QVERIFY(vault);
+    QCOMPARE(node->property("benchPanel").toBool(), true);
+    QCOMPARE(mining->property("benchPanel").toBool(), true);
+    QCOMPARE(vault->property("benchPanel").toBool(), true);
+    QCOMPARE(node->findChild<QLabel*>(QStringLiteral("benchPanelTitle"))->text(), QStringLiteral("NODE"));
+    QCOMPARE(mining->findChild<QLabel*>(QStringLiteral("benchPanelTitle"))->text(), QStringLiteral("MINING"));
+    QCOMPARE(vault->findChild<QLabel*>(QStringLiteral("benchPanelTitle"))->text(), QStringLiteral("VAULT"));
+
+    QLabel* cost = launch->findChild<QLabel*>(QStringLiteral("desktopLaunchCostCopy"));
+    QVERIFY(cost);
+    QVERIFY(node->isAncestorOf(cost));
+    // The Backup row and its command are the Vault panel's; a missing backup's
+    // warning heads the Ledger panel, inside it, which can give up rows to make
+    // room. The node's warnings are the Node panel's (send-back 2 item 8: no
+    // line floats above the panels).
+    QVERIFY(vault->isAncestorOf(launch->findChild<QLabel*>(QStringLiteral("desktopLaunchBackupState"))));
+    QVERIFY(vault->isAncestorOf(launch->findChild<QPushButton*>(QStringLiteral("desktopLaunchBackupButton"))));
+    QWidget* backup_warning = launch->findChild<QWidget*>(QStringLiteral("desktopLaunchBackupPanel"));
+    QVERIFY(backup_warning);
+    QVERIFY(launch->findChild<QFrame*>(QStringLiteral("homeLedger"))->isAncestorOf(backup_warning));
+    QVERIFY(node->isAncestorOf(launch->findChild<QLabel*>(QStringLiteral("homeNodeAlerts"))));
+    QVERIFY(vault->isAncestorOf(launch->findChild<QPushButton*>(QStringLiteral("launchVaultBalancePrivacyButton"))));
+    QVERIFY(mining->isAncestorOf(launch->findChild<QPushButton*>(QStringLiteral("launchMiningCardButton"))));
+    QVERIFY(mining->isAncestorOf(launch->findChild<QLabel*>(QStringLiteral("launchMiningCardState"))));
+    // Panel heads carry the title only: no coloured state badge or icon.
+    for (QFrame* panel : {node, mining, vault}) {
+        QFrame* head = panel->findChild<QFrame*>(QStringLiteral("benchPanelHead"));
+        QVERIFY(head);
+        QCOMPARE(head->findChildren<QLabel*>().size(), 1);
+    }
+    QVERIFY(launch->findChild<QWidget*>(QStringLiteral("sparkline")) == nullptr);
+
+    QLabel* node_height = node->findChild<QLabel*>(QStringLiteral("homeNodeHeight"));
+    QLabel* node_peers = node->findChild<QLabel*>(QStringLiteral("homeNodePeers"));
+    QLabel* node_last = node->findChild<QLabel*>(QStringLiteral("homeNodeLastBlock"));
+    QVERIFY(node_height);
+    QVERIFY(node_peers);
+    QVERIFY(node_last);
+    // Label/value rows: the values are the strip's figures without its words.
+    const QString none = QStringLiteral("\u2014");
+    const QString strip_height = window->findChild<QLabel*>(QStringLiteral("benchStatusHeight"))->text();
+    QCOMPARE(strip_height, node_height->text() == none ? QStringLiteral("Height unavailable") : QStringLiteral("Height %1").arg(node_height->text()));
+    const QString strip_peers = window->findChild<QLabel*>(QStringLiteral("benchStatusPeers"))->text();
+    if (node_peers->text() == none) {
+        QCOMPARE(strip_peers, QStringLiteral("No peers"));
+    } else {
+        QCOMPARE(strip_peers, node_peers->text() == QStringLiteral("1") ? QStringLiteral("1 peer") : QStringLiteral("%1 peers").arg(node_peers->text()));
+    }
+    QVERIFY(node_last->text() == none || node_last->text().endsWith(QStringLiteral(" ago")));
+    QVERIFY(!node_last->text().contains(QStringLiteral("48")));
+    // The launch heading and its tagline are gone: the breadcrumb names the page.
+    QVERIFY(!launch->findChild<QLabel*>(QStringLiteral("desktopLaunchTitle")));
+    QVERIFY(!launch->findChild<QLabel*>(QStringLiteral("desktopLaunchSubtitle")));
+    const QString charge_word = QStringLiteral("fee");
+    for (QLabel* label : launch->findChildren<QLabel*>()) {
+        QVERIFY(!label->text().contains(QStringLiteral("Last 24 blocks")));
+        QVERIFY2(!label->text().contains(charge_word, Qt::CaseInsensitive),
+                 qPrintable(label->objectName() + QStringLiteral(": ") + label->text()));
+    }
+
+    const QSize home_minimum = window->minimumSizeHint();
+    QVERIFY2(home_minimum.height() <= 1015,
+             qPrintable(QStringLiteral("Home window minimum is %1x%2 px").arg(home_minimum.width()).arg(home_minimum.height())));
+    QVERIFY2(home_minimum.width() <= 1200,
+             qPrintable(QStringLiteral("Home window minimum is %1x%2 px").arg(home_minimum.width()).arg(home_minimum.height())));
+}
+
 void TestPrimaryNavigation(QuicksilverGUI* window)
 {
     struct ExpectedAction {
         const char* object_name;
         QString text;
         QString shortcut;
-        QString accent;
     };
 
     const ExpectedAction expected[] = {
-        {"homeBootstrapAction", QStringLiteral("Home"), QStringLiteral("Alt+1"), QStringLiteral("cinnabar")},
-        {"sendCoinsAction", QStringLiteral("Transfer"), QStringLiteral("Alt+2"), QStringLiteral("amber")},
-        {"receiveCoinsAction", QStringLiteral("Request"), QStringLiteral("Alt+3"), QStringLiteral("teal")},
-        {"historyAction", QStringLiteral("Ledger"), QStringLiteral("Alt+4"), QStringLiteral("silver")},
-        {"agentAllotmentAction", QStringLiteral("Agents"), QStringLiteral("Alt+5"), QStringLiteral("violet")},
-        {"mineMintAction", QStringLiteral("Mine / Mint"), QStringLiteral("Alt+6"), QStringLiteral("amber")},
-        {"networkAction", QStringLiteral("Network"), QStringLiteral("Alt+7"), QStringLiteral("teal")},
+        {"homeBootstrapAction", QStringLiteral("Home"), QStringLiteral("Alt+1")},
+        {"sendCoinsAction", QStringLiteral("Transfer"), QStringLiteral("Alt+2")},
+        {"receiveCoinsAction", QStringLiteral("Request"), QStringLiteral("Alt+3")},
+        {"historyAction", QStringLiteral("Ledger"), QStringLiteral("Alt+4")},
+        {"agentAllotmentAction", QStringLiteral("Agents"), QStringLiteral("Alt+5")},
+        {"mineMintAction", QStringLiteral("Mine / Mint"), QStringLiteral("Alt+6")},
+        {"networkAction", QStringLiteral("Network"), QStringLiteral("Alt+7")},
     };
 
     QToolBar* rail = window->findChild<QToolBar*>(QStringLiteral("primaryCommandRail"));
@@ -164,9 +556,12 @@ void TestPrimaryNavigation(QuicksilverGUI* window)
         QCOMPARE(text, item.text);
         QCOMPARE(action->shortcut().toString(QKeySequence::PortableText), item.shortcut);
         QVERIFY(action->isCheckable());
-        QWidget* button = rail->widgetForAction(action);
+        // Every destination is a rail row driven by its action. The rows no
+        // longer carry per-page accent colours: icons are muted and only the
+        // checked row is cinnabar.
+        QToolButton* button = RailButtonFor(rail, action);
         QVERIFY(button);
-        QCOMPARE(button->property("accent").toString(), item.accent);
+        QVERIFY(!button->property("accent").isValid());
     }
 
     QAction* mine_mint_action = window->findChild<QAction*>(QStringLiteral("mineMintAction"));
@@ -187,10 +582,12 @@ void TestHudMenuBar(QuicksilverGUI* window)
     };
 
     const ExpectedMenu expected[] = {
+        // Owner ruling 2026-10-10: Vault keeps its name; the other three take the
+        // names every desktop uses, so their contents are where people look.
         {"vaultMenu", QStringLiteral("Vault")},
-        {"controlsMenu", QStringLiteral("Controls")},
-        {"panelsMenu", QStringLiteral("Panels")},
-        {"signalMenu", QStringLiteral("Signal")},
+        {"settingsMenu", QStringLiteral("Settings")},
+        {"windowMenu", QStringLiteral("Window")},
+        {"helpMenu", QStringLiteral("Help")},
     };
 
     for (const auto& item : expected) {
@@ -265,7 +662,7 @@ void TestModernShell(QuicksilverGUI* window)
 
     QWidget* launch = window->findChild<QWidget*>(QStringLiteral("desktopLaunchPage"));
     QVERIFY(launch);
-    QCOMPARE(launch->findChild<QLabel*>(QStringLiteral("desktopLaunchTitle"))->text(), QStringLiteral("Quicksilver"));
+    QVERIFY(!launch->findChild<QLabel*>(QStringLiteral("desktopLaunchTitle")));
     QVERIFY(launch->findChild<QFrame*>(QStringLiteral("launchVaultCard")));
     QPushButton* launch_vault_button = launch->findChild<QPushButton*>(QStringLiteral("launchVaultCardButton"));
     QVERIFY(launch_vault_button);
@@ -285,17 +682,17 @@ void TestModernShell(QuicksilverGUI* window)
     // The figures a real user reads are asserted in StorageCostsTests, at 128/26 injected.
     QVERIFY(launch_cost->text().contains(QStringLiteral("2 GB recent-block window")));
     QVERIFY(launch_cost->text().contains(QStringLiteral("0 GB per year")));
-    QFrame* backup_panel = launch->findChild<QFrame*>(QStringLiteral("desktopLaunchBackupPanel"));
+    QWidget* backup_panel = launch->findChild<QWidget*>(QStringLiteral("desktopLaunchBackupPanel"));
     QVERIFY(backup_panel);
     QVERIFY(backup_panel->isHidden());
     QPushButton* mining_button = launch->findChild<QPushButton*>(QStringLiteral("launchMiningCardButton"));
     QVERIFY(mining_button);
     QVERIFY(!mining_button->isEnabled());
-    QLabel* mining_icon = launch->findChild<QLabel*>(QStringLiteral("launchMiningCardIcon"));
-    QVERIFY(mining_icon);
-    const QPixmap locked_mining_pixmap = mining_icon->pixmap(Qt::ReturnByValue);
-    QVERIFY(!locked_mining_pixmap.isNull());
-    const QImage locked_mining_icon = locked_mining_pixmap.toImage();
+    // The Mining panel's State row says whether mining is open, where a lock
+    // icon used to.
+    QLabel* mining_state = launch->findChild<QLabel*>(QStringLiteral("launchMiningCardState"));
+    QVERIFY(mining_state);
+    QCOMPARE(mining_state->text(), QStringLiteral("Locked"));
 
     QStackedWidget* vault_stack = window->findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
     QVERIFY(vault_stack);
@@ -323,9 +720,11 @@ void TestModernShell(QuicksilverGUI* window)
     QCOMPARE(launch->findChild<QLabel*>(QStringLiteral("launchConsensusCardState"))->text(), QStringLiteral("Enabled"));
     QCOMPARE(mining_button->text(), QStringLiteral("Open mining"));
     QVERIFY(mining_button->isEnabled());
-    const QPixmap available_mining_pixmap = mining_icon->pixmap(Qt::ReturnByValue);
-    QVERIFY(!available_mining_pixmap.isNull());
-    QVERIFY(available_mining_pixmap.toImage() != locked_mining_icon);
+    // Open now, and once the miner has reported, in the strip's own word.
+    QVERIFY(mining_state->text() != QStringLiteral("Locked"));
+    QLabel* strip_mining = window->statusBar()->findChild<QLabel*>(QStringLiteral("benchStatusMining"));
+    QVERIFY(strip_mining);
+    QCOMPARE(strip_mining->text(), QStringLiteral("Mining %1").arg(mining_state->text().toLower()));
     QCOMPARE(consensus_decline->property("class").toString(), QStringLiteral("secondaryActionButton"));
     QCOMPARE(consensus_continue->property("class").toString(), QStringLiteral("primaryActionButton"));
     mining_button->click();
@@ -488,7 +887,119 @@ void TestLazyConsensusActivation(interfaces::Node& node, const NetworkStyle* net
     QCOMPARE(window.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"))->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
 }
+
+//! F-441: an opt-in that cannot find the Tor it needs is refused before the node
+//! starts -- and before the vault handover closes an open vault -- and the
+//! desktop stays usable, says why, and lets the user retry without a restart.
+void TestConsensusRefusedWithoutTor(interfaces::Node& node, const NetworkStyle* network_style)
+{
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate(QuicksilverGUI::DEFAULT_UIPLATFORM.c_str()));
+    {
+        // The launch path: a saved opt-in refused at startup, with Home selected.
+        // The sidebar must follow the page it is sent to.
+        QuicksilverGUI launch_window(node, platform_style.data(), network_style);
+        QAction* launch_network_action = launch_window.findChild<QAction*>(QStringLiteral("networkAction"));
+        QVERIFY(launch_network_action);
+        QVERIFY(!launch_network_action->isChecked());
+        launch_window.markConsensusTorMissing();
+        QVERIFY(launch_network_action->isChecked());
+    }
+    QuicksilverGUI window(node, platform_style.data(), network_style);
+    bool tor_found{false};
+    window.setConsensusPreflight([&tor_found] { return tor_found; });
+
+    QSignalSpy consensus_spy(&window, &QuicksilverGUI::consensusActivationRequested);
+    QVERIFY(consensus_spy.isValid());
+    QAction* network_action = window.findChild<QAction*>(QStringLiteral("networkAction"));
+    QVERIFY(network_action);
+    network_action->setEnabled(true);
+    network_action->trigger();
+    QWidget* consensus_review = window.findChild<QWidget*>(QStringLiteral("consensusReviewPage"));
+    QVERIFY(consensus_review);
+    QPushButton* consensus_continue = consensus_review->findChild<QPushButton*>(QStringLiteral("consensusContinueButton"));
+    QVERIFY(consensus_continue);
+
+    consensus_continue->click();
+    QCOMPARE(consensus_spy.count(), 0);
+    QCOMPARE(QSettings().value(QStringLiteral("Desktop/ConsensusEnabled")).toBool(), false);
+    QStackedWidget* vault_stack = window.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+    QVERIFY(vault_stack);
+    QCOMPARE(vault_stack->currentWidget()->objectName(), QStringLiteral("networkPage"));
+    QWidget* network_page = window.findChild<QWidget*>(QStringLiteral("networkPage"));
+    QVERIFY(network_page);
+    QCOMPARE(network_page->findChild<QLabel*>(QStringLiteral("networkStatusValue"))->text(), QStringLiteral("Startup failed"));
+    QCOMPARE(network_page->findChild<QLabel*>(QStringLiteral("syncStatusValue"))->text(), QStringLiteral("Not running"));
+    const QString tor_missing_intro = network_page->findChild<QLabel*>(QStringLiteral("networkIntro"))->text();
+    // The node's own sentence, so the two never drift, plus what needs a restart:
+    // only a tor placed beside the executable is found on the next opt-in.
+    QVERIFY(tor_missing_intro.contains(QString::fromStdString(tor::MissingTorMessage().translated)));
+    QVERIFY(tor_missing_intro.contains(QStringLiteral("restart")));
+    // Not the restart-required state: placing Tor and opting in again is enough.
+    QWidget* launch = window.findChild<QWidget*>(QStringLiteral("desktopLaunchPage"));
+    QVERIFY(launch);
+    QVERIFY(launch->findChild<QLabel*>(QStringLiteral("launchConsensusCardState"))->text() != QStringLiteral("Restart needed"));
+
+    // The page refreshes on navigation; it must keep saying why, not "starting".
+    network_action->trigger();
+    QCOMPARE(network_page->findChild<QLabel*>(QStringLiteral("networkStatusValue"))->text(), QStringLiteral("Startup failed"));
+
+    tor_found = true;
+    window.findChild<QAction*>(QStringLiteral("mineMintAction"))->trigger();
+    QCOMPARE(vault_stack->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
+    consensus_continue->click();
+    QCOMPARE(consensus_spy.count(), 1);
+    QVERIFY(QSettings().value(QStringLiteral("Desktop/ConsensusEnabled")).toBool());
+    QCOMPARE(network_page->findChild<QLabel*>(QStringLiteral("networkStatusValue"))->text(), QStringLiteral("Starting consensus"));
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+}
 } // namespace
+
+void AppTests::consensusTorPreflight()
+{
+    int calls{0};
+    fs::path asked;
+    const auto locator = [&](std::optional<fs::path> answer) {
+        return [&calls, &asked, answer](const fs::path& override_path) {
+            ++calls;
+            asked = override_path;
+            return answer;
+        };
+    };
+    const auto args_with = [](const char* bundled, const char* onion) {
+        auto args = std::make_unique<ArgsManager>();
+        args->ForceSetArg("-bundledtor", bundled);
+        args->ForceSetArg("-listenonion", onion);
+        return args;
+    };
+
+    // Bundled Tor will start and is found: the node may start.
+    auto args = args_with("1", "1");
+    args->ForceSetArg("-bundledtorpath", "/opt/tor/bin/tor");
+    QVERIFY(QuicksilverApplication::consensusTorAvailableForTesting(*args, locator(fs::u8path("/opt/tor/bin/tor"))));
+    QCOMPARE(calls, 1);
+    QCOMPARE(fs::PathToString(asked), std::string{"/opt/tor/bin/tor"});
+
+    // Bundled Tor will start and none is found: refuse (the F-441 exit).
+    calls = 0;
+    QVERIFY(!QuicksilverApplication::consensusTorAvailableForTesting(*args_with("1", "1"), locator(std::nullopt)));
+    QCOMPARE(calls, 1);
+
+    // A user who runs their own Tor, or turned onion listening off, is never
+    // asked for a bundled one.
+    calls = 0;
+    QVERIFY(QuicksilverApplication::consensusTorAvailableForTesting(*args_with("0", "1"), locator(std::nullopt)));
+    QVERIFY(QuicksilverApplication::consensusTorAvailableForTesting(*args_with("1", "0"), locator(std::nullopt)));
+    QCOMPARE(calls, 0);
+
+    // At launch the refusal opens the vault instead. With the vault disabled
+    // there is nothing to open: let node startup report the missing Tor itself.
+    QVERIFY(QuicksilverApplication::launchOpensVaultOnlyForTesting(*args_with("1", "1"), locator(std::nullopt)));
+    QVERIFY(!QuicksilverApplication::launchOpensVaultOnlyForTesting(*args_with("1", "1"), locator(fs::u8path("/opt/tor/bin/tor"))));
+    auto no_vault = args_with("1", "1");
+    no_vault->ForceSetArg("-disablevault", "1");
+    QVERIFY(!QuicksilverApplication::launchOpensVaultOnlyForTesting(*no_vault, locator(std::nullopt)));
+}
 
 void AppTests::restartArgumentsForDeveloperNetwork()
 {
@@ -543,6 +1054,7 @@ void AppTests::appTests()
     QScopedPointer<const NetworkStyle> style(NetworkStyle::instantiate(Params().GetChainType()));
     m_app.setupPlatformStyle();
     TestLazyConsensusActivation(m_app.node(), style.data());
+    TestConsensusRefusedWithoutTor(m_app.node(), style.data());
     // Reproduce the returning-user path: persisted consensus must let AppInitMain
     // load settings-listed vaults before the GUI controller is constructed.
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), true);
@@ -580,6 +1092,10 @@ void AppTests::guiTests(QuicksilverGUI* window)
     TestHudMenuBar(window);
     TestModernShell(window);
     TestSyncWarningFollowsKnownHeaders(window);
+    TestAssayBenchChrome(window);
+    TestAssayBenchChromeLayout(window);
+    TestStatusStripFollowsMiningStatus(window);
+    TestAssayBenchHome(window);
     shutdownIsNotParkedBehindAModalDialog(window);
     ExpectModalWithoutNestedEventLoop("QMessageBox", [&] {
         window->message(QString(), QStringLiteral("client modal boom"), CClientUIInterface::MSG_ERROR);
@@ -657,8 +1173,11 @@ void AppTests::shutdownIsNotParkedBehindAModalDialog(QuicksilverGUI* window)
 void AppTests::consoleTests(RPCConsole* console)
 {
     HandleCallback callback{"consoleTests", *this};
-    QVERIFY(console->findChild<QFrame*>(QStringLiteral("nodeWindowHeader")));
-    QVERIFY(console->findChild<QLabel*>(QStringLiteral("nodeWindowTitle")));
+    // F-442 send-back 2 item 7 (owner ruling): the Node window takes the bench
+    // grammar, so its tabs sit in a titled panel and the old header is gone.
+    QVERIFY(!console->findChild<QFrame*>(QStringLiteral("nodeWindowHeader")));
+    QVERIFY(!console->findChild<QLabel*>(QStringLiteral("nodeWindowTitle")));
+    QVERIFY(console->findChild<QFrame*>(QStringLiteral("nodeWindowPanel")));
     // H1: this console has a live client model, so the consensus-off banner must be gone.
     // The banner defaults to visible in the form; only setClientModel clears it.
     QLabel* consensus_off = console->findChild<QLabel*>(QStringLiteral("consensusOffBanner"));

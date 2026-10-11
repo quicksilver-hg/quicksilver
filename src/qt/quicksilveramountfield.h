@@ -56,6 +56,10 @@ public:
     /** Change unit used to display amount. */
     void setDisplayUnit(QuicksilverUnit new_unit);
 
+    /** Show or hide the unit selector. A field whose unit is named beside it,
+        such as under a column heading, follows the display unit alone. */
+    void setUnitSelectorVisible(bool visible);
+
     /** Make field empty and ready for new input. */
     void clear();
 

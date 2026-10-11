@@ -31,6 +31,7 @@ public:
     };
     //! Pure formatting for the Mine/Mint status readings.
     //! Pure: no widget. setStatus applies this and nothing else decides those rows.
+    static StatusText statusText(const interfaces::MiningStatus& status);
     static StatusText statusTextForTesting(const interfaces::MiningStatus& status);
 
     void setStatus(const interfaces::MiningStatus& status);
@@ -57,11 +58,13 @@ Q_SIGNALS:
 private:
     void handleStartClicked();
     void refreshIsolationState();
-    static StatusText statusText(const interfaces::MiningStatus& status);
+    void renderPayout();
 
     QWidget* m_isolation_panel{nullptr};
     QLabel* m_isolation_banner{nullptr};
     QLabel* m_status_value{nullptr};
+    bool m_active{false};
+    QString m_reported_payout;
     QLabel* m_payout_value{nullptr};
     QLabel* m_solver_value{nullptr};
     QLabel* m_solver_health_value{nullptr};

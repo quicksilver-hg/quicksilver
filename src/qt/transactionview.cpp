@@ -6,10 +6,12 @@
 #include <qt/transactionview.h>
 
 #include <qt/addresstablemodel.h>
+#include <qt/benchpanel.h>
 #include <qt/quicksilverunits.h>
 #include <qt/csvmodelwriter.h>
 #include <qt/editaddressdialog.h>
 #include <qt/guiutil.h>
+#include <qt/ledgerrows.h>
 #include <qt/optionsmodel.h>
 #include <qt/platformstyle.h>
 #include <qt/transactiondescdialog.h>
@@ -20,6 +22,7 @@
 
 #include <node/interface_ui.h>
 
+#include <algorithm>
 #include <chrono>
 #include <optional>
 
@@ -37,6 +40,7 @@
 #include <QScrollBar>
 #include <QSettings>
 #include <QPointer>
+#include <QPushButton>
 #include <QTableView>
 #include <QTimer>
 #include <QUrl>
@@ -46,26 +50,16 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     : QWidget(parent), m_platform_style{platformStyle}
 {
     // Build filter row
-    setContentsMargins(0,0,0,0);
+    setContentsMargins(14, 14, 14, 14);
 
     QHBoxLayout *hlayout = new QHBoxLayout();
-    hlayout->setContentsMargins(0,0,0,0);
+    hlayout->setSpacing(8);
 
-    if (platformStyle->getUseExtraSpacing()) {
-        hlayout->setSpacing(5);
-        hlayout->addSpacing(26);
-    } else {
-        hlayout->setSpacing(0);
-        hlayout->addSpacing(23);
-    }
-
+    // Each filter's first entry names what it filters: two combos both reading
+    // "All" said nothing about which was which.
     dateWidget = new QComboBox(this);
-    if (platformStyle->getUseExtraSpacing()) {
-        dateWidget->setFixedWidth(121);
-    } else {
-        dateWidget->setFixedWidth(120);
-    }
-    dateWidget->addItem(tr("All"), All);
+    dateWidget->setAccessibleName(tr("Filter by date"));
+    dateWidget->addItem(tr("All dates"), All);
     dateWidget->addItem(tr("Today"), Today);
     dateWidget->addItem(tr("This week"), ThisWeek);
     dateWidget->addItem(tr("This month"), ThisMonth);
@@ -75,33 +69,24 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     hlayout->addWidget(dateWidget);
 
     typeWidget = new QComboBox(this);
-    if (platformStyle->getUseExtraSpacing()) {
-        typeWidget->setFixedWidth(121);
-    } else {
-        typeWidget->setFixedWidth(120);
-    }
-
-    typeWidget->addItem(tr("All"), TransactionFilterProxy::ALL_TYPES);
-    typeWidget->addItem(tr("Received with"), TransactionFilterProxy::TYPE(TransactionRecord::RecvWithAddress) |
+    typeWidget->setAccessibleName(tr("Filter by type"));
+    typeWidget->addItem(tr("All types"), TransactionFilterProxy::ALL_TYPES);
+    typeWidget->addItem(TransactionTableModel::typeWord(TransactionRecord::RecvWithAddress), TransactionFilterProxy::TYPE(TransactionRecord::RecvWithAddress) |
                                         TransactionFilterProxy::TYPE(TransactionRecord::RecvFromOther));
-    typeWidget->addItem(tr("Sent to"), TransactionFilterProxy::TYPE(TransactionRecord::SendToAddress) |
+    typeWidget->addItem(TransactionTableModel::typeWord(TransactionRecord::SendToAddress), TransactionFilterProxy::TYPE(TransactionRecord::SendToAddress) |
                                   TransactionFilterProxy::TYPE(TransactionRecord::SendToOther));
-    typeWidget->addItem(tr("Mined"), TransactionFilterProxy::TYPE(TransactionRecord::Generated));
+    typeWidget->addItem(TransactionTableModel::typeWord(TransactionRecord::Generated), TransactionFilterProxy::TYPE(TransactionRecord::Generated));
     typeWidget->addItem(tr("Other"), TransactionFilterProxy::TYPE(TransactionRecord::Other));
 
     hlayout->addWidget(typeWidget);
 
     search_widget = new QLineEdit(this);
     search_widget->setPlaceholderText(tr("Enter address, transaction id, or label to search"));
-    hlayout->addWidget(search_widget);
+    hlayout->addWidget(search_widget, 1);
 
     amountWidget = new QLineEdit(this);
     amountWidget->setPlaceholderText(tr("Min amount"));
-    if (platformStyle->getUseExtraSpacing()) {
-        amountWidget->setFixedWidth(97);
-    } else {
-        amountWidget->setFixedWidth(100);
-    }
+    amountWidget->setFixedWidth(110);
     QDoubleValidator *amountValidator = new QDoubleValidator(0, 1e20, 8, this);
     QLocale amountLocale(QLocale::C);
     amountLocale.setNumberOptions(QLocale::RejectGroupSeparator);
@@ -124,19 +109,34 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     vlayout->setContentsMargins(0,0,0,0);
     vlayout->setSpacing(0);
 
+    // The ledger is one Bench panel: filters over the table.
+    const BenchPanel::Parts panel = BenchPanel::Make(QStringLiteral("transactionLedgerPanel"), tr("Ledger"), this);
+    panel.frame->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    panel.body->setContentsMargins(0, 0, 0, 0);
+    panel.body->setSpacing(0);
+    hlayout->setContentsMargins(12, 10, 12, 10);
     transactionView = new QTableView(this);
     transactionView->setObjectName("transactionView");
-    vlayout->addLayout(hlayout);
-    vlayout->addWidget(createDateRangeWidget());
-    vlayout->addWidget(transactionView);
-    vlayout->setSpacing(0);
-    int width = transactionView->verticalScrollBar()->sizeHint().width();
-    // Cover scroll bar width with spacing
-    if (platformStyle->getUseExtraSpacing()) {
-        hlayout->addSpacing(width+2);
-    } else {
-        hlayout->addSpacing(width);
-    }
+    transactionView->setProperty("class", QStringLiteral("benchTable"));
+    transactionView->setFrameShape(QFrame::NoFrame);
+    panel.body->addLayout(hlayout);
+    panel.body->addWidget(createDateRangeWidget());
+    panel.body->addWidget(transactionView, 1);
+    // What a bracketed amount and the clock mean, said once on the page.
+    auto* legend = new QLabel(tr("Pending and Maturing amounts are not spendable yet: a pending transfer is waiting for a block, and a maturing mining reward is still maturing. Point at a row's state for its details."), panel.frame);
+    legend->setObjectName(QStringLiteral("transactionLedgerLegend"));
+    legend->setProperty("class", QStringLiteral("benchNote"));
+    legend->setWordWrap(true);
+    legend->setContentsMargins(12, 8, 12, 10);
+    panel.body->addWidget(legend);
+    // Export is one of the panel's own commands, in its head.
+    auto* export_button = new QPushButton(tr("&Export"), panel.frame);
+    export_button->setObjectName(QStringLiteral("transactionExportButton"));
+    export_button->setProperty("class", QStringLiteral("benchQuiet"));
+    export_button->setToolTip(tr("Export the ledger to a file"));
+    panel.head->addWidget(export_button);
+    connect(export_button, &QPushButton::clicked, this, &TransactionView::exportClicked);
+    vlayout->addWidget(panel.frame);
     transactionView->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     transactionView->setTabKeyNavigation(false);
     transactionView->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -154,8 +154,11 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
         transactionView->setColumnWidth(TransactionTableModel::Type, TYPE_COLUMN_WIDTH);
         transactionView->setColumnWidth(TransactionTableModel::Amount, AMOUNT_MINIMUM_COLUMN_WIDTH);
         transactionView->horizontalHeader()->setMinimumSectionSize(MINIMUM_COLUMN_WIDTH);
-        transactionView->horizontalHeader()->setStretchLastSection(true);
     }
+    // Label takes the room left over, whatever a saved header state said: with
+    // the last section stretching, the room went to a gap before Amount while
+    // dates and labels were cut short.
+    transactionView->horizontalHeader()->setStretchLastSection(false);
 
     contextMenu = new QMenu(this);
     contextMenu->setObjectName("contextMenu");
@@ -192,6 +195,13 @@ TransactionView::~TransactionView()
 
 void TransactionView::setModel(VaultModel *_model)
 {
+    if (transactionProxyModel) {
+        transactionView->setModel(nullptr);
+        delete m_ledger_rows;
+        m_ledger_rows = nullptr;
+        delete transactionProxyModel;
+        transactionProxyModel = nullptr;
+    }
     this->model = _model;
     if(_model)
     {
@@ -201,11 +211,29 @@ void TransactionView::setModel(VaultModel *_model)
         transactionProxyModel->setSortCaseSensitivity(Qt::CaseInsensitive);
         transactionProxyModel->setFilterCaseSensitivity(Qt::CaseInsensitive);
         transactionProxyModel->setSortRole(Qt::EditRole);
-        transactionView->setModel(transactionProxyModel);
+        // The rows read as on Home: state word, friendly date with the state
+        // dot, label, signed amount. Sorting and filtering stay underneath.
+        m_ledger_rows = new LedgerRows(LedgerRows::Tooltips::All, this);
+        m_ledger_rows->setSourceModel(transactionProxyModel);
+        if (OptionsModel* options = _model->getOptionsModel()) {
+            m_ledger_rows->setDisplay(options->getDisplayUnit(), /*privacy=*/false);
+            connect(options, &OptionsModel::displayUnitChanged, m_ledger_rows, [this, options] {
+                m_ledger_rows->setDisplay(options->getDisplayUnit(), /*privacy=*/false);
+            });
+        }
+        transactionView->setModel(m_ledger_rows);
         transactionView->sortByColumn(TransactionTableModel::Date, Qt::DescendingOrder);
+        transactionView->horizontalHeader()->setSectionResizeMode(TransactionTableModel::ToAddress, QHeaderView::Stretch);
+        for (const auto& signal : {&QAbstractItemModel::rowsInserted, &QAbstractItemModel::rowsRemoved}) {
+            connect(m_ledger_rows, signal, this, &TransactionView::fitColumns);
+        }
+        connect(m_ledger_rows, &QAbstractItemModel::modelReset, this, &TransactionView::fitColumns);
+        connect(m_ledger_rows, &QAbstractItemModel::dataChanged, this, &TransactionView::fitColumns);
+        fitColumns();
 
-        if (_model->getOptionsModel())
+        if (_model->getOptionsModel() && !m_third_party_actions)
         {
+            m_third_party_actions = true;
             // Add third party transaction URLs to context menu
             QStringList listUrls = GUIUtil::SplitSkipEmptyParts(_model->getOptionsModel()->getThirdPartyTxUrls(), "|");
             bool actions_created = false;
@@ -227,6 +255,21 @@ void TransactionView::setModel(VaultModel *_model)
             }
         }
     }
+}
+
+void TransactionView::fitColumns()
+{
+    QHeaderView* header = transactionView->horizontalHeader();
+    if (header->count() <= TransactionTableModel::Amount) return;
+    // QTableView narrows the public QAbstractItemView call to protected.
+    QAbstractItemView* cells = transactionView;
+    const auto content = [&](int column) { return std::max(cells->sizeHintForColumn(column), header->sectionSizeHint(column)); };
+    // State, Date and Type keep a wider width the user chose; Amount is exactly as
+    // wide as its figures, and Label stretches over the rest.
+    for (int column : {TransactionTableModel::Status, TransactionTableModel::Date, TransactionTableModel::Type}) {
+        if (transactionView->columnWidth(column) < content(column)) transactionView->setColumnWidth(column, content(column));
+    }
+    transactionView->setColumnWidth(TransactionTableModel::Amount, content(TransactionTableModel::Amount));
 }
 
 void TransactionView::changeEvent(QEvent* e)
@@ -533,7 +576,7 @@ void TransactionView::focusTransaction(const QModelIndex &idx)
 {
     if(!transactionProxyModel)
         return;
-    QModelIndex targetIdx = transactionProxyModel->mapFromSource(idx);
+    QModelIndex targetIdx = m_ledger_rows->mapFromSource(transactionProxyModel->mapFromSource(idx));
     transactionView->scrollTo(targetIdx);
     transactionView->setCurrentIndex(targetIdx);
     transactionView->setFocus();
@@ -552,7 +595,7 @@ void TransactionView::focusTransaction(const uint256& txid)
     transactionView->setFocus();
     transactionView->selectionModel()->clearSelection();
     for (const QModelIndex& index : results) {
-        const QModelIndex targetIndex = transactionProxyModel->mapFromSource(index);
+        const QModelIndex targetIndex = m_ledger_rows->mapFromSource(transactionProxyModel->mapFromSource(index));
         transactionView->selectionModel()->select(
             targetIndex,
             QItemSelectionModel::Rows | QItemSelectionModel::Select);

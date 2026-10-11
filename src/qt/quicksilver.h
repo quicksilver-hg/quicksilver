@@ -10,8 +10,10 @@
 
 #include <interfaces/node.h>
 #include <qt/initexecutor.h>
+#include <util/fs.h>
 
 #include <assert.h>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -19,6 +21,7 @@
 #include <QString>
 #include <QStringList>
 
+class ArgsManager;
 class QuicksilverGUI;
 class ClientModel;
 class NetworkStyle;
@@ -63,6 +66,12 @@ public:
     void setRestartCommandLine(int argc, char* argv[]);
     /// Test wrapper for the network-context restart argument sanitizer.
     static QStringList restartArgumentsForChainForTesting(const QStringList& original_arguments, const QString& chain_token);
+    //! Finds the tor executable for an -bundledtorpath value (empty: the default search).
+    using TorLocator = std::function<std::optional<fs::path>(const fs::path& override_path)>;
+    //! Test wrapper for the check that a consensus start will find the Tor it needs.
+    static bool consensusTorAvailableForTesting(const ArgsManager& args, const TorLocator& locate);
+    //! Test wrapper for the launch decision: a saved opt-in without that Tor opens the vault alone.
+    static bool launchOpensVaultOnlyForTesting(const ArgsManager& args, const TorLocator& locate);
     /**
      * One tick of the shutdown poll, with the node's answer passed in.
      *
@@ -78,6 +87,14 @@ public:
 
     /// Request core initialization
     void requestInitialize();
+
+    /**
+     * Start the consensus opt-in saved by an earlier session. If the node would
+     * start a bundled Tor and none can be found, start nothing: open the desktop
+     * vault-only and say why, instead of letting node startup fail and exit
+     * (F-441). Otherwise this is requestInitialize().
+     */
+    void startPersistedConsensus();
 
     /// Get window identifier of QMainWindow (QuicksilverGUI)
     WId getMainWinId() const;

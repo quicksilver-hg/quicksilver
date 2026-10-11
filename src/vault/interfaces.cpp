@@ -168,6 +168,11 @@ public:
     {
         return m_vault->ValidateAgentAllotmentPolicyRequest(request_json);
     }
+    util::Result<CTransactionRef> cosignAgentAllotmentSpend(const std::string& psqt_base64) override
+    {
+        return m_vault->CosignAgentAllotmentSpend(psqt_base64);
+    }
+    bool stopAgentAllotment(const std::string& id) override { return m_vault->StopAgentAllotment(id); }
     util::Result<AgentAllotmentPolicyBundle> agentAllotmentPolicyBundle(const std::string& request_json) override
     {
         return m_vault->ExportAgentAllotmentPolicyBundle(request_json);

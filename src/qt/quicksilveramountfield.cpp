@@ -19,6 +19,11 @@
 
 #include <cassert>
 
+namespace {
+//! The amount the box is sized to show whole: 99 999 999.99999999.
+constexpr CAmount WIDTH_REFERENCE_AMOUNT{99'999'999 * COIN + 99'999'999};
+} // namespace
+
 /** QSpinBox that uses fixed-point numbers internally and uses our own
  * formatting/parsing functions.
  */
@@ -126,26 +131,26 @@ public:
 
             const QFontMetrics fm(fontMetrics());
             int h = lineEdit()->minimumSizeHint().height();
-            int w = GUIUtil::TextWidth(fm, QuicksilverUnits::format(QuicksilverUnit::HG, QuicksilverUnits::maxMoney(), false, QuicksilverUnits::SeparatorStyle::ALWAYS));
+            // Wide enough for an eight-digit whole part (F-452): the 1 000 000 000
+            // cap made the box far wider than any balance; a longer amount
+            // still types, and scrolls inside the box.
+            int w = GUIUtil::TextWidth(fm, QuicksilverUnits::format(QuicksilverUnit::HG, WIDTH_REFERENCE_AMOUNT, false, QuicksilverUnits::SeparatorStyle::ALWAYS));
             w += 2; // cursor blinking space
+            // QLineEdit keeps 2 px between its edge and its text on each side.
+            w += 2 * 2;
 
+            // The box around the text (frame, padding, arrows) is whatever the
+            // style leaves outside the edit field. Measured once and added once:
+            // the old estimate fed a size that already held it back through
+            // sizeFromContents, which added the sheet's padding and border a
+            // second time, about 30 px of empty box (F-452).
             QStyleOptionSpinBox opt;
             initStyleOption(&opt);
-            QSize hint(w, h);
-            QSize extra(35, 6);
-            opt.rect.setSize(hint + extra);
-            extra += hint - style()->subControlRect(QStyle::CC_SpinBox, &opt,
-                                                    QStyle::SC_SpinBoxEditField, this).size();
-            // get closer to final result by repeating the calculation
-            opt.rect.setSize(hint + extra);
-            extra += hint - style()->subControlRect(QStyle::CC_SpinBox, &opt,
-                                                    QStyle::SC_SpinBoxEditField, this).size();
-            hint += extra;
-            hint.setHeight(h);
-
-            opt.rect = rect();
-
-            cachedMinimumSizeHint = style()->sizeFromContents(QStyle::CT_SpinBox, &opt, hint, this);
+            opt.rect = QRect(0, 0, 1000, h);
+            const QRect field = style()->subControlRect(QStyle::CC_SpinBox, &opt, QStyle::SC_SpinBoxEditField, this);
+            const int box = opt.rect.width() - field.width();
+            const int height = style()->sizeFromContents(QStyle::CT_SpinBox, &opt, QSize(w, h), this).height();
+            cachedMinimumSizeHint = QSize(w + box, height);
         }
         return cachedMinimumSizeHint;
     }
@@ -245,6 +250,11 @@ QuicksilverAmountField::QuicksilverAmountField(QWidget* parent)
 
     // Set default based on configuration
     unitChanged(unit->currentIndex());
+}
+
+void QuicksilverAmountField::setUnitSelectorVisible(bool visible)
+{
+    unit->setVisible(visible);
 }
 
 void QuicksilverAmountField::clear()

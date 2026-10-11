@@ -83,15 +83,6 @@ static util::Result<int64_t> ReadPolicyTimeField(const UniValue& policy, const s
     return *time;
 }
 
-static util::Result<bool> ReadPolicyBoolField(const UniValue& policy, const std::string& key)
-{
-    const UniValue& field{policy.find_value(key)};
-    if (!field.isBool()) {
-        return util::Error{Untranslated(strprintf("Agent allotment policy request field '%s' must be a boolean.", key))};
-    }
-    return field.get_bool();
-}
-
 static util::Result<std::vector<AllotmentFundingOutputArtifact>> ReadBundleFundingOutputs(const UniValue& bundle)
 {
     const UniValue& outputs{bundle.find_value("funding_outputs")};
@@ -180,7 +171,7 @@ util::Result<AllotmentPolicyArtifact> DecodeAllotmentPolicyRequest(std::string_v
 
     const UniValue& version{policy.find_value("version")};
     const auto policy_version{version.isNum() ? ToIntegral<int>(version.getValStr()) : std::optional<int>{}};
-    if (!policy_version || *policy_version != 1) {
+    if (!policy_version || *policy_version != 2) {
         return util::Error{Untranslated("Agent allotment policy request version is not supported.")};
     }
 
@@ -211,6 +202,10 @@ util::Result<AllotmentPolicyArtifact> DecodeAllotmentPolicyRequest(std::string_v
     if (!funding_address) return util::Error{util::ErrorString(funding_address)};
     artifact.funding_address = *funding_address;
 
+    auto funding_descriptor{ReadPolicyStringField(policy, "funding_descriptor")};
+    if (!funding_descriptor) return util::Error{util::ErrorString(funding_descriptor)};
+    artifact.funding_descriptor = *funding_descriptor;
+
     auto funding_limit{ReadPolicyAmountField(policy, "funding_limit_cinnabar")};
     if (!funding_limit) return util::Error{util::ErrorString(funding_limit)};
     if (*funding_limit == 0) {
@@ -234,17 +229,6 @@ util::Result<AllotmentPolicyArtifact> DecodeAllotmentPolicyRequest(std::string_v
     if (!request_created_time) return util::Error{util::ErrorString(request_created_time)};
     artifact.request_created_time = *request_created_time;
 
-    auto policy_status{ReadPolicyStringField(policy, "policy_status")};
-    if (!policy_status) return util::Error{util::ErrorString(policy_status)};
-    if (*policy_status != "pending_integration" && *policy_status != "enforced") {
-        return util::Error{Untranslated("Agent allotment policy request has an unknown policy_status.")};
-    }
-    artifact.policy_status = *policy_status;
-
-    auto backend_created{ReadPolicyBoolField(policy, "backend_created")};
-    if (!backend_created) return util::Error{util::ErrorString(backend_created)};
-    artifact.backend_created = *backend_created;
-
     return artifact;
 }
 
@@ -259,7 +243,10 @@ util::Result<AllotmentPolicyBundleArtifact> DecodeAllotmentPolicyBundle(std::str
 
     auto type{ReadPolicyStringField(bundle, "type")};
     if (!type) return util::Error{util::ErrorString(type)};
-    if (*type != "quicksilver.agent_allotment_key_bundle") {
+    if (*type == "quicksilver.agent_allotment_key_bundle") {
+        return util::Error{Untranslated("This bundle was exported before 0.1.2. Its key can spend the funding outputs alone and cannot be revoked; this agent no longer uses that format. See \"Bundles exported before 0.1.2\" in doc/design/agent-client.md.")};
+    }
+    if (*type != "quicksilver.agent_allotment_cosign_bundle") {
         return util::Error{Untranslated("Agent allotment policy bundle has an unknown type.")};
     }
 
@@ -283,16 +270,13 @@ util::Result<AllotmentPolicyBundleArtifact> DecodeAllotmentPolicyBundle(std::str
         return util::Error{Untranslated("Agent allotment policy bundle funding address does not match the policy request.")};
     }
 
-    auto funding_secret{ReadPolicyStringField(bundle, "funding_secret_wif")};
-    if (!funding_secret) return util::Error{util::ErrorString(funding_secret)};
+    auto agent_secret{ReadPolicyStringField(bundle, "agent_secret_wif")};
+    if (!agent_secret) return util::Error{util::ErrorString(agent_secret)};
 
-    auto policy_enforcement{ReadPolicyStringField(bundle, "policy_enforcement")};
-    if (!policy_enforcement) return util::Error{util::ErrorString(policy_enforcement)};
-    if (*policy_enforcement != "pending_integration" && *policy_enforcement != "enforced") {
-        return util::Error{Untranslated("Agent allotment policy bundle has an unknown policy_enforcement.")};
-    }
-    if (*policy_enforcement != policy_artifact->policy_status) {
-        return util::Error{Untranslated("Agent allotment policy bundle enforcement state does not match the policy request.")};
+    auto funding_descriptor{ReadPolicyStringField(bundle, "funding_descriptor")};
+    if (!funding_descriptor) return util::Error{util::ErrorString(funding_descriptor)};
+    if (*funding_descriptor != policy_artifact->funding_descriptor) {
+        return util::Error{Untranslated("Agent allotment policy bundle funding descriptor does not match the policy request.")};
     }
 
     auto funding_outputs{ReadBundleFundingOutputs(bundle)};
@@ -302,8 +286,8 @@ util::Result<AllotmentPolicyBundleArtifact> DecodeAllotmentPolicyBundle(std::str
     artifact.policy_request = *policy_artifact;
     artifact.policy_request_json = policy_request_json;
     artifact.funding_address = *funding_address;
-    artifact.funding_secret = *funding_secret;
-    artifact.policy_enforcement = *policy_enforcement;
+    artifact.agent_secret = *agent_secret;
+    artifact.funding_descriptor = *funding_descriptor;
     artifact.funding_outputs = *funding_outputs;
     return artifact;
 }

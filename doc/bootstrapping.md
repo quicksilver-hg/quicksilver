@@ -34,11 +34,13 @@ The onion seed is reachable **only over Tor**. A node with no Tor available
 cannot use it, and on a default configuration that leaves the node with no
 automatic path to a peer at all.
 
-**On the desktop, provide Tor and ask for a node.** The desktop starts and
-supervises its own Tor process, but needs a `tor` executable beside the
-Quicksilver executable, on `PATH`, or at `-bundledtorpath=<path>`. Install Tor
-through your package manager on Unix; on Windows, obtain it separately as
-described in [tor.md](tor.md#0-the-desktop-starts-its-own-tor). The desktop's
+**On the desktop, ask for a node.** The desktop starts and supervises its own
+Tor process, using a `tor` executable beside the Quicksilver executable, on
+`PATH`, or at `-bundledtorpath=<path>`. The Windows installer ships one beside
+`quicksilver.exe`. On Unix, install Tor through your package manager; a Windows
+source build fetches it as described in
+[tor.md](tor.md#0-the-desktop-starts-its-own-tor). Without one, the desktop does
+not start the node and its Network page says so. The desktop's
 Tor needs no manual torrc or proxy configuration. That section also covers
 `-bundledtor=0` for anyone who would rather run their own.
 
@@ -143,7 +145,7 @@ quicksilver-cli getpeerinfo            # []
 
 On the desktop, the same two answers are in the **Node window** — press
 `Ctrl+Shift+D`, or pick any of Information / Console / Network Traffic / Peers
-from the **Panels** menu. It is not a fallback for people without a terminal: the
+from the **Window** menu. It is not a fallback for people without a terminal: the
 Information tab shows the connection count directly, the Peers tab lists exactly
 what `getpeerinfo` returns, and the Console tab runs every RPC named in this
 document. `Ctrl+Shift+C` opens the Node window with the Console focused, but

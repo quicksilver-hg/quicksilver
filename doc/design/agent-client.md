@@ -4,34 +4,27 @@
 > payload adapters, peer routing, the command-line transport harness, and the
 > client-side agent allotment policy-request decoder plus daily-guardrail check are
 > in tree and covered by focused tests. The command-line agent can check a
-> desktop-issued policy request against a proposed spend amount. The desktop
-> vault can export a funded setup as a policy-plus-funding-key bundle for the
-> gateway handoff, and the command-line agent can verify that bundle's funding
-> key matches its funding address before applying the same guardrail check.
-> Agent-side key import, bundle-output spend signing, persisted payment receipt
-> ingestion, local receipt-inbox scanning, output-level receipt activity history,
-> optional receipt metadata, post-spend change receipt rotation, a persistent
-> configured relay peer store, local-node addrman import, configured-peer header
-> sync, and configured-peer address-gossip import are now wired through the
-> command-line consumer. The desktop can now save a reviewed receipt artifact,
-> the current funding receipts for a funded setup, or a reviewed signed-spend
-> change receipt into that local agent inbox and scan it directly into the
-> durable receipt store. It shows the refreshed spendable-output count and total,
-> while the shared scanner prevents spent activity from being re-imported from
-> retained inbox files. It still copies the matching `scanreceipts` command for
-> external agent hosts. Manual configured-peer transaction relay is also wired
-> through the command-line consumer, the desktop can save a policy bundle locally and
-> copy a runnable `signbundle` command for a requested agent spend, and the
-> desktop can copy a
-> `scantxoutset`-to-`importrecovery` command for a recorded agent funding
-> address. It can also import local-node peers directly into the agent relay
-> peer store, copy a `getnodeaddresses` import pipeline for an external agent
-> host, and run the bundle-output signing path in-process while merging and
-> rotating persisted receipt-store entries before reviewing the resulting signed
-> spend. The desktop can also run transaction relay in the background after
-> review instead of only copying the `sendtxpeer` command. It attempts the typed
-> peer, stored peers, or the active network's fixed seeds without blocking the
-> GUI, and reports partial peer failures after all attempts finish.
+> desktop-issued policy request against a proposed spend amount. An agent
+> allotment is a co-signed taproot output: the desktop vault exports a co-sign
+> bundle holding the agent's one key and the allotment's public descriptor, and
+> the command-line agent verifies that the key is the descriptor's agent key
+> before applying the same guardrail check. Bundle-output spend signing produces
+> the agent's half of a spend, proved, as a PSQT; the desktop reviews it,
+> co-signs it with the vault's key, and broadcasts it through its own node.
+> Persisted payment receipt ingestion, local receipt-inbox scanning, output-level
+> receipt activity history, optional receipt metadata, post-spend change receipt
+> rotation, a persistent configured relay peer store, local-node addrman import,
+> configured-peer header sync, and configured-peer address-gossip import are
+> wired through the command-line consumer. The desktop can save a reviewed
+> receipt artifact or the current funding receipts for a funded setup into that
+> local agent inbox and scan it directly into the durable receipt store. It
+> shows the refreshed spendable-output count and total, while the shared scanner
+> prevents spent activity from being re-imported from retained inbox files. It
+> still copies the matching `scanreceipts` command for external agent hosts.
+> Manual configured-peer transaction relay is wired through the command-line
+> consumer for transactions that are already complete, and the desktop can copy
+> a `scantxoutset`-to-`importrecovery` command for a recorded agent funding
+> address.
 > Public seed infrastructure now ships: `vFixedSeeds` carries an onion seed on
 > `main` and `publictest`. Network-native payment discovery and full desktop vault
 > integration remain deferred; see [v1-scope.md](v1-scope.md).
@@ -125,8 +118,8 @@ Quicksilver transaction.
 The implemented slice is intentionally transport-agnostic. It creates and
 processes ordinary P2P message payloads, owns local header state, and queues
 outbound messages for a caller-provided transport. Its allotment-spend primitive can
-import explicitly shared key material, select known funding outputs, sign
-transactions, and grind transaction proof-of-work, but the core still does not
+import the agent's key from a co-sign bundle, select known funding outputs, sign
+the agent's half of a spend, and grind transaction proof-of-work, but the core still does not
 own a rich durable allotment or persist payment history beyond the command-line
 receipt store and its output-level activity ledger. The command-line consumer
 provides the current manual socket transport harness and configured-peer
@@ -168,10 +161,13 @@ discovery harness.
   the command-line agent can remember handoff funding and post-spend change
   outputs across invocations. The same store keeps an append-only output activity
   ledger for imported, spent, and change receipt events.
-- **Desktop key handoff:** the vault validates a desktop-issued policy request
+- **Desktop co-sign handoff:** the vault validates a desktop-issued policy request
   against its recorded setup, proves the funding address is spendable by that
-  vault, and exports a policy-plus-funding-key bundle for the gateway handoff.
-  This is key material, not protocol enforcement. The same setup row can copy a
+  vault, and exports a co-sign bundle: the agent's key A, the allotment's public
+  descriptor, and its current funding outputs. A cannot spend alone. The vault
+  co-signs a pasted spend request with its cosigner key, or refuses it, and
+  broadcasts what it signs (see "Coordination between vault and agent"). The
+  same setup row can copy a
   `scantxoutset start ["addr(...)"] | quicksilver-agent ... importrecovery`
   command for recovering spendable outputs at the reserved funding address
   through a full node and importing them into the receipt store.
@@ -188,9 +184,9 @@ discovery harness.
   `checkpolicy` accepts a desktop-issued policy request plus a proposed spend
   amount and exits successfully only when the request decodes for the active
   chain and the spend fits the recorded daily guardrail.
-  `checkbundle` accepts the desktop policy-plus-key bundle plus stored and
-  optional `-paymentreceipt=<json>` artifacts, verifies that the WIF funding key
-  maps to the bundle funding address, reports the merged funding-output count and
+  `checkbundle` accepts the desktop co-sign bundle plus stored and
+  optional `-paymentreceipt=<json>` artifacts, verifies that the bundle's agent
+  key is the agent key of the bundle's descriptor, reports the merged funding-output count and
   total, and then applies the same policy check without printing the secret.
   `importreceipt`, `importrecovery`, `scanreceipts`, `listreceipts`, and
   `listreceiptactivity` manage and inspect the local receipt store, including
@@ -207,15 +203,18 @@ discovery harness.
   `signbundle` imports the same bundle and receipts into an in-memory signing
   context, checks the requested spend against the guardrail, selects known
   funding outputs when explicit UTXO arguments are not supplied, adds change back
-  to the funded agent address, and signs it. Proving reads the anchor's congestion
+  to the allotment's address, and signs the agent's half of the spend. It proves
+  the spend before the vault co-signs, so it prices the largest witness the
+  leaf can carry: two 65-byte signatures, the script and the control block. A
+  larger size only lowers the target, so the proof still holds for the real,
+  smaller witness, and the vault's signature changes neither the proof's
+  pre-image nor the txid. It prints the request as `psqt=<base64>` for the
+  desktop's Agent spend request panel; it prints no relay payload, because a
+  half-signed spend cannot relay. Proving reads the anchor's congestion
   multiplier out of the header chain (see "The congestion multiplier" above), so
   `-prove=1` works at any anchor a thin client has synced, not only at genesis and not
-  only under a full node. The full-node desktop consumer supplies the connected anchor
-  and uses the same primitive. The desktop can paste a bundle, destination,
-  spend amount, and optional already-spent amount, then save that bundle under
-  the local agent datadir and copy a `signbundle` command that reads the saved
-  file. On
-  successful spends it removes consumed stored receipts,
+  only under a full node. On
+  each signed request it removes consumed stored receipts,
   records spent-output activity, stores the change receipt when change is
   created, records change-output activity, and prints that `change_paymentreceipt`
   artifact for external handoff.
@@ -235,8 +234,8 @@ discovery harness.
   minimal version/verack handshake, asks cooperative peers for address gossip,
   and imports valid advertised peers. `syncheaderspeer` uses the same explicit,
   stored, or fixed-seed peers to run a live `getheaders`/`headers` exchange and
-  save the accepted thin header store. `sendtxpeer` accepts the `tx_payload`
-  produced by `signbundle` or the desktop spend reviewer, connects either to an
+  save the accepted thin header store. `sendtxpeer` accepts a `tx_payload` for a
+  transaction that is already complete, connects either to an
   explicit, stored, or fixed-seed peer, completes a minimal
   version/verack handshake with the active chain's message start bytes, and sends
   the transaction message over the socket. This closes the manual relay handoff,
@@ -245,7 +244,8 @@ discovery harness.
   cold-start bootstrapping. Fixed onion seeds use the SOCKS5 endpoint configured
   through `-proxy` or `-onion`.
   `importrecovery` accepts the JSON result printed by `scantxoutset start`,
-  validates recovered unspents for an explicit funding address, converts them to
+  validates recovered unspents for an explicit funding address (for an
+  allotment, its taproot address), converts them to
   payment receipts with recovery metadata, and imports only new outputs into the
   local receipt store.
 - **Regression coverage:**
@@ -253,10 +253,10 @@ discovery harness.
   header chain/store/sync driver, message adapters, peer set, client facade, and
   CLI-style payload decoding paths.
 
-The local v1 desktop flow is now end to end: durable receipt refresh feeds
-in-process bundle signing, signed-spend review feeds a lifecycle-guarded
-background relay, and configured-peer failure can fall through across the peer
-set. Remaining integration gaps are deliberately outside that local flow:
+The v1 allotment flow is end to end: the vault issues a co-signed allotment,
+receipts feed the agent's bundle signing, and the desktop reviews, co-signs and
+broadcasts the agent's request through its own node. Remaining integration gaps
+are deliberately outside that flow:
 
 - network-native payment discovery beyond the shipped receipt handoff and
   recovery imports (intentionally deferred for v1);
@@ -276,31 +276,74 @@ against a pruned node. This recovers balance, not transaction history — see
 
 ## Agent allotment
 
-An agent spends from an allotment derived from the user's vault as a child key. The
-user retains the parent key, so funds can always be swept back without the agent's
-cooperation. The user funds the allotment, sets a spending limit and a transaction
-count, and can return unspent funds to the vault. Both directions cost a full
-proof-of-work grind.
+An agent spends from an allotment: one taproot output script,
+`tr(V,multi_a(2,A,C))`, built from three fresh random keys when the user creates
+the allotment. V is the vault's reclaim key, which spends alone by key path. A is
+the agent's key and C is the vault's cosigner key, and the script path needs
+both. The vault imports the descriptor with all three private keys, encrypted
+with the vault when the vault is encrypted. The agent receives A and the public
+descriptor, nothing else. A is never a child of any vault descriptor and no
+extended public key is exported, because a non-hardened child plus its parent
+extended public key would let the holder of the child climb to the parent.
 
-### Keys are shared, and this is stated plainly
+The user funds the allotment, sets a funding limit and an optional daily limit,
+and can take unspent funds back to the vault at any time without the agent: a
+coin-control send of the allotment's outputs, which the vault signs by key path
+with V. Funding and reclaim each cost one proof-of-work grind.
 
-The agent holds the allotment's keys. This is a deliberate choice, and it has a
-consequence that the interface must state rather than obscure:
+Because A is not derivable from anything else in the vault, a backup made before
+the allotment existed cannot spend its outputs. Creating an allotment therefore
+clears the vault's "backup recorded" state, and the desktop asks for a new backup.
 
-**Spending limits are client-side policy, not protocol guarantees.** The limits
-are enforced by the agent's own client. An agent that ignores its client can spend
-the entire balance. No interface text may describe them as guaranteed, enforced,
-or protected.
+### The agent cannot spend alone, and this is stated plainly
+
+The agent holds one key of a 2-of-2. Every spend from the allotment needs the
+vault's co-signature, and the vault gives it only when the user pastes the
+agent's request into the desktop and chooses to co-sign it (see "Coordination
+between vault and agent"). This has consequences that the interface must state
+rather than obscure:
+
+**Spending limits are the agent's own check, not protocol guarantees.** The
+script does not contain a limit, and the vault does not enforce one: it co-signs
+any request for an active allotment that passes its checks. The agent's client
+applies the limits to itself. No interface text may describe them as guaranteed,
+enforced, or protected.
 
 Two distinct risks are disclosed at allotment creation, and acceptance is recorded:
 
-1. **A dishonest agent** can spend the funds it was given. The user chose the
-   agent and chose the amount; the exposure is capped at what they funded.
-2. **A compromised agent host** hands the keys to a party the user never
-   evaluated. This is the more serious of the two, because the user never made a
-   judgement about that party at all.
+1. **A dishonest agent** cannot spend until the vault co-signs. It can ask for
+   spends the user did not want, so the user reviews each request before
+   co-signing it.
+2. **A compromised agent host** holds A, and A alone spends nothing. Spending
+   still needs the vault's signature. A compromised vault machine is the
+   treasury itself, and it can spend the allotment by key path with V.
 
-There is no recovery mechanism for either. The design does not pretend otherwise.
+**Stop is the revocation.** Stopping an allotment makes the vault refuse every
+later co-sign request for it, permanently; to fund the agent again, the user
+creates a new allotment. A spend the vault has already co-signed and broadcast
+still confirms. Stop does not move the coins. Taking them back is the reclaim
+send above.
+
+### Bundles exported before 0.1.2
+
+Before 0.1.2 the desktop exported a bundle of type
+`quicksilver.agent_allotment_key_bundle`. Its funding outputs pay a single-key
+script, and the bundle holds that key's private key. The key spends those
+outputs **alone**, with any software, for as long as they are unspent. No
+software update can change a script that is already on the chain.
+
+0.1.2 cannot revoke such a bundle. The only remedy is to spend its funding
+outputs from the vault: on the Transfer page, open coin control, unlock the
+locked agent outputs, select them, and send them to an address of this vault.
+That spend costs one proof, and it races any spend that the holder of the old key
+has already prepared. After it confirms, the old key controls nothing. Create a
+new allotment if the agent should keep working.
+
+0.1.2 refuses the old format at both ends. The agent rejects a
+`quicksilver.agent_allotment_key_bundle` with a message naming this section.
+The vault no longer loads allotment records written before 0.1.2, and logs that
+it did not. The outputs those records locked stay locked, so ordinary sends do not
+use them, and they remain visible in coin control for the remedy above.
 
 ## Why the client is not a daemon on the user's machine
 
@@ -323,26 +366,55 @@ A daemon remains reasonable when it is **not** next to the treasury — on a sec
 machine the user controls. That is deferred rather than refused: it is purely
 additive against the same core, so adding it later creates no migration debt.
 
+Co-signing does not need a listener either. The agent hands its request over as
+text that the user pastes into the desktop, so nothing on the treasury machine
+accepts a connection from the agent.
+
 ## Coordination between vault and agent
 
-Shared keys mean the vault and the agent can select the same outputs. There is no
-daemon and therefore no coordination channel, so the relay pool serves as one: the
-vault computes available balance as confirmed outputs minus those already spent by
-transactions in the relay pool.
+An agent spend is a handoff in three steps, and nothing listens at either end:
 
-The residual race is a transaction whose grind has started but which has not yet
-been broadcast — a window of roughly the grind duration. A collision there wastes
-work. It does not produce an incorrect balance or a double spend.
+1. **Request.** `signbundle` builds the spend from the allotment's known outputs,
+   with change back to the allotment's address, signs the agent's half with A,
+   proves it, and prints it as a PSQT. The agent proves first because the vault
+   never grinds for it.
+2. **Co-sign.** The user pastes the request into the desktop's Agent spend
+   request panel and reviews it: the allotment, the input total, each output's
+   address and amount, the change, and the anchor's age. The vault then checks
+   it against its own records, refusing before it signs anything if the request
+   spends outputs of more than one allotment, spends anything that is not this
+   allotment's unspent output, belongs to a stopped allotment, lacks the agent's
+   signature, or carries no proof or an expired one. Otherwise it signs with C
+   only, so the spend takes the script path and needs both signatures.
+3. **Broadcast.** The desktop broadcasts the finished transaction through its own
+   node and shows its txid. It never hands a co-signature back to the agent, so
+   co-signing needs Consensus on.
+
+The proof is bound to an anchor block, and a request whose anchor is more than
+`nMaxAnchorAge` blocks below the tip (100 on main and publictest, roughly eight
+hours at five-minute blocks) is refused as expired. The agent makes a fresh
+request.
+
+Because the vault broadcasts every agent spend itself, it never learns of one
+late. The residual race is between a request the agent has proved but not yet
+handed over and a reclaim the user sends in the meantime. If the reclaim spends
+the outputs first, the vault refuses the request because those outputs are no
+longer unspent. A collision there wastes work. It does not produce an incorrect
+balance or a double spend.
 
 **Decided 2026-08-04: the vault locks the agent's funding outputs at the moment it
-exports them.** `CVault::ExportAgentAllotmentPolicyBundle` hands over the funding key
-*and* the list of outputs that key can spend; from that instant both sides can sign
-for them. So the same call now locks each of those outputs, persisted to the vault
+exports them.** `CVault::ExportAgentAllotmentPolicyBundle` hands over the agent's key *and* the list
+of outputs the agent may ask the vault to co-sign; from that instant the agent can
+build requests against them. So the same call locks each of those outputs, persisted to the vault
 database, which removes them from ordinary coin selection — `AvailableCoins` skips
 locked outputs unless a caller opts out, and only the coin-control listing does.
+`CVault::CosignAgentAllotmentSpend` does the same for any change the spend returns
+to the allotment's address, before broadcasting, because the agent's next request
+spends that change.
 
-This makes the collision structurally impossible for exported outputs rather than
-merely improbable, and it needs no protocol, no daemon and no shared state, which
+The lock keeps ordinary coin selection from spending the agent's allotment by key
+path. This makes the collision structurally impossible for exported outputs rather
+than merely improbable, and it needs no protocol, no daemon and no shared state, which
 matters because the vault and the agent are on different machines by design. The
 alternative considered — giving the agent its own derivation path and teaching the
 vault's coin selection to avoid it — was rejected because it does not match what
@@ -360,8 +432,8 @@ Two consequences, both intended:
   therefore returns `m_mine_delegated` alongside `m_mine_trusted`, the overview shows a
   *Delegated* row when it is non-zero, and `getbalances` reports `mine.delegated`. The
   total the vault claims to own is unchanged. Coin control still displays the outputs,
-  marked locked, so an explicit sweep remains available — which is what "the user retains
-  the parent key" is for.
+  marked locked, so an explicit reclaim remains available — which is what the vault's
+  reclaim key V is for.
 - **Re-exporting a bundle still enumerates the agent's outputs**, because the export
   path deliberately does not skip locked outputs when it builds the list. Otherwise a
   refreshed bundle would tell the agent it holds nothing.
@@ -371,9 +443,9 @@ are both locked and paid to an agent's reserved funding address. Nothing locked 
 nothing delegated, which is what lets a vault that has never funded an agent skip the
 lookup entirely.
 
-The residual race above is unchanged for outputs the vault sends to the funding
-address *after* an export and before the next one. Those are not yet locked, and the
-relay pool remains the only coordination for them.
+Outputs the vault sends to the funding address *after* an export and before the next
+one are not yet locked, so ordinary coin selection can still spend them by key path.
+The agent does not know of them until the next bundle or receipt.
 
 ## Backup is the only history
 

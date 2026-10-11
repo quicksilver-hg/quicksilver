@@ -168,15 +168,59 @@ def check_windows_installer(failures: list[str]) -> None:
     if r"DisplayIcon $INSTDIR\@QUICKSILVER_GUI_NAME@@EXEEXT@" not in nsi:
         failures.append("share/setup.nsi.in: uninstall DisplayIcon must use the configured GUI binary name")
 
+    # The desktop starts its own Tor, and a downloader cannot be assumed to
+    # install one, so the installer carries tor.exe and its licenses (F-441).
+    main_section = re.search(r"^Section -Main SEC0000$(.*?)^SectionEnd$", nsi, re.MULTILINE | re.DOTALL)
+    main_body = main_section.group(1) if main_section else ""
+    for token in ("@nsis_tor_exe@", "@nsis_tor_license@"):
+        if not re.search(rf'^\s*File\b.*"{re.escape(token)}"', main_body, re.MULTILINE):
+            failures.append(f"share/setup.nsi.in: the Main section must install {token}")
+    for installed in (r"$INSTDIR\tor.exe", r"$INSTDIR\LICENSE-tor.txt"):
+        if f"Delete /REBOOTOK {installed}" not in nsi:
+            failures.append(f"share/setup.nsi.in: uninstall must delete {installed}")
+
+    # One Start-menu entry per application: main/publictest is switched from the
+    # Network page. Uninstall still removes the link older installers created.
+    for line_number, raw_line in enumerate(nsi.splitlines(), start=1):
+        if raw_line.strip().startswith("CreateShortcut") and "publictest" in raw_line:
+            failures.append(f"share/setup.nsi.in:{line_number}: the installer must not create a publictest shortcut")
+    if 'Delete /REBOOTOK "$SMPROGRAMS\\$StartMenuGroup\\@CLIENT_NAME@ (publictest).lnk"' not in nsi:
+        failures.append("share/setup.nsi.in: uninstall must still remove the old publictest shortcut")
+    # Installing over an older version must remove that link too, not leave it
+    # until uninstall.
+    post = nsi.split("Section -post SEC0001", 1)[-1].split("SectionEnd", 1)[0]
+    if 'Delete "$SMPROGRAMS\\$StartMenuGroup\\@CLIENT_NAME@ (publictest).lnk"' not in post:
+        failures.append("share/setup.nsi.in: install must remove the publictest shortcut an older installer left")
+
     maintenance = read("cmake/module/Maintenance.cmake")
+    # A reused build directory must rebuild the installer when a bundled binary
+    # or the installer script changes, not keep serving the old one.
+    setup_rule = maintenance.split("OUTPUT ${PROJECT_BINARY_DIR}/quicksilver-win64-setup.exe", 1)[-1].split("VERBATIM", 1)[0]
+    setup_depends = setup_rule.split("DEPENDS", 1)[-1] if "DEPENDS" in setup_rule else ""
+    for dependency in ("quicksilver", "quicksilver-daemon", "quicksilver-cli", "quicksilver-agent",
+                       "quicksilver-tx", "quicksilver-vault", "${PROJECT_BINARY_DIR}/quicksilver-win64-setup.nsi"):
+        if dependency not in setup_depends.split():
+            failures.append(f"cmake/module/Maintenance.cmake: the installer rule must depend on {dependency}")
     if "TARGET_FILE:test_quicksilver" in maintenance or "TARGET_FILE:bench_quicksilver" in maintenance:
         failures.append("cmake/module/Maintenance.cmake: deploy target must not stage test binaries")
     if "TARGET_FILE:quicksilver-agent" not in maintenance:
         failures.append("cmake/module/Maintenance.cmake: deploy target must stage quicksilver-agent with developer tools")
 
+    if "QUICKSILVER_BUNDLED_TOR_SHA256" not in maintenance or "CheckBundledTor.cmake" not in maintenance:
+        failures.append("cmake/module/Maintenance.cmake: deploy must check tor.exe against QUICKSILVER_BUNDLED_TOR_SHA256")
+    try:
+        checker = read("cmake/script/CheckBundledTor.cmake")
+    except FileNotFoundError:
+        checker = ""
+    if "file(SHA256" not in checker:
+        failures.append("cmake/script/CheckBundledTor.cmake: must hash tor.exe with file(SHA256 ...)")
+
     generator = read("cmake/module/GenerateSetupNsi.cmake")
     if "QUICKSILVER_TEST_NAME" in generator:
         failures.append("cmake/module/GenerateSetupNsi.cmake: installer generator must not define test binary names")
+    for token in ("nsis_tor_exe", "nsis_tor_license"):
+        if token not in generator:
+            failures.append(f"cmake/module/GenerateSetupNsi.cmake: installer generator must define {token}")
     for binary, token in {**DEVELOPER_BINS, **APPLICATION_BINS}.items():
         if token.strip("@") not in generator:
             failures.append(f"cmake/module/GenerateSetupNsi.cmake: installer generator must define {binary}")

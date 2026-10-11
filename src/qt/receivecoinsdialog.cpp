@@ -9,6 +9,7 @@
 #include <qt/forms/ui_receivecoinsdialog.h>
 
 #include <qt/addresstablemodel.h>
+#include <qt/benchpanel.h>
 #include <qt/guiutil.h>
 #include <qt/optionsmodel.h>
 #include <qt/platformstyle.h>
@@ -44,6 +45,30 @@ ReceiveCoinsDialog::ReceiveCoinsDialog(const PlatformStyle *_platformStyle, QWid
         ui->removeRequestButton->setIcon(_platformStyle->ColorIcon(":/icons/remove", QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarBright)));
     }
 
+    // The request form and the request history are Bench panels, on the
+    // page margins the other pages use.
+    ui->verticalLayout->setContentsMargins(14, 14, 14, 14);
+    ui->verticalLayout->setSpacing(12);
+    BenchPanel::Wrap(ui->receiveRequestPanel, QStringLiteral("receiveRequestBenchPanel"), tr("Request"));
+    BenchPanel::Wrap(ui->receiveHistoryPanel, QStringLiteral("receiveHistoryBenchPanel"), tr("Recent requests"));
+    for (QPushButton* button : {ui->clearButton, ui->showRequestButton, ui->removeRequestButton}) {
+        button->setProperty("class", QStringLiteral("benchQuiet"));
+    }
+    ui->recentRequestsView->setProperty("class", QStringLiteral("benchTable"));
+    for (QLabel* label : {ui->label, ui->label_2, ui->label_3, ui->addressFormatLabel}) {
+        label->setProperty("class", QStringLiteral("benchKey"));
+        label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    }
+    ui->label_5->setProperty("class", QStringLiteral("benchNote"));
+    ui->addressFormatAdvice->setProperty("class", QStringLiteral("benchNote"));
+    ui->addressType->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+    connect(ui->addressType, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        ui->addressFormatAdvice->setText(ui->addressType->itemData(index, Qt::ToolTipRole).toString());
+    });
+    ui->gridLayout->setHorizontalSpacing(12);
+    ui->gridLayout->setVerticalSpacing(8);
+    ui->recentRequestsView->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+
     // context menu
     contextMenu = new QMenu(this);
     contextMenu->addAction(tr("Copy &URI"), this, &ReceiveCoinsDialog::copyURI);
@@ -60,15 +85,6 @@ ReceiveCoinsDialog::ReceiveCoinsDialog(const PlatformStyle *_platformStyle, QWid
     tableView->setAlternatingRowColors(true);
     tableView->setSelectionBehavior(QAbstractItemView::SelectRows);
     tableView->setSelectionMode(QAbstractItemView::ContiguousSelection);
-
-    QSettings settings;
-    if (!tableView->horizontalHeader()->restoreState(settings.value("RecentRequestsViewHeaderState").toByteArray())) {
-        tableView->setColumnWidth(RecentRequestsTableModel::Date, DATE_COLUMN_WIDTH);
-        tableView->setColumnWidth(RecentRequestsTableModel::Label, LABEL_COLUMN_WIDTH);
-        tableView->setColumnWidth(RecentRequestsTableModel::Amount, AMOUNT_MINIMUM_COLUMN_WIDTH);
-        tableView->horizontalHeader()->setMinimumSectionSize(MINIMUM_COLUMN_WIDTH);
-        tableView->horizontalHeader()->setStretchLastSection(true);
-    }
 }
 
 void ReceiveCoinsDialog::setModel(VaultModel *_model)
@@ -83,30 +99,40 @@ void ReceiveCoinsDialog::setModel(VaultModel *_model)
 
         QTableView* tableView = ui->recentRequestsView;
         tableView->setModel(_model->getRecentRequestsTableModel());
+        QHeaderView* header = tableView->horizontalHeader();
+        header->restoreState(QSettings().value("RecentRequestsViewHeaderState").toByteArray());
+        header->setStretchLastSection(false);
+        header->setSectionResizeMode(RecentRequestsTableModel::Date, QHeaderView::ResizeToContents);
+        header->setSectionResizeMode(RecentRequestsTableModel::Label, QHeaderView::Stretch);
+        header->setSectionResizeMode(RecentRequestsTableModel::Message, QHeaderView::Stretch);
+        header->setSectionResizeMode(RecentRequestsTableModel::Amount, QHeaderView::ResizeToContents);
         tableView->sortByColumn(RecentRequestsTableModel::Date, Qt::DescendingOrder);
 
         connect(tableView->selectionModel(),
             &QItemSelectionModel::selectionChanged, this,
             &ReceiveCoinsDialog::recentRequestsView_selectionChanged);
 
-        // Populate address type dropdown and select default
+        // Keep the vault-supported formats, with the advice visible beside the choice.
+        ui->addressType->clear();
         auto add_address_type = [&](OutputType type, const QString& text, const QString& tooltip) {
             const auto index = ui->addressType->count();
             ui->addressType->addItem(text, (int) type);
             ui->addressType->setItemData(index, tooltip, Qt::ToolTipRole);
             if (model->vault().getDefaultAddressType() == type) ui->addressType->setCurrentIndex(index);
         };
-        add_address_type(OutputType::BASE58, tr("Base58"), tr("Not recommended due to larger transactions and less protection against typos."));
-        add_address_type(OutputType::BECH32, tr("Bech32"), tr("Recommended. Smaller transfers and better protection against mistyped addresses."));
+        add_address_type(OutputType::BECH32, tr("Bech32 (recommended)"), tr("Recommended. Smaller transfers and better protection against mistyped addresses."));
         if (model->vault().taprootEnabled()) {
             add_address_type(OutputType::BECH32M, tr("Bech32m"), tr("Same benefits as Bech32, with a stronger checksum."));
         }
+
+        add_address_type(OutputType::BASE58, tr("Base58"), tr("Not recommended: larger transfers and weaker typo protection."));
+        ui->addressFormatAdvice->setText(ui->addressType->currentData(Qt::ToolTipRole).toString());
 
         // Set the button to be enabled or disabled based on whether the vault can give out new addresses.
         ui->receiveButton->setEnabled(model->vault().canGetAddresses());
 
         // Enable/disable the receive button if the vault is now able/unable to give out new addresses.
-        connect(model, &VaultModel::canGetAddressesChanged, [this] {
+        connect(model, &VaultModel::canGetAddressesChanged, this, [this] {
             ui->receiveButton->setEnabled(model->vault().canGetAddresses());
         });
     }
@@ -152,7 +178,7 @@ void ReceiveCoinsDialog::on_receiveButton_clicked()
 
     QString label = ui->reqLabel->text();
     /* Generate new receiving address */
-    const OutputType address_type = (OutputType)ui->addressType->currentData().toInt();
+    const OutputType address_type = static_cast<OutputType>(ui->addressType->currentData().toInt());
     QString address = model->getAddressTableModel()->addRow(AddressTableModel::Receive, label, "", address_type);
     if (model->getAddressTableModel()->getEditStatus() == AddressTableModel::EditStatus::VAULT_UNLOCK_FAILURE) {
         QPointer<ReceiveCoinsDialog> self(this);

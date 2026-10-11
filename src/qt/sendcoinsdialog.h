@@ -32,8 +32,9 @@ namespace Ui {
 }
 
 QT_BEGIN_NAMESPACE
-class QUrl;
+class QLabel;
 class QShowEvent;
+class QUrl;
 QT_END_NAMESPACE
 
 /** Dialog for Quicksilver transfers. */
@@ -77,6 +78,16 @@ public:
     quint64 currentSolveGeneration() const { return m_solve_generation; }
     void bumpSolveGeneration();
     bool acceptSolveResult(quint64 gen) const { return gen == m_solve_generation; }
+    //! What the summary says about preparing a transfer: the notes, then how
+    //! the proof will be computed. When the processor takes over, that last
+    //! line is a warning and the page sets it apart (F-453).
+    struct SendWorkNotes {
+        QString intro;
+        QString acceleration;
+        bool processor_fallback{false};
+    };
+    static SendWorkNotes sendWorkNotesForTesting(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status) { return sendWorkNotes(requires_configured_gpu_solver, solver_path, probe_status); }
+    void showSendWorkNotesForTesting(const SendWorkNotes& notes) { showSendWorkNotes(notes); }
     static QString sendWorkResourceTextForTesting(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status = GpuSolverProbeStatus::Unchecked);
     static QStringList startupAccelerationTextForTesting(bool has_gpu) { return startupAccelerationText(has_gpu); }
     static QStringList gpuSolverProbeArguments(uint8_t edgebits);
@@ -109,6 +120,16 @@ private:
     std::unique_ptr<vault::CCoinControl> m_coin_control;
     std::unique_ptr<VaultModelTransaction> m_current_transaction;
     bool fNewRecipientAllowed{true};
+    CAmount m_spendable{0};
+    QLabel* m_summary_from{nullptr};
+    QLabel* m_summary_spendable_key{nullptr};
+    QLabel* m_summary_recipients{nullptr};
+    QLabel* m_summary_total{nullptr};
+    QLabel* m_summary_spendable{nullptr};
+    QLabel* m_summary_remaining{nullptr};
+    QLabel* m_summary_flag{nullptr};
+    //! The processor-fallback line, in the warning tone (F-453).
+    QLabel* m_acceleration_warning{nullptr};
     const PlatformStyle *platformStyle;
     quint64 m_solve_generation{0};
     bool m_send_work_graph_attempted{false};
@@ -147,6 +168,8 @@ private:
     void refreshGpuSolverProbe(bool requires_configured_gpu_solver, const QString& solver_path);
     void stopGpuSolverProbe();
     static QString sendWorkResourceText(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status);
+    static SendWorkNotes sendWorkNotes(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status);
+    void showSendWorkNotes(const SendWorkNotes& notes);
     static QStringList startupAccelerationText(bool has_gpu);
     void showStartupAccelerationWarningIfNeeded();
     void confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<VaultModelTransaction> transaction, vault::CCoinControl coin_control);
@@ -173,6 +196,8 @@ private Q_SLOTS:
     void coinControlChangeChecked(int);
     void coinControlChangeEdited(const QString &);
     void coinControlUpdateLabels();
+    void refreshTransferSummary();
+    void createTransferSummary();
     void coinControlClipboardQuantity();
     void coinControlClipboardAmount();
     void coinControlClipboardBytes();

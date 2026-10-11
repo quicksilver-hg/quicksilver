@@ -120,7 +120,16 @@ bool VaultBatch::WriteAgentAllotmentRecords(const std::vector<AgentAllotmentReco
 bool VaultBatch::ReadAgentAllotmentRecords(std::vector<AgentAllotmentRecord>& records)
 {
     records.clear();
-    return m_batch->Read(std::make_pair(DBKeys::SETTINGS, std::string{"agent_allotment_records"}), records);
+    if (!m_batch->Read(std::make_pair(DBKeys::SETTINGS, std::string{"agent_allotment_records"}), records)) {
+        records.clear();
+        return false;
+    }
+    return true;
+}
+
+bool VaultBatch::HasAgentAllotmentRecords()
+{
+    return m_batch->Exists(std::make_pair(DBKeys::SETTINGS, std::string{"agent_allotment_records"}));
 }
 
 bool VaultBatch::WriteOrderPosNext(int64_t nOrderPosNext)

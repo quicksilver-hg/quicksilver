@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QPalette>
+#include <QProxyStyle>
 #include <QStyleFactory>
 
 namespace QuicksilverStyle {
@@ -41,8 +42,74 @@ QColor Color(Token token)
         return QColor(QStringLiteral("#f1cf7a"));
     case Token::Violet:
         return QColor(QStringLiteral("#c3ace8"));
+    case Token::BenchSurface:
+        return QColor(QStringLiteral("#15181c"));
+    case Token::BenchSurfaceRaised:
+        return QColor(QStringLiteral("#191d22"));
+    case Token::BenchTop:
+        return QColor(QStringLiteral("#14171b"));
+    case Token::Hairline:
+        return QColor(QStringLiteral("#252a30"));
+    case Token::StatusGood:
+        return QColor(QStringLiteral("#6cc4a1"));
+    case Token::TickerText:
+        return QColor(QStringLiteral("#c9d0d6"));
+    case Token::RailText:
+        return QColor(QStringLiteral("#aab3bb"));
+    case Token::RailDisabled:
+        return QColor(QStringLiteral("#4a525a"));
+    case Token::StatePending:
+        return QColor(QStringLiteral("#e0a84a"));
+    case Token::CinnabarSoft:
+        return QColor(QStringLiteral("#e98a7c"));
+    case Token::BenchLabel:
+        return QColor(QStringLiteral("#aab3bb"));
+    case Token::Focus:
+        return QColor(QStringLiteral("#8b959e"));
+    case Token::Warning:
+        return QColor(QStringLiteral("#e0a84a"));
     }
     return QColor(QStringLiteral("#ccd5dc"));
+}
+
+int FontPx(Type type)
+{
+    switch (type) {
+    case Type::Caption:
+        return 10;
+    case Type::Label:
+    case Type::Body:
+    case Type::Value:
+        return 12;
+    case Type::Figure:
+        return 14;
+    case Type::Title:
+        return 19;
+    }
+    return 12;
+}
+
+namespace {
+class BenchStyle : public QProxyStyle
+{
+public:
+    explicit BenchStyle(QStyle* base) : QProxyStyle(base)
+    {
+        // Kept so the style can be recreated by name.
+        setObjectName(base->objectName());
+    }
+
+    int styleHint(StyleHint hint, const QStyleOption* option, const QWidget* widget, QStyleHintReturn* data) const override
+    {
+        if (hint == SH_DialogButtonBox_ButtonsHaveIcons) return 0;
+        return QProxyStyle::styleHint(hint, option, widget, data);
+    }
+};
+} // namespace
+
+QStyle* WithoutDialogButtonIcons(QStyle* base)
+{
+    return new BenchStyle(base);
 }
 
 void Apply(QApplication& app)
@@ -50,7 +117,7 @@ void Apply(QApplication& app)
     // Native Windows widgets do not consistently honor dark palettes. Fusion
     // gives every supported platform the same paint path and stylesheet surface.
     if (QStyle* fusion = QStyleFactory::create(QStringLiteral("Fusion"))) {
-        app.setStyle(fusion);
+        app.setStyle(WithoutDialogButtonIcons(fusion));
         app.setProperty("quicksilverBaseStyle", QStringLiteral("Fusion"));
     }
 
@@ -77,13 +144,16 @@ void Apply(QApplication& app)
     palette.setColor(QPalette::Disabled, QPalette::WindowText, Color(Token::SilverMuted));
     app.setPalette(palette);
 
-    app.setStyleSheet(QStringLiteral(R"(
+    QString sheet = QStringLiteral(R"(
 QMainWindow,
 QDialog,
 QWidget#RPCConsole,
 QWidget[class="quicksilverPage"] {
     background-color: #101214;
     color: #ccd5dc;
+}
+QMainWindow QWidget, QDialog QWidget {
+    font-size: {body}px;
 }
 QToolTip {
     background-color: #20262b;
@@ -142,38 +212,39 @@ QStatusBar QLabel {
 QToolBar#primaryCommandRail {
     background-color: #0b0d0f;
     border: 0;
-    border-right: 1px solid #2d2222;
-    spacing: 3px;
-    padding: 12px 9px 10px 9px;
+    border-right: 1px solid #252a30;
+    spacing: 2px;
+    padding: 0 0 10px 0;
 }
 QFrame#commandRailBrand {
     background: transparent;
     border: 0;
-    border-bottom: 1px solid #2d2222;
-    margin-bottom: 9px;
-    padding-bottom: 12px;
+    border-bottom: 1px solid #252a30;
+    padding-bottom: 0;
 }
 QLabel#commandRailBrandTitle {
     color: #f5f7f9;
-    font-size: 13px;
+    font-size: {figure}px;
     font-weight: 700;
 }
 QLabel#commandRailSectionLabel {
-    color: #8e9aa3;
-    font-size: 10px;
-    font-weight: 600;
+    color: #5f6973;
+    font-size: {caption}px;
+    font-weight: 700;
 }
 QLabel#commandRailSectionLabel {
-    padding: 3px 6px 6px 6px;
+    padding: 12px 6px 4px 18px;
 }
 QToolBar#primaryCommandRail QToolButton {
     background: transparent;
-    border: 1px solid transparent;
-    border-radius: 5px;
-    color: #ccd5dc;
+    border: 0;
+    border-left: 2px solid transparent;
+    border-radius: 0;
+    color: #aab3bb;
     min-height: 38px;
-    min-width: 132px;
-    padding: 6px 9px;
+    max-height: 38px;
+    padding-left: 16px;
+    padding-right: 12px;
     text-align: left;
 }
 QToolBar#primaryCommandRail QToolButton[accent="cinnabar"] {
@@ -192,14 +263,16 @@ QToolBar#primaryCommandRail QToolButton[accent="silver"] {
     color: #ccd5dc;
 }
 QToolBar#primaryCommandRail QToolButton:checked {
-    background-color: #2d2222;
-    border-color: #d84b3e;
+    background-color: #171a1f;
+    border-left: 2px solid #d84b3e;
     color: #f5f7f9;
 }
 QToolBar#primaryCommandRail QToolButton:hover {
-    background-color: #20262b;
-    border-color: #6b3431;
+    background-color: #171a1f;
     color: #f5f7f9;
+}
+QToolBar#primaryCommandRail QToolButton:disabled {
+    color: #4a525a;
 }
 QComboBox,
 QLineEdit,
@@ -219,7 +292,46 @@ QLineEdit:focus,
 QAbstractSpinBox:focus,
 QTextEdit:focus,
 QPlainTextEdit:focus {
-    border-color: #d84b3e;
+    border-color: {focus};
+}
+QAbstractSpinBox {
+    padding-right: 0;
+}
+QAbstractSpinBox::up-button,
+QAbstractSpinBox::down-button {
+    background-color: transparent;
+    border: 0;
+    border-left: 1px solid #2c3238;
+    subcontrol-origin: padding;
+    width: 18px;
+}
+QAbstractSpinBox::up-button {
+    subcontrol-position: top right;
+}
+QAbstractSpinBox::down-button {
+    subcontrol-position: bottom right;
+}
+QAbstractSpinBox::up-button:hover,
+QAbstractSpinBox::down-button:hover {
+    background-color: #2a3037;
+}
+QAbstractSpinBox::up-arrow {
+    image: url(:/icons/spin_up);
+    height: 5px;
+    width: 9px;
+}
+QAbstractSpinBox::down-arrow {
+    image: url(:/icons/spin_down);
+    height: 5px;
+    width: 9px;
+}
+QAbstractSpinBox::up-arrow:disabled,
+QAbstractSpinBox::up-arrow:off {
+    image: url(:/icons/spin_up_off);
+}
+QAbstractSpinBox::down-arrow:disabled,
+QAbstractSpinBox::down-arrow:off {
+    image: url(:/icons/spin_down_off);
 }
 QComboBox:disabled,
 QLineEdit:disabled,
@@ -247,60 +359,39 @@ QRadioButton {
     color: #ccd5dc;
     spacing: 8px;
 }
-QCheckBox::indicator,
-QRadioButton::indicator {
-    background-color: #101214;
-    border: 1px solid #53606a;
-    height: 14px;
-    width: 14px;
-}
-QCheckBox::indicator {
-    border-radius: 3px;
-}
-QRadioButton::indicator {
-    border-radius: 8px;
-}
-QCheckBox::indicator:checked,
-QRadioButton::indicator:checked {
-    background-color: #d84b3e;
-    border-color: #ff7a6c;
-}
 QCheckBox:disabled,
 QRadioButton:disabled {
     color: #6f7a82;
 }
+QCheckBox::indicator {
+    background-color: #0f1114;
+    border: 1px solid #8b959e;
+    border-radius: 2px;
+    height: 12px;
+    width: 12px;
+}
+QCheckBox::indicator:hover {
+    border-color: #aab3bb;
+}
+QCheckBox::indicator:checked {
+    background-color: #2a3037;
+    border-color: #aab3bb;
+    image: url(:/icons/check_tick);
+}
+QCheckBox::indicator:disabled {
+    border-color: #4a525a;
+}
 QWidget[class="quicksilverPage"] QGroupBox,
-QFrame#overviewBalancePanel,
-QFrame#overviewActivityPanel,
-QFrame#overviewBackupPanel,
-QFrame#frameCoinControl,
-QFrame#receiveRequestPanel,
-QFrame#receiveHistoryPanel,
 QFrame#coinControlPanel,
 QFrame#sendWorkProgressPanel,
-QFrame#agentAllotmentRiskPanel,
-QFrame#agentAllotmentAcceptancePanel,
-QFrame#agentAllotmentRecordsPanel,
-QFrame#agentAllotmentPolicyReviewPanel,
-QFrame#agentAllotmentPaymentReceiptPanel,
-QFrame#agentAllotmentSpendCommandPanel,
-QFrame#agentAllotmentSignedSpendPanel,
-QFrame#mineMintPayoutPanel,
-QFrame[class="launchCapabilityCard"],
-QFrame#desktopLaunchBackupPanel,
-QFrame#desktopLaunchCostPanel,
 QFrame[class="consensusCostRow"],
-QFrame[class="networkContextCard"],
 QFrame#consensusChoicePanel {
     background-color: #171b1f;
     border: 1px solid #39434b;
     border-radius: 6px;
     padding: 12px;
 }
-QWidget[class="quicksilverPage"] QGroupBox,
-QFrame#overviewBalancePanel,
-QFrame#overviewActivityPanel,
-QFrame#overviewBackupPanel {
+QWidget[class="quicksilverPage"] QGroupBox {
     margin-top: 18px;
 }
 QWidget[class="quicksilverPage"] QGroupBox::title {
@@ -311,13 +402,13 @@ QWidget[class="quicksilverPage"] QGroupBox::title {
 }
 QLabel[class="pageTitle"] {
     color: #f5f7f9;
-    font-size: 21px;
+    font-size: {title}px;
     font-weight: 700;
     padding: 4px 0;
 }
 QLabel[class="pageEyebrow"] {
     color: #ff7a6c;
-    font-size: 10px;
+    font-size: {caption}px;
     font-weight: 700;
 }
 QLabel[class="sectionValue"] {
@@ -327,17 +418,11 @@ QLabel[class="sectionValue"] {
 QLabel[class="muted"] {
     color: #8e9aa3;
 }
-QLabel[class="policyReviewIdle"],
 QLabel[class="policyReviewReady"],
 QLabel[class="policyReviewValid"],
 QLabel[class="policyReviewError"] {
     border-radius: 5px;
     padding: 6px 8px;
-}
-QLabel[class="policyReviewIdle"] {
-    background-color: #101214;
-    border: 1px solid #39434b;
-    color: #8e9aa3;
 }
 QLabel[class="policyReviewReady"] {
     background-color: #252d33;
@@ -356,7 +441,7 @@ QLabel[class="policyReviewError"] {
 }
 QLabel[class="hudHeading"] {
     color: #ff7a6c;
-    font-size: 12px;
+    font-size: {body}px;
     font-weight: 700;
 }
 QLabel[class="developerNetworkBanner"] {
@@ -373,14 +458,6 @@ QLabel[class="isolationBanner"] {
     color: #f5f7f9;
     padding: 8px 10px;
 }
-QLabel[class="hudValue"] {
-    color: #f5f7f9;
-    font-weight: 700;
-}
-QFrame#desktopLaunchHeader {
-    background: transparent;
-    border: 0;
-}
 QFrame#consensusReviewHeader {
     background: transparent;
     border: 0;
@@ -390,39 +467,14 @@ QLabel#consensusReviewMark {
     border: 1px solid #6b3431;
     border-radius: 23px;
 }
-QLabel[class="launchCapabilityTitle"] {
-    color: #f5f7f9;
-    font-size: 16px;
-    font-weight: 700;
-}
-QLabel#launchVaultCardTitle {
-    color: #ff7a6c;
-}
-QLabel#launchConsensusCardTitle {
-    color: #9bd7c8;
-}
-QLabel#launchMiningCardTitle {
-    color: #f1cf7a;
-}
 QLabel[class="launchCapabilityState"] {
     background-color: #21312e;
     border: 1px solid #4d7c69;
     border-radius: 4px;
     color: #9bd7c8;
-    font-size: 11px;
+    font-size: {label}px;
     font-weight: 700;
     padding: 4px 7px;
-}
-QLabel#launchMiningCardState,
-QLabel#desktopLaunchBackupState {
-    background-color: #322a1c;
-    border-color: #8a7648;
-    color: #f1cf7a;
-}
-QLabel#launchConsensusCardState {
-    background-color: #2d2222;
-    border-color: #6b3431;
-    color: #ff7a6c;
 }
 QFrame#consensusStorageCost {
     border-color: #53606a;
@@ -433,34 +485,9 @@ QFrame#consensusBackgroundCost {
 QFrame#consensusVaultCost {
     border-color: #4d7c69;
 }
-QFrame#agentAllotmentRiskPanel {
-    border-color: #8a7648;
-}
-QFrame#agentAllotmentAcceptancePanel {
-    border-color: #6b3431;
-}
-QFrame#launchVaultCard {
-    border-color: #6b3431;
-}
-QFrame#launchConsensusCard,
-QFrame#receiveRequestPanel,
-QFrame#receiveHistoryPanel,
-QFrame[class="networkContextCard"] {
-    border-color: #365f5a;
-}
-QFrame#launchMiningCard,
-QFrame#frameCoinControl,
 QFrame#coinControlPanel,
-QFrame#sendWorkProgressPanel,
-QFrame#mineMintPayoutPanel {
+QFrame#sendWorkProgressPanel {
     border-color: #6d5935;
-}
-QFrame#agentAllotmentRecordsPanel,
-QFrame#agentAllotmentPolicyReviewPanel,
-QFrame#agentAllotmentPaymentReceiptPanel,
-QFrame#agentAllotmentSpendCommandPanel,
-QFrame#agentAllotmentSignedSpendPanel {
-    border-color: #514567;
 }
 QScrollArea#agentAllotmentScrollArea,
 QWidget#agentAllotmentScrollContents {
@@ -472,35 +499,27 @@ QWidget#tabMainScrollContents {
     background-color: #171b1f;
     border: 0;
 }
-QWidget#SendCoinsEntry {
-    background-color: #0b0d0f;
-    border: 1px solid #39434b;
-    border-radius: 6px;
-}
-QScrollArea#scrollArea {
-    background-color: #101214;
+QWidget#SendCoinsEntry,
+QScrollArea#scrollArea,
+QWidget#scrollAreaWidgetContents,
+QFrame#frameCoinControl {
+    background: transparent;
     border: 0;
-}
-QWidget#scrollAreaWidgetContents {
-    background-color: #101214;
 }
 QPushButton {
     background-color: #20262b;
     border: 1px solid #46515a;
-    border-radius: 4px;
+    border-radius: 3px;
     color: #ccd5dc;
-    min-height: 19px;
-    padding: 6px 13px;
+    min-height: 26px;
+    padding: 0 12px;
 }
 QPushButton#sendButton,
 QPushButton#receiveButton,
-QPushButton#emptyVaultCreateButton,
-QPushButton[class="launchPrimaryButton"],
 QPushButton[class="primaryActionButton"] {
     background-color: #6b3431;
     border-color: #d84b3e;
     color: #f5f7f9;
-    font-weight: 700;
 }
 QPushButton[class="secondaryActionButton"] {
     background-color: #171b1f;
@@ -514,7 +533,7 @@ QPushButton:disabled {
 }
 QPushButton:hover:!disabled {
     background-color: #293138;
-    border-color: #ff7a6c;
+    border-color: #56606a;
 }
 QToolButton {
     background-color: #20262b;
@@ -526,7 +545,7 @@ QToolButton {
 }
 QToolButton:hover {
     background-color: #293138;
-    border-color: #d84b3e;
+    border-color: #56606a;
 }
 Line {
     color: #39434b;
@@ -603,11 +622,6 @@ QGroupBox::title {
     left: 9px;
     padding: 0 4px;
 }
-QFrame#noVaultState {
-    background-color: #171b1f;
-    border: 1px solid #39434b;
-    border-radius: 6px;
-}
 QFrame#nodeWindowHeader {
     background-color: #171b1f;
     border: 0;
@@ -652,10 +666,298 @@ QProgressBar {
     text-align: center;
 }
 QProgressBar::chunk {
-    background-color: #d84b3e;
+    background-color: #6cc4a1;
     border-radius: 3px;
 }
-)"));
+)");
+
+    const QString bench_surface = Color(Token::BenchSurface).name();
+    const QString bench_raised = Color(Token::BenchSurfaceRaised).name();
+    const QString bench_top = Color(Token::BenchTop).name();
+    const QString hairline = Color(Token::Hairline).name();
+    const QString status_good = Color(Token::StatusGood).name();
+    const QString ticker = Color(Token::TickerText).name();
+    const QString hero = Color(Token::SilverHi).name();
+    const QString muted = Color(Token::SilverMuted).name();
+    const QString rail = Color(Token::Rail).name();
+    const QString cinnabar = Color(Token::Cinnabar).name();
+    sheet += QStringLiteral(R"(
+QFrame#benchTopBar {
+    background-color: %1;
+    border: 0;
+    border-bottom: 1px solid %2;
+}
+QFrame#benchPanel,
+QFrame[benchPanel="true"] {
+    background-color: %3;
+    border: 1px solid %2;
+    border-radius: 0;
+}
+QFrame#benchPanelHead {
+    background-color: %4;
+    border: 0;
+    border-bottom: 1px solid %2;
+}
+QFrame#benchStatusStrip {
+    background-color: %5;
+    border: 0;
+    border-top: 1px solid %2;
+}
+QLabel#benchBreadcrumb,
+QLabel#benchTickerKey,
+QLabel#benchPanelTitle,
+QLabel#benchStatusText,
+QLabel#benchTickerEmpty {
+    color: %6;
+}
+QLabel#benchTickerSpendable {
+    color: %7;
+    font-size: {title}px;
+}
+QLabel#benchTickerPending,
+QLabel#benchTickerMaturing,
+QLabel#benchTickerDelegated,
+QLabel#benchTickerTotal {
+    color: %8;
+    font-size: {figure}px;
+}
+QFrame#benchTickerSeparator {
+    background-color: %2;
+    border: 0;
+}
+QMenuBar {
+    background-color: %1;
+    border-bottom: 1px solid %2;
+}
+QLabel#benchStatusGood {
+    color: %9;
+    font-size: {label}px;
+}
+)").arg(bench_top, hairline, bench_surface, bench_raised, rail, muted, hero, ticker, status_good);
+    sheet += QStringLiteral(R"(
+QPushButton#sendButton,
+QPushButton[class="primaryActionButton"] {
+    background-color: %1;
+    border-color: %1;
+    color: %2;
+}
+QPushButton#sendButton:disabled,
+QPushButton[class="primaryActionButton"]:disabled {
+    background-color: #171b1f;
+    border-color: #293138;
+    color: #6f7a82;
+}
+QProgressBar {
+    background-color: %3;
+    border: 0;
+    border-radius: 0;
+    color: %2;
+    min-height: 14px;
+    max-height: 16px;
+    text-align: center;
+}
+QProgressBar::chunk {
+    background-color: %4;
+    border-radius: 0;
+}
+QLabel#benchStatusSync,
+QLabel#benchStatusHeight,
+QLabel#benchStatusPeers,
+QLabel#benchStatusMining,
+QLabel#benchStatusVault {
+    color: %5;
+    font-size: {label}px;
+}
+QLabel#benchStatusSync[benchTone="good"],
+QLabel#benchStatusDot[benchTone="good"] {
+    color: %4;
+}
+QLabel#benchStatusDot {
+    color: %5;
+    font-size: {caption}px;
+}
+QLabel#benchTickerKey {
+    color: %6;
+    font-size: {caption}px;
+    font-weight: 700;
+}
+QLabel#benchTickerUnit {
+    color: %1;
+    font-size: {label}px;
+    font-weight: 700;
+}
+QLabel#benchBreadcrumb {
+    font-size: {label}px;
+}
+QLabel#benchPanelTitle,
+QLabel[class="benchSection"] {
+    color: %6;
+    font-size: {caption}px;
+    font-weight: 700;
+}
+)").arg(cinnabar, hero, bench_surface, status_good, muted, Color(Token::RailText).name());
+    sheet += QStringLiteral(R"(
+QFrame#consensusChoicePanel,
+QWidget#mineMintIsolationPanel {
+    background-color: %1;
+    border: 1px solid %2;
+    border-radius: 0;
+}
+QFrame[benchBody="true"] {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin: 0;
+}
+QPushButton#receiveButton,
+QPushButton#consensusContinueButton,
+QPushButton#startMiningButton,
+QPushButton#agentAllotmentCreateButton {
+    background-color: %4;
+    border-color: %4;
+    color: %3;
+}
+)").arg(bench_surface, hairline, hero, cinnabar);
+
+    // The Bench page grammar: label/value rows, notes, quiet commands, the
+    // segmented filter and the ledger table.
+    sheet += QStringLiteral(R"(
+QLabel[class="benchKey"] {
+    color: {label_color};
+}
+QLabel[class="benchValue"] {
+    color: %2;
+}
+QLabel[class="benchValue"][benchTone="good"] {
+    color: %3;
+}
+QLabel[class="benchValue"][benchTone="warn"],
+QLabel[class="benchNote"][benchTone="warn"] {
+    color: %4;
+}
+QLabel[class="benchNote"] {
+    color: {label_color};
+    font-size: {label}px;
+}
+QPushButton[class="benchQuiet"] {
+    background-color: transparent;
+    border: 1px solid %5;
+    color: %6;
+}
+QPushButton[class="benchQuiet"]:hover:!disabled {
+    background-color: %7;
+    border-color: %8;
+    color: %2;
+}
+QPushButton[class="benchQuiet"]:disabled {
+    background-color: transparent;
+    border-color: %9;
+    color: %10;
+}
+QPushButton[class="benchSegment"] {
+    background-color: %11;
+    border: 1px solid %5;
+    border-radius: 0;
+    color: %6;
+    min-height: 16px;
+    padding: 3px 10px;
+    margin: 0;
+}
+QPushButton[class="benchSegment"]:checked {
+    background-color: %12;
+    border-color: %13;
+    color: %2;
+}
+QTableView[class="benchTable"] {
+    alternate-background-color: %14;
+    background-color: %15;
+    border: 0;
+    border-top: 1px solid %9;
+    selection-background-color: %16;
+    selection-color: %2;
+}
+QTableView[class="benchTable"]::item {
+    border: 0;
+    padding: 0 6px;
+}
+QTableView[class="benchTable"] QHeaderView::section {
+    background-color: %17;
+    border: 0;
+    border-bottom: 1px solid %9;
+    color: %18;
+    font-size: {caption}px;
+    font-weight: 700;
+    padding: 6px;
+}
+QLabel[class="benchColumnHead"] {
+    color: %18;
+    font-size: {caption}px;
+    font-weight: 700;
+}
+QFrame#benchRule {
+    background-color: %9;
+    border: 0;
+}
+QToolButton[class="benchRemove"] {
+    background-color: transparent;
+    border: 1px solid %5;
+    border-radius: 3px;
+    color: %1;
+    min-height: 24px;
+    min-width: 24px;
+}
+QToolButton[class="benchRemove"]:hover {
+    border-color: %8;
+    color: %2;
+}
+QProgressBar#homeNodeSync {
+    background-color: %19;
+    border: 0;
+    max-height: 4px;
+    min-height: 4px;
+}
+)")
+                 .arg(muted, hero, status_good, Color(Token::Warning).name(), QStringLiteral("#2c3238"), Color(Token::RailText).name(),
+                      QStringLiteral("#1b1f24"), QStringLiteral("#56606a"), hairline)
+                 .arg(Color(Token::RailDisabled).name(), QStringLiteral("#1b1f24"), QStringLiteral("#2a3037"), QStringLiteral("#3a4148"),
+                      QStringLiteral("#171b20"), bench_surface, QStringLiteral("#2b2023"), bench_raised, QStringLiteral("#8b959e"))
+                 .arg(QStringLiteral("#20252a"));
+
+    sheet += QStringLiteral(R"(
+QFrame#optionsPanel QTabWidget::pane {
+    border: 0;
+    border-radius: 0;
+}
+QFrame#optionsPanel QTabBar::tab {
+    padding: 5px 10px;
+    min-height: 26px;
+    min-width: 0;
+}
+QFrame#optionsPanel QTabBar::tab:selected {
+    border-color: transparent;
+    border-bottom-color: %1;
+}
+QTextBrowser#aboutMessage {
+    border: 0;
+    background: transparent;
+    padding: 0;
+}
+)").arg(Color(Token::Cinnabar).name());
+
+    // One type scale and the shared label colour, filled in last so every
+    // section above draws from the same values.
+    const QList<QPair<QString, QString>> tokens{
+        {QStringLiteral("{caption}"), QString::number(FontPx(Type::Caption))},
+        {QStringLiteral("{label}"), QString::number(FontPx(Type::Label))},
+        {QStringLiteral("{body}"), QString::number(FontPx(Type::Body))},
+        {QStringLiteral("{value}"), QString::number(FontPx(Type::Value))},
+        {QStringLiteral("{figure}"), QString::number(FontPx(Type::Figure))},
+        {QStringLiteral("{title}"), QString::number(FontPx(Type::Title))},
+        {QStringLiteral("{label_color}"), Color(Token::BenchLabel).name()},
+        {QStringLiteral("{focus}"), Color(Token::Focus).name()},
+    };
+    for (const auto& [token, value] : tokens) sheet.replace(token, value);
+    app.setStyleSheet(sheet);
 }
 
 } // namespace QuicksilverStyle

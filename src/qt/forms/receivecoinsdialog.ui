@@ -34,7 +34,7 @@
            <string>An optional amount to request. Leave this empty or zero to not request a specific amount.</string>
           </property>
           <property name="text">
-           <string>&amp;Amount:</string>
+           <string>&amp;Amount</string>
           </property>
           <property name="alignment">
            <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -50,7 +50,7 @@
            <string>An optional note to attach to the address request. The note stays local and is not sent over the Quicksilver network.</string>
           </property>
           <property name="text">
-           <string>&amp;Message:</string>
+           <string>&amp;Message</string>
           </property>
           <property name="alignment">
            <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -80,7 +80,7 @@
            <string>An optional label to associate with the new receiving address.</string>
           </property>
           <property name="text">
-           <string>&amp;Label:</string>
+           <string>&amp;Label</string>
           </property>
           <property name="alignment">
            <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -97,7 +97,7 @@
           </property>
          </widget>
         </item>
-        <item row="7" column="2">
+        <item row="9" column="2">
          <layout class="QHBoxLayout" name="horizontalLayout">
           <item>
            <widget class="QPushButton" name="receiveButton">
@@ -167,6 +167,20 @@
           </property>
          </widget>
         </item>
+        <item row="7" column="0">
+         <widget class="QLabel" name="addressFormatLabel">
+          <property name="text"><string>Address &amp;format</string></property>
+          <property name="buddy"><cstring>addressType</cstring></property>
+         </widget>
+        </item>
+        <item row="7" column="2">
+         <widget class="QComboBox" name="addressType"/>
+        </item>
+        <item row="8" column="2">
+         <widget class="QLabel" name="addressFormatAdvice">
+          <property name="wordWrap"><bool>true</bool></property>
+         </widget>
+        </item>
         <item row="5" column="2">
          <layout class="QHBoxLayout" name="horizontalLayout_6">
           <item>
@@ -191,25 +205,6 @@
             </property>
             <property name="toolTip">
              <string>An optional amount to request. Leave this empty or zero to not request a specific amount.</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QComboBox" name="addressType">
-            <property name="sizePolicy">
-             <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-              <horstretch>0</horstretch>
-              <verstretch>0</verstretch>
-             </sizepolicy>
-            </property>
-            <property name="maximumSize">
-             <size>
-              <width>1000</width>
-              <height>16777215</height>
-             </size>
-            </property>
-            <property name="focusPolicy">
-             <enum>Qt::StrongFocus</enum>
             </property>
            </widget>
           </item>
@@ -261,19 +256,6 @@
       <enum>QFrame::Raised</enum>
      </property>
      <layout class="QVBoxLayout" name="verticalLayout_2">
-      <item>
-       <widget class="QLabel" name="recentRequestsHeading">
-        <property name="font">
-         <font>
-          <weight>75</weight>
-          <bold>true</bold>
-         </font>
-        </property>
-        <property name="text">
-         <string>Recent requests</string>
-        </property>
-       </widget>
-      </item>
       <item>
        <widget class="QTableView" name="recentRequestsView">
         <property name="contextMenuPolicy">
@@ -360,8 +342,8 @@
  <tabstops>
   <tabstop>reqLabel</tabstop>
   <tabstop>reqAmount</tabstop>
-  <tabstop>addressType</tabstop>
   <tabstop>reqMessage</tabstop>
+  <tabstop>addressType</tabstop>
   <tabstop>receiveButton</tabstop>
   <tabstop>clearButton</tabstop>
   <tabstop>recentRequestsView</tabstop>

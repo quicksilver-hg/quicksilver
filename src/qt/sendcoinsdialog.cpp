@@ -9,6 +9,7 @@
 #include <qt/forms/ui_sendcoinsdialog.h>
 
 #include <qt/addresstablemodel.h>
+#include <qt/benchpanel.h>
 #include <qt/quicksilverunits.h>
 #include <qt/clientmodel.h>
 #include <qt/coincontroldialog.h>
@@ -37,7 +38,14 @@
 #include <QDebug>
 #include <QCheckBox>
 #include <QFileInfo>
+#include <QFontDatabase>
+#include <QFrame>
+#include <QGridLayout>
+#include <QHBoxLayout>
+#include <QIcon>
+#include <QLabel>
 #include <QLocale>
+#include <QVBoxLayout>
 #include <QPointer>
 #include <QPushButton>
 #include <QScrollBar>
@@ -97,6 +105,7 @@ SendCoinsDialog::SendCoinsDialog(const PlatformStyle *_platformStyle, QWidget *p
     }
 
     GUIUtil::setupAddressWidget(ui->lineEditCoinControlChange, this);
+    createTransferSummary();
     ui->sendWorkProgressPanel->hide();
     ui->sendWorkProgressBar->setRange(0, 0);
     updateSendWorkDisclosure();
@@ -157,6 +166,7 @@ void SendCoinsDialog::setModel(VaultModel *_model)
             }
         }
 
+        m_summary_from->setText(_model->getDisplayName());
         connect(_model, &VaultModel::balanceChanged, this, &SendCoinsDialog::setBalance);
         connect(_model->getOptionsModel(), &OptionsModel::displayUnitChanged, this, &SendCoinsDialog::refreshBalance);
         refreshBalance();
@@ -611,7 +621,7 @@ void SendCoinsDialog::updateSendWorkElapsed()
 void SendCoinsDialog::updateSendWorkDisclosure()
 {
     refreshGpuSolverProbe(TxProofRequiresConfiguredGpuSolver(), ConfiguredGpuSolverPath());
-    ui->sendWorkDisclosureLabel->setText(sendWorkResourceText());
+    showSendWorkNotes(sendWorkNotes(TxProofRequiresConfiguredGpuSolver(), ConfiguredGpuSolverPath(), m_gpu_solver_probe_status));
 }
 
 void SendCoinsDialog::updateSendWorkGraphs(uint32_t nonce)
@@ -730,23 +740,34 @@ QStringList SendCoinsDialog::gpuSolverProbeArguments(uint8_t edgebits)
 
 QString SendCoinsDialog::sendWorkResourceText(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status)
 {
-    QStringList disclosure;
-    disclosure << tr("Quicksilver sends the full amount. Before broadcast, this desktop prepares a transfer proof; that work can take time.");
+    const SendWorkNotes notes = sendWorkNotes(requires_configured_gpu_solver, solver_path, probe_status);
+    return notes.intro + QLatin1Char('\n') + notes.acceleration;
+}
+
+SendCoinsDialog::SendWorkNotes SendCoinsDialog::sendWorkNotes(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status)
+{
+    SendWorkNotes notes;
+    // Each branch that leaves the work to the processor says so as a warning.
+    const auto fallback = [&notes](const QString& text) {
+        notes.acceleration = text;
+        notes.processor_fallback = true;
+    };
+    notes.intro = tr("Quicksilver sends the full amount. Before broadcast, this desktop prepares a transfer proof; that work can take time.");
 
     if (requires_configured_gpu_solver) {
         const QString trimmed_solver_path = solver_path.trimmed();
         if (trimmed_solver_path.isEmpty()) {
-            disclosure << tr("Graphics acceleration is not configured. The processor will take over, which may take many minutes. Choose a GPU solver in Controls > Options > Main for faster preparation.");
+            fallback(tr("Graphics acceleration is not configured. The processor will take over, which may take many minutes. Choose a GPU solver in Settings > Options > Main for faster preparation."));
         } else {
             const QFileInfo solver_info(trimmed_solver_path);
             if (!solver_info.exists()) {
-                disclosure << tr("The configured GPU solver could not be found. The processor will take over, which may take many minutes. Choose a working GPU solver in Controls > Options > Main.");
+                fallback(tr("The configured GPU solver could not be found. The processor will take over, which may take many minutes. Choose a working GPU solver in Settings > Options > Main."));
             } else if (!solver_info.isFile() || !solver_info.isExecutable()) {
-                disclosure << tr("The configured GPU solver cannot be started. The processor will take over, which may take many minutes. Choose a working GPU solver in Controls > Options > Main.");
+                fallback(tr("The configured GPU solver cannot be started. The processor will take over, which may take many minutes. Choose a working GPU solver in Settings > Options > Main."));
             } else {
                 switch (probe_status) {
                 case GpuSolverProbeStatus::Checking:
-                    disclosure << tr("Checking whether graphics acceleration is ready for this network.");
+                    notes.acceleration = tr("Checking whether graphics acceleration is ready for this network.");
                     break;
                 case GpuSolverProbeStatus::Available:
                     // The wait is a geometric search with no upper bound, so a
@@ -755,25 +776,32 @@ QString SendCoinsDialog::sendWorkResourceText(bool requires_configured_gpu_solve
                     // this, the success branch was the only one that named no
                     // duration at all, leaving the user whose acceleration works
                     // the least informed about the wait ahead.
-                    disclosure << tr("Graphics acceleration is ready for this network. Preparing a transfer usually takes one to two minutes, but the search is random: some transfers finish in seconds and some run past five minutes. You can stop the work at any time.");
+                    notes.acceleration = tr("Graphics acceleration is ready for this network. Preparing a transfer usually takes one to two minutes, but the search is random: some transfers finish in seconds and some run past five minutes. You can stop the work at any time.");
                     break;
                 case GpuSolverProbeStatus::Failed:
-                    disclosure << tr("Graphics acceleration did not start. The processor will take over, which may take many minutes. Check the GPU solver in Controls > Options > Main.");
+                    fallback(tr("Graphics acceleration did not start. The processor will take over, which may take many minutes. Check the GPU solver in Settings > Options > Main."));
                     break;
                 case GpuSolverProbeStatus::TimedOut:
-                    disclosure << tr("The graphics acceleration check timed out. The processor will take over, which may take many minutes.");
+                    fallback(tr("The graphics acceleration check timed out. The processor will take over, which may take many minutes."));
                     break;
                 case GpuSolverProbeStatus::Unchecked:
-                    disclosure << tr("A GPU solver is configured. The desktop will check it before preparation starts.");
+                    notes.acceleration = tr("A GPU solver is configured. The desktop will check it before preparation starts.");
                     break;
                 }
             }
         }
     } else {
-        disclosure << tr("Sandbox transfers use quick built-in preparation and do not need graphics acceleration.");
+        notes.acceleration = tr("Sandbox transfers use quick built-in preparation and do not need graphics acceleration.");
     }
 
-    return disclosure.join(QLatin1Char('\n'));
+    return notes;
+}
+
+void SendCoinsDialog::showSendWorkNotes(const SendWorkNotes& notes)
+{
+    ui->sendWorkDisclosureLabel->setText(notes.processor_fallback ? notes.intro : notes.intro + QLatin1Char('\n') + notes.acceleration);
+    m_acceleration_warning->setText(notes.processor_fallback ? notes.acceleration : QString());
+    m_acceleration_warning->setVisible(notes.processor_fallback);
 }
 
 bool SendCoinsDialog::cpuFallbackWarningRequired(bool slow_network, GpuSolverProbeStatus probe_status, bool warning_enabled)
@@ -786,7 +814,7 @@ QStringList SendCoinsDialog::startupAccelerationText(bool has_gpu)
     QStringList text;
     if (has_gpu) {
         text << tr("Graphics acceleration is available, but no GPU solver is configured.");
-        text << tr("Quicksilver can still send using this computer's processor, but preparing a transfer may take many minutes. Choose a GPU solver in Controls > Options > Main for faster preparation.");
+        text << tr("Quicksilver can still send using this computer's processor, but preparing a transfer may take many minutes. Choose a GPU solver in Settings > Options > Main for faster preparation.");
     } else {
         text << tr("Graphics acceleration was not detected on this computer.");
         text << tr("Quicksilver can still send using this computer's processor, but preparing a transfer may take many minutes. The transfer screen will stay responsive and lets you stop the work at any time.");
@@ -999,6 +1027,11 @@ SendCoinsEntry *SendCoinsDialog::addEntry()
 
 void SendCoinsDialog::updateTabsAndLabels()
 {
+    int index = 0;
+    for (int i = 0; i < ui->entries->count(); ++i) {
+        auto* entry = qobject_cast<SendCoinsEntry*>(ui->entries->itemAt(i)->widget());
+        if (entry) entry->setIndex(++index);
+    }
     setupTabChain(nullptr);
     coinControlUpdateLabels();
 }
@@ -1011,6 +1044,8 @@ void SendCoinsDialog::removeEntry(SendCoinsEntry* entry)
     if (ui->entries->count() == 1)
         addEntry();
 
+    // Out of the list now, so the rows renumber without it.
+    ui->entries->removeWidget(entry);
     entry->deleteLater();
 
     updateTabsAndLabels();
@@ -1089,9 +1124,10 @@ void SendCoinsDialog::setBalance(const interfaces::VaultBalances& balances)
     if(model && model->getOptionsModel())
     {
         if (model->vault().hasExternalSigner()) {
-            ui->labelBalanceName->setText(tr("External balance:"));
+            m_summary_spendable_key->setText(tr("External balance"));
         }
-        ui->labelBalance->setText(QuicksilverUnits::formatWithUnit(model->getOptionsModel()->getDisplayUnit(), balances.balance));
+        m_spendable = balances.balance;
+        refreshTransferSummary();
     }
 }
 
@@ -1246,6 +1282,8 @@ void SendCoinsDialog::coinControlChangeChecked(int state)
         coinControlChangeEdited(ui->lineEditCoinControlChange->text());
 
     ui->lineEditCoinControlChange->setEnabled((state == Qt::Checked));
+    ui->lineEditCoinControlChange->setVisible(state == Qt::Checked);
+    ui->labelCoinControlChangeLabel->setVisible(state == Qt::Checked);
 }
 
 // Coin Control: custom change address changed
@@ -1348,6 +1386,196 @@ void SendCoinsDialog::coinControlUpdateLabels()
         ui->widgetCoinControl->hide();
         ui->labelCoinControlInsuffFunds->hide();
     }
+
+    refreshTransferSummary();
+}
+
+namespace {
+QLabel* ColumnHead(const QString& text, QWidget* parent)
+{
+    auto* label = new QLabel(text, parent);
+    label->setProperty("class", QStringLiteral("benchColumnHead"));
+    QFont font = label->font();
+    font.setLetterSpacing(QFont::AbsoluteSpacing, 1.5);
+    label->setFont(font);
+    return label;
+}
+} // namespace
+
+void SendCoinsDialog::createTransferSummary()
+{
+    // Take the form's parts out of the stacked .ui layout; they are laid out
+    // here as two panels: the recipients with their inputs, and the summary.
+    for (QWidget* widget : {static_cast<QWidget*>(ui->frameCoinControl), static_cast<QWidget*>(ui->scrollArea),
+                            static_cast<QWidget*>(ui->sendWorkDisclosureLabel), static_cast<QWidget*>(ui->sendWorkProgressPanel)}) {
+        ui->verticalLayout->removeWidget(widget);
+    }
+    for (QWidget* widget : {ui->sendButton, ui->clearButton, ui->addButton}) {
+        ui->horizontalLayout->removeWidget(widget);
+    }
+    ui->verticalLayout->removeItem(ui->horizontalLayout);
+    ui->verticalLayout->setContentsMargins(14, 14, 14, 14);
+
+    // TRANSFER · RECIPIENTS: one line per recipient under column heads, then
+    // the inputs line.
+    auto* recipients = new QFrame(this);
+    recipients->setObjectName(QStringLiteral("transferRecipientsPanel"));
+    recipients->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    QVBoxLayout* body = BenchPanel::Install(recipients, tr("Transfer") + QStringLiteral(" \u00B7 ") + tr("Recipients")).body;
+    body->setContentsMargins(12, 12, 12, 12);
+    body->setSpacing(10);
+
+    auto* header = new QWidget(recipients);
+    header->setObjectName(QStringLiteral("transferRecipientsHeader"));
+    auto* header_row = new QHBoxLayout(header);
+    header_row->setContentsMargins(0, 0, 0, 0);
+    header_row->setSpacing(SendCoinsEntry::SPACING);
+    auto* index_head = ColumnHead(QStringLiteral("#"), header);
+    index_head->setFixedWidth(SendCoinsEntry::INDEX_WIDTH);
+    header_row->addWidget(index_head);
+    header_row->addWidget(ColumnHead(tr("Address").toUpper(), header), 1);
+    body->addWidget(header);
+
+    ui->scrollArea->setFrameShape(QFrame::NoFrame);
+    ui->scrollArea->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    ui->entries->setSpacing(8);
+    body->addWidget(ui->scrollArea);
+
+    auto* more = new QHBoxLayout;
+    more->setSpacing(8);
+    for (QPushButton* button : {ui->addButton, ui->clearButton}) {
+        button->setIcon(QIcon());
+        button->setProperty("class", QStringLiteral("benchQuiet"));
+        more->addWidget(button);
+    }
+    more->addStretch();
+    body->addLayout(more);
+
+    // The rule belongs to the inputs line, and hides with it when coin
+    // control features are off.
+    auto* rule = new QFrame(ui->frameCoinControl);
+    rule->setObjectName(QStringLiteral("benchRule"));
+    rule->setFixedHeight(1);
+    ui->verticalLayoutCoinControl2->insertWidget(0, rule);
+    ui->verticalLayoutCoinControl2->insertSpacing(1, 8);
+
+    // Inputs: one line, the coin control command at its right; the selected
+    // inputs and the custom change address show under it when used.
+    ui->labelCoinControlFeatures->hide();
+    auto* inputs_key = new QLabel(tr("Inputs"), ui->frameCoinControl);
+    inputs_key->setProperty("class", QStringLiteral("benchKey"));
+    ui->horizontalLayoutCoinControl2->insertWidget(0, inputs_key);
+    ui->horizontalLayoutCoinControl2->removeWidget(ui->pushButtonCoinControl);
+    // The custom change address is a choice on the same line; its address
+    // field opens under the line only once the choice is made.
+    ui->horizontalLayoutCoinControl4->removeWidget(ui->checkBoxCoinControlChange);
+    ui->horizontalLayoutCoinControl2->addWidget(ui->checkBoxCoinControlChange);
+    ui->horizontalLayoutCoinControl2->addWidget(ui->pushButtonCoinControl);
+    ui->lineEditCoinControlChange->setVisible(false);
+    ui->labelCoinControlChangeLabel->setVisible(false);
+    ui->horizontalLayoutCoinControl2->setSpacing(10);
+    ui->pushButtonCoinControl->setProperty("class", QStringLiteral("benchQuiet"));
+    ui->labelCoinControlAutomaticallySelected->setProperty("class", QStringLiteral("benchValue"));
+    ui->labelCoinControlAutomaticallySelected->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    ui->verticalLayoutCoinControl2->setContentsMargins(0, 0, 0, 0);
+    ui->verticalLayoutCoinControl2->setSpacing(0);
+    ui->verticalLayoutCoinControl->setContentsMargins(0, 0, 0, 0);
+    ui->verticalLayoutCoinControl->setSpacing(6);
+    ui->verticalSpacerCoinControl->changeSize(0, 0, QSizePolicy::Minimum, QSizePolicy::Fixed);
+    ui->frameCoinControl->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    body->addWidget(ui->frameCoinControl);
+
+    auto* column = new QVBoxLayout;
+    column->setSpacing(12);
+    column->addWidget(recipients);
+    column->addWidget(ui->sendWorkProgressPanel);
+    column->addStretch(1);
+
+    // SUMMARY: label/value rows, the notes, and the one primary command.
+    auto* panel = new QFrame(this);
+    panel->setObjectName(QStringLiteral("transferSummaryPanel"));
+    panel->setFixedWidth(330);
+    panel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Maximum);
+    QVBoxLayout* summary = BenchPanel::Install(panel, tr("Summary")).body;
+    summary->setContentsMargins(12, 12, 12, 12);
+    summary->setSpacing(10);
+    auto* rows_host = new QWidget(panel);
+    QGridLayout* rows = BenchPanel::MakeRows(rows_host);
+    rows->setVerticalSpacing(9);
+    const auto add_row = [rows_host, rows](const QString& name, const QString& caption, QLabel** key_out = nullptr) {
+        return BenchPanel::AddRow(rows, caption, name, rows_host, key_out);
+    };
+    m_summary_from = add_row(QStringLiteral("transferSummaryFrom"), tr("From"));
+    m_summary_spendable = add_row(QStringLiteral("transferSummarySpendable"), tr("Spendable"), &m_summary_spendable_key);
+    m_summary_recipients = add_row(QStringLiteral("transferSummaryRecipients"), tr("Recipients"));
+    m_summary_total = add_row(QStringLiteral("transferSummaryTotal"), tr("Sending"));
+    m_summary_remaining = add_row(QStringLiteral("transferSummaryRemaining"), tr("Spendable after"));
+    summary->addWidget(rows_host);
+
+    m_summary_flag = new QLabel(tr("Above spendable balance"), panel);
+    m_summary_flag->setObjectName(QStringLiteral("transferSummaryFlag"));
+    m_summary_flag->setProperty("class", QStringLiteral("benchNote"));
+    m_summary_flag->setProperty("benchTone", QStringLiteral("warn"));
+    m_summary_flag->setWordWrap(true);
+    m_summary_flag->hide();
+    summary->addWidget(m_summary_flag);
+
+    // Review follows the figures it acts on, at its own width; the notes on
+    // how the transfer is prepared come after it rather than burying it.
+    ui->sendButton->setProperty("class", QStringLiteral("primaryActionButton"));
+    summary->addWidget(ui->sendButton, 0, Qt::AlignRight);
+
+    // The full-amount line and the preparation notice.
+    ui->sendWorkDisclosureLabel->setProperty("class", QStringLiteral("benchNote"));
+    ui->sendWorkDisclosureLabel->setWordWrap(true);
+    summary->addWidget(ui->sendWorkDisclosureLabel);
+    // When the processor will take over, that line reads as a warning, so it
+    // is noticed before Review (F-453).
+    m_acceleration_warning = new QLabel(panel);
+    m_acceleration_warning->setObjectName(QStringLiteral("sendWorkAccelerationWarning"));
+    m_acceleration_warning->setProperty("class", QStringLiteral("benchNote"));
+    m_acceleration_warning->setProperty("benchTone", QStringLiteral("warn"));
+    m_acceleration_warning->setWordWrap(true);
+    m_acceleration_warning->hide();
+    summary->addWidget(m_acceleration_warning);
+
+    auto* side = new QVBoxLayout;
+    side->addWidget(panel);
+    side->addStretch(1);
+
+    auto* row = new QHBoxLayout;
+    row->setSpacing(12);
+    row->addLayout(column, 1);
+    row->addLayout(side);
+    ui->verticalLayout->addLayout(row, 1);
+}
+
+void SendCoinsDialog::refreshTransferSummary()
+{
+    if (!m_summary_total) return;
+
+    int count = 0;
+    CAmount total = 0;
+    for (int i = 0; i < ui->entries->count(); ++i) {
+        auto* entry = qobject_cast<SendCoinsEntry*>(ui->entries->itemAt(i)->widget());
+        if (!entry || entry->isHidden()) continue;
+        ++count;
+        total += entry->getValue().amount;
+    }
+
+    m_summary_recipients->setText(QString::number(count));
+    const bool over = total > m_spendable;
+    const CAmount left = over ? 0 : m_spendable - total;
+    if (model && model->getOptionsModel()) {
+        const auto unit = model->getOptionsModel()->getDisplayUnit();
+        const auto format_amount = [unit](CAmount amount) {
+            return QuicksilverUnits::formatInlineWithPrivacy(unit, amount, QuicksilverUnits::SeparatorStyle::ALWAYS, false);
+        };
+        m_summary_total->setText(format_amount(total));
+        m_summary_spendable->setText(format_amount(m_spendable));
+        m_summary_remaining->setText(format_amount(left));
+    }
+    m_summary_flag->setVisible(over);
 }
 
 SendConfirmationDialog::SendConfirmationDialog(const QString& title, const QString& text, const QString& informative_text, const QString& detailed_text, int _secDelay, bool enable_send, bool always_show_unsigned, QWidget* parent)

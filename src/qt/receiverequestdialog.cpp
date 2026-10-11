@@ -4,6 +4,8 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <qt/receiverequestdialog.h>
+#include <key_io.h>
+#include <outputtype.h>
 #include <qt/forms/ui_receiverequestdialog.h>
 
 #include <qt/quicksilverunits.h>
@@ -60,6 +62,13 @@ void ReceiveRequestDialog::setInfo(const SendCoinsRecipient &_info)
 
     ui->uri_content->setText("<a href=\"" + uri + "\">" + GUIUtil::HtmlEscape(uri) + "</a>");
     ui->address_content->setText(info.address);
+    // Derive the format from the address, including when reopening a saved request.
+    const auto type = OutputTypeFromDestination(DecodeDestination(info.address.toStdString()));
+    QString format = tr("Unknown");
+    if (type == OutputType::BASE58) format = QStringLiteral("Base58");
+    if (type == OutputType::BECH32) format = QStringLiteral("Bech32");
+    if (type == OutputType::BECH32M) format = QStringLiteral("Bech32m");
+    ui->address_format_content->setText(format);
 
     if (!info.amount) {
         ui->amount_tag->hide();

@@ -8,13 +8,14 @@ bring-up; it is not a stable release series.
 Release status
 ==============
 
-- This repository is a public pre-1.0 development source tree built from source.
+- This repository is a public pre-1.0 development source tree.
 - The 0.1.x version line identifies development snapshots, not a stable API,
   vault, consensus, or packaging contract.
-- Binary release artifacts, checksums, and update-notification channels are not
-  part of the 0.1.x source-only posture unless maintainers publish them
-  separately.
-- Quicksilver publishes no maintainer signing keys (see [../SECURITY.md](../SECURITY.md)).
+- From 0.1.1, tagged releases are published as signed binaries (Ubuntu
+  packages and a Windows installer) on the repository's Releases page. Verify
+  them as described in [release-verification.md](release-verification.md),
+  which also gives the release signing key. There is no update-notification
+  channel.
 - Report ordinary bugs through this repository's issue tracker.
 - Report security-sensitive issues using the process in [../SECURITY.md](../SECURITY.md).
 
@@ -48,6 +49,40 @@ Notable changes
   node that cannot reach Tor needs an explicit peer configured with `-addnode`,
   `-connect`, or `-seednode`; see `doc/bootstrapping.md`.
 
+Changes in 0.1.2
+================
+
+- The Windows installer ships the Tor Project's `tor.exe` (Tor Expert Bundle
+  15.0.24, tor 0.4.9.13) beside `quicksilver.exe`, with its licenses in
+  `LICENSE-tor.txt`. In 0.1.1 it shipped none, so a desktop installed from it
+  exited as soon as Consensus was enabled unless the user had placed Tor there.
+- A desktop that cannot find the Tor it needs no longer exits. It does not start
+  the node, opens vault-only, and the Network page says Tor is missing. A `tor`
+  placed beside `quicksilver.exe` is found when Consensus is enabled again; a
+  change to `PATH` or `quicksilver.conf` needs a restart first.
+- The installer no longer adds a separate "Quicksilver (publictest)" Start-menu
+  entry; switch networks on the Network page. Uninstalling removes the entry an
+  earlier installer added.
+- An agent allotment is now co-signed. Creating one imports a taproot output,
+  `tr(V,multi_a(2,A,C))`, whose keys are all new: the agent receives only A,
+  which cannot spend alone, and the vault keeps C to co-sign and V to take the
+  coins back without the agent. `quicksilver-agent signbundle` prints its signed,
+  proved half of a spend as `psqt=`; paste it into the Agents page's Agent spend
+  request panel, and the desktop co-signs it and broadcasts it through its own
+  node, so co-signing needs Consensus on. **Stop** makes the vault refuse every
+  later request from that allotment. Creating an allotment clears "backup
+  recorded", because no earlier backup holds its keys.
+- Bundles exported before 0.1.2 (`quicksilver.agent_allotment_key_bundle`) hold a
+  key that spends their funding outputs alone and cannot be revoked. The 0.1.2
+  agent refuses them, and the 0.1.2 vault no longer loads the allotment records
+  that issued them; the outputs stay locked. To take those outputs back, send
+  them from the vault with coin control. See "Bundles exported before 0.1.2" in
+  `doc/design/agent-client.md`.
+- The desktop no longer signs, proves or relays as the agent. Its local agent
+  signing, signed-spend relay and agent peer import panels are gone, and so is
+  the Options setting that allowed this computer's processor to prove agent
+  spends. `quicksilver-agent -allowcputxpow` is unchanged.
+
 The compatibility boundary
 ==========================
 
@@ -55,7 +90,7 @@ Quicksilver reads its own formats and speaks its own RPC dialect. It does not
 upgrade, translate, or fall back to anything written by another chain's software
 or by a pre-remint Quicksilver build. There is no deprecation period, because
 there is nothing in the field to deprecate: the launch remint invalidated every
-data directory that had ever been written, and no binaries have been published.
+data directory that had ever been written, and no binaries had been published.
 Stating the boundary once, at the only moment it costs nothing, is preferred to
 carrying compatibility branches that no user can ever exercise.
 
@@ -66,7 +101,7 @@ version and rejects anything else with an explicit pre-Quicksilver message:
 |---|---|
 | `peers.dat` | format 4 only; addresses always read as `CAddress::V2_DISK`. A lower format is rejected with an explicit pre-Quicksilver message rather than misparsed |
 | chainstate | the current key layout only. The `DB_COINS` probe, `CCoinsViewDB::NeedsUpgrade`, and the startup check that asked for `-reindex-chainstate` are all gone |
-| `vault.dat` | file version 100, and `AgentAllotmentRecord` version 1 — any other record version throws `Unsupported agent allotment record version` |
+| `vault.dat` | file version 100, and `AgentAllotmentRecord` version 2 — any other record version throws `Unsupported agent allotment record version`, so the records written before 0.1.2 are not loaded |
 
 A data directory from any earlier build must be removed, not migrated.
 

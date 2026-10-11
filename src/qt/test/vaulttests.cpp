@@ -8,7 +8,7 @@
 
 #include <addresstype.h>
 #include <agent/headerstore.h>
-#include <agent/allotmentstore.h>
+#include <base58.h>
 #include <chainparams.h>
 #include <common/args.h>
 #include <core_io.h>
@@ -18,36 +18,49 @@
 #include <key.h>
 #include <key_io.h>
 #include <outputtype.h>
+#include <psqt.h>
+#include <streams.h>
+#include <util/strencodings.h>
 #include <qt/agentallotmentpage.h>
 #include <qt/askpassphrasedialog.h>
+#include <qt/createvaultdialog.h>
+#include <qt/benchpanel.h>
 #include <qt/clientmodel.h>
 #include <qt/coincontroldialog.h>
+#include <qt/addressbookpage.h>
 #include <qt/desktoplaunchpage.h>
 #include <qt/minemintpage.h>
 #include <qt/miningmodel.h>
+#include <qt/modaloverlay.h>
 #include <qt/networkpage.h>
 #include <qt/networkstyle.h>
 #include <qt/quicksilvergui.h>
 #include <qt/optionsmodel.h>
-#include <qt/overviewpage.h>
 #include <qt/platformstyle.h>
 #include <qt/rpcconsole.h>
 #include <qt/vaultcontroller.h>
 #include <qt/quicksilveramountfield.h>
+#include <qt/quicksilverstyle.h>
 #include <qt/quicksilverunits.h>
 #include <qt/qvalidatedlineedit.h>
 #include <qt/receivecoinsdialog.h>
+#include <qt/peertablemodel.h>
 #include <qt/signverifymessagedialog.h>
 #include <qt/receiverequestdialog.h>
 #include <qt/recentrequeststablemodel.h>
 #include <qt/sendcoinsdialog.h>
 #include <qt/sendcoinsentry.h>
+#include <qt/transactionrecord.h>
 #include <qt/transactiontablemodel.h>
 #include <qt/transactionview.h>
 #include <qt/thinvaultheadersource.h>
 #include <qt/vaultframe.h>
 #include <qt/vaultmodel.h>
 #include <qt/vaultview.h>
+#include <qt/utilitydialog.h>
+#include <QTextBrowser>
+#include <QTextBlock>
+#include <QTextLayout>
 #include <rpc/server.h>
 #include <script/solver.h>
 #include <test/util/setup_common.h>
@@ -63,12 +76,11 @@
 #include <vault/vaultdb.h>
 
 #include <algorithm>
-#include <atomic>
-#include <chrono>
+#include <cmath>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
-#include <thread>
 
 #include <QAbstractButton>
 #include <QAction>
@@ -82,8 +94,11 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QFontDatabase>
 #include <QFrame>
 #include <QGroupBox>
+#include <QHeaderView>
+#include <QImage>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
@@ -97,14 +112,21 @@
 #include <QRegularExpression>
 #include <QScopedPointer>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
+#include <QFontInfo>
+#include <QStyleOption>
+#include <QSpinBox>
+#include <QSet>
 #include <QSignalSpy>
 #include <QStackedWidget>
+#include <QTabWidget>
 #include <QTableView>
 #include <QTemporaryDir>
 #include <QTextEdit>
 #include <QThread>
 #include <QTimer>
+#include <QDir>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -143,6 +165,12 @@ class PollMarkerVault final : public interfaces::Vault
 public:
     uint256 block_hash;
     CAmount balance{0};
+    CAmount unconfirmed{0};
+    CAmount immature{0};
+    CAmount delegated{0};
+    std::vector<vault::AgentAllotmentRecord> agent_records;
+    int cosign_calls{0};
+    CTransactionRef cosign_result;
     bool crypted{false};
     bool locked{false};
     bool unlock_ok{true};
@@ -184,10 +212,22 @@ public:
     bool isBackupRecorded() override { return false; }
     bool setBackupRecorded(bool) override { return false; }
     util::Result<vault::AgentAllotmentRecord> recordAgentAllotmentSetup(const std::string&, CAmount, CAmount) override { return util::Error{Untranslated("unsupported")}; }
-    std::vector<vault::AgentAllotmentRecord> listAgentAllotmentRecords() override { return {}; }
+    std::vector<vault::AgentAllotmentRecord> listAgentAllotmentRecords() override { return agent_records; }
     std::string agentAllotmentPolicyRequest(const vault::AgentAllotmentRecord&, CAmount) override { return {}; }
     util::Result<vault::AgentAllotmentPolicyRequestMetadata> validateAgentAllotmentPolicyRequest(const std::string&) override { return util::Error{Untranslated("unsupported")}; }
     util::Result<vault::AgentAllotmentPolicyBundle> agentAllotmentPolicyBundle(const std::string&) override { return util::Error{Untranslated("unsupported")}; }
+    util::Result<CTransactionRef> cosignAgentAllotmentSpend(const std::string&) override
+    {
+        ++cosign_calls;
+        if (cosign_result) return cosign_result;
+        return util::Error{Untranslated(agent_records.at(0).stopped_time ?
+            "This agent allotment is stopped. The vault no longer co-signs for it." : "backend refusal verbatim")};
+    }
+    bool stopAgentAllotment(const std::string& id) override
+    {
+        for (auto& record : agent_records) if (record.id == id) { record.stopped_time = 1; return true; }
+        return false;
+    }
     std::string getVaultName() override { return "poll-marker-vault"; }
     util::Result<CTxDestination> getNewDestination(const OutputType, const std::string&) override { return CTxDestination{}; }
     bool getPubKey(const CScript&, const CKeyID&, CPubKey&) override { return false; }
@@ -238,6 +278,9 @@ public:
     {
         interfaces::VaultBalances balances;
         balances.balance = balance;
+        balances.unconfirmed_balance = unconfirmed;
+        balances.immature_balance = immature;
+        balances.delegated_balance = delegated;
         return balances;
     }
     bool tryGetBalances(interfaces::VaultBalances& balances, uint256& hash) override
@@ -586,7 +629,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     // Update vaultModel cached balance which will trigger an update for the 'labelBalance' QLabel.
     vaultModel.pollBalanceChanged();
     // Check balance in send dialog
-    CompareBalance(vaultModel, vaultModel.getCachedBalance().balance, sendCoinsDialog.findChild<QLabel*>("labelBalance"));
+    CompareBalance(vaultModel, vaultModel.getCachedBalance().balance, sendCoinsDialog.findChild<QLabel*>(QStringLiteral("transferSummarySpendable")));
 
     // Check 'UseAvailableBalance' functionality
     VerifyUseAvailableBalance(sendCoinsDialog, vaultModel);
@@ -608,29 +651,6 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QCOMPARE(transactionTableModel->rowCount({}), 107);
     QVERIFY(FindTx(*transactionTableModel, txid1).isValid());
     QVERIFY(FindTx(*transactionTableModel, txid2).isValid());
-
-    // Check current balance on OverviewPage
-    OverviewPage overviewPage(platformStyle.get());
-    QLabel* home_title = overviewPage.findChild<QLabel*>(QStringLiteral("homeBootstrapTitle"));
-    QVERIFY(home_title);
-    QCOMPARE(home_title->text(), QStringLiteral("Quicksilver HUD"));
-    QFrame* overview_backup_panel = overviewPage.findChild<QFrame*>(QStringLiteral("overviewBackupPanel"));
-    QVERIFY(overview_backup_panel);
-    QCOMPARE(overviewPage.findChild<QLabel*>(QStringLiteral("overviewBackupState"))->text(), QStringLiteral("Needed"));
-    QLabel* overview_backup_summary = overviewPage.findChild<QLabel*>(QStringLiteral("overviewBackupSummary"));
-    QVERIFY(overview_backup_summary);
-    // The banner must name the vault-file backup as the complete recovery artifact;
-    // the history export deliberately does not contain spending keys.
-    QVERIFY(overview_backup_summary->text().contains(QStringLiteral("only a current vault-file backup restores both spending keys and transaction history")));
-    QPushButton* overview_backup_button = overviewPage.findChild<QPushButton*>(QStringLiteral("overviewBackupButton"));
-    QVERIFY(overview_backup_button);
-    QCOMPARE(overview_backup_button->text(), QStringLiteral("Back up vault"));
-    overviewPage.setBackupState(true);
-    QCOMPARE(overviewPage.findChild<QLabel*>(QStringLiteral("overviewBackupState"))->text(), QStringLiteral("Done"));
-    QCOMPARE(overview_backup_button->text(), QStringLiteral("Back up again"));
-    overviewPage.setVaultModel(&vaultModel);
-    vaultModel.pollBalanceChanged(); // Manual balance polling update
-    CompareBalance(vaultModel, vaultModel.getCachedBalance().balance, overviewPage.findChild<QLabel*>("labelBalance"));
 
     VaultView vaultView(&vaultModel, platformStyle.get(), nullptr);
     vaultView.setClientModel(mini_gui.clientModel.get());
@@ -688,13 +708,80 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QVERIFY(no_vault_new_address);
     QVERIFY(!no_vault_new_address->isEnabled());
 
+    // A launch refused for want of Tor lands on the network page before the
+    // startup vaults finish loading. The first vault to arrive must not replace
+    // that explanation; choosing a vault afterwards still works. The frame lives
+    // as long as vaultModel, like the frames below: its views stay connected.
+    VaultFrame torMissingFrame(platformStyle.get(), nullptr);
+    {
+        auto* lateVaultView = new VaultView(&vaultModel, platformStyle.get(), &torMissingFrame);
+        torMissingFrame.markConsensusTorMissing();
+        QStackedWidget* tor_missing_stack = torMissingFrame.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+        QVERIFY(tor_missing_stack);
+        QCOMPARE(tor_missing_stack->currentWidget()->objectName(), QStringLiteral("networkPage"));
+        QVERIFY(torMissingFrame.addView(lateVaultView));
+        torMissingFrame.setCurrentVault(&vaultModel);
+        QCOMPARE(tor_missing_stack->currentWidget()->objectName(), QStringLiteral("networkPage"));
+        QCOMPARE(torMissingFrame.currentVaultView(), lateVaultView);
+        // Choosing the vault again keeps the page the rail names (Network); the
+        // vault's own pages are a rail choice away.
+        torMissingFrame.setCurrentVault(&vaultModel);
+        QCOMPARE(tor_missing_stack->currentWidget()->objectName(), QStringLiteral("networkPage"));
+        torMissingFrame.gotoHistoryPage();
+        QCOMPARE(tor_missing_stack->currentWidget(), lateVaultView);
+    }
+
+    // A vault opened from the no-vault page while the app runs lands on Home.
+    VaultFrame openedFrame(platformStyle.get(), nullptr);
+    {
+        openedFrame.setVaultRuntimeAvailable(true);
+        openedFrame.gotoVaultPage();
+        QStackedWidget* opened_stack = openedFrame.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+        QVERIFY(opened_stack);
+        QCOMPARE(opened_stack->currentWidget()->objectName(), QStringLiteral("noVaultPage"));
+        auto* openedVaultView = new VaultView(&vaultModel, platformStyle.get(), &openedFrame);
+        QVERIFY(openedFrame.addView(openedVaultView));
+        openedFrame.setCurrentVault(&vaultModel);
+        QCOMPARE(opened_stack->currentWidget()->objectName(), QStringLiteral("desktopLaunchPage"));
+    }
+
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     VaultFrame vaultFrame(platformStyle.get(), nullptr);
     vaultFrame.setClientModel(mini_gui.clientModel.get());
+    // The node's warnings (this build is not a release) read in Home's Node panel.
+    {
+        QLabel* node_alerts = vaultFrame.findChild<QLabel*>(QStringLiteral("homeNodeAlerts"));
+        QVERIFY(node_alerts);
+        const QString warnings = mini_gui.clientModel->getStatusBarWarnings();
+        QVERIFY(!warnings.isEmpty());
+        QCOMPARE(node_alerts->text(), warnings);
+        QVERIFY(!node_alerts->isHidden());
+    }
     auto* routedVaultView = new VaultView(&vaultModel, platformStyle.get(), &vaultFrame);
     QVERIFY(vaultFrame.addView(routedVaultView));
     vaultFrame.setCurrentVault(&vaultModel);
     QCOMPARE(vaultModel.backupRecorded(), false);
+
+    // F-442 owner walk: with a vault open, Home is the new Home. A vault loaded at
+    // startup, the Vault panel's command and choosing the vault again each land
+    // where the rail points; there is no other "home" page left to land on.
+    {
+        QStackedWidget* routed_stack = vaultFrame.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+        QVERIFY(routed_stack);
+        QCOMPARE(routed_stack->currentWidget()->objectName(), QStringLiteral("desktopLaunchPage"));
+        QVERIFY(!vaultFrame.findChild<QLabel*>(QStringLiteral("homeBootstrapTitle")));
+        vaultFrame.gotoVaultPage();
+        QCOMPARE(routed_stack->currentWidget()->objectName(), QStringLiteral("desktopLaunchPage"));
+        vaultFrame.setCurrentVault(&vaultModel);
+        QCOMPARE(routed_stack->currentWidget()->objectName(), QStringLiteral("desktopLaunchPage"));
+        // From a vault page, choosing a vault keeps that page.
+        vaultFrame.gotoHistoryPage();
+        QWidget* history_page = routedVaultView->currentWidget();
+        vaultFrame.setCurrentVault(&vaultModel);
+        QCOMPARE(routed_stack->currentWidget(), routedVaultView);
+        QCOMPARE(routedVaultView->currentWidget(), history_page);
+        vaultFrame.gotoLaunchPage();
+    }
 
     vaultFrame.gotoNetworkPage();
     QStackedWidget* vault_stack = vaultFrame.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
@@ -709,84 +796,58 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QCOMPARE(networkPage->objectName(), QStringLiteral("networkPage"));
     QVERIFY(vaultFrame.consensusEnabled());
     vaultFrame.gotoLaunchPage();
+    // The Vault panel is label/value rows. Balances are the ticker's, so the
+    // panel names the vault, its encryption and its backup.
     QLabel* launch_summary = vaultFrame.findChild<QLabel*>(QStringLiteral("launchVaultCardBody"));
     QVERIFY(launch_summary);
-    const QString launch_summary_text = launch_summary->text();
-    QVERIFY(launch_summary_text.contains(vaultModel.getDisplayName()));
-    QVERIFY(launch_summary_text.contains(QStringLiteral("Balance: ")));
-    QVERIFY(launch_summary_text.contains(QuicksilverUnits::formatWithUnit(
-        vaultModel.getOptionsModel()->getDisplayUnit(),
-        vaultModel.getCachedBalance().balance,
-        false,
-        QuicksilverUnits::SeparatorStyle::ALWAYS)));
-    QVERIFY(launch_summary_text.contains(QStringLiteral("Agent setups: none")));
-    QVERIFY(!launch_summary_text.contains(QStringLiteral("Funded")));
-    // Backup state belongs to the Backup panel, which knows whether one was recorded.
-    QVERIFY(!launch_summary_text.contains(QStringLiteral("Backup")));
-    QVERIFY(launch_summary_text.contains(QStringLiteral("Recent activity: ")));
-    // One item per line, led by the vault name.
-    const QStringList launch_summary_lines = launch_summary_text.split(QLatin1Char('\n'));
-    QCOMPARE(launch_summary_lines.first(), QStringLiteral("Vault: %1").arg(vaultModel.getDisplayName()));
-    QVERIFY(launch_summary_lines.at(1).startsWith(QStringLiteral("Balance: ")));
-    QVERIFY(launch_summary_lines.contains(QStringLiteral("Agent setups: none")));
-    QVERIFY(launch_summary_lines.last().startsWith(QStringLiteral("Recent activity: ")));
-    QCOMPARE(vaultFrame.findChild<QPushButton*>(QStringLiteral("launchVaultCardButton"))->text(), QStringLiteral("Open vault"));
+    QVERIFY(launch_summary->isHidden());
+    QCOMPARE(vaultFrame.findChild<QLabel*>(QStringLiteral("launchVaultCardState"))->text(), vaultModel.getDisplayName());
+    QCOMPARE(vaultFrame.findChild<QLabel*>(QStringLiteral("homeVaultEncryption"))->text(), QStringLiteral("Not encrypted"));
+    QVERIFY(vaultFrame.findChild<QLabel*>(QStringLiteral("homeVaultAgents"))->isHidden());
+    // Home is the open vault: there is nothing for an "Open vault" command to open.
+    QVERIFY(vaultFrame.findChild<QPushButton*>(QStringLiteral("launchVaultCardButton"))->isHidden());
     QPushButton* launch_privacy = vaultFrame.findChild<QPushButton*>(QStringLiteral("launchVaultBalancePrivacyButton"));
     QVERIFY(launch_privacy);
     QVERIFY(!launch_privacy->isHidden());
     QCOMPARE(launch_privacy->text(), QStringLiteral("Hide balance"));
-    QCOMPARE(launch_privacy->property("class").toString(), QStringLiteral("secondaryActionButton"));
+    QCOMPARE(launch_privacy->property("class").toString(), QStringLiteral("benchQuiet"));
     QSignalSpy launch_privacy_spy(&vaultFrame, &VaultFrame::privacyRequested);
     QVERIFY(launch_privacy_spy.isValid());
     launch_privacy->click();
     QCOMPARE(launch_privacy_spy.count(), 1);
     QCOMPARE(launch_privacy_spy.takeFirst().at(0).toBool(), true);
+    // Privacy masks the Home ledger's amounts.
+    QTableView* home_rows = vaultFrame.findChild<QTableView*>(QStringLiteral("homeLedgerTable"));
+    QVERIFY(home_rows);
+    QVERIFY(home_rows->model()->rowCount() > 0);
+    const auto home_amount = [&] {
+        return home_rows->model()->index(0, TransactionTableModel::Amount).data().toString();
+    };
+    QVERIFY(!home_amount().contains(QLatin1Char('#')));
     vaultFrame.setPrivacy(true);
-    const QString masked_launch_summary = launch_summary->text();
-    QVERIFY(masked_launch_summary.contains(QStringLiteral("Balance: ")));
-    QVERIFY(masked_launch_summary.contains(QStringLiteral("#")));
-    QVERIFY(!masked_launch_summary.contains(QuicksilverUnits::formatWithUnit(
-        vaultModel.getOptionsModel()->getDisplayUnit(),
-        vaultModel.getCachedBalance().balance,
-        false,
-        QuicksilverUnits::SeparatorStyle::ALWAYS)));
+    QVERIFY2(home_amount().contains(QLatin1Char('#')), qPrintable(home_amount()));
     QCOMPARE(launch_privacy->text(), QStringLiteral("Show balance"));
     launch_privacy->click();
     QCOMPARE(launch_privacy_spy.count(), 1);
     QCOMPARE(launch_privacy_spy.takeFirst().at(0).toBool(), false);
     vaultFrame.setPrivacy(false);
-    QVERIFY(launch_summary->text().contains(QuicksilverUnits::formatWithUnit(
-        vaultModel.getOptionsModel()->getDisplayUnit(),
-        vaultModel.getCachedBalance().balance,
-        false,
-        QuicksilverUnits::SeparatorStyle::ALWAYS)));
+    QVERIFY(!home_amount().contains(QLatin1Char('#')));
     QCOMPARE(launch_privacy->text(), QStringLiteral("Hide balance"));
-    QFrame* backup_panel = vaultFrame.findChild<QFrame*>(QStringLiteral("desktopLaunchBackupPanel"));
+    QWidget* backup_panel = vaultFrame.findChild<QWidget*>(QStringLiteral("desktopLaunchBackupPanel"));
     QVERIFY(backup_panel);
     QVERIFY(!backup_panel->isHidden());
     QCOMPARE(vaultFrame.findChild<QLabel*>(QStringLiteral("desktopLaunchBackupState"))->text(), QStringLiteral("Needed"));
     QLabel* backup_summary = vaultFrame.findChild<QLabel*>(QStringLiteral("desktopLaunchBackupSummary"));
     QVERIFY(backup_summary);
+    QVERIFY(!backup_summary->isHidden());
     QVERIFY(backup_summary->text().contains(QStringLiteral("only a current vault-file backup restores both spending keys and transaction history")));
     QPushButton* backup_button = vaultFrame.findChild<QPushButton*>(QStringLiteral("desktopLaunchBackupButton"));
     QVERIFY(backup_button);
     QCOMPARE(backup_button->text(), QStringLiteral("Back up vault"));
-    QCOMPARE(backup_button->property("class").toString(), QStringLiteral("primaryActionButton"));
+    QCOMPARE(backup_button->property("class").toString(), QStringLiteral("benchQuiet"));
     QPushButton* launch_mining = vaultFrame.findChild<QPushButton*>(QStringLiteral("launchMiningCardButton"));
     QVERIFY(launch_mining);
     QVERIFY(launch_mining->isEnabled());
-
-    vaultFrame.gotoOverviewPage();
-    QLabel* routed_backup_state = vaultFrame.findChild<QLabel*>(QStringLiteral("overviewBackupState"));
-    QVERIFY(routed_backup_state);
-    QCOMPARE(routed_backup_state->text(), QStringLiteral("Needed"));
-    QLabel* routed_backup_summary = vaultFrame.findChild<QLabel*>(QStringLiteral("overviewBackupSummary"));
-    QVERIFY(routed_backup_summary);
-    QVERIFY(routed_backup_summary->text().contains(QStringLiteral("does not issue a recovery phrase")));
-    QVERIFY(routed_backup_summary->text().contains(QStringLiteral("restores both spending keys and transaction history")));
-    QPushButton* routed_backup_button = vaultFrame.findChild<QPushButton*>(QStringLiteral("overviewBackupButton"));
-    QVERIFY(routed_backup_button);
-    QCOMPARE(routed_backup_button->text(), QStringLiteral("Back up vault"));
 
     QTemporaryDir backup_dir;
     QVERIFY(backup_dir.isValid());
@@ -796,30 +857,22 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     vaultFrame.setCurrentVault(&vaultModel);
     vaultFrame.gotoLaunchPage();
     QCOMPARE(vaultFrame.findChild<QLabel*>(QStringLiteral("desktopLaunchBackupState"))->text(), QStringLiteral("Done"));
-    QVERIFY(vaultFrame.findChild<QLabel*>(QStringLiteral("desktopLaunchBackupSummary"))->text().contains(QStringLiteral("vault records a completed backup")));
+    // A recorded backup is said by the row; the warning sentence goes away.
+    QVERIFY(vaultFrame.findChild<QLabel*>(QStringLiteral("desktopLaunchBackupSummary"))->isHidden());
     QCOMPARE(vaultFrame.findChild<QPushButton*>(QStringLiteral("desktopLaunchBackupButton"))->text(), QStringLiteral("Back up again"));
-    vaultFrame.gotoOverviewPage();
-    QCOMPARE(vaultFrame.findChild<QLabel*>(QStringLiteral("overviewBackupState"))->text(), QStringLiteral("Done"));
-    QVERIFY(vaultFrame.findChild<QLabel*>(QStringLiteral("overviewBackupSummary"))->text().contains(QStringLiteral("vault records a completed backup")));
-    QCOMPARE(vaultFrame.findChild<QPushButton*>(QStringLiteral("overviewBackupButton"))->text(), QStringLiteral("Back up again"));
 
     vaultFrame.gotoAgentAllotmentPage();
     QVERIFY(vaultFrame.currentVaultView());
     QWidget* agent_allotment_page = vaultFrame.currentVaultView()->currentWidget();
     QVERIFY(agent_allotment_page);
     QCOMPARE(agent_allotment_page->objectName(), QStringLiteral("agentAllotmentPage"));
-    QCOMPARE(agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentTitle"))->text(), QStringLiteral("Agent allotments"));
-    QVERIFY(agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentDishonestAgentRisk"))->text().contains(QStringLiteral("dishonest agent")));
-    QVERIFY(agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentCompromisedHostRisk"))->text().contains(QStringLiteral("compromised host")));
+    // No page heading: the breadcrumb names the page.
+    QVERIFY(!agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentTitle")));
+    QVERIFY(agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentDishonestAgentRisk"))->text().contains(QStringLiteral("cannot spend without this vault")));
+    QVERIFY(agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentCompromisedHostRisk"))->text().contains(QStringLiteral("refuses every later request")));
     QLabel* guarantee_risk = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentGuaranteeRisk"));
     QVERIFY(guarantee_risk);
-    QVERIFY(guarantee_risk->text().contains(QStringLiteral("no guarantee")));
-    QLabel* agent_utxo_state = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentUtxoState"));
-    QVERIFY(agent_utxo_state);
-    QVERIFY(agent_utxo_state->text().contains(QStringLiteral("Spendable agent UTXOs: 0")));
-    QPushButton* agent_utxo_refresh_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentRefreshUtxosButton"));
-    QVERIFY(agent_utxo_refresh_button);
-    QVERIFY(agent_utxo_refresh_button->isEnabled());
+    QVERIFY(guarantee_risk->text().contains(QStringLiteral("no limit is a guarantee")));
     QLineEdit* agent_name = agent_allotment_page->findChild<QLineEdit*>(QStringLiteral("agentAllotmentNameEdit"));
     QVERIFY(agent_name);
     QuicksilverAmountField* agent_funding = agent_allotment_page->findChild<QuicksilverAmountField*>(QStringLiteral("agentAllotmentFundingLimit"));
@@ -831,7 +884,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QPushButton* agent_create = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentCreateButton"));
     QVERIFY(agent_create);
     QVERIFY(!agent_create->isEnabled());
-    QCOMPARE(agent_create->text(), QStringLiteral("Record shared-key risk and setup"));
+    QCOMPARE(agent_create->text(), QStringLiteral("Create agent allotment"));
     QLabel* backend_state = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentBackendState"));
     QVERIFY(backend_state);
     QVERIFY(backend_state->text().contains(QStringLiteral("Enter a name")));
@@ -845,7 +898,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     agent_daily->setValue(COIN / 2);
     agent_acceptance->setChecked(true);
     QVERIFY(agent_create->isEnabled());
-    QVERIFY(backend_state->text().contains(QStringLiteral("marks agent policy integration pending")));
+    QVERIFY(backend_state->text().contains(QStringLiteral("reserves its vault funding address")));
     agent_create->click();
     const auto agent_records = vaultModel.listAgentAllotmentRecords();
     QCOMPARE(agent_records.size(), size_t{1});
@@ -853,13 +906,13 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QCOMPARE(agent_records[0].funding_limit, COIN);
     QCOMPARE(agent_records[0].daily_limit, COIN / 2);
     QVERIFY(agent_records[0].risk_accepted_time > 0);
-    QVERIFY(!agent_records[0].backend_created);
+    QCOMPARE(agent_records[0].stopped_time, static_cast<int64_t>(0));
+    QVERIFY(!agent_records[0].funding_descriptor.empty());
     QVERIFY(IsValidDestinationString(agent_records[0].funding_address));
-    QVERIFY(agent_records[0].policy_status == vault::AgentAllotmentPolicyStatus::PendingIntegration);
-    QVERIFY(backend_state->text().contains(QStringLiteral("Setup recorded with a vault funding address")));
+    QVERIFY(backend_state->text().contains(QStringLiteral("Agent allotment created. Back up this vault again.")));
     QVERIFY(recorded_setups->text().contains(QStringLiteral("test-agent")));
     QVERIFY(recorded_setups->text().contains(QStringLiteral("daily guardrail")));
-    QVERIFY(recorded_setups->text().contains(QStringLiteral("policy pending")));
+    QVERIFY(recorded_setups->text().contains(QStringLiteral("Co-signed by this vault")));
     QVERIFY(recorded_setups->text().contains(QString::fromStdString(agent_records[0].funding_address)));
     QCOMPARE(vaultModel.agentAllotmentFundingAvailable(agent_records[0]), CAmount{0});
     QLabel* agent_funding_state = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentFundingState"));
@@ -867,11 +920,11 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QCOMPARE(agent_funding_state->text(), QStringLiteral("Awaiting funding"));
     QLabel* agent_policy_state = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentPolicyState"));
     QVERIFY(agent_policy_state);
-    QCOMPARE(agent_policy_state->text(), QStringLiteral("Policy pending"));
+    QCOMPARE(agent_policy_state->text(), QStringLiteral("Co-signed by this vault"));
     QLabel* agent_funding_row = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentFundingRowLabel"));
     QVERIFY(agent_funding_row);
     QVERIFY(agent_funding_row->text().contains(QStringLiteral("awaits funding")));
-    QVERIFY(agent_funding_row->text().contains(QStringLiteral("Policy integration remains pending")));
+    QVERIFY(agent_funding_row->text().contains(QStringLiteral("test-agent")));
     QPushButton* agent_fund_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentFundSetupButton"));
     QVERIFY(agent_fund_button);
     QCOMPARE(agent_fund_button->text(), QStringLiteral("Fund setup"));
@@ -898,7 +951,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QCOMPARE(agent_funding_state->text(), QStringLiteral("Awaiting funding"));
     agent_policy_state = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentPolicyState"));
     QVERIFY(agent_policy_state);
-    QCOMPARE(agent_policy_state->text(), QStringLiteral("Policy pending"));
+    QCOMPARE(agent_policy_state->text(), QStringLiteral("Co-signed by this vault"));
     agent_funding_row = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentFundingRowLabel"));
     QVERIFY(agent_funding_row);
     QVERIFY(agent_funding_row->text().contains(QStringLiteral("remains")));
@@ -936,7 +989,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QCOMPARE(agent_funding_state->text(), QStringLiteral("Funded"));
     agent_policy_state = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentPolicyState"));
     QVERIFY(agent_policy_state);
-    QCOMPARE(agent_policy_state->text(), QStringLiteral("Policy pending"));
+    QCOMPARE(agent_policy_state->text(), QStringLiteral("Co-signed by this vault"));
     agent_funding_row = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentFundingRowLabel"));
     QVERIFY(agent_funding_row);
     QVERIFY(agent_funding_row->text().contains(QStringLiteral("confirmed funding")));
@@ -955,60 +1008,16 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QVERIFY(agent_recovery_scan_button->isEnabled());
     agent_policy_button->click();
     const QString agent_bundle = QApplication::clipboard()->text();
-    QVERIFY(agent_bundle.contains(QStringLiteral("\"type\":\"quicksilver.agent_allotment_key_bundle\"")));
+    QVERIFY(agent_bundle.contains(QStringLiteral("\"type\":\"quicksilver.agent_allotment_cosign_bundle\"")));
     QVERIFY(agent_bundle.contains(QStringLiteral("\"version\":1")));
     QVERIFY(agent_bundle.contains(QStringLiteral("\"policy_request\":{")));
-    QVERIFY(agent_bundle.contains(QStringLiteral("\"funding_secret_wif\":\"")));
+    QVERIFY(agent_bundle.contains(QStringLiteral("\"agent_secret_wif\":\"")));
+    QVERIFY(!agent_bundle.contains(QStringLiteral("funding_secret_wif")));
     QVERIFY(agent_bundle.contains(QStringLiteral("\"funding_outputs\":[")));
     QVERIFY(agent_bundle.contains(QStringLiteral("\"amount_cinnabar\":\"")));
-    QVERIFY(agent_bundle.contains(QStringLiteral("\"policy_enforcement\":\"pending_integration\"")));
+    QVERIFY(agent_bundle.contains(QStringLiteral("\"type\":\"quicksilver.agent_allotment_cosign_bundle\"")));
     QVERIFY(agent_bundle.contains(QStringLiteral("\"funding_address\":\"%1\"").arg(QString::fromStdString(agent_records[0].funding_address))));
     QVERIFY(backend_state->text().contains(QStringLiteral("Agent bundle copied")));
-    QPlainTextEdit* agent_spend_bundle_edit = agent_allotment_page->findChild<QPlainTextEdit*>(QStringLiteral("agentAllotmentSpendBundleEdit"));
-    QVERIFY(agent_spend_bundle_edit);
-    QLineEdit* agent_spend_destination_edit = agent_allotment_page->findChild<QLineEdit*>(QStringLiteral("agentAllotmentSpendDestinationEdit"));
-    QVERIFY(agent_spend_destination_edit);
-    QuicksilverAmountField* agent_spend_amount = agent_allotment_page->findChild<QuicksilverAmountField*>(QStringLiteral("agentAllotmentSpendAmount"));
-    QVERIFY(agent_spend_amount);
-    QuicksilverAmountField* agent_spent_today = agent_allotment_page->findChild<QuicksilverAmountField*>(QStringLiteral("agentAllotmentSpentToday"));
-    QVERIFY(agent_spent_today);
-    QPushButton* agent_copy_spend_command_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentCopySpendCommandButton"));
-    QVERIFY(agent_copy_spend_command_button);
-    QVERIFY(!agent_copy_spend_command_button->isEnabled());
-    QPushButton* agent_sign_spend_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentSignSpendButton"));
-    QVERIFY(agent_sign_spend_button);
-    QVERIFY(!agent_sign_spend_button->isEnabled());
-    QLabel* agent_spend_command_state = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentSpendCommandState"));
-    QVERIFY(agent_spend_command_state);
-    QVERIFY(agent_spend_command_state->text().contains(QStringLiteral("Paste an agent bundle")));
-    QCOMPARE(agent_spend_command_state->property("class").toString(), QStringLiteral("policyReviewIdle"));
-    agent_spend_bundle_edit->setPlainText(agent_bundle);
-    agent_spend_destination_edit->setText(QString::fromStdString(agent_records[0].funding_address));
-    agent_spend_amount->setValue(COIN / 3);
-    QVERIFY(agent_copy_spend_command_button->isEnabled());
-    QVERIFY(agent_sign_spend_button->isEnabled());
-    QCOMPARE(agent_spend_command_state->property("class").toString(), QStringLiteral("policyReviewReady"));
-    agent_copy_spend_command_button->click();
-    const fs::path policy_bundle_path = gArgs.GetDataDirNet() / "agent" / "policy-bundles.d" / "agent-1.json";
-    const auto saved_policy_bundle = ReadBinaryFile(policy_bundle_path);
-    QVERIFY(saved_policy_bundle.first);
-    QCOMPARE(QString::fromStdString(saved_policy_bundle.second), agent_bundle + QStringLiteral("\n"));
-    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("quicksilver-agent -chain=%1 -policybundle=\"$(cat '%2')\" -destination='%3' -spendamount=33333333 signbundle")
-                                                 .arg(QString::fromStdString(Params().GetChainTypeString()),
-                                                      QString::fromStdString(fs::PathToString(policy_bundle_path)),
-                                                      QString::fromStdString(agent_records[0].funding_address)));
-    QVERIFY(agent_spend_command_state->text().contains(QStringLiteral("Agent spend command copied")));
-    QVERIFY(agent_spend_command_state->text().contains(QStringLiteral("agent-1")));
-    QCOMPARE(agent_spend_command_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    agent_spent_today->setValue(COIN / 10);
-    QVERIFY(agent_copy_spend_command_button->isEnabled());
-    QVERIFY(agent_sign_spend_button->isEnabled());
-    QCOMPARE(agent_spend_command_state->property("class").toString(), QStringLiteral("policyReviewReady"));
-    agent_copy_spend_command_button->click();
-    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("quicksilver-agent -chain=%1 -policybundle=\"$(cat '%2')\" -destination='%3' -spendamount=33333333 -spenttoday=10000000 signbundle")
-                                                 .arg(QString::fromStdString(Params().GetChainTypeString()),
-                                                      QString::fromStdString(fs::PathToString(policy_bundle_path)),
-                                                      QString::fromStdString(agent_records[0].funding_address)));
     agent_recovery_scan_button->click();
     const QString recovery_scan_command = QApplication::clipboard()->text();
     QVERIFY(recovery_scan_command.startsWith(QStringLiteral("quicksilver-cli -chain=%1 scantxoutset start ").arg(QString::fromStdString(Params().GetChainTypeString()))));
@@ -1026,10 +1035,8 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("quicksilver-agent -chain=%1 -paymentreceiptdir='%2' scanreceipts")
                                                  .arg(QString::fromStdString(Params().GetChainTypeString()),
                                                       QString::fromStdString(fs::PathToString(funding_receipt_inbox))));
-    QVERIFY(backend_state->text().contains(QStringLiteral("Agent funding receipts saved and imported")));
+    QVERIFY(backend_state->text().contains(QStringLiteral("Agent funding receipts saved")));
     QVERIFY(backend_state->text().contains(QString::number(exported_bundle->funding_outputs.size())));
-    QVERIFY(agent_utxo_state->text().contains(QStringLiteral("Spendable agent UTXOs: %1").arg(exported_bundle->funding_outputs.size())));
-    QVERIFY(agent_utxo_state->text().contains(QStringLiteral("Imported %1 new receipt").arg(exported_bundle->funding_outputs.size())));
     for (const vault::AgentAllotmentFundingOutput& output : exported_bundle->funding_outputs) {
         const fs::path receipt_path = funding_receipt_inbox / fs::PathFromString(output.txid + "-" + util::ToString(output.vout) + ".json");
         const auto saved_receipt = ReadBinaryFile(receipt_path);
@@ -1054,8 +1061,8 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QVERIFY(policy_request.contains(QStringLiteral("\"funding_available_cinnabar\":\"100000000\"")));
     QVERIFY(policy_request.contains(QStringLiteral("\"daily_limit_cinnabar\":\"50000000\"")));
     QVERIFY(policy_request.contains(QStringLiteral("\"request_created_time\":\"")));
-    QVERIFY(policy_request.contains(QStringLiteral("\"policy_status\":\"pending_integration\"")));
-    QVERIFY(policy_request.contains(QStringLiteral("\"backend_created\":false")));
+    QVERIFY(!policy_request.contains(QStringLiteral("policy_status")));
+    QVERIFY(!policy_request.contains(QStringLiteral("backend_created")));
     QPlainTextEdit* agent_policy_review_edit = agent_allotment_page->findChild<QPlainTextEdit*>(QStringLiteral("agentAllotmentPolicyRequestEdit"));
     QVERIFY(agent_policy_review_edit);
     QPushButton* agent_policy_review_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentReviewPolicyButton"));
@@ -1064,7 +1071,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QLabel* agent_policy_review_state = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentPolicyReviewState"));
     QVERIFY(agent_policy_review_state);
     QVERIFY(agent_policy_review_state->text().contains(QStringLiteral("Paste a policy request")));
-    QCOMPARE(agent_policy_review_state->property("class").toString(), QStringLiteral("policyReviewIdle"));
+    QCOMPARE(agent_policy_review_state->property("class").toString(), QStringLiteral("muted"));
     agent_policy_review_edit->setPlainText(policy_request);
     QVERIFY(agent_policy_review_button->isEnabled());
     QVERIFY(agent_policy_review_state->text().contains(QStringLiteral("Ready to review")));
@@ -1072,7 +1079,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     agent_policy_review_button->click();
     QVERIFY(agent_policy_review_state->text().contains(QStringLiteral("Valid request for test-agent")));
     QVERIFY(agent_policy_review_state->text().contains(QString::fromStdString(agent_records[0].funding_address)));
-    QVERIFY(agent_policy_review_state->text().contains(QStringLiteral("Review does not activate enforcement")));
+    QVERIFY(agent_policy_review_state->text().contains(QStringLiteral("Spending limits are checked by the agent")));
     QCOMPARE(agent_policy_review_state->property("class").toString(), QStringLiteral("policyReviewValid"));
     agent_policy_review_edit->setPlainText(QStringLiteral("[]"));
     QVERIFY(agent_policy_review_button->isEnabled());
@@ -1099,7 +1106,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QLabel* agent_payment_receipt_state = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentPaymentReceiptState"));
     QVERIFY(agent_payment_receipt_state);
     QVERIFY(agent_payment_receipt_state->text().contains(QStringLiteral("Paste a payment receipt")));
-    QCOMPARE(agent_payment_receipt_state->property("class").toString(), QStringLiteral("policyReviewIdle"));
+    QCOMPARE(agent_payment_receipt_state->property("class").toString(), QStringLiteral("muted"));
     CKey discovered_funding_key;
     discovered_funding_key.MakeNewKey(true);
     const std::string discovered_funding_address{EncodeDestination(WitnessV0KeyHash(discovered_funding_key.GetPubKey()))};
@@ -1130,9 +1137,8 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
                                                  .arg(QString::fromStdString(Params().GetChainTypeString()),
                                                       QString::fromStdString(fs::PathToString(receipt_inbox))));
     QVERIFY(agent_payment_receipt_state->text().contains(QStringLiteral("Payment receipt saved")));
-    QVERIFY(agent_payment_receipt_state->text().contains(QStringLiteral("imported into the durable agent output store")));
     QVERIFY(agent_payment_receipt_state->text().contains(QStringLiteral("External-agent scan command copied")));
-    QVERIFY(agent_utxo_state->text().contains(QStringLiteral("Imported 1 new receipt")));
+    QVERIFY(agent_payment_receipt_state->text().contains(QStringLiteral("External-agent scan command copied")));
     QCOMPARE(agent_payment_receipt_state->property("class").toString(), QStringLiteral("policyReviewValid"));
     agent_payment_receipt_edit->setPlainText(QStringLiteral("[]"));
     QVERIFY(agent_payment_receipt_review_button->isEnabled());
@@ -1141,216 +1147,12 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     agent_payment_receipt_review_button->click();
     QVERIFY(agent_payment_receipt_state->text().contains(QStringLiteral("must be a JSON object")));
     QCOMPARE(agent_payment_receipt_state->property("class").toString(), QStringLiteral("policyReviewError"));
-    QPlainTextEdit* agent_signed_spend_edit = agent_allotment_page->findChild<QPlainTextEdit*>(QStringLiteral("agentAllotmentSignedSpendEdit"));
-    QVERIFY(agent_signed_spend_edit);
-    QPushButton* agent_signed_spend_review_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentReviewSignedSpendButton"));
-    QVERIFY(agent_signed_spend_review_button);
-    QVERIFY(!agent_signed_spend_review_button->isEnabled());
-    QPushButton* agent_signed_spend_copy_relay_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentCopyRelayPayloadsButton"));
-    QVERIFY(agent_signed_spend_copy_relay_button);
-    QVERIFY(!agent_signed_spend_copy_relay_button->isEnabled());
-    QLineEdit* agent_signed_spend_relay_peer_edit = agent_allotment_page->findChild<QLineEdit*>(QStringLiteral("agentAllotmentRelayPeerEdit"));
-    QVERIFY(agent_signed_spend_relay_peer_edit);
-    QPushButton* agent_signed_spend_copy_add_peer_command_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentCopyAddPeerCommandButton"));
-    QVERIFY(agent_signed_spend_copy_add_peer_command_button);
-    QVERIFY(!agent_signed_spend_copy_add_peer_command_button->isEnabled());
-    QPushButton* agent_signed_spend_copy_discover_peers_command_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentCopyDiscoverPeersCommandButton"));
-    QVERIFY(agent_signed_spend_copy_discover_peers_command_button);
-    QVERIFY(agent_signed_spend_copy_discover_peers_command_button->isEnabled());
-    QPushButton* agent_signed_spend_import_node_peers_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentImportNodePeersButton"));
-    QVERIFY(agent_signed_spend_import_node_peers_button);
-    QVERIFY(agent_signed_spend_import_node_peers_button->isEnabled());
-    QPushButton* agent_signed_spend_copy_node_address_import_command_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentCopyNodeAddressImportCommandButton"));
-    QVERIFY(agent_signed_spend_copy_node_address_import_command_button);
-    QVERIFY(agent_signed_spend_copy_node_address_import_command_button->isEnabled());
-    QPushButton* agent_signed_spend_copy_sync_headers_command_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentCopySyncHeadersCommandButton"));
-    QVERIFY(agent_signed_spend_copy_sync_headers_command_button);
-    QVERIFY(agent_signed_spend_copy_sync_headers_command_button->isEnabled());
-    QPushButton* agent_signed_spend_copy_peer_command_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentCopyPeerRelayCommandButton"));
-    QVERIFY(agent_signed_spend_copy_peer_command_button);
-    QVERIFY(!agent_signed_spend_copy_peer_command_button->isEnabled());
-    QPushButton* agent_signed_spend_copy_stored_peer_command_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentCopyStoredPeerRelayCommandButton"));
-    QVERIFY(agent_signed_spend_copy_stored_peer_command_button);
-    QVERIFY(!agent_signed_spend_copy_stored_peer_command_button->isEnabled());
-    QPushButton* agent_signed_spend_relay_peer_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentRelayPeerButton"));
-    QVERIFY(agent_signed_spend_relay_peer_button);
-    QVERIFY(!agent_signed_spend_relay_peer_button->isEnabled());
-    QPushButton* agent_signed_spend_submit_button = agent_allotment_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentSubmitSignedSpendButton"));
-    QVERIFY(agent_signed_spend_submit_button);
-    QVERIFY(!agent_signed_spend_submit_button->isEnabled());
-    QLabel* agent_signed_spend_state = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentSignedSpendState"));
-    QVERIFY(agent_signed_spend_state);
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Paste signed spend output")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewIdle"));
-    agent_sign_spend_button->click();
-    // The spend is prepared off the GUI thread. The signed result is the same
-    // string as before; it arrives on a later turn instead of inside the click.
-    //
-    // The wait is long on purpose, and is not a tolerance on the assertion. What
-    // it bounds is a real sandbox Cuckatoo grind: the prove loop searches nonces
-    // until a cycle beats the target, so its cost is a random variable, not a
-    // fixed one. Before this test went asynchronous the click() blocked and no
-    // time bound existed at all, so any duration passed; QTRY_VERIFY's 5 s
-    // default introduced one that the work has always exceeded -- it was
-    // measured at 11.4 s under `ctest -j10`. A tight bound here would fail on an
-    // unlucky nonce or a loaded box while the code was correct. A genuine hang
-    // still fails, in finite time.
-    QTRY_VERIFY_WITH_TIMEOUT(agent_spend_command_state->text().contains(QStringLiteral("Agent spend signed locally")), 120000);
-    QCOMPARE(agent_spend_command_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    QVERIFY(agent_signed_spend_edit->toPlainText().contains(QStringLiteral("tx_payload=")));
-    QVERIFY(agent_signed_spend_edit->toPlainText().contains(QStringLiteral("inv_payload=")));
-    QVERIFY(agent_signed_spend_edit->toPlainText().contains(QStringLiteral("change_paymentreceipt=")));
-    QVERIFY(agent_signed_spend_edit->toPlainText().contains(QStringLiteral("receipt_store_saved=true")));
-    QVERIFY(agent_signed_spend_edit->toPlainText().contains(QStringLiteral("receipt_store_change_added=1")));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Valid signed spend")));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Change receipt saved")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    QVERIFY(agent_signed_spend_copy_relay_button->isEnabled());
-    QVERIFY(agent_signed_spend_copy_stored_peer_command_button->isEnabled());
-    QVERIFY(agent_signed_spend_relay_peer_button->isEnabled());
-    QVERIFY(agent_signed_spend_submit_button->isEnabled());
-    const agent::AllotmentReceiptStoreLoadResult local_sign_store{agent::LoadAllotmentPaymentReceipts(gArgs.GetDataDirNet() / "agent" / "payment-receipts.dat", Params().GenesisBlock().GetHash())};
-    QVERIFY(local_sign_store.ok());
-    QCOMPARE(local_sign_store.receipts.size(), exported_bundle->funding_outputs.size() + size_t{1});
-    QVERIFY(std::any_of(local_sign_store.receipts.begin(), local_sign_store.receipts.end(), [&](const auto& receipt) {
-        return receipt.funding_address == discovered_funding_address && receipt.payment_id == "desk-42";
-    }));
-    QVERIFY(std::any_of(local_sign_store.receipts.begin(), local_sign_store.receipts.end(), [&](const auto& receipt) {
-        return receipt.funding_address == agent_records[0].funding_address && receipt.memo == "agent spend change";
-    }));
-    QVERIFY(std::any_of(local_sign_store.activities.begin(), local_sign_store.activities.end(), [](const auto& activity) {
-        return activity.type == agent::AllotmentReceiptActivityType::CHANGE;
-    }));
-
-    CMutableTransaction mutable_agent_spend;
-    mutable_agent_spend.version = 2;
-    mutable_agent_spend.vin.emplace_back(COutPoint{Txid::FromUint256(ArithToUint256(700)), 0});
-    mutable_agent_spend.vout.emplace_back(COIN / 3, GetScriptForDestination(agent_funding_dest));
-    const CTransaction agent_spend_tx{mutable_agent_spend};
-    const QString agent_spend_hex = QString::fromStdString(EncodeHexTx(agent_spend_tx));
-    const QString change_receipt = QStringLiteral(R"({"type":"quicksilver.agent_payment_receipt","version":1,"chain":"%1","genesis_hash":"%2","funding_address":"%3","txid":"%4","vout":0,"amount_cinnabar":"33333333","received_time":"790","payment_id":"agent-1:change","label":"test-agent","memo":"agent spend change","payer":"desktop vault"})")
-                                       .arg(QString::fromStdString(Params().GetChainTypeString()),
-                                            QString::fromStdString(Params().GenesisBlock().GetHash().ToString()),
-                                            QString::fromStdString(agent_records[0].funding_address),
-                                            QString::fromStdString(agent_spend_tx.GetHash().ToString()));
-    agent_signed_spend_edit->setPlainText(QStringLiteral("policy_id=agent-1\nhex=%1\nchange_paymentreceipt=%2\nreceipt_store_saved=true")
-                                              .arg(agent_spend_hex, change_receipt));
-    QVERIFY(agent_signed_spend_review_button->isEnabled());
-    QVERIFY(!agent_signed_spend_copy_relay_button->isEnabled());
-    QVERIFY(!agent_signed_spend_copy_stored_peer_command_button->isEnabled());
-    QVERIFY(!agent_signed_spend_submit_button->isEnabled());
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewReady"));
-    agent_signed_spend_review_button->click();
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Valid signed spend")));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("1 input")));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("1 output")));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Submit starts consensus-backed relay")));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Change receipt saved")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    const fs::path change_receipt_path = receipt_inbox / fs::PathFromString(agent_spend_tx.GetHash().ToString() + "-0.json");
-    const auto saved_change_receipt = ReadBinaryFile(change_receipt_path);
-    QVERIFY(saved_change_receipt.first);
-    QCOMPARE(QString::fromStdString(saved_change_receipt.second), change_receipt + QStringLiteral("\n"));
-    QVERIFY(agent_signed_spend_copy_relay_button->isEnabled());
-    QVERIFY(agent_signed_spend_copy_stored_peer_command_button->isEnabled());
-    QVERIFY(agent_signed_spend_relay_peer_button->isEnabled());
-    QVERIFY(!agent_signed_spend_copy_peer_command_button->isEnabled());
-    QVERIFY(agent_signed_spend_submit_button->isEnabled());
-    agent_signed_spend_copy_discover_peers_command_button->click();
-    const QString stored_discovery_command = QApplication::clipboard()->text();
-    QCOMPARE(stored_discovery_command, QStringLiteral("quicksilver-agent -chain=%1 discoverpeers").arg(QString::fromStdString(Params().GetChainTypeString())));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Stored-peer discovery command copied")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    agent_signed_spend_copy_node_address_import_command_button->click();
-    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("quicksilver-cli -chain=%1 getnodeaddresses 64 | quicksilver-agent -chain=%1 -peeraddresses=- importnodeaddresses")
-                                             .arg(QString::fromStdString(Params().GetChainTypeString())));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Local-node peer import command copied")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    agent_signed_spend_copy_sync_headers_command_button->click();
-    const QString stored_header_sync_command = QApplication::clipboard()->text();
-    QCOMPARE(stored_header_sync_command, QStringLiteral("quicksilver-agent -chain=%1 syncheaderspeer").arg(QString::fromStdString(Params().GetChainTypeString())));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Stored-peer header sync command copied")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    const QString chain = QString::fromStdString(Params().GetChainTypeString());
-    const QString relay_peer = QStringLiteral("127.0.0.1:%1").arg(Params().GetDefaultPort());
-    agent_signed_spend_relay_peer_edit->setText(relay_peer);
-    QVERIFY(agent_signed_spend_copy_add_peer_command_button->isEnabled());
-    QVERIFY(agent_signed_spend_copy_discover_peers_command_button->isEnabled());
-    QVERIFY(agent_signed_spend_copy_sync_headers_command_button->isEnabled());
-    QVERIFY(agent_signed_spend_copy_peer_command_button->isEnabled());
-    agent_signed_spend_copy_add_peer_command_button->click();
-    const QString add_peer_command = QApplication::clipboard()->text();
-    QCOMPARE(add_peer_command, QStringLiteral("quicksilver-agent -chain=%1 -peer='%2' addpeer").arg(chain, relay_peer));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Relay peer save command copied")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    agent_signed_spend_copy_discover_peers_command_button->click();
-    const QString peer_discovery_command = QApplication::clipboard()->text();
-    QCOMPARE(peer_discovery_command, QStringLiteral("quicksilver-agent -chain=%1 -peer='%2' discoverpeers").arg(chain, relay_peer));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Relay peer discovery command copied")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    agent_signed_spend_copy_sync_headers_command_button->click();
-    const QString peer_header_sync_command = QApplication::clipboard()->text();
-    QCOMPARE(peer_header_sync_command, QStringLiteral("quicksilver-agent -chain=%1 -peer='%2' syncheaderspeer").arg(chain, relay_peer));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Relay peer header sync command copied")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    agent_signed_spend_copy_relay_button->click();
-    const QString relay_payloads = QApplication::clipboard()->text();
-    QVERIFY(relay_payloads.contains(QStringLiteral("tx_payload=")));
-    QVERIFY(relay_payloads.contains(QStringLiteral("inv_payload=")));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Relay payloads copied")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    QVERIFY(agent_signed_spend_copy_relay_button->isEnabled());
-    QVERIFY(agent_signed_spend_copy_stored_peer_command_button->isEnabled());
-    QVERIFY(agent_signed_spend_relay_peer_button->isEnabled());
-    QVERIFY(agent_signed_spend_copy_peer_command_button->isEnabled());
-    QVERIFY(agent_signed_spend_submit_button->isEnabled());
-    agent_signed_spend_edit->setPlainText(relay_payloads);
-    QVERIFY(agent_signed_spend_review_button->isEnabled());
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewReady"));
-    agent_signed_spend_review_button->click();
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Valid signed spend")));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("1 input")));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("1 output")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    QVERIFY(agent_signed_spend_copy_relay_button->isEnabled());
-    QVERIFY(agent_signed_spend_copy_stored_peer_command_button->isEnabled());
-    QVERIFY(agent_signed_spend_relay_peer_button->isEnabled());
-    QVERIFY(agent_signed_spend_copy_peer_command_button->isEnabled());
-    QVERIFY(agent_signed_spend_submit_button->isEnabled());
-    agent_signed_spend_copy_peer_command_button->click();
-    const QString relay_command = QApplication::clipboard()->text();
-    QVERIFY(relay_command.startsWith(QStringLiteral("quicksilver-agent -chain=%1 ").arg(chain)));
-    QVERIFY(relay_command.contains(QStringLiteral("-peer='%1'").arg(relay_peer)));
-    QVERIFY(relay_command.contains(QStringLiteral(" -message=")));
-    QVERIFY(relay_command.endsWith(QStringLiteral(" sendtxpeer")));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Peer relay command copied")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    agent_signed_spend_copy_stored_peer_command_button->click();
-    const QString stored_peer_relay_command = QApplication::clipboard()->text();
-    QVERIFY(stored_peer_relay_command.startsWith(QStringLiteral("quicksilver-agent -chain=%1 ").arg(QString::fromStdString(Params().GetChainTypeString()))));
-    QVERIFY(!stored_peer_relay_command.contains(QStringLiteral(" -peer=")));
-    QVERIFY(stored_peer_relay_command.contains(QStringLiteral(" -message=")));
-    QVERIFY(stored_peer_relay_command.endsWith(QStringLiteral(" sendtxpeer")));
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Stored-peer relay command copied")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    agent_signed_spend_submit_button->click();
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("Signed spend submission failed")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewError"));
-    agent_signed_spend_edit->setPlainText(QStringLiteral("hex=not-a-transaction"));
-    QVERIFY(agent_signed_spend_review_button->isEnabled());
-    QVERIFY(!agent_signed_spend_copy_relay_button->isEnabled());
-    QVERIFY(!agent_signed_spend_copy_stored_peer_command_button->isEnabled());
-    QVERIFY(!agent_signed_spend_copy_peer_command_button->isEnabled());
-    QVERIFY(!agent_signed_spend_submit_button->isEnabled());
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewReady"));
-    agent_signed_spend_review_button->click();
-    QVERIFY(agent_signed_spend_state->text().contains(QStringLiteral("not a valid serialized Quicksilver transaction")));
-    QCOMPARE(agent_signed_spend_state->property("class").toString(), QStringLiteral("policyReviewError"));
     vaultFrame.setCurrentVault(&vaultModel);
     vaultFrame.gotoLaunchPage();
-    launch_summary = vaultFrame.findChild<QLabel*>(QStringLiteral("launchVaultCardBody"));
-    QVERIFY(launch_summary);
-    QVERIFY(launch_summary->text().contains(QStringLiteral("Agent funding: 1 of 1 confirmed")));
+    QLabel* launch_agents = vaultFrame.findChild<QLabel*>(QStringLiteral("homeVaultAgents"));
+    QVERIFY(launch_agents);
+    QVERIFY(!launch_agents->isHidden());
+    QCOMPARE(launch_agents->text(), QStringLiteral("Funding 1 of 1 confirmed"));
 
     vaultFrame.gotoMineMintPage();
     QVERIFY(vaultFrame.currentVaultView());
@@ -1363,9 +1165,9 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     // Check request button
     ReceiveCoinsDialog receiveCoinsDialog(platformStyle.get());
     receiveCoinsDialog.setModel(&vaultModel);
-    QLabel* requests_heading = receiveCoinsDialog.findChild<QLabel*>(QStringLiteral("recentRequestsHeading"));
-    QVERIFY(requests_heading);
-    QCOMPARE(requests_heading->text(), QStringLiteral("Recent requests"));
+    QFrame* requests_panel = receiveCoinsDialog.findChild<QFrame*>(QStringLiteral("receiveHistoryBenchPanel"));
+    QVERIFY(requests_panel);
+    QCOMPARE(requests_panel->findChild<QLabel*>(QStringLiteral("benchPanelTitle"))->text(), QStringLiteral("RECENT REQUESTS"));
     RecentRequestsTableModel* requestTableModel = vaultModel.getRecentRequestsTableModel();
 
     // Label input
@@ -1465,6 +1267,351 @@ void TestGUI(interfaces::Node& node)
 
 } // namespace
 
+namespace {
+struct AgentPageFixture {
+    TestChain100Setup chain;
+    ScopedNodeContext context;
+    std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate("other")};
+    OptionsModel options;
+    PollMarkerVault* vault;
+    std::unique_ptr<VaultModel> model;
+    ClientModel client;
+    AgentAllotmentPage page;
+    QString request;
+
+    explicit AgentPageFixture(interfaces::Node& node) : context(node, chain.m_node), options(node), client(node, &options)
+    {
+        bilingual_str error;
+        if (!options.Init(error)) throw std::runtime_error(error.original);
+        auto owned = std::make_unique<PollMarkerVault>();
+        vault = owned.get();
+        vault::AgentAllotmentRecord record;
+        record.id = "agent-ui";
+        record.label = "UI agent";
+        record.funding_limit = COIN;
+        record.funding_address = EncodeDestination(WitnessV1Taproot{XOnlyPubKey{chain.coinbaseKey.GetPubKey()}});
+        vault->agent_records.push_back(record);
+        model = std::make_unique<VaultModel>(std::move(owned), node, &options, style.get());
+        page.setModel(model.get());
+        CMutableTransaction tx;
+        tx.vin.emplace_back(Txid::FromUint256(ArithToUint256(2)), 0);
+        tx.vout.emplace_back(COIN / 4, GetScriptForDestination(PKHash{chain.coinbaseKey.GetPubKey()}));
+        tx.vout.emplace_back(COIN * 3 / 4, GetScriptForDestination(DecodeDestination(record.funding_address)));
+        tx.nAnchorHeight = 100;
+        tx.nCycle[0] = 1;
+        PartiallySignedQuicksilverTransaction psqt{tx};
+        psqt.inputs[0].witness_utxo = CTxOut(COIN, GetScriptForDestination(DecodeDestination(record.funding_address)));
+        DataStream stream;
+        stream << psqt;
+        request = QStringLiteral("psqt=") + QString::fromStdString(EncodeBase64(stream.str()));
+    }
+    template <typename T> T* get(const char* name) { return page.findChild<T*>(QString::fromLatin1(name)); }
+    void pasteAndReview()
+    {
+        get<QPlainTextEdit>("agentAllotmentCosignEdit")->setPlainText(request);
+        get<QPushButton>("agentAllotmentReviewCosignButton")->click();
+    }
+};
+}
+
+void VaultTests::agentAllotmentSetupAsksToUnlock()
+{
+    TestChain100Setup test;
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+    const auto vault = SetupDescriptorsVault(m_node, test);
+    const SecureString passphrase{"test unlock"};
+    QVERIFY(vault->EncryptVault(passphrase));
+    QVERIFY(vault->IsLocked());
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    MiniGUI gui(m_node, style.get());
+    gui.initModelForVault(m_node, vault, style.get());
+    VaultModel& model = *gui.vaultModel;
+    AgentAllotmentPage page;
+    page.setModel(&model);
+    page.findChild<QLineEdit*>("agentAllotmentNameEdit")->setText("locked agent");
+    page.findChild<QuicksilverAmountField*>("agentAllotmentFundingLimit")->setValue(COIN);
+    page.findChild<QCheckBox*>("agentAllotmentAcceptanceCheck")->setChecked(true);
+    QSignalSpy unlock(&model, &VaultModel::requireUnlock);
+    connect(&model, &VaultModel::requireUnlock, &page, [&] { model.notifyUnlockDialogShown(); });
+    page.findChild<QPushButton*>("agentAllotmentCreateButton")->click();
+    QCOMPARE(unlock.count(), 1);
+    QVERIFY(model.listAgentAllotmentRecords().empty());
+    QVERIFY(vault->Unlock(passphrase));
+    model.completePendingUnlock();
+    QCOMPARE(model.listAgentAllotmentRecords().size(), size_t{1});
+    QVERIFY(vault->IsLocked());
+}
+
+void VaultTests::agentAllotmentStatusNeverPromisesEnforcementLater()
+{
+    AgentPageFixture f(m_node);
+    for (QWidget* widget : f.page.findChildren<QWidget*>()) {
+        QString text = widget->toolTip();
+        if (auto* label = qobject_cast<QLabel*>(widget)) text += label->text();
+        const QRegularExpression forbidden(QStringLiteral("\\b(?:yet|pending|enforced)\\b"), QRegularExpression::CaseInsensitiveOption);
+        QVERIFY2(!forbidden.match(text).hasMatch(), qPrintable(QStringLiteral("%1: %2").arg(widget->objectName(), text)));
+    }
+}
+
+void VaultTests::agentAllotmentRiskTextNamesTheCosigner()
+{
+    AgentAllotmentPage page;
+    QCOMPARE(page.findChild<QLabel*>("agentAllotmentDishonestAgentRisk")->text(), QStringLiteral("The agent holds one key and this vault holds the other. The agent cannot spend without this vault's signature."));
+    QCOMPARE(page.findChild<QLabel*>("agentAllotmentCompromisedHostRisk")->text(), QStringLiteral("Stop an allotment and this vault refuses every later request. A request the vault has already signed and broadcast still confirms."));
+    QCOMPARE(page.findChild<QLabel*>("agentAllotmentGuaranteeRisk")->text(), QStringLiteral("Spending limits are the agent's own check. This vault does not enforce them, and no limit is a guarantee."));
+    for (QLabel* label : page.findChildren<QLabel*>()) {
+        QVERIFY(!label->text().contains("dishonest agent"));
+        QVERIFY(!label->text().contains("compromised host"));
+    }
+}
+
+void VaultTests::agentAllotmentStopAsksThenRefusesCosign()
+{
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    for (int i = 0; i < 5; ++i) test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+    auto loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+    auto vault = SetupDescriptorsVault(m_node, test);
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    MiniGUI gui(m_node, style.get());
+    gui.initModelForVault(m_node, vault, style.get());
+    VaultModel& model = *gui.vaultModel;
+    auto record = model.recordAgentAllotmentSetup("stopped agent", COIN, 0);
+    QVERIFY(record);
+    const CScript funding_script = GetScriptForDestination(DecodeDestination(record->funding_address));
+    auto funding = vault::CreateTransaction(*vault, {vault::CRecipient{DecodeDestination(record->funding_address), COIN}},
+        std::nullopt, vault::CCoinControl{});
+    QVERIFY2(funding, util::ErrorString(funding).original.c_str());
+    QVERIFY(vault->CommitTransaction(funding->tx, {}, {}));
+    auto bundle = model.agentAllotmentPolicyBundle(model.agentAllotmentPolicyRequest(*record, COIN));
+    QVERIFY2(bundle, util::ErrorString(bundle).original.c_str());
+    QVERIFY(!bundle->funding_outputs.empty());
+    FlatSigningProvider provider;
+    std::string error;
+    auto descriptors = Parse(bundle->funding_descriptor, provider, error, true);
+    QCOMPARE(descriptors.size(), size_t{1});
+    std::vector<CScript> scripts;
+    QVERIFY(descriptors[0]->Expand(0, provider, scripts, provider));
+    const CKey agent = DecodeSecret(bundle->agent_secret);
+    provider.keys.emplace(agent.GetPubKey().GetID(), agent);
+    CMutableTransaction tx;
+    for (const auto& coin : bundle->funding_outputs) tx.vin.emplace_back(Txid::FromHex(coin.txid).value(), coin.vout);
+    tx.vout.emplace_back(COIN / 4, GetScriptForDestination(PKHash{test.coinbaseKey.GetPubKey()}));
+    tx.vout.emplace_back(COIN * 3 / 4, funding_script);
+    PartiallySignedQuicksilverTransaction request{tx};
+    for (size_t i = 0; i < request.inputs.size(); ++i) request.inputs[i].witness_utxo = CTxOut(bundle->funding_outputs[i].amount, funding_script);
+    auto data = PrecomputePSQTData(request);
+    for (size_t i = 0; i < request.inputs.size(); ++i) {
+        SignPSQTInput(provider, request, i, &data, SIGHASH_DEFAULT, nullptr, false);
+        QCOMPARE(request.inputs[i].m_tap_script_sigs.size(), size_t{1});
+    }
+    CMutableTransaction maximum{*request.tx};
+    for (size_t i = 0; i < maximum.vin.size(); ++i) {
+        const auto& leaf = *request.inputs[i].m_tap_scripts.begin();
+        maximum.vin[i].scriptWitness.stack = {std::vector<unsigned char>(65), std::vector<unsigned char>(65), leaf.first.first, *leaf.second.begin()};
+    }
+    {
+        LOCK(::cs_main);
+        ProveTxPowForTest(maximum, *Assert(test.m_node.chainman->ActiveChain().Tip()), Params().GetConsensus());
+    }
+    request.tx->nAnchorHeight = maximum.nAnchorHeight;
+    request.tx->nPowNonce = maximum.nPowNonce;
+    request.tx->nCycle = maximum.nCycle;
+    DataStream stream;
+    stream << request;
+    const QString pasted = QStringLiteral("psqt=") + QString::fromStdString(EncodeBase64(stream.str()));
+    const SecureString passphrase{"stop locked vault"};
+    QVERIFY(vault->EncryptVault(passphrase));
+    QVERIFY(vault->IsLocked());
+    AgentAllotmentPage page;
+    page.setModel(&model);
+    auto* stop = page.findChild<QPushButton*>("agentAllotmentStopButton");
+    QVERIFY(stop);
+    QSignalSpy unlock(&model, &VaultModel::requireUnlock);
+    stop->click();
+    auto* confirm = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+    QVERIFY(confirm);
+    QCOMPARE(confirm->text(), QStringLiteral("Stop this allotment? This vault will refuse every later spend request from this agent. This cannot be undone; create a new allotment to fund the agent again."));
+    QCOMPARE(model.listAgentAllotmentRecords()[0].stopped_time, int64_t{0});
+    confirm->button(QMessageBox::Cancel)->click();
+    QCOMPARE(model.listAgentAllotmentRecords()[0].stopped_time, int64_t{0});
+    stop->click();
+    confirm = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+    QVERIFY(confirm);
+    confirm->button(QMessageBox::Yes)->click();
+    QTRY_VERIFY(model.listAgentAllotmentRecords()[0].stopped_time != 0);
+    QVERIFY(vault->IsLocked());
+    QCOMPARE(unlock.count(), 0);
+    QCOMPARE(page.findChild<QLabel*>("agentAllotmentPolicyState")->text(), QStringLiteral("Stopped"));
+    page.refresh();
+    QCOMPARE(page.findChild<QLabel*>("agentAllotmentPolicyState")->text(), QStringLiteral("Stopped"));
+    vault::VaultBatch batch(vault->GetDatabase());
+    std::vector<vault::AgentAllotmentRecord> stored;
+    QVERIFY(batch.ReadAgentAllotmentRecords(stored));
+    QCOMPARE(stored.size(), size_t{1});
+    QVERIFY(stored[0].stopped_time != 0);
+    auto* paste = page.findChild<QPlainTextEdit*>("agentAllotmentCosignEdit");
+    QVERIFY(paste);
+    paste->setPlainText(pasted);
+    const auto transactions_before = WITH_LOCK(vault->cs_vault, return vault->mapVault.size());
+    page.findChild<QPushButton*>("agentAllotmentReviewCosignButton")->click();
+    QCOMPARE(unlock.count(), 0);
+    QCOMPARE(WITH_LOCK(vault->cs_vault, return vault->mapVault.size()), transactions_before);
+    auto* cosign = page.findChild<QPushButton*>("agentAllotmentSubmitSignedSpendButton");
+    QVERIFY(cosign->isEnabled());
+    connect(&model, &VaultModel::requireUnlock, &page, [&] { model.notifyUnlockDialogShown(); });
+    cosign->click();
+    QCOMPARE(unlock.count(), 1);
+    QVERIFY(vault->Unlock(passphrase));
+    model.completePendingUnlock();
+    QCOMPARE(page.findChild<QLabel*>("agentAllotmentCosignState")->text(), QStringLiteral("This agent allotment is stopped. The vault no longer co-signs for it."));
+    QCOMPARE(WITH_LOCK(vault->cs_vault, return vault->mapVault.size()), transactions_before);
+    QVERIFY(vault->IsLocked());
+}
+
+void VaultTests::agentAllotmentCosignDisabledWithoutNode()
+{
+    AgentPageFixture f(m_node);
+    QVERIFY(f.get<QPlainTextEdit>("agentAllotmentCosignEdit"));
+    f.pasteAndReview();
+    QCOMPARE(f.vault->cosign_calls, 0);
+    auto* cosign = f.get<QPushButton>("agentAllotmentSubmitSignedSpendButton");
+    QVERIFY(!cosign->isEnabled());
+    QCOMPARE(cosign->toolTip(), QStringLiteral("Turn on Consensus to co-sign: this desktop broadcasts the spend through its own node."));
+    const QString review = f.get<QLabel>("agentAllotmentCosignState")->text();
+    QVERIFY2(review.contains("UI agent"), qPrintable(review));
+    QVERIFY(review.contains("Input total"));
+    QVERIFY(review.contains("Change back to the allotment"));
+    QVERIFY(review.contains("Anchor age: 0 blocks"));
+    const auto format = [](CAmount amount) { return QuicksilverUnits::formatWithUnit(QuicksilverUnit::HG, amount, false, QuicksilverUnits::SeparatorStyle::ALWAYS); };
+    QVERIFY(review.contains(format(COIN)));
+    QVERIFY(review.contains(format(COIN / 4)));
+    QVERIFY(review.contains(format(COIN * 3 / 4)));
+    QVERIFY(review.contains(QString::fromStdString(f.vault->agent_records[0].funding_address)));
+    QVERIFY(review.contains(QString::fromStdString(EncodeDestination(PKHash{f.chain.coinbaseKey.GetPubKey()}))));
+    const auto refused = f.model->cosignAgentAllotmentSpend(f.request.mid(5));
+    QVERIFY(!refused);
+    QCOMPARE(f.vault->cosign_calls, 0);
+    f.model->setClientModel(&f.client);
+    QVERIFY(cosign->isEnabled());
+    f.model->setClientModel(nullptr);
+    QVERIFY(!cosign->isEnabled());
+    QVERIFY(!f.model->cosignAgentAllotmentSpend(f.request.mid(5)));
+    QCOMPARE(f.vault->cosign_calls, 0);
+}
+
+void VaultTests::agentAllotmentCosignReviewTracksPastedText()
+{
+    AgentPageFixture f(m_node);
+    f.model->setClientModel(&f.client);
+    QVERIFY(f.get<QPlainTextEdit>("agentAllotmentCosignEdit"));
+    f.pasteAndReview();
+    auto* cosign = f.get<QPushButton>("agentAllotmentSubmitSignedSpendButton");
+    QVERIFY(cosign->isEnabled());
+    QCOMPARE(f.vault->cosign_calls, 0);
+    f.get<QPlainTextEdit>("agentAllotmentCosignEdit")->setPlainText("invalid");
+    QVERIFY(!cosign->isEnabled());
+    f.pasteAndReview();
+    QVERIFY(cosign->isEnabled());
+    f.get<QPushButton>("agentAllotmentRefuseButton")->click();
+    QVERIFY(!cosign->isEnabled());
+    QVERIFY(f.get<QPlainTextEdit>("agentAllotmentCosignEdit")->toPlainText().isEmpty());
+    QCOMPARE(f.get<QLabel>("agentAllotmentCosignState")->text(), QStringLiteral("Refused. Nothing was signed."));
+    QCOMPARE(f.vault->cosign_calls, 0);
+    f.pasteAndReview();
+    cosign->click();
+    QCOMPARE(f.get<QLabel>("agentAllotmentCosignState")->text(), QStringLiteral("backend refusal verbatim"));
+    f.pasteAndReview();
+    f.vault->cosign_result = MakeTransactionRef(CMutableTransaction{});
+    cosign->click();
+    QCOMPARE(f.get<QLabel>("agentAllotmentCosignState")->text(), QString::fromStdString(f.vault->cosign_result->GetHash().ToString()));
+    QVERIFY(!cosign->isEnabled());
+    f.pasteAndReview();
+    f.vault->crypted = true;
+    f.vault->locked = true;
+    connect(f.model.get(), &VaultModel::requireUnlock, &f.page, [&] { f.model->notifyUnlockDialogShown(); });
+    const int calls_before_unlock = f.vault->cosign_calls;
+    cosign->click();
+    QCOMPARE(f.vault->cosign_calls, calls_before_unlock);
+    f.get<QPushButton>("agentAllotmentRefuseButton")->click();
+    f.vault->locked = false;
+    f.model->completePendingUnlock();
+    QCOMPARE(f.vault->cosign_calls, calls_before_unlock);
+    QVERIFY(!cosign->isEnabled());
+}
+
+void VaultTests::agentAllotmentCosignUnlockDiesWithItsReview()
+{
+    AgentPageFixture f(m_node);
+    f.model->setClientModel(&f.client);
+    f.vault->cosign_result = MakeTransactionRef(CMutableTransaction{});
+    f.vault->crypted = true;
+    f.vault->locked = true;
+    connect(f.model.get(), &VaultModel::requireUnlock, &f.page, [&] { f.model->notifyUnlockDialogShown(); });
+    auto* cosign = f.get<QPushButton>("agentAllotmentSubmitSignedSpendButton");
+
+    // Refuse, then review the same request again: the first approval stays cancelled.
+    f.pasteAndReview();
+    cosign->click();
+    f.get<QPushButton>("agentAllotmentRefuseButton")->click();
+    f.pasteAndReview();
+    QVERIFY(cosign->isEnabled());
+    f.vault->locked = false;
+    f.model->completePendingUnlock();
+    QCOMPARE(f.vault->cosign_calls, 0);
+
+    // Replacing the model and restoring it also cancels a pending approval.
+    f.vault->locked = true;
+    cosign->click();
+    f.page.setModel(nullptr);
+    f.page.setModel(f.model.get());
+    f.pasteAndReview();
+    f.vault->locked = false;
+    f.model->completePendingUnlock();
+    QCOMPARE(f.vault->cosign_calls, 0);
+
+    // A fresh click after the new review is still honoured.
+    f.vault->locked = true;
+    cosign->click();
+    f.vault->locked = false;
+    f.model->completePendingUnlock();
+    QCOMPARE(f.vault->cosign_calls, 1);
+}
+
+void VaultTests::agentAllotmentStoppedAllotmentOffersNoFunding()
+{
+    AgentPageFixture f(m_node);
+    const CTxDestination dest = DecodeDestination(f.vault->agent_records[0].funding_address);
+    const QString stopped_tip = QStringLiteral("This allotment is stopped. Create a new allotment to fund the agent again.");
+    const auto check_row = [&](const QString& fund_text) {
+        f.page.refresh();
+        auto* fund = f.get<QPushButton>("agentAllotmentFundSetupButton");
+        QVERIFY(fund);
+        QCOMPARE(fund->text(), fund_text);
+        QVERIFY(!fund->isEnabled());
+        QCOMPARE(fund->toolTip(), stopped_tip);
+        QVERIFY(f.get<QPushButton>("agentAllotmentCopyRecoveryScanButton")->isEnabled());
+        QCOMPARE(f.get<QLabel>("agentAllotmentPolicyState")->text(), QStringLiteral("Stopped"));
+    };
+
+    f.vault->agent_records[0].stopped_time = 1;
+    check_row(QStringLiteral("Fund setup"));
+
+    interfaces::VaultTxOut partial;
+    partial.txout = CTxOut(COIN / 2, GetScriptForDestination(dest));
+    f.vault->coin_list[dest].emplace_back(COutPoint{Txid::FromUint256(ArithToUint256(7)), 0}, partial);
+    f.vault->coin_listing_available = true;
+    check_row(QStringLiteral("Fund remaining"));
+
+    // The same partly funded row stays fundable while the allotment is active.
+    f.vault->agent_records[0].stopped_time = 0;
+    f.page.refresh();
+    QVERIFY(f.get<QPushButton>("agentAllotmentFundSetupButton")->isEnabled());
+}
+
 void VaultTests::agentAllotmentPageScrollsWithinLaptopViewport()
 {
     QStackedWidget stack;
@@ -1487,171 +1634,115 @@ void VaultTests::agentAllotmentPageScrollsWithinLaptopViewport()
     QVERIFY(scroll_area->widget()->isAncestorOf(final_action));
 }
 
-void VaultTests::agentAllotmentImportsNodePeers()
+//! F-442 send-back 2, item 5: in the desktop window at 1200x800 the Agents
+//! page fits its viewport's width; nothing scrolls sideways.
+void VaultTests::agentsPageHasNoSideScrollAt1200()
 {
-    TestChain100Setup test;
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
     auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
 
-    std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
-    auto vault = std::make_unique<PollMarkerVault>();
-    OptionsModel options_model(m_node);
-    bilingual_str error;
-    QVERIFY(options_model.Init(error));
-    VaultModel vault_model(std::move(vault), m_node, &options_model, platformStyle.get());
-    AgentAllotmentPage agent_allotment_page;
-    agent_allotment_page.setModel(&vault_model);
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    MiniGUI mini_gui(m_node, platform_style.get());
+    mini_gui.initModelForVault(m_node, vault, platform_style.get());
 
-    QPushButton* import_button = agent_allotment_page.findChild<QPushButton*>(QStringLiteral("agentAllotmentImportNodePeersButton"));
-    QVERIFY(import_button);
-    QVERIFY(import_button->isEnabled());
-    QLabel* state = agent_allotment_page.findChild<QLabel*>(QStringLiteral("agentAllotmentSignedSpendState"));
-    QVERIFY(state);
-
-    // The RPC table leaves warmup only once a node finishes init. Clear it here, so the
-    // slot does not depend on RPCNestedTests having run first (F-437).
-    if (RPCIsInWarmup(nullptr)) SetRPCWarmupFinished();
-    UniValue add_peer_params{UniValue::VARR};
-    add_peer_params.push_back("1.2.3.4");
-    add_peer_params.push_back(Params().GetDefaultPort());
-    add_peer_params.push_back(false);
-    const UniValue add_peer_result{m_node.executeRpc("addpeeraddress", add_peer_params, /*uri=*/{})};
-    const bool added{add_peer_result.find_value("success").isBool() && add_peer_result.find_value("success").get_bool()};
-    const std::vector<CService> node_addresses{m_node.getNodeAddresses(64)};
-    QVERIFY(added || std::any_of(node_addresses.begin(), node_addresses.end(), [](const CService& peer) {
-        return peer.ToStringAddrPort() == strprintf("1.2.3.4:%u", Params().GetDefaultPort());
-    }));
-
-    import_button->click();
-
-    const fs::path relay_peer_store = gArgs.GetDataDirNet() / "agent" / "relay-peers.json";
-    const auto saved_relay_peers = ReadBinaryFile(relay_peer_store);
-    QVERIFY(saved_relay_peers.first);
-    const QString saved_json = QString::fromStdString(saved_relay_peers.second);
-    QVERIFY(saved_json.contains(QStringLiteral("\"type\": \"quicksilver.agent_relay_peers\"")));
-    QVERIFY(saved_json.contains(QStringLiteral("1.2.3.4:%1").arg(Params().GetDefaultPort())));
-    QVERIFY(state->text().contains(QStringLiteral("Local-node peers imported")));
-    QCOMPARE(state->property("class").toString(), QStringLiteral("policyReviewValid"));
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(mini_gui.vaultModel.get(), platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(mini_gui.vaultModel.get());
+    window.resize(1200, 800);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QAction* agents = window.findChild<QAction*>(QStringLiteral("agentAllotmentAction"));
+    QVERIFY(agents);
+    agents->trigger();
+    QScrollArea* scroll_area = window.findChild<QScrollArea*>(QStringLiteral("agentAllotmentScrollArea"));
+    QVERIFY(scroll_area);
+    QTRY_VERIFY(scroll_area->isVisible());
+    QCoreApplication::processEvents();
+    QWidget* contents = scroll_area->widget();
+    QVERIFY2(!scroll_area->horizontalScrollBar()->isVisible(),
+             qPrintable(QStringLiteral("contents need %1 px in a %2 px viewport").arg(contents->minimumSizeHint().width()).arg(scroll_area->viewport()->width())));
+    // Name the widest offender, so a regression says where to look.
+    for (QWidget* child : contents->findChildren<QWidget*>()) {
+        if (!child->isVisibleTo(contents)) continue;
+        QVERIFY2(child->mapTo(contents, QPoint(child->width(), 0)).x() <= scroll_area->viewport()->width(),
+                 qPrintable(QStringLiteral("%1 (%2) ends at %3 px").arg(child->objectName(), QString::fromLatin1(child->metaObject()->className())).arg(child->mapTo(contents, QPoint(child->width(), 0)).x())));
+    }
 }
 
-void VaultTests::agentAllotmentRelaysInBackgroundWithPeerFallback()
+//! F-442 send-back 2, item 8: every line of text on a rail page sits in the
+//! panel it describes; none floats above the panels.
+void VaultTests::pagesKeepTheirTextInsidePanels()
 {
-    const fs::path relay_peer_store{gArgs.GetDataDirNet() / "agent" / "relay-peers.json"};
-    fs::create_directories(relay_peer_store.parent_path());
-    const QString peer_store_json = QStringLiteral(R"({
-  "type": "quicksilver.agent_relay_peers",
-  "version": 1,
-  "chain": "%1",
-  "genesis_hash": "%2",
-  "peers": ["127.0.0.1:%3", "127.0.0.2:%3"]
-})")
-                                        .arg(QString::fromStdString(Params().GetChainTypeString()),
-                                             QString::fromStdString(Params().GenesisBlock().GetHash().ToString()),
-                                             QString::number(Params().GetDefaultPort()));
-    QVERIFY(WriteBinaryFile(relay_peer_store, peer_store_json.toStdString() + "\n"));
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
 
-    std::atomic<int> relay_attempts{0};
-    std::atomic<bool> ran_off_gui_thread{false};
-    std::atomic<int64_t> observed_timeout_ms{0};
-    QThread* const gui_thread{QThread::currentThread()};
-    AgentAllotmentPage page{nullptr, [&](const CService& peer,
-                                      const CSerializedNetMsg&,
-                                      std::chrono::milliseconds timeout) {
-        observed_timeout_ms = timeout.count();
-        ran_off_gui_thread = QThread::currentThread() != gui_thread;
-        std::this_thread::sleep_for(std::chrono::milliseconds{200});
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    MiniGUI mini_gui(m_node, platform_style.get());
+    mini_gui.initModelForVault(m_node, vault, platform_style.get());
 
-        agent::PeerTransactionRelayResult result;
-        result.peer = peer;
-        if (relay_attempts.fetch_add(1) == 0) {
-            result.error = "test peer unavailable";
-        } else {
-            result.connected = true;
-            result.peer_version_received = true;
-            result.peer_verack_received = true;
-            result.local_verack_sent = true;
-            result.sent_tx = true;
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(mini_gui.vaultModel.get(), platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(mini_gui.vaultModel.get());
+    frame->setClientModel(mini_gui.clientModel.get());
+    window.resize(1200, 800);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+    // The network page reads its running state; give its intro the line the
+    // owner saw.
+    NetworkPage* network = window.findChild<NetworkPage*>();
+    QVERIFY(network);
+
+    const auto in_panel = [](QWidget* widget, QWidget* page) {
+        for (QWidget* at = widget; at && at != page; at = at->parentWidget()) {
+            if (at->property("benchPanel").toBool()) return true;
         }
-        return result;
-    }};
-
-    QPlainTextEdit* signed_spend_edit{page.findChild<QPlainTextEdit*>(QStringLiteral("agentAllotmentSignedSpendEdit"))};
-    QLineEdit* relay_peer_edit{page.findChild<QLineEdit*>(QStringLiteral("agentAllotmentRelayPeerEdit"))};
-    QPushButton* review_button{page.findChild<QPushButton*>(QStringLiteral("agentAllotmentReviewSignedSpendButton"))};
-    QPushButton* relay_button{page.findChild<QPushButton*>(QStringLiteral("agentAllotmentRelayPeerButton"))};
-    QLabel* state{page.findChild<QLabel*>(QStringLiteral("agentAllotmentSignedSpendState"))};
-    QVERIFY(signed_spend_edit);
-    QVERIFY(relay_peer_edit);
-    QVERIFY(review_button);
-    QVERIFY(relay_button);
-    QVERIFY(state);
-
-    CMutableTransaction mutable_spend;
-    mutable_spend.version = 2;
-    mutable_spend.vin.emplace_back(COutPoint{Txid::FromUint256(ArithToUint256(901)), 0});
-    mutable_spend.vout.emplace_back(COIN / 4, CScript{});
-    signed_spend_edit->setPlainText(QStringLiteral("hex=%1").arg(QString::fromStdString(EncodeHexTx(CTransaction{mutable_spend}))));
-    review_button->click();
-    QVERIFY(relay_button->isEnabled());
-    QVERIFY(relay_peer_edit->text().isEmpty());
-
-    QElapsedTimer click_timer;
-    click_timer.start();
-    relay_button->click();
-    QVERIFY2(click_timer.elapsed() < 150, "peer relay blocked the GUI thread");
-    QVERIFY(!relay_button->isEnabled());
-    QVERIFY(!signed_spend_edit->isEnabled());
-    QVERIFY(state->text().contains(QStringLiteral("in the background")));
-
-    QElapsedTimer relay_timer;
-    relay_timer.start();
-    while (!state->text().contains(QStringLiteral("sent to 1 of 2 peer(s)")) && relay_timer.elapsed() < 3000) {
-        // Deliver only the relay's queued result. Processing every application
-        // timer here can wake unrelated models retained by earlier GUI tests.
-        QCoreApplication::sendPostedEvents(&page);
-        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        return false;
+    };
+    for (const char* action_name : {"homeBootstrapAction", "sendCoinsAction", "receiveCoinsAction", "historyAction",
+                                    "agentAllotmentAction", "mineMintAction", "networkAction"}) {
+        QAction* action = window.findChild<QAction*>(QString::fromLatin1(action_name));
+        QVERIFY2(action, action_name);
+        action->trigger();
+        QCoreApplication::processEvents();
+        QWidget* page = nullptr;
+        for (QStackedWidget* stack : window.findChildren<QStackedWidget*>()) {
+            QWidget* current = stack->currentWidget();
+            if (current && current->isVisible() && current->property("class").toString() == QLatin1String("quicksilverPage")) page = current;
+        }
+        if (!page) {
+            // Home and the pages that are not quicksilverPage-classed: take the
+            // vault view's current page.
+            page = view->currentWidget();
+        }
+        QVERIFY2(page, action_name);
+        for (QLabel* label : page->findChildren<QLabel*>()) {
+            if (!label->isVisibleTo(page) || label->text().trimmed().isEmpty()) continue;
+            if (qobject_cast<QAbstractButton*>(label->parentWidget())) continue;
+            QVERIFY2(in_panel(label, page),
+                     qPrintable(QStringLiteral("%1: \"%2\" (%3) floats outside a panel").arg(QLatin1String(action_name), label->text().left(60), label->objectName())));
+        }
     }
-    QVERIFY(state->text().contains(QStringLiteral("sent to 1 of 2 peer(s)")));
-    QCOMPARE(relay_attempts.load(), 2);
-    QVERIFY(ran_off_gui_thread.load());
-    QCOMPARE(observed_timeout_ms.load(), agent::DEFAULT_AGENT_PEER_TIMEOUT_MS);
-    QVERIFY(state->text().contains(QStringLiteral("test peer unavailable")));
-    QCOMPARE(state->property("class").toString(), QStringLiteral("policyReviewValid"));
-    QVERIFY(relay_button->isEnabled());
-    QVERIFY(signed_spend_edit->isEnabled());
-
-    std::atomic<bool> orphaned_worker_finished{false};
-    auto closing_page{std::make_unique<AgentAllotmentPage>(nullptr, [&](const CService& peer,
-                                                                     const CSerializedNetMsg&,
-                                                                     std::chrono::milliseconds) {
-        std::this_thread::sleep_for(std::chrono::milliseconds{100});
-        orphaned_worker_finished = true;
-        agent::PeerTransactionRelayResult result;
-        result.peer = peer;
-        result.sent_tx = true;
-        return result;
-    })};
-    QPlainTextEdit* closing_spend_edit{closing_page->findChild<QPlainTextEdit*>(QStringLiteral("agentAllotmentSignedSpendEdit"))};
-    QLineEdit* closing_peer_edit{closing_page->findChild<QLineEdit*>(QStringLiteral("agentAllotmentRelayPeerEdit"))};
-    QPushButton* closing_review_button{closing_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentReviewSignedSpendButton"))};
-    QPushButton* closing_relay_button{closing_page->findChild<QPushButton*>(QStringLiteral("agentAllotmentRelayPeerButton"))};
-    QVERIFY(closing_spend_edit);
-    QVERIFY(closing_peer_edit);
-    QVERIFY(closing_review_button);
-    QVERIFY(closing_relay_button);
-    closing_spend_edit->setPlainText(QStringLiteral("hex=%1").arg(QString::fromStdString(EncodeHexTx(CTransaction{mutable_spend}))));
-    closing_review_button->click();
-    closing_peer_edit->setText(QStringLiteral("127.0.0.1:%1").arg(Params().GetDefaultPort()));
-    closing_relay_button->click();
-    closing_page.reset();
-
-    QElapsedTimer orphaned_worker_timer;
-    orphaned_worker_timer.start();
-    while (!orphaned_worker_finished.load() && orphaned_worker_timer.elapsed() < 1000) {
-        std::this_thread::sleep_for(std::chrono::milliseconds{10});
-    }
-    QVERIFY(orphaned_worker_finished.load());
 }
 
 void VaultTests::vaultTests()
@@ -1668,6 +1759,842 @@ void VaultTests::vaultTests()
     }
 #endif
     TestGUI(m_node);
+}
+
+void VaultTests::benchTickerMatchesVaultBalances()
+{
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    OptionsModel options_model(m_node);
+    bilingual_str error;
+    QVERIFY(options_model.Init(error));
+
+    auto vault = std::make_unique<PollMarkerVault>();
+    PollMarkerVault* vault_ptr = vault.get();
+    vault_ptr->balance = 50 * COIN;
+    vault_ptr->unconfirmed = 2 * COIN;
+    vault_ptr->immature = 3 * COIN;
+    VaultModel model(std::move(vault), m_node, &options_model, platform_style.get());
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(&model, platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(&model);
+    vault_ptr->block_hash = ArithToUint256(1);
+    model.pollBalanceChanged();
+
+    // Each figure is the bare amount; its unit is a separate small label, as in
+    // the Assay Bench ticker. TOTAL is everything the vault holds.
+    const auto format_amount = [&](CAmount amount, bool privacy) {
+        return QuicksilverUnits::formatInlineValueWithPrivacy(
+            model.getOptionsModel()->getDisplayUnit(), amount, QuicksilverUnits::SeparatorStyle::ALWAYS, privacy);
+    };
+    const auto expect_ticker = [&](bool privacy) {
+        const interfaces::VaultBalances balances = model.getCachedBalance();
+        QCOMPARE(window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable"))->text(), format_amount(balances.balance, privacy));
+        QCOMPARE(window.findChild<QLabel*>(QStringLiteral("benchTickerPending"))->text(), format_amount(balances.unconfirmed_balance, privacy));
+        QCOMPARE(window.findChild<QLabel*>(QStringLiteral("benchTickerMaturing"))->text(), format_amount(balances.immature_balance, privacy));
+        QCOMPARE(window.findChild<QLabel*>(QStringLiteral("benchTickerDelegated"))->text(), format_amount(balances.delegated_balance, privacy));
+        QCOMPARE(window.findChild<QLabel*>(QStringLiteral("benchTickerTotal"))->text(),
+                 format_amount(balances.balance + balances.unconfirmed_balance + balances.immature_balance + balances.delegated_balance, privacy));
+        QCOMPARE(window.findChild<QWidget*>(QStringLiteral("benchTickerDelegatedBox"))->isHidden(), balances.delegated_balance == 0);
+        const QString unit = QuicksilverUnits::shortName(model.getOptionsModel()->getDisplayUnit());
+        const QList<QLabel*> units = window.findChild<QWidget*>(QStringLiteral("benchTickerFigures"))->findChildren<QLabel*>(QStringLiteral("benchTickerUnit"));
+        QCOMPARE(units.size(), 5);
+        // The symbol is spelled Hg everywhere, the ticker included (F-442 owner walk).
+        QCOMPARE(unit, QStringLiteral("Hg"));
+        for (const QLabel* label : units) QCOMPARE(label->text(), unit);
+    };
+
+    const interfaces::VaultBalances initial = model.getCachedBalance();
+    QCOMPARE(initial.balance, 50 * COIN);
+    QCOMPARE(initial.unconfirmed_balance, 2 * COIN);
+    QCOMPARE(initial.immature_balance, 3 * COIN);
+    QCOMPARE(initial.delegated_balance, 0 * COIN);
+    expect_ticker(false);
+    if (QTest::currentTestFailed()) return;
+    QVERIFY(window.findChild<QLabel*>(QStringLiteral("benchTickerEmpty"))->isHidden());
+    QLabel* crumb = window.findChild<QLabel*>(QStringLiteral("benchBreadcrumb"));
+    QVERIFY(crumb);
+    QCOMPARE(crumb->text(), model.getDisplayName().toUpper() + QStringLiteral(" / HOME"));
+    QLabel* vault_status = window.findChild<QLabel*>(QStringLiteral("benchStatusVault"));
+    QVERIFY(vault_status);
+    QCOMPARE(vault_status->text(), QStringLiteral("Vault not encrypted · backup needed"));
+    for (QLabel* label : {window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable")),
+                          window.findChild<QLabel*>(QStringLiteral("benchTickerPending")),
+                          window.findChild<QLabel*>(QStringLiteral("benchTickerMaturing")),
+                          window.findChild<QLabel*>(QStringLiteral("benchTickerDelegated")),
+                          window.findChild<QLabel*>(QStringLiteral("benchTickerTotal"))}) {
+        QVERIFY(label);
+        const QString charge_word = QStringLiteral("fee");
+        QVERIFY(!label->text().contains(charge_word, Qt::CaseInsensitive));
+    }
+
+    const QString spendable_before = window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable"))->text();
+    vault_ptr->balance = 40 * COIN;
+    vault_ptr->block_hash = ArithToUint256(2);
+    model.pollBalanceChanged();
+    expect_ticker(false);
+    if (QTest::currentTestFailed()) return;
+    QVERIFY(window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable"))->text() != spendable_before);
+
+    vault_ptr->delegated = 7 * COIN;
+    vault_ptr->block_hash = uint256{3};
+    model.pollBalanceChanged();
+    expect_ticker(false);
+    if (QTest::currentTestFailed()) return;
+    QVERIFY(!window.findChild<QWidget*>(QStringLiteral("benchTickerDelegatedBox"))->isHidden());
+
+    QAction* mask = nullptr;
+    for (QAction* action : window.findChildren<QAction*>()) {
+        QString text = action->text();
+        text.remove(QLatin1Char('&'));
+        if (text == QStringLiteral("Mask values")) {
+            mask = action;
+            break;
+        }
+    }
+    QVERIFY(mask);
+    mask->setChecked(true);
+    expect_ticker(true);
+    if (QTest::currentTestFailed()) return;
+    QVERIFY(window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable"))->text().contains(QLatin1Char('#')));
+    QVERIFY(window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable"))->text() != spendable_before);
+    mask->setChecked(false);
+    expect_ticker(false);
+    if (QTest::currentTestFailed()) return;
+
+    vault_ptr->delegated = 0;
+    vault_ptr->block_hash = uint256{4};
+    model.pollBalanceChanged();
+    expect_ticker(false);
+
+    QAction* transfer = window.findChild<QAction*>(QStringLiteral("sendCoinsAction"));
+    QVERIFY(transfer);
+    transfer->setChecked(true);
+    QCOMPARE(crumb->text(), model.getDisplayName().toUpper() + QStringLiteral(" / TRANSFER"));
+}
+
+void VaultTests::homeLedgerListsVaultTransactions()
+{
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    DesktopLaunchPage bare(platform_style.get(), /*blockchain_size_gb=*/128, /*chain_state_size_gb=*/26, nullptr);
+    QVERIFY(bare.findChild<QWidget*>(QStringLiteral("homeLedger")));
+    QVERIFY(bare.findChild<QLabel*>(QStringLiteral("homeLedgerEmpty")));
+    QVERIFY(bare.findChild<QLabel*>(QStringLiteral("homeNodeHeight")));
+    QVERIFY(bare.findChild<QLabel*>(QStringLiteral("homeNodePeers")));
+    QVERIFY(bare.findChild<QLabel*>(QStringLiteral("homeNodeLastBlock")));
+    QCOMPARE(bare.findChild<QLabel*>(QStringLiteral("homeLedgerEmpty"))->text(), QStringLiteral("No vault is open"));
+
+    // The application test window has no funded vault, so the ledger rows are
+    // checked here, on the same chain the transfer tests already use.
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    for (int i = 0; i < 5; ++i) {
+        test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+    }
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    QSettings().remove(QStringLiteral("TransactionViewHeaderState"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    MiniGUI mini_gui(m_node, platform_style.get());
+    mini_gui.initModelForVault(m_node, vault, platform_style.get());
+    // One transfer still waiting for a block, beside mature and maturing rewards.
+    const uint256 pending_txid = SendCoins(*vault, mini_gui.sendCoinsDialog, PKHash(), COIN);
+    QVERIFY(!pending_txid.IsNull());
+    qApp->processEvents();
+    TransactionTableModel* source = mini_gui.vaultModel->getTransactionTableModel();
+    QVERIFY(source);
+    const int all_rows = source->rowCount({});
+    QVERIFY(all_rows > 0);
+
+    int generated = 0;
+    int transferred = 0;
+    int pending = 0;
+    int maturing = 0;
+    for (int row = 0; row < all_rows; ++row) {
+        const QModelIndex index = source->index(row, 0);
+        switch (index.data(TransactionTableModel::TypeRole).toInt()) {
+        case TransactionRecord::Generated: ++generated; break;
+        case TransactionRecord::SendToAddress:
+        case TransactionRecord::SendToOther: ++transferred; break;
+        }
+        const int status = index.data(TransactionTableModel::StatusRole).toInt();
+        if (status == TransactionStatus::Unconfirmed) ++pending;
+        if (status == TransactionStatus::Immature) ++maturing;
+    }
+    QVERIFY(generated > 0);
+    QCOMPARE(transferred, 1);
+    // More rows than Home's snapshot holds, so the snapshot has to choose.
+    QVERIFY(all_rows > 10);
+    QDateTime tenth_newest;
+    {
+        QList<QDateTime> dates;
+        for (int row = 0; row < all_rows; ++row) dates << source->index(row, 0).data(TransactionTableModel::DateRole).toDateTime();
+        std::sort(dates.begin(), dates.end(), std::greater<>());
+        tenth_newest = dates.at(9);
+    }
+    QVERIFY(pending >= 1);
+    QVERIFY(maturing > 0);
+
+    QByteArray history_header;
+    {
+        QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+        VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+        QVERIFY(frame);
+        auto* view = new VaultView(mini_gui.vaultModel.get(), platform_style.get(), frame);
+        QVERIFY(frame->addView(view));
+        frame->setCurrentVault(mini_gui.vaultModel.get());
+        QAction* home = window.findChild<QAction*>(QStringLiteral("homeBootstrapAction"));
+        QVERIFY(home);
+        home->trigger();
+
+        QWidget* launch = window.findChild<QWidget*>(QStringLiteral("desktopLaunchPage"));
+        QVERIFY(launch);
+        QVERIFY(launch->findChild<QLabel*>(QStringLiteral("homeLedgerEmpty"))->isHidden());
+        // The launch heading and tagline are gone; the breadcrumb names the page.
+        QVERIFY(!launch->findChild<QLabel*>(QStringLiteral("desktopLaunchTitle")));
+        QVERIFY(!launch->findChild<QLabel*>(QStringLiteral("desktopLaunchSubtitle")));
+        // The maturity countdown (F-432) reads on Home, above the ledger.
+        QLabel* maturing_note = launch->findChild<QLabel*>(QStringLiteral("homeVaultMaturing"));
+        QVERIFY(maturing_note);
+        QVERIFY(!maturing_note->isHidden());
+        QVERIFY2(maturing_note->text().contains(QStringLiteral("in about")), qPrintable(maturing_note->text()));
+
+        // F-451: Home's ledger is a snapshot, the newest 10 rows, with how many
+        // there are in all in its head. Filtering lives on the Ledger page, which
+        // a link in the head opens.
+        QFrame* ledger = launch->findChild<QFrame*>(QStringLiteral("homeLedger"));
+        QVERIFY(ledger);
+        QVERIFY(!ledger->isHidden());
+        QCOMPARE(ledger->property("benchPanel").toBool(), true);
+        QCOMPARE(ledger->findChild<QLabel*>(QStringLiteral("benchPanelTitle"))->text(), QStringLiteral("LEDGER"));
+        QLabel* count = ledger->findChild<QLabel*>(QStringLiteral("homeLedgerCount"));
+        QVERIFY(count);
+        QCOMPARE(count->text(), QStringLiteral("10 of %1 entries").arg(all_rows));
+        QVERIFY(ledger->findChildren<QComboBox*>().isEmpty());
+        QVERIFY(ledger->findChildren<QLineEdit*>().isEmpty());
+        for (const char* segment : {"homeLedgerFilterAll", "homeLedgerFilterReceived", "homeLedgerFilterTransferred", "homeLedgerFilterMining"}) {
+            QVERIFY2(!ledger->findChild<QPushButton*>(QString::fromLatin1(segment)), segment);
+        }
+        QTableView* table = ledger->findChild<QTableView*>(QStringLiteral("homeLedgerTable"));
+        QVERIFY(table);
+        QAbstractItemModel* rows = table->model();
+        QVERIFY(rows);
+        QCOMPARE(rows->rowCount(), 10);
+        for (int row = 0; row < rows->rowCount(); ++row) {
+            const QDateTime when = rows->index(row, 0).data(TransactionTableModel::DateRole).toDateTime();
+            QVERIFY2(when >= tenth_newest, qPrintable(when.toString(Qt::ISODate)));
+            if (row > 0) QVERIFY(when <= rows->index(row - 1, 0).data(TransactionTableModel::DateRole).toDateTime());
+        }
+
+        // Columns: date (with the state dot), type, label, signed amount, and
+        // STATE last. No status-icon column.
+        QHeaderView* header = table->horizontalHeader();
+        QStringList columns;
+        for (int visual = 0; visual < header->count(); ++visual) {
+            const int logical = header->logicalIndex(visual);
+            if (header->isSectionHidden(logical)) continue;
+            columns << rows->headerData(logical, Qt::Horizontal).toString();
+        }
+        const QString unit = QuicksilverUnits::shortName(mini_gui.vaultModel->getOptionsModel()->getDisplayUnit());
+        QCOMPARE(columns, (QStringList{QStringLiteral("DATE"), QStringLiteral("TYPE"), QStringLiteral("LABEL"),
+                                       QStringLiteral("AMOUNT  ") + unit, QStringLiteral("STATE")}));
+        int state_column = -1;
+        int amount_column = -1;
+        int date_column = -1;
+        for (int logical = 0; logical < rows->columnCount(); ++logical) {
+            const QString name = rows->headerData(logical, Qt::Horizontal).toString();
+            if (name == QStringLiteral("STATE")) state_column = logical;
+            if (name.startsWith(QStringLiteral("AMOUNT"))) amount_column = logical;
+            if (name == QStringLiteral("DATE")) date_column = logical;
+        }
+        QVERIFY(state_column >= 0 && amount_column >= 0 && date_column >= 0);
+        int seen_pending = 0;
+        int seen_maturing = 0;
+        for (int row = 0; row < rows->rowCount(); ++row) {
+            const int status = rows->index(row, 0).data(TransactionTableModel::StatusRole).toInt();
+            const QString state = rows->index(row, state_column).data().toString();
+            const QString amount = rows->index(row, amount_column).data().toString();
+            QVERIFY2(!amount.contains(QLatin1Char('[')), qPrintable(amount));
+            QVERIFY(!rows->index(row, date_column).data(Qt::DecorationRole).isNull());
+            switch (status) {
+            case TransactionStatus::Unconfirmed:
+                QCOMPARE(state, QStringLiteral("Pending"));
+                ++seen_pending;
+                break;
+            case TransactionStatus::Immature:
+                QCOMPARE(state, QStringLiteral("Maturing"));
+                ++seen_maturing;
+                break;
+            case TransactionStatus::Confirmed:
+                QCOMPARE(state, QStringLiteral("Confirmed"));
+                break;
+            default:
+                QVERIFY2(!state.isEmpty(), "every row names its state");
+            }
+            const qint64 net = rows->index(row, 0).data(TransactionTableModel::AmountRole).toLongLong();
+            QVERIFY2(amount.startsWith(net < 0 ? QStringLiteral("− ") : QStringLiteral("+ ")), qPrintable(amount));
+        }
+        // The transfer still waiting for a block is the newest row; the newest
+        // rewards are still maturing.
+        QCOMPARE(seen_pending, pending);
+        QVERIFY(seen_maturing > 0);
+
+        // A new transaction joins the snapshot and the oldest shown row leaves
+        // it; the count in the head follows. Both transfers are pending at the
+        // same mock time, so either may sort first.
+        const uint256 second_txid = SendCoins(*vault, mini_gui.sendCoinsDialog, PKHash(), COIN);
+        QVERIFY(!second_txid.IsNull());
+        QTRY_COMPARE(source->rowCount({}), all_rows + 1);
+        QTRY_COMPARE(count->text(), QStringLiteral("10 of %1 entries").arg(all_rows + 1));
+        QCOMPARE(rows->rowCount(), 10);
+        QCOMPARE(rows->match(rows->index(0, 0), TransactionTableModel::TxHashRole, QString::fromStdString(second_txid.GetHex()), 1, Qt::MatchExactly).size(), 1);
+
+        // "Full ledger" opens the Ledger page, and the rail follows.
+        QPushButton* full = ledger->findChild<QPushButton*>(QStringLiteral("homeLedgerOpenFull"));
+        QVERIFY(full);
+        QCOMPARE(full->text(), QStringLiteral("Full ledger"));
+        QAction* history = window.findChild<QAction*>(QStringLiteral("historyAction"));
+        QVERIFY(history);
+        QVERIFY(!history->isChecked());
+        full->click();
+        QVERIFY(history->isChecked());
+        QWidget* history_page = window.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"))->currentWidget();
+        QVERIFY(history_page);
+        QVERIFY(history_page != launch);
+        QTableView* history_table = history_page->findChild<QTableView*>(QStringLiteral("transactionView"));
+        QVERIFY(history_table);
+        QVERIFY(history_table->model());
+        QCOMPARE(history_table->model()->rowCount(), all_rows + 1);
+
+        table->setColumnWidth(TransactionTableModel::Date, 55);
+        history_table->setColumnWidth(TransactionTableModel::Date, 177);
+        history_header = history_table->horizontalHeader()->saveState();
+    }
+
+    TransactionView restored(platform_style.get());
+    QTableView* restored_table = restored.findChild<QTableView*>(QStringLiteral("transactionView"));
+    QVERIFY(restored_table);
+    QCOMPARE(restored_table->horizontalHeader()->saveState(), history_header);
+    QCOMPARE(restored_table->columnWidth(TransactionTableModel::Date), 177);
+}
+
+namespace {
+double RelativeLuminance(const QColor& color)
+{
+    const auto channel = [](double c) { return c <= 0.03928 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); };
+    return 0.2126 * channel(color.redF()) + 0.7152 * channel(color.greenF()) + 0.0722 * channel(color.blueF());
+}
+
+double ContrastRatio(const QColor& a, const QColor& b)
+{
+    const double la = RelativeLuminance(a);
+    const double lb = RelativeLuminance(b);
+    return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+}
+
+bool Reddish(const QColor& color)
+{
+    return color.red() > 150 && color.red() - std::max(color.green(), color.blue()) > 60;
+}
+
+int CountPixels(const QImage& image, const std::function<bool(const QColor&)>& match)
+{
+    int count = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (match(image.pixelColor(x, y))) ++count;
+        }
+    }
+    return count;
+}
+} // namespace
+
+//! F-442 owner walk, items 3, 5, 11 and 12: one type scale with labels as
+//! legible as their values, focus and checked states that do not read as
+//! errors, spin box arrows that draw, and primary commands that differ from
+//! the rest in colour only.
+void VaultTests::benchStyleKeepsOneScaleAndQuietStates()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    using QuicksilverStyle::Type;
+
+    QSet<int> scale;
+    for (Type type : {Type::Caption, Type::Label, Type::Body, Type::Value, Type::Figure, Type::Title}) {
+        scale.insert(QuicksilverStyle::FontPx(type));
+    }
+    const QRegularExpression size_rule(QStringLiteral("font-size:\\s*(\\d+)px"));
+    for (auto it = size_rule.globalMatch(qApp->styleSheet()); it.hasNext();) {
+        const int px = it.next().captured(1).toInt();
+        QVERIFY2(scale.contains(px), qPrintable(QStringLiteral("font-size %1px is not on the type scale").arg(px)));
+    }
+    QVERIFY(QuicksilverStyle::FontPx(Type::Caption) >= 10);
+
+    // Labels read as strongly as the values they name: AAA contrast on a panel.
+    // Captions are short upper-case words and need AA.
+    const QColor panel = QuicksilverStyle::Color(QuicksilverStyle::Token::BenchSurface);
+    QWidget sample;
+    auto* key = new QLabel(QStringLiteral("Payout target"), &sample);
+    key->setProperty("class", QStringLiteral("benchKey"));
+    auto* note = new QLabel(QStringLiteral("A note under the rows"), &sample);
+    note->setProperty("class", QStringLiteral("benchNote"));
+    const BenchPanel::Parts parts = BenchPanel::Make(QStringLiteral("samplePanel"), QStringLiteral("Mining state"), &sample);
+    QLabel* caption = parts.frame->findChild<QLabel*>(QStringLiteral("benchPanelTitle"));
+    QVERIFY(caption);
+    for (QLabel* label : {key, note, caption}) label->ensurePolished();
+    for (QLabel* label : {key, note}) {
+        const QColor color = label->palette().color(label->foregroundRole());
+        QVERIFY2(ContrastRatio(color, panel) >= 7.0,
+                 qPrintable(QStringLiteral("%1 is %2 on the panel, %3:1").arg(label->text(), color.name()).arg(ContrastRatio(color, panel), 0, 'f', 2)));
+    }
+    const QColor caption_color = caption->palette().color(caption->foregroundRole());
+    QVERIFY2(ContrastRatio(caption_color, panel) >= 4.5, qPrintable(caption_color.name()));
+
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    auto* edit = new QLineEdit(&host);
+    auto* check = new QCheckBox(QStringLiteral("Enable RPC server"), &host);
+    check->setChecked(true);
+    auto* spin = new QSpinBox(&host);
+    spin->setRange(0, 1000);
+    spin->setValue(450);
+    spin->setMinimumWidth(140);
+    auto* primary = new QPushButton(QStringLiteral("Request"), &host);
+    primary->setProperty("class", QStringLiteral("primaryActionButton"));
+    auto* secondary = new QPushButton(QStringLiteral("Request"), &host);
+    auto* quiet = new QPushButton(QStringLiteral("Request"), &host);
+    quiet->setProperty("class", QStringLiteral("benchQuiet"));
+    for (QWidget* widget : std::initializer_list<QWidget*>{edit, check, spin, primary, secondary, quiet}) layout->addWidget(widget, 0, Qt::AlignLeft);
+    host.resize(360, 320);
+    host.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&host));
+    host.activateWindow();
+    edit->setFocus();
+    QTRY_VERIFY(edit->hasFocus());
+
+    // Focus is not a validation error.
+    const QImage focused = edit->grab().toImage();
+    const QColor focus_border = focused.pixelColor(0, focused.height() / 2);
+    QVERIFY2(!Reddish(focus_border), qPrintable(QStringLiteral("focused input border %1").arg(focus_border.name())));
+
+    // A checked box shows a check mark, and is not a red block.
+    QStyleOptionButton check_option;
+    check_option.initFrom(check);
+    const QRect indicator = check->style()->subElementRect(QStyle::SE_CheckBoxIndicator, &check_option, check);
+    const QImage box = check->grab(indicator).toImage();
+    QCOMPARE(CountPixels(box, Reddish), 0);
+    QVERIFY2(CountPixels(box, [](const QColor& c) { return c.lightness() > 150; }) > 0, "checked box has no check mark");
+
+    // The spin box's buttons sit inside its border and draw their arrows.
+    QStyleOptionSpinBox spin_option;
+    spin_option.initFrom(spin);
+    spin_option.subControls = QStyle::SC_SpinBoxUp | QStyle::SC_SpinBoxDown | QStyle::SC_SpinBoxFrame | QStyle::SC_SpinBoxEditField;
+    spin_option.buttonSymbols = spin->buttonSymbols();
+    spin_option.frame = true;
+    spin_option.stepEnabled = QAbstractSpinBox::StepUpEnabled | QAbstractSpinBox::StepDownEnabled;
+    for (QStyle::SubControl part : {QStyle::SC_SpinBoxUp, QStyle::SC_SpinBoxDown}) {
+        const QRect button = spin->style()->subControlRect(QStyle::CC_SpinBox, &spin_option, part, spin);
+        QVERIFY2(button.width() >= 14 && button.right() < spin->width() - 1,
+                 qPrintable(QStringLiteral("spin button %1,%2 %3x%4 in a %5 px box").arg(button.x()).arg(button.y()).arg(button.width()).arg(button.height()).arg(spin->width())));
+        const QImage arrow = spin->grab(button).toImage();
+        QVERIFY2(CountPixels(arrow, [](const QColor& c) { return c.lightness() > 130; }) >= 4, "spin button draws no arrow");
+    }
+
+    // Primary, secondary and quiet commands share height, padding and type.
+    QCOMPARE(primary->height(), secondary->height());
+    QCOMPARE(quiet->height(), secondary->height());
+    QCOMPARE(primary->sizeHint(), secondary->sizeHint());
+    QCOMPARE(quiet->sizeHint(), secondary->sizeHint());
+    QCOMPARE(QFontInfo(primary->font()).pixelSize(), QFontInfo(secondary->font()).pixelSize());
+    QCOMPARE(QFontInfo(quiet->font()).pixelSize(), QFontInfo(secondary->font()).pixelSize());
+}
+
+//! F-442 send-back 2, items 2 and 3: a spin box always draws both arrows,
+//! dimming the one that cannot step, and a check box reads against its panel
+//! whether or not it is checked.
+void VaultTests::benchSpinAndCheckControlsStayWhole()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    const QColor panel = QuicksilverStyle::Color(QuicksilverStyle::Token::BenchSurface);
+
+    QWidget host;
+    host.setAutoFillBackground(true);
+    QPalette host_palette = host.palette();
+    host_palette.setColor(QPalette::Window, panel);
+    host.setPalette(host_palette);
+    auto* layout = new QVBoxLayout(&host);
+    auto* at_min = new QSpinBox(&host);
+    at_min->setRange(0, 10);
+    at_min->setValue(0);
+    auto* at_max = new QSpinBox(&host);
+    at_max->setRange(0, 10);
+    at_max->setValue(10);
+    auto* disabled = new QSpinBox(&host);
+    disabled->setRange(0, 10);
+    disabled->setValue(5);
+    disabled->setEnabled(false);
+    auto* unchecked = new QCheckBox(QStringLiteral("Route change to custom address"), &host);
+    auto* checked = new QCheckBox(QStringLiteral("I accept the shared-key risk"), &host);
+    checked->setChecked(true);
+    for (QAbstractSpinBox* spin : {static_cast<QAbstractSpinBox*>(at_min), static_cast<QAbstractSpinBox*>(at_max), static_cast<QAbstractSpinBox*>(disabled)}) {
+        spin->setMinimumWidth(140);
+        layout->addWidget(spin, 0, Qt::AlignLeft);
+    }
+    layout->addWidget(unchecked, 0, Qt::AlignLeft);
+    layout->addWidget(checked, 0, Qt::AlignLeft);
+    host.resize(360, 260);
+    host.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&host));
+
+    // Brightest pixel in a spin button: the arrow, dimmed or not, is drawn.
+    const auto arrow_lightness = [](QSpinBox* spin, QStyle::SubControl part) {
+        QStyleOptionSpinBox option;
+        option.initFrom(spin);
+        option.subControls = QStyle::SC_SpinBoxUp | QStyle::SC_SpinBoxDown | QStyle::SC_SpinBoxFrame | QStyle::SC_SpinBoxEditField;
+        option.buttonSymbols = spin->buttonSymbols();
+        option.frame = true;
+        const QRect button = spin->style()->subControlRect(QStyle::CC_SpinBox, &option, part, spin);
+        const QImage image = spin->grab(button).toImage();
+        int arrow_pixels = 0;
+        int brightest = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                const QColor c = image.pixelColor(x, y);
+                if (c.lightness() > 70) ++arrow_pixels;
+                brightest = std::max(brightest, c.lightness());
+            }
+        }
+        return std::make_pair(arrow_pixels, brightest);
+    };
+    const auto min_up = arrow_lightness(at_min, QStyle::SC_SpinBoxUp);
+    const auto min_down = arrow_lightness(at_min, QStyle::SC_SpinBoxDown);
+    const auto max_up = arrow_lightness(at_max, QStyle::SC_SpinBoxUp);
+    const auto max_down = arrow_lightness(at_max, QStyle::SC_SpinBoxDown);
+    const auto off_up = arrow_lightness(disabled, QStyle::SC_SpinBoxUp);
+    const auto off_down = arrow_lightness(disabled, QStyle::SC_SpinBoxDown);
+    for (const auto& [name, arrow] : std::initializer_list<std::pair<const char*, std::pair<int, int>>>{
+             {"minimum up", min_up}, {"minimum down", min_down}, {"maximum up", max_up}, {"maximum down", max_down},
+             {"disabled up", off_up}, {"disabled down", off_down}}) {
+        QVERIFY2(arrow.first >= 4, qPrintable(QStringLiteral("%1 arrow draws %2 pixels").arg(QLatin1String(name)).arg(arrow.first)));
+    }
+    // The arrow that cannot step is dimmer than the one that can.
+    QVERIFY2(min_down.second < min_up.second, qPrintable(QStringLiteral("at minimum down %1 vs up %2").arg(min_down.second).arg(min_up.second)));
+    QVERIFY2(max_up.second < max_down.second, qPrintable(QStringLiteral("at maximum up %1 vs down %2").arg(max_up.second).arg(max_down.second)));
+
+    // Both check boxes show their box against the panel (non-text contrast,
+    // 3:1), and the checked one shows a tick that is not an error red.
+    const auto indicator_image = [](QCheckBox* box) {
+        QStyleOptionButton option;
+        option.initFrom(box);
+        const QRect indicator = box->style()->subElementRect(QStyle::SE_CheckBoxIndicator, &option, box);
+        return box->grab(indicator).toImage();
+    };
+    for (QCheckBox* box : {unchecked, checked}) {
+        const QImage image = indicator_image(box);
+        double best = 1.0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) best = std::max(best, ContrastRatio(image.pixelColor(x, y), panel));
+        }
+        QVERIFY2(best >= 3.0, qPrintable(QStringLiteral("%1: box border reaches %2:1 on the panel").arg(box->text()).arg(best, 0, 'f', 2)));
+    }
+    const QImage tick = indicator_image(checked);
+    QCOMPARE(CountPixels(tick, Reddish), 0);
+    QVERIFY2(CountPixels(tick, [](const QColor& c) { return c.lightness() > 200; }) >= 6, "checked box has no visible tick");
+    QVERIFY2(CountPixels(indicator_image(unchecked), [](const QColor& c) { return c.lightness() > 200; }) == 0, "unchecked box draws a tick");
+}
+
+//! F-442 owner walk, item 4: the Ledger destination lines up with every other
+//! page, names both filters, gives Date and Label their content before Amount,
+//! keeps Export inside its panel and says what a bracketed amount means.
+void VaultTests::ledgerPageNamesItsFiltersAndFitsItsColumns()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    QSettings().remove(QStringLiteral("TransactionViewHeaderState"));
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    MiniGUI mini_gui(m_node, platform_style.get());
+    mini_gui.initModelForVault(m_node, vault, platform_style.get());
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(mini_gui.vaultModel.get(), platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(mini_gui.vaultModel.get());
+    window.resize(1200, 800);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+    QAction* home = window.findChild<QAction*>(QStringLiteral("homeBootstrapAction"));
+    QVERIFY(home);
+    home->trigger();
+    QCoreApplication::processEvents();
+    QWidget* home_ledger = window.findChild<QWidget*>(QStringLiteral("homeLedger"));
+    QVERIFY(home_ledger);
+    const int page_left = home_ledger->mapTo(&window, QPoint(0, 0)).x();
+
+    QAction* history = window.findChild<QAction*>(QStringLiteral("historyAction"));
+    QVERIFY(history);
+    history->trigger();
+    QCoreApplication::processEvents();
+    QFrame* panel = view->findChild<QFrame*>(QStringLiteral("transactionLedgerPanel"));
+    QVERIFY(panel);
+    QTRY_VERIFY(panel->isVisible());
+    QCOMPARE(panel->mapTo(&window, QPoint(0, 0)).x(), page_left);
+
+    // Both filters say what they filter.
+    QList<QComboBox*> combos = panel->findChildren<QComboBox*>();
+    QCOMPARE(combos.size(), 2);
+    QStringList first_items;
+    for (QComboBox* combo : combos) first_items << combo->itemText(0);
+    first_items.sort();
+    QCOMPARE(first_items, (QStringList{QStringLiteral("All dates"), QStringLiteral("All types")}));
+
+    // Export is one of the panel's commands.
+    QPushButton* export_button = window.findChild<QPushButton*>(QStringLiteral("transactionExportButton"));
+    QVERIFY(export_button);
+    QVERIFY(panel->isAncestorOf(export_button));
+
+    // The page says which states are not spendable yet. Send-back 2 item 4
+    // replaced the bracketed amount with Home's signed amount and state word,
+    // so the legend names the states, not brackets.
+    QLabel* legend = panel->findChild<QLabel*>(QStringLiteral("transactionLedgerLegend"));
+    QVERIFY(legend);
+    QVERIFY(legend->isVisible());
+    QVERIFY2(!legend->text().contains(QStringLiteral("brackets")), qPrintable(legend->text()));
+    QVERIFY2(legend->text().contains(QStringLiteral("Pending")) && legend->text().contains(QStringLiteral("Maturing")), qPrintable(legend->text()));
+    // F-451: the page reads rows as Home does, a state word and a dot on the
+    // date, so there is no status clock for the legend to explain.
+    QVERIFY2(!legend->text().contains(QStringLiteral("clock")), qPrintable(legend->text()));
+
+    // Date and Label get their content width; Amount takes no slack.
+    QTableView* table = panel->findChild<QTableView*>(QStringLiteral("transactionView"));
+    QVERIFY(table);
+    // QTableView narrows the public QAbstractItemView call to protected.
+    QAbstractItemView* cells = table;
+    QTRY_VERIFY(table->model() && table->model()->rowCount() > 0);
+    QCoreApplication::processEvents();
+    for (int row = 0; row < table->model()->rowCount(); ++row) {
+        QVERIFY(table->model()->index(row, TransactionTableModel::Status).data(Qt::DecorationRole).isNull());
+    }
+    const auto fits = [&](int column) { return table->columnWidth(column) >= cells->sizeHintForColumn(column); };
+    QVERIFY2(fits(TransactionTableModel::Date),
+             qPrintable(QStringLiteral("Date %1 px of %2").arg(table->columnWidth(TransactionTableModel::Date)).arg(cells->sizeHintForColumn(TransactionTableModel::Date))));
+    QVERIFY2(fits(TransactionTableModel::ToAddress),
+             qPrintable(QStringLiteral("Label %1 px of %2").arg(table->columnWidth(TransactionTableModel::ToAddress)).arg(cells->sizeHintForColumn(TransactionTableModel::ToAddress))));
+    // A header saved before the state had a word kept a 30 px icon column;
+    // the next fit widens it to the word.
+    table->setColumnWidth(TransactionTableModel::Status, 30);
+    TransactionView* ledger_view = window.findChild<TransactionView*>();
+    QVERIFY(ledger_view && ledger_view->isAncestorOf(table));
+    QVERIFY(QMetaObject::invokeMethod(ledger_view, "fitColumns"));
+    QVERIFY2(fits(TransactionTableModel::Status),
+             qPrintable(QStringLiteral("State %1 px of %2").arg(table->columnWidth(TransactionTableModel::Status)).arg(cells->sizeHintForColumn(TransactionTableModel::Status))));
+    const int amount_slack = table->columnWidth(TransactionTableModel::Amount) - std::max(cells->sizeHintForColumn(TransactionTableModel::Amount),
+                                                                                         table->horizontalHeader()->sectionSizeHint(TransactionTableModel::Amount));
+    QVERIFY2(amount_slack <= 24, qPrintable(QStringLiteral("Amount carries %1 px of slack").arg(amount_slack)));
+}
+
+//! F-442 send-back 2, item 4, and F-451: Home's ledger and the Ledger page read
+//! the same transaction the same way in every column (state word, friendly date
+//! with its state dot, type, label, signed amount); Home gives the
+//! label its content width before any slack; and a reward that is still
+//! maturing reads as a caution, not an error.
+void VaultTests::homeAndLedgerReadTransactionsAlike()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    // TestChain100Setup's rewards pay a bare pubkey, which has no address and
+    // so no label. One reward to the key's P2WPKH address gives a labelled row.
+    test.CreateAndProcessBlock({}, GetScriptForDestination(WitnessV0KeyHash(test.coinbaseKey.GetPubKey())));
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    const QString payout_label = QStringLiteral("founding-payout-b58");
+    {
+        LOCK(vault->cs_vault);
+        vault->SetAddressBook(CTxDestination{WitnessV0KeyHash(test.coinbaseKey.GetPubKey())}, payout_label.toStdString(), vault::AddressPurpose::RECEIVE);
+    }
+
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    QSettings().remove(QStringLiteral("TransactionViewHeaderState"));
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    MiniGUI mini_gui(m_node, platform_style.get());
+    mini_gui.initModelForVault(m_node, vault, platform_style.get());
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(mini_gui.vaultModel.get(), platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(mini_gui.vaultModel.get());
+    window.resize(1200, 800);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+    QAction* home = window.findChild<QAction*>(QStringLiteral("homeBootstrapAction"));
+    QVERIFY(home);
+    home->trigger();
+    QTableView* home_table = window.findChild<QTableView*>(QStringLiteral("homeLedgerTable"));
+    QVERIFY(home_table);
+    QTRY_VERIFY(home_table->isVisible() && home_table->model() && home_table->model()->rowCount() > 0);
+    QCoreApplication::processEvents();
+    QAbstractItemModel* home_rows = home_table->model();
+
+    QAction* history = window.findChild<QAction*>(QStringLiteral("historyAction"));
+    QVERIFY(history);
+    history->trigger();
+    QTableView* ledger_table = window.findChild<QTableView*>(QStringLiteral("transactionView"));
+    QVERIFY(ledger_table);
+    QTRY_VERIFY(ledger_table->model() && ledger_table->model()->rowCount() > 0);
+    QAbstractItemModel* ledger_rows = ledger_table->model();
+    // Home holds the newest 10; the Ledger page holds them all.
+    QVERIFY(ledger_rows->rowCount() > 10);
+    QCOMPARE(home_rows->rowCount(), 10);
+    for (int column = 0; column < ledger_rows->columnCount(); ++column) {
+        QCOMPARE(ledger_rows->headerData(column, Qt::Horizontal).toString(), home_rows->headerData(column, Qt::Horizontal).toString());
+    }
+
+    // Row by row, matched on the transaction, both views say the same words.
+    int maturing = -1;
+    bool labelled = false;
+    for (int row = 0; row < home_rows->rowCount(); ++row) {
+        const QModelIndex home_index = home_rows->index(row, 0);
+        const QString hash = home_index.data(TransactionTableModel::TxHashRole).toString();
+        const QModelIndexList found = ledger_rows->match(ledger_rows->index(0, 0), TransactionTableModel::TxHashRole, hash, 1, Qt::MatchExactly);
+        QVERIFY2(found.size() == 1, qPrintable(hash));
+        for (int column : {TransactionTableModel::Date, TransactionTableModel::Type, TransactionTableModel::ToAddress, TransactionTableModel::Amount, TransactionTableModel::Status}) {
+            const QString on_home = home_rows->index(row, column).data(Qt::DisplayRole).toString();
+            const QString on_ledger = ledger_rows->index(found.first().row(), column).data(Qt::DisplayRole).toString();
+            QVERIFY2(on_home == on_ledger, qPrintable(QStringLiteral("column %1: Home \"%2\", Ledger \"%3\"").arg(column).arg(on_home, on_ledger)));
+            QVERIFY2(!on_home.isEmpty(), qPrintable(QStringLiteral("column %1 is empty").arg(column)));
+        }
+        QVERIFY(!ledger_rows->index(found.first().row(), TransactionTableModel::Date).data(Qt::DecorationRole).isNull());
+        if (home_index.data(TransactionTableModel::StatusRole).toInt() == TransactionStatus::Immature) maturing = row;
+        if (home_rows->index(row, TransactionTableModel::ToAddress).data().toString() == payout_label) labelled = true;
+    }
+    QVERIFY(labelled);
+
+    // A maturing reward is a caution: the warning tone, never the error red.
+    QVERIFY(maturing >= 0);
+    const QColor state_color = home_rows->index(maturing, TransactionTableModel::Status).data(Qt::ForegroundRole).value<QColor>();
+    QVERIFY2(state_color == QuicksilverStyle::Color(QuicksilverStyle::Token::Warning), qPrintable(state_color.name()));
+
+    // Home: the label gets its content width before Amount takes any slack.
+    home->trigger();
+    QTRY_VERIFY(home_table->isVisible());
+    QCoreApplication::processEvents();
+    QAbstractItemView* home_cells = home_table;
+    // Whether the label fits whole at 1200 px is a question about real glyph
+    // metrics; "minimal" measures text with a placeholder font database, about
+    // twice as wide, so the fit runs where fonts are real (as on Home's layout).
+    const bool real_fonts = !QFontDatabase().families().isEmpty();
+    const int label_need = home_cells->sizeHintForColumn(TransactionTableModel::ToAddress);
+    if (real_fonts) {
+        QVERIFY2(home_table->columnWidth(TransactionTableModel::ToAddress) >= label_need,
+                 qPrintable(QStringLiteral("Label %1 px of %2").arg(home_table->columnWidth(TransactionTableModel::ToAddress)).arg(label_need)));
+        QVERIFY(home_table->fontMetrics().horizontalAdvance(payout_label) < home_table->columnWidth(TransactionTableModel::ToAddress));
+    }
+    const int amount_slack = home_table->columnWidth(TransactionTableModel::Amount) - std::max(home_cells->sizeHintForColumn(TransactionTableModel::Amount),
+                                                                                               home_table->horizontalHeader()->sectionSizeHint(TransactionTableModel::Amount));
+    QVERIFY2(amount_slack <= 24, qPrintable(QStringLiteral("Amount carries %1 px of slack").arg(amount_slack)));
+}
+
+//! Home at the first-launch size: the ledger takes the width, the instruments
+//! keep a narrow fixed column, and nothing scrolls.
+//!
+//! The first port gave the ledger about a third of the width, cut its labels and
+//! amounts short, and left Home taller than a 1200x800 window.
+void VaultTests::homeLaysOutLedgerBesideInstruments()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    MiniGUI mini_gui(m_node, platform_style.get());
+    mini_gui.initModelForVault(m_node, vault, platform_style.get());
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(mini_gui.vaultModel.get(), platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(mini_gui.vaultModel.get());
+    QAction* home = window.findChild<QAction*>(QStringLiteral("homeBootstrapAction"));
+    QVERIFY(home);
+    home->trigger();
+    window.resize(1200, 800);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+    DesktopLaunchPage* launch = window.findChild<DesktopLaunchPage*>(QStringLiteral("desktopLaunchPage"));
+    QVERIFY(launch);
+    QWidget* ledger = launch->findChild<QWidget*>(QStringLiteral("homeLedger"));
+    QWidget* instruments = launch->findChild<QWidget*>(QStringLiteral("homeInstruments"));
+    QScrollArea* scroll = window.findChild<QScrollArea*>(QStringLiteral("mainContentScrollArea"));
+    QVERIFY(ledger);
+    QVERIFY(instruments);
+    QVERIFY(scroll);
+
+    // Whether Home fits is a question about real glyph metrics. The default
+    // test platform ("minimal") measures text with a placeholder font database,
+    // so the scroll checks run where fonts are real (QT_QPA_PLATFORM=offscreen
+    // or a display); the proportions hold either way.
+    const bool real_fonts = !QFontDatabase().families().isEmpty();
+
+    // Before consensus, with consensus on, and with consensus on and no peer
+    // (the tallest instrument column the page has).
+    const auto check = [&](const char* state) {
+        QCoreApplication::processEvents();
+        const QString where = QString::fromLatin1(state);
+        QVERIFY2(instruments->width() <= 340, qPrintable(where + QStringLiteral(": instruments %1 px").arg(instruments->width())));
+        QVERIFY2(ledger->width() > instruments->width(),
+                 qPrintable(where + QStringLiteral(": ledger %1 px, instruments %2 px").arg(ledger->width()).arg(instruments->width())));
+        if (!real_fonts) return;
+        QTRY_VERIFY2(scroll->verticalScrollBar()->maximum() == 0 && scroll->horizontalScrollBar()->maximum() == 0,
+                     qPrintable(where + QStringLiteral(": Home scrolls %1 px down, %2 px across; the instruments need %3 px")
+                                            .arg(scroll->verticalScrollBar()->maximum()).arg(scroll->horizontalScrollBar()->maximum())
+                                            .arg(instruments->minimumSizeHint().height())));
+    };
+    check("before consensus");
+    if (QTest::currentTestFailed()) return;
+    launch->setConsensusEnabled(true);
+    launch->setPeerCount(8);
+    launch->setChainTip(105, QDateTime::currentDateTime());
+    launch->setSyncState(true, 1.0);
+    check("consensus on");
+    if (QTest::currentTestFailed()) return;
+    launch->setPeerCount(0);
+    check("consensus on, no peers");
+    if (QTest::currentTestFailed()) return;
+    if (!real_fonts) QSKIP("Home's fit at 1200x800 needs real font metrics; run with QT_QPA_PLATFORM=offscreen");
 }
 
 void VaultTests::sendConfirmationNamesUnconfirmedChange()
@@ -1819,6 +2746,72 @@ void VaultTests::coinControlMarksUnconfirmedChange()
     }
 }
 
+void VaultTests::minePageSeparatesDraftPayoutAndHealthNote()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    MineMintPage page;
+    page.setPayoutAddress(QStringLiteral("hg1qdraft"));
+    interfaces::MiningStatus status;
+    page.setStatus(status);
+    auto* payout = page.findChild<QLabel*>(QStringLiteral("payoutTargetValue"));
+    QVERIFY(payout);
+    // Owner ruling, send-back 2 item 6: while idle, an entered address is
+    // what the row names, marked as applied on Start; "Not set" only when the
+    // field is empty too; while running, the active payout.
+    QCOMPARE(payout->text(), QStringLiteral("hg1qdraft (applied on Start)"));
+    QCOMPARE(page.payoutAddress(), QStringLiteral("hg1qdraft"));
+    status.address = "hg1qprevious";
+    page.setStatus(status);
+    QCOMPARE(payout->text(), QStringLiteral("hg1qdraft (applied on Start)"));
+    page.setPayoutAddress(QStringLiteral("hg1qnext"));
+    QCOMPARE(payout->text(), QStringLiteral("hg1qnext (applied on Start)"));
+    status.active = true;
+    page.setStatus(status);
+    QCOMPARE(payout->text(), QStringLiteral("hg1qprevious"));
+    QCOMPARE(page.payoutAddress(), QStringLiteral("hg1qnext"));
+    status.active = false;
+    status.address.clear();
+    page.setPayoutAddress(QString());
+    page.setStatus(status);
+    QCOMPARE(payout->text(), QStringLiteral("Not set"));
+    auto* panel = page.findChild<QFrame*>(QStringLiteral("mineMintPayoutPanel"));
+    auto* intro = page.findChild<QLabel*>(QStringLiteral("mineMintEmptyState"));
+    QVERIFY(panel && intro);
+    QVERIFY(panel->isAncestorOf(intro));
+    auto* health = page.findChild<QLabel*>(QStringLiteral("solverHealthValue"));
+    QVERIFY(health);
+    QCOMPARE(health->property("class").toString(), QStringLiteral("benchNote"));
+    QVERIFY(!QFontInfo(health->font()).fixedPitch());
+    page.resize(980, 600);
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+    QVERIFY(health->width() > page.width() / 2);
+    QCOMPARE(page.findChild<QPushButton*>(QStringLiteral("startMiningButton"))->height(),
+             page.findChild<QPushButton*>(QStringLiteral("stopMiningButton"))->height());
+}
+
+void VaultTests::aboutDialogWrapsAtWords()
+{
+    HelpMessageDialog dialog(nullptr, true);
+    auto* text = dialog.findChild<QTextBrowser*>(QStringLiteral("aboutMessage"));
+    QVERIFY(text);
+    QCOMPARE(text->wordWrapMode(), QTextOption::WordWrap);
+    QVERIFY(text->toPlainText().contains(QRegularExpression(QStringLiteral("Copyright \\(C\\) [0-9-]+ The Bitcoin Core developers"))));
+    QVERIFY(text->openExternalLinks());
+    dialog.resize(620, 400);
+    dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+    for (QTextBlock block = text->document()->begin(); block.isValid(); block = block.next()) {
+        const QString content = block.text();
+        const auto* layout = block.layout();
+        for (int i = 1; i < layout->lineCount(); ++i) {
+            const int start = layout->lineAt(i).textStart();
+            QVERIFY2(start == 0 || !content.at(start - 1).isLetter() || !content.at(start).isLetter(), qPrintable(content));
+        }
+    }
+}
+
 void VaultTests::mineMintPageRendersStatus()
 {
     MineMintPage page;
@@ -1862,12 +2855,12 @@ void VaultTests::mineMintPageRendersStatus()
     st.graphs_attempted = 0;
     page.setStatus(st);
     QCOMPARE(page.findChild<QLabel*>("attemptsRateValue")->text(),
-             QStringLiteral("Warming up (0 graphs attempted)"));
+             QStringLiteral("Warming up"));
 
     st.active = false;
     page.setStatus(st);
     QCOMPARE(page.findChild<QLabel*>("attemptsRateValue")->text(),
-             QStringLiteral("None (0 graphs attempted)"));
+             QStringLiteral("Idle"));
 
     // F-109: the core fault string is written for quicksilver-daemon and names a
     // command-line flag. This window owns the setting, so the missing-solver case
@@ -1882,7 +2875,7 @@ void VaultTests::mineMintPageRendersStatus()
     st.last_solver_error = "No GPU solver is configured; set -cuckatoosolver=<path>";
     page.setStatus(st);
     QCOMPARE(health->text(),
-             QStringLiteral("No GPU solver is configured. Choose one in Controls > Options > Main."));
+             QStringLiteral("No GPU solver is configured. Choose one in Settings > Options > Main."));
     QVERIFY(!health->text().contains(QStringLiteral("-cuckatoosolver")));
     // And the control itself, not just its address: this is the only health state
     // the user can act on from this page.
@@ -1928,14 +2921,18 @@ void VaultTests::mineMintPageNamesAnArmedMinerWithNoPermittedSolver()
     const auto idle = rows(false, false, true, true, false, 0, std::nullopt, nullptr);
     QCOMPARE(idle.block_mining, QStringLiteral("Idle"));
     QCOMPARE(idle.solver, QStringLiteral("CPU"));
-    QCOMPARE(idle.attempts, QStringLiteral("None (0 graphs attempted)"));
+    QCOMPARE(idle.attempts, QStringLiteral("Idle"));
     QCOMPARE(idle.health, QStringLiteral("Not running"));
     QVERIFY(!idle.show_configure_solver);
+
+    // Stopped after mining: idle, with the graphs it attempted, and no rate.
+    QCOMPARE(rows(false, false, true, true, false, 7, std::nullopt, nullptr).attempts, QStringLiteral("Idle (7 graphs attempted)"));
+    QCOMPARE(rows(false, false, true, true, false, 1, 0.29, nullptr).attempts, QStringLiteral("Idle (1 graph attempted)"));
 
     const auto warming = rows(true, true, true, true, false, 0, std::nullopt, nullptr);
     QCOMPARE(warming.block_mining, QStringLiteral("Active"));
     QCOMPARE(warming.solver, QStringLiteral("GPU bridge"));
-    QCOMPARE(warming.attempts, QStringLiteral("Warming up (0 graphs attempted)"));
+    QCOMPARE(warming.attempts, QStringLiteral("Warming up"));
     QCOMPARE(warming.health, QStringLiteral("Working — no graph finished yet"));
     QVERIFY(!warming.show_configure_solver);
 
@@ -1953,8 +2950,8 @@ void VaultTests::mineMintPageNamesAnArmedMinerWithNoPermittedSolver()
     const auto halted = rows(true, false, false, true, false, 0, std::nullopt, nullptr);
     QCOMPARE(halted.block_mining, QStringLiteral("Halted"));
     QCOMPARE(halted.solver, QStringLiteral("None"));
-    QCOMPARE(halted.attempts, QStringLiteral("Not solving (0 graphs attempted)"));
-    QCOMPARE(halted.health, QStringLiteral("No GPU solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Controls > Options > Main."));
+    QCOMPARE(halted.attempts, QStringLiteral("Not solving"));
+    QCOMPARE(halted.health, QStringLiteral("No GPU solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Settings > Options > Main."));
     QVERIFY(!halted.health.contains(QStringLiteral("-cuckatoosolver")));
     QVERIFY(!halted.health.contains(QStringLiteral("-allowcpumining")));
     QVERIFY(halted.show_configure_solver);
@@ -2099,7 +3096,7 @@ void VaultTests::mineMintPageShowsARawScriptPayout()
 
     interfaces::MiningStatus st;
     auto rows = MineMintPage::statusTextForTesting(st);
-    QCOMPARE(rows.payout, QStringLiteral("None"));
+    QCOMPARE(rows.payout, QStringLiteral("Not set"));
     page.setStatus(st);
     QCOMPARE(payout->text(), rows.payout);
 
@@ -2129,19 +3126,19 @@ void VaultTests::mineMintPageNamesAnIdleNodeWithNothingPermitted()
         st.block_solving_possible = possible;
         return MineMintPage::statusTextForTesting(st);
     };
-    const QString sentence = QStringLiteral("No GPU solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Controls > Options > Main.");
+    const QString sentence = QStringLiteral("No GPU solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Settings > Options > Main.");
 
     const auto cpu = rows(false, true);
     QCOMPARE(cpu.block_mining, QStringLiteral("Idle"));
     QCOMPARE(cpu.solver, QStringLiteral("CPU"));
-    QCOMPARE(cpu.attempts, QStringLiteral("None (0 graphs attempted)"));
+    QCOMPARE(cpu.attempts, QStringLiteral("Idle"));
     QCOMPARE(cpu.health, QStringLiteral("Not running"));
     QVERIFY(!cpu.show_configure_solver);
 
     const auto gpu = rows(true, true);
     QCOMPARE(gpu.block_mining, QStringLiteral("Idle"));
     QCOMPARE(gpu.solver, QStringLiteral("GPU bridge"));
-    QCOMPARE(gpu.attempts, QStringLiteral("None (0 graphs attempted)"));
+    QCOMPARE(gpu.attempts, QStringLiteral("Idle"));
     QCOMPARE(gpu.health, QStringLiteral("Not running"));
     QVERIFY(!gpu.show_configure_solver);
 
@@ -2151,14 +3148,14 @@ void VaultTests::mineMintPageNamesAnIdleNodeWithNothingPermitted()
     const auto gpu_denied = rows(true, false);
     QCOMPARE(gpu_denied.block_mining, QStringLiteral("Idle"));
     QCOMPARE(gpu_denied.solver, QStringLiteral("GPU bridge"));
-    QCOMPARE(gpu_denied.attempts, QStringLiteral("None (0 graphs attempted)"));
+    QCOMPARE(gpu_denied.attempts, QStringLiteral("Idle"));
     QCOMPARE(gpu_denied.health, QStringLiteral("Not running"));
     QVERIFY(!gpu_denied.show_configure_solver);
 
     const auto denied = rows(false, false);
     QCOMPARE(denied.block_mining, QStringLiteral("Idle"));
     QCOMPARE(denied.solver, QStringLiteral("None"));
-    QCOMPARE(denied.attempts, QStringLiteral("None (0 graphs attempted)"));
+    QCOMPARE(denied.attempts, QStringLiteral("Idle"));
     QCOMPARE(denied.health, sentence);
     QVERIFY(!denied.health.contains(QStringLiteral("-cuckatoosolver")));
     QVERIFY(!denied.health.contains(QStringLiteral("-allowcpumining")));
@@ -2259,7 +3256,7 @@ void VaultTests::networkPageDiagnosesBootstrapAndAddsPeers()
 void VaultTests::networkPageHidesTheManualTorRecipeWhenAProxyIsCarryingOnions()
 {
     NetworkPage page;
-    QGroupBox* panel = page.findChild<QGroupBox*>(QStringLiteral("torSetupPanel"));
+    QFrame* panel = page.findChild<QFrame*>(QStringLiteral("torSetupPanel"));
     QLabel* warning = page.findChild<QLabel*>(QStringLiteral("torSetupWarning"));
     QLabel* steps = page.findChild<QLabel*>(QStringLiteral("torSetupSteps"));
     QLabel* working = page.findChild<QLabel*>(QStringLiteral("torSetupWorking"));
@@ -2281,12 +3278,245 @@ void VaultTests::networkPageHidesTheManualTorRecipeWhenAProxyIsCarryingOnions()
     QVERIFY(working->isVisibleTo(&page));
     // The panel itself stays, so Tor does not become another silently empty surface.
     QVERIFY(panel->isVisibleTo(&page));
-    QVERIFY(working->text().contains(QStringLiteral("none of the manual setup below is needed")));
+    QVERIFY(working->text().contains(QStringLiteral("No manual setup is needed")));
+    QCOMPARE(working->property("class").toString(), QStringLiteral("benchNote"));
 
     // And it is reversible: a Tor that dies must bring the recipe back.
     page.applyTorSetupAdvice(/*onion_proxy_configured=*/false);
     QVERIFY(steps->isVisibleTo(&page));
     QVERIFY(!working->isVisibleTo(&page));
+}
+
+//! F-442 send-back 2, item 9: "This build is not a released version" is a
+//! caution, so Home and the Node window draw it in the warning tone, not the
+//! error red.
+void VaultTests::devBuildBannerUsesTheWarningTone()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    using QuicksilverStyle::Token;
+    const QString warnings = QStringLiteral("This build is not a released version. It contains changes made since the last release.");
+    QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+
+    DesktopLaunchPage home(platform_style.data(), 0, 0, nullptr);
+    home.setAlerts(warnings);
+    QLabel* home_alerts = home.findChild<QLabel*>(QStringLiteral("homeNodeAlerts"));
+    QVERIFY(home_alerts);
+
+    RPCConsole console(m_node, platform_style.data(), nullptr);
+    QVERIFY(QMetaObject::invokeMethod(&console, "updateAlerts", Q_ARG(QString, warnings)));
+    QLabel* console_alerts = console.findChild<QLabel*>(QStringLiteral("label_alerts"));
+    QVERIFY(console_alerts);
+
+    for (QLabel* label : {home_alerts, console_alerts}) {
+        label->ensurePolished();
+        const QColor color = label->palette().color(label->foregroundRole());
+        QVERIFY2(color == QuicksilverStyle::Color(Token::Warning),
+                 qPrintable(QStringLiteral("%1 draws %2, not the warning %3").arg(label->objectName(), color.name(), QuicksilverStyle::Color(Token::Warning).name())));
+        QVERIFY(color != QuicksilverStyle::Color(Token::CinnabarSoft));
+        QVERIFY(color != QuicksilverStyle::Color(Token::Cinnabar));
+    }
+}
+
+//! F-442 send-back 2, item 7: every window the Window menu opens takes the
+//! bench grammar: no eyebrow or page title, content in a titled panel,
+//! label/value rows with key and value roles, section heads as captions,
+//! and quiet commands. The Node window, all four tabs, and both used-address
+//! lists.
+void VaultTests::agentSpendRequestRefuseWaitsForARequest()
+{
+    AgentAllotmentPage page;
+    // A hint that is waiting for input is plain text: drawn as a bordered box it
+    // reads as a field to type into.
+    QCOMPARE(page.findChild<QLabel*>(QStringLiteral("agentAllotmentPolicyReviewState"))->property("class").toString(), QStringLiteral("muted"));
+    QCOMPARE(page.findChild<QLabel*>(QStringLiteral("agentAllotmentPaymentReceiptState"))->property("class").toString(), QStringLiteral("muted"));
+
+    QPlainTextEdit* request = page.findChild<QPlainTextEdit*>(QStringLiteral("agentAllotmentCosignEdit"));
+    QPushButton* refuse = page.findChild<QPushButton*>(QStringLiteral("agentAllotmentRefuseButton"));
+    QVERIFY(request && refuse);
+    QVERIFY(!refuse->isEnabled());
+    request->setPlainText(QStringLiteral("psqt=cHNidP8B"));
+    QVERIFY(refuse->isEnabled());
+    refuse->click();
+    QVERIFY(request->toPlainText().isEmpty());
+    QVERIFY(!refuse->isEnabled());
+}
+
+void VaultTests::noVaultPageIsOneBenchPanel()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+
+    VaultFrame frame(platform_style.data(), nullptr);
+    frame.setVaultRuntimeAvailable(true);
+    frame.gotoVaultPage();
+    frame.resize(1000, 700);
+    frame.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&frame));
+
+    QWidget* page = frame.findChild<QWidget*>(QStringLiteral("noVaultPage"));
+    QVERIFY(page);
+    QFrame* panel = page->findChild<QFrame*>(QStringLiteral("noVaultState"));
+    QVERIFY(panel);
+    QCOMPARE(panel->property("benchPanel").toBool(), true);
+    bool titled{false};
+    for (QLabel* label : panel->findChildren<QLabel*>()) titled |= label->text() == QStringLiteral("VAULT ACCESS");
+    QVERIFY(titled);
+    // A page's panels span the page, as on every other page.
+    QCOMPARE(panel->width(), page->width() - 28);
+
+    QLabel* title = panel->findChild<QLabel*>(QStringLiteral("emptyVaultTitle"));
+    QLabel* body = panel->findChild<QLabel*>(QStringLiteral("emptyVaultBody"));
+    QVERIFY(title);
+    QVERIFY(body);
+    QCOMPARE(title->property("class").toString(), QStringLiteral("benchValue"));
+    QCOMPARE(body->property("class").toString(), QStringLiteral("benchNote"));
+    for (const char* gone : {"emptyVaultMark", "emptyVaultEyebrow"}) {
+        QVERIFY2(!page->findChild<QWidget*>(QString::fromLatin1(gone)), gone);
+    }
+
+    // Nothing in the panel is drawn over anything else.
+    QList<QWidget*> shown;
+    for (QWidget* widget : panel->findChildren<QWidget*>()) {
+        if (widget->isVisible() && (qobject_cast<QLabel*>(widget) || qobject_cast<QPushButton*>(widget))) shown << widget;
+    }
+    QVERIFY(shown.size() >= 4);
+    for (int i = 0; i < shown.size(); ++i) {
+        for (int j = i + 1; j < shown.size(); ++j) {
+            const QRect a{shown[i]->mapTo(panel, QPoint()), shown[i]->size()};
+            const QRect b{shown[j]->mapTo(panel, QPoint()), shown[j]->size()};
+            QVERIFY2(!a.intersects(b), qPrintable(QStringLiteral("%1 overlaps %2").arg(shown[i]->objectName(), shown[j]->objectName())));
+        }
+    }
+}
+
+void VaultTests::peerTableNamesTheConnectionInOneColumn()
+{
+    PeerTableModel model(m_node, nullptr);
+    QStringList headers;
+    for (int column = 0; column < model.columnCount(); ++column) {
+        headers << model.headerData(column, Qt::Horizontal, Qt::DisplayRole).toString();
+    }
+    // "Inbound" carries no further type, so a separate Type column was blank for
+    // every inbound peer. One column names direction and type together.
+    QCOMPARE(headers, (QStringList{QStringLiteral("Peer"), QStringLiteral("Age"), QStringLiteral("Address"), QStringLiteral("Connection"),
+                                   QStringLiteral("Network"), QStringLiteral("Ping"), QStringLiteral("Sent"), QStringLiteral("Received"),
+                                   QStringLiteral("User Agent")}));
+}
+
+//! The windows behind the menus carry the grammar of the pages: their content in
+//! one titled panel, the dialog's own buttons outside it, quiet commands.
+void VaultTests::menuDialogsUseTheBenchGrammar()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+
+    auto check = [](QDialog& dialog, const char* panel_name, const QString& title, QWidget* inside, QWidget* outside) {
+        QFrame* panel = dialog.findChild<QFrame*>(QString::fromLatin1(panel_name));
+        QVERIFY2(panel, panel_name);
+        QCOMPARE(panel->property("benchPanel").toBool(), true);
+        bool titled{false};
+        for (QLabel* label : panel->findChildren<QLabel*>()) titled |= label->text() == title.toUpper();
+        QVERIFY2(titled, qPrintable(title));
+        QVERIFY2(inside && panel->isAncestorOf(inside), panel_name);
+        if (outside) QVERIFY2(!panel->isAncestorOf(outside), panel_name);
+        for (QPushButton* button : dialog.findChildren<QPushButton*>()) {
+            QVERIFY2(button->property("class").toString() == QLatin1String("benchQuiet"),
+                     qPrintable(QStringLiteral("%1 %2 is class \"%3\"").arg(QString::fromLatin1(panel_name), button->text(), button->property("class").toString())));
+            // A command is its words; only a button with no words carries an icon.
+            if (!button->text().isEmpty()) {
+                QVERIFY2(button->icon().isNull(), qPrintable(QStringLiteral("%1 %2 carries an icon").arg(QString::fromLatin1(panel_name), button->text())));
+            }
+        }
+    };
+
+    for (const auto mode : {AskPassphraseDialog::Encrypt, AskPassphraseDialog::Unlock, AskPassphraseDialog::ChangePass}) {
+        AskPassphraseDialog dialog(mode, nullptr);
+        check(dialog, "passphrasePanel", dialog.windowTitle(), dialog.findChild<QLineEdit*>(QStringLiteral("passEdit1")),
+              dialog.findChild<QDialogButtonBox*>(QStringLiteral("buttonBox")));
+        QCOMPARE(dialog.findChild<QLabel*>(QStringLiteral("warningLabel"))->property("class").toString(), QStringLiteral("benchNote"));
+    }
+
+    {
+        CreateVaultDialog dialog(nullptr);
+        check(dialog, "createVaultPanel", QStringLiteral("Create vault"), dialog.findChild<QLineEdit*>(QStringLiteral("vault_name_line_edit")),
+              dialog.findChild<QDialogButtonBox*>(QStringLiteral("buttonBox")));
+        QCOMPARE(dialog.findChild<QLabel*>(QStringLiteral("label_description"))->property("class").toString(), QStringLiteral("benchNote"));
+    }
+
+    {
+        HelpMessageDialog dialog(nullptr, /*about=*/true);
+        check(dialog, "helpPanel", QStringLiteral("About Quicksilver"), dialog.findChild<QTextBrowser*>(QStringLiteral("aboutMessage")),
+              dialog.findChild<QDialogButtonBox*>(QStringLiteral("okButton")));
+    }
+    {
+        HelpMessageDialog dialog(nullptr, /*about=*/false);
+        check(dialog, "helpPanel", QStringLiteral("Command-line options"), dialog.findChild<QTextEdit*>(QStringLiteral("helpMessage")),
+              dialog.findChild<QDialogButtonBox*>(QStringLiteral("okButton")));
+        // The URI form is Quicksilver's own scheme, not a numbered upstream proposal.
+        const QString help = dialog.findChild<QTextEdit*>(QStringLiteral("helpMessage"))->toPlainText();
+        QVERIFY2(!help.contains(QRegularExpression(QStringLiteral("\\bBIP ?[0-9]"))), qPrintable(help.left(400)));
+        QVERIFY(help.contains(QStringLiteral("quicksilver:")));
+    }
+
+    {
+        SignVerifyMessageDialog dialog(platform_style.data(), nullptr);
+        check(dialog, "signaturesPanel", QStringLiteral("Signatures"), dialog.findChild<QTabWidget*>(QStringLiteral("tabWidget")), nullptr);
+        for (const char* note : {"infoLabel_SM", "infoLabel_VM"}) {
+            QCOMPARE(dialog.findChild<QLabel*>(QString::fromLatin1(note))->property("class").toString(), QStringLiteral("benchNote"));
+        }
+    }
+}
+
+void VaultTests::panelsMenuWindowsUseTheBenchGrammar()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+
+    RPCConsole console(m_node, platform_style.data(), nullptr);
+    for (const char* old : {"nodeWindowEyebrow", "nodeWindowTitle", "nodeWindowSubtitle"}) {
+        QVERIFY2(!console.findChild<QLabel*>(QString::fromLatin1(old)), old);
+    }
+    QFrame* panel = console.findChild<QFrame*>(QStringLiteral("nodeWindowPanel"));
+    QVERIFY(panel);
+    QCOMPARE(panel->property("benchPanel").toBool(), true);
+    QTabWidget* tabs = console.findChild<QTabWidget*>(QStringLiteral("tabWidget"));
+    QVERIFY(tabs && panel->isAncestorOf(tabs));
+    QCOMPARE(tabs->count(), 4);
+    // Information: section heads are captions, not bold body text; keys and
+    // values carry their roles.
+    for (const char* head : {"label_9", "labelNetwork"}) {
+        QLabel* label = console.findChild<QLabel*>(QString::fromLatin1(head));
+        QVERIFY2(label, head);
+        QCOMPARE(label->property("class").toString(), QStringLiteral("benchSection"));
+    }
+    QCOMPARE(console.findChild<QLabel*>(QStringLiteral("label_6"))->property("class").toString(), QStringLiteral("benchKey"));
+    QCOMPARE(console.findChild<QLabel*>(QStringLiteral("clientVersion"))->property("class").toString(), QStringLiteral("benchValue"));
+    // Peers: the detail rows too.
+    QCOMPARE(console.findChild<QLabel*>(QStringLiteral("peerConnectionTypeLabel"))->property("class").toString(), QStringLiteral("benchKey"));
+    QCOMPARE(console.findChild<QLabel*>(QStringLiteral("peerConnectionType"))->property("class").toString(), QStringLiteral("benchValue"));
+    // Commands on every tab are quiet bench buttons.
+    for (QPushButton* button : console.findChildren<QPushButton*>()) {
+        QVERIFY2(button->property("class").toString() == QLatin1String("benchQuiet"),
+                 qPrintable(QStringLiteral("%1 is class \"%2\"").arg(button->objectName(), button->property("class").toString())));
+    }
+
+    for (AddressBookPage::Tabs tab : {AddressBookPage::SendingTab, AddressBookPage::ReceivingTab}) {
+        AddressBookPage book(platform_style.data(), AddressBookPage::ForEditing, tab);
+        QFrame* book_panel = book.findChild<QFrame*>(QStringLiteral("addressBookPanel"));
+        QVERIFY(book_panel);
+        QCOMPARE(book_panel->property("benchPanel").toBool(), true);
+        QVERIFY(book_panel->isAncestorOf(book.findChild<QTableView*>(QStringLiteral("tableView"))));
+        QLabel* explanation = book.findChild<QLabel*>(QStringLiteral("labelExplanation"));
+        QVERIFY(explanation && book_panel->isAncestorOf(explanation));
+        QCOMPARE(explanation->property("class").toString(), QStringLiteral("benchNote"));
+        for (QPushButton* button : book.findChildren<QPushButton*>()) {
+            QVERIFY2(button->property("class").toString() == QLatin1String("benchQuiet"), qPrintable(button->objectName()));
+        }
+    }
 }
 
 //! H1: with consensus off, RPCConsole::setClientModel is never called, so every value on
@@ -2395,13 +3625,30 @@ void VaultTests::networkPageFormatsStatus()
     NetworkPage page;
     QSignalSpy restart_spy(&page, &NetworkPage::restartRequested);
     QVERIFY(restart_spy.isValid());
-    QCOMPARE(page.findChild<QLabel*>("developerNetworkCurrentValue")->text(), QString("Quicksilver Sandbox (sandbox)"));
+    QVERIFY(!page.findChild<QLabel*>(QStringLiteral("developerNetworkCurrentValue")));
     QLabel* developer_banner = page.findChild<QLabel*>("developerNetworkBanner");
     QVERIFY(developer_banner);
     QVERIFY(!developer_banner->isHidden());
     QVERIFY(developer_banner->text().contains(QString("not using the live ledger")));
     QCOMPARE(page.findChild<QLabel*>("developerNetworkSandboxCardState")->text(), QString("Current"));
-    QCOMPARE(page.findChild<QLabel*>("developerNetworkMainCardState")->text(), QString("Restart to use"));
+    // Owner ruling, send-back 2 item 10: a network that is not current shows
+    // its Restart command only; "Current" sits in the same state/action
+    // column, at the same right edge as the Restart buttons.
+    QVERIFY(!page.findChild<QLabel*>("developerNetworkMainCardState"));
+    QPushButton* main_restart = page.findChild<QPushButton*>("developerNetworkMainCardButton");
+    QVERIFY(main_restart);
+    QCOMPARE(main_restart->toolTip(), QString("Restart Quicksilver with this network context."));
+    QVERIFY(!page.findChild<QPushButton*>("developerNetworkSandboxCardButton"));
+    {
+        page.resize(980, 900);
+        page.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&page));
+        QLabel* current = page.findChild<QLabel*>("developerNetworkSandboxCardState");
+        const int current_right = current->mapTo(&page, QPoint(current->width(), 0)).x();
+        const int restart_right = main_restart->mapTo(&page, QPoint(main_restart->width(), 0)).x();
+        QCOMPARE(current_right, restart_right);
+        page.hide();
+    }
     QVERIFY(page.findChild<QLabel*>("developerNetworkMainCardToken")->text().contains(QString("main")));
     QVERIFY(page.findChild<QLabel*>("developerNetworkPublicTestCardDatadir")->text().contains(QString("publictest")));
     QVERIFY(page.findChild<QLabel*>("developerNetworkSandboxCardDatadir")->text().contains(QString("sandbox")));
@@ -2427,18 +3674,16 @@ void VaultTests::networkPageFormatsStatus()
 #endif
     // The menu is Controls, not Settings; the old text sent the reader to a menu
     // this window does not have.
-    QVERIFY(tor_steps->text().contains(QStringLiteral("Controls > Options > Network")));
-    QPushButton* main_restart = page.findChild<QPushButton*>("developerNetworkMainCardButton");
+    QVERIFY(tor_steps->text().contains(QStringLiteral("Settings > Options > Network")));
+    main_restart = page.findChild<QPushButton*>("developerNetworkMainCardButton");
     QPushButton* publictest_restart = page.findChild<QPushButton*>("developerNetworkPublicTestCardButton");
     QPushButton* sandbox_restart = page.findChild<QPushButton*>("developerNetworkSandboxCardButton");
     QVERIFY(main_restart);
     QVERIFY(publictest_restart);
-    QVERIFY(sandbox_restart);
+    QVERIFY(!sandbox_restart);
     QCOMPARE(main_restart->text(), QString("Restart"));
     QVERIFY(main_restart->isEnabled());
     QVERIFY(publictest_restart->isEnabled());
-    QCOMPARE(sandbox_restart->text(), QString("Current network"));
-    QVERIFY(!sandbox_restart->isEnabled());
     publictest_restart->click();
     QCOMPARE(restart_spy.count(), 1);
     QCOMPARE(restart_spy.takeFirst().at(0).toString(), QString("publictest"));
@@ -2637,7 +3882,7 @@ void VaultTests::vaultModelSkipsCoinControlOutputsBeforeConsensusClientModel()
     QCOMPARE(vault_ptr->try_list_coin_calls, 2);
 }
 
-void VaultTests::overviewPageMasksValuesWithoutClientModel()
+void VaultTests::vaultViewMasksValuesWithoutClientModel()
 {
     TestChain100Setup test;
     auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
@@ -2650,16 +3895,15 @@ void VaultTests::overviewPageMasksValuesWithoutClientModel()
     QVERIFY(options_model.Init(error));
     VaultModel vault_model(std::make_unique<PollMarkerVault>(), m_node, &options_model, platformStyle.get());
 
-    // Opening a vault with consensus off leaves the client model unset, and the overview
-    // page is handed the privacy setting the moment the vault is added.
-    OverviewPage overview_page(platformStyle.get());
-    overview_page.setVaultModel(&vault_model);
+    // Opening a vault with consensus off leaves the client model unset, and the vault
+    // view is handed the privacy setting the moment the vault is added.
+    VaultView vault_view(&vault_model, platformStyle.get(), nullptr);
 
     options_model.setOption(OptionsModel::OptionID::MaskValues, false);
-    overview_page.setPrivacy(true);
+    Q_EMIT vault_view.setPrivacy(true);
     QVERIFY(options_model.getOption(OptionsModel::OptionID::MaskValues).toBool());
 
-    overview_page.setPrivacy(false);
+    Q_EMIT vault_view.setPrivacy(false);
     QVERIFY(!options_model.getOption(OptionsModel::OptionID::MaskValues).toBool());
 }
 
@@ -3002,7 +4246,7 @@ void VaultTests::sendWorkResourceTextClassifiesGpuSolver()
 
     const QString missing_arg_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, QString());
     QVERIFY(missing_arg_text.contains(QStringLiteral("processor will take over")));
-    QVERIFY(missing_arg_text.contains(QStringLiteral("Controls > Options > Main")));
+    QVERIFY(missing_arg_text.contains(QStringLiteral("Settings > Options > Main")));
 
     QTemporaryDir temp_dir;
     QVERIFY(temp_dir.isValid());
@@ -3010,7 +4254,7 @@ void VaultTests::sendWorkResourceTextClassifiesGpuSolver()
     const QString absent_solver_path = temp_dir.filePath(QStringLiteral("missing-solver"));
     const QString absent_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, absent_solver_path);
     QVERIFY(absent_solver_text.contains(QStringLiteral("could not be found")));
-    QVERIFY(absent_solver_text.contains(QStringLiteral("Controls > Options > Main")));
+    QVERIFY(absent_solver_text.contains(QStringLiteral("Settings > Options > Main")));
 
     const QString directory_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, temp_dir.path());
     QVERIFY(directory_solver_text.contains(QStringLiteral("cannot be started")));
@@ -3082,6 +4326,49 @@ void VaultTests::sendWorkResourceTextClassifiesGpuSolver()
         QVERIFY2(text.contains(QStringLiteral("minute")),
                  qPrintable(QStringLiteral("disclosure states no duration: ") + text));
     }
+
+    // F-453: every case where the processor takes over is a warning, set
+    // apart from the notes; the others are not.
+    using Status = SendCoinsDialog::GpuSolverProbeStatus;
+    // No default argument on the lambda: MSVC cannot name the local alias
+    // in one (C2653).
+    const auto warns = [](bool requires_gpu, const QString& path, Status status) {
+        return SendCoinsDialog::sendWorkNotesForTesting(requires_gpu, path, status).processor_fallback;
+    };
+    QVERIFY(!warns(false, QString(), Status::Unchecked));
+    QVERIFY(warns(true, QString(), Status::Unchecked));
+    QVERIFY(warns(true, absent_solver_path, Status::Unchecked));
+    QVERIFY(warns(true, temp_dir.path(), Status::Unchecked));
+    QVERIFY(warns(true, non_executable_path, Status::Unchecked));
+    QVERIFY(!warns(true, solver_path, Status::Unchecked));
+    QVERIFY(!warns(true, solver_path, Status::Checking));
+    QVERIFY(!warns(true, solver_path, Status::Available));
+    QVERIFY(warns(true, solver_path, Status::Failed));
+    QVERIFY(warns(true, solver_path, Status::TimedOut));
+    // The notes and the warning together say what the one text says.
+    const SendCoinsDialog::SendWorkNotes missing = SendCoinsDialog::sendWorkNotesForTesting(true, QString(), Status::Unchecked);
+    QCOMPARE(missing.intro + QLatin1Char('\n') + missing.acceleration, missing_arg_text);
+    QVERIFY(missing.acceleration.startsWith(QStringLiteral("Graphics acceleration is not configured")));
+
+    // On the page the warning is its own line in the warning tone, under the
+    // notes; a note that is not a warning stays with them.
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    SendCoinsDialog page(platform_style.get());
+    QLabel* notes = page.findChild<QLabel*>(QStringLiteral("sendWorkDisclosureLabel"));
+    QLabel* warning = page.findChild<QLabel*>(QStringLiteral("sendWorkAccelerationWarning"));
+    QVERIFY(notes);
+    QVERIFY(warning);
+    QCOMPARE(warning->property("class").toString(), QStringLiteral("benchNote"));
+    QCOMPARE(warning->property("benchTone").toString(), QStringLiteral("warn"));
+    page.showSendWorkNotesForTesting(missing);
+    QVERIFY(!warning->isHidden());
+    QCOMPARE(warning->text(), missing.acceleration);
+    QCOMPARE(notes->text(), missing.intro);
+    QVERIFY(notes->parentWidget() == warning->parentWidget());
+    const SendCoinsDialog::SendWorkNotes ready = SendCoinsDialog::sendWorkNotesForTesting(true, solver_path, Status::Available);
+    page.showSendWorkNotesForTesting(ready);
+    QVERIFY(warning->isHidden());
+    QCOMPARE(notes->text(), ready.intro + QLatin1Char('\n') + ready.acceleration);
 }
 
 void VaultTests::cpuFallbackWarningPolicyMatchesNetworkAndPreference()
@@ -3092,6 +4379,204 @@ void VaultTests::cpuFallbackWarningPolicyMatchesNetworkAndPreference()
     QVERIFY(!SendCoinsDialog::cpuFallbackWarningRequiredForTesting(true, Status::Failed, false));
     QVERIFY(SendCoinsDialog::cpuFallbackWarningRequiredForTesting(true, Status::Unchecked, true));
     QVERIFY(SendCoinsDialog::cpuFallbackWarningRequiredForTesting(true, Status::TimedOut, true));
+}
+
+void VaultTests::transferSummaryTracksAmountsAgainstSpendable()
+{
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    OptionsModel options_model(m_node);
+    bilingual_str error;
+    QVERIFY(options_model.Init(error));
+
+    auto vault = std::make_unique<PollMarkerVault>();
+    PollMarkerVault* vault_ptr = vault.get();
+    vault_ptr->balance = 10 * COIN;
+    VaultModel model(std::move(vault), m_node, &options_model, platform_style.get());
+
+    SendCoinsDialog dialog(platform_style.get());
+    dialog.setModel(&model);
+    vault_ptr->block_hash = ArithToUint256(1);
+    model.pollBalanceChanged();
+
+    QFrame* panel = dialog.findChild<QFrame*>(QStringLiteral("transferSummaryPanel"));
+    QVERIFY(panel);
+    QLabel* recipients = panel->findChild<QLabel*>(QStringLiteral("transferSummaryRecipients"));
+    QLabel* total = panel->findChild<QLabel*>(QStringLiteral("transferSummaryTotal"));
+    QLabel* spendable = panel->findChild<QLabel*>(QStringLiteral("transferSummarySpendable"));
+    QLabel* remaining = panel->findChild<QLabel*>(QStringLiteral("transferSummaryRemaining"));
+    QLabel* over = panel->findChild<QLabel*>(QStringLiteral("transferSummaryFlag"));
+    QVERIFY(recipients);
+    QVERIFY(total);
+    QVERIFY(spendable);
+    QVERIFY(remaining);
+    QVERIFY(over);
+
+    const auto format_amount = [&](CAmount amount) {
+        return QuicksilverUnits::formatInlineWithPrivacy(
+            model.getOptionsModel()->getDisplayUnit(), amount, QuicksilverUnits::SeparatorStyle::ALWAYS, false);
+    };
+    const auto expect_summary = [&](int count, CAmount sent, bool above) {
+        QCOMPARE(recipients->text(), QString::number(count));
+        QCOMPARE(total->text(), format_amount(sent));
+        QCOMPARE(spendable->text(), format_amount(model.getCachedBalance().balance));
+        const CAmount left = sent > model.getCachedBalance().balance ? 0 : model.getCachedBalance().balance - sent;
+        QCOMPARE(remaining->text(), format_amount(left));
+        QCOMPARE(over->isHidden(), !above);
+        if (above) {
+            QCOMPARE(over->text(), QStringLiteral("Above spendable balance"));
+        }
+    };
+
+    expect_summary(1, 0, false);
+    if (QTest::currentTestFailed()) return;
+
+    QList<QuicksilverAmountField*> amounts = dialog.findChildren<QuicksilverAmountField*>(QStringLiteral("payAmount"));
+    QCOMPARE(amounts.size(), 1);
+    amounts.at(0)->setValue(3 * COIN);
+    expect_summary(1, 3 * COIN, false);
+    if (QTest::currentTestFailed()) return;
+
+    SendCoinsEntry* second = dialog.addEntry();
+    QVERIFY(second);
+    QuicksilverAmountField* second_amount = second->findChild<QuicksilverAmountField*>(QStringLiteral("payAmount"));
+    QVERIFY(second_amount);
+    second_amount->setValue(2 * COIN);
+    expect_summary(2, 5 * COIN, false);
+    if (QTest::currentTestFailed()) return;
+
+    amounts.at(0)->setValue(9 * COIN);
+    expect_summary(2, 11 * COIN, true);
+    if (QTest::currentTestFailed()) return;
+
+    QToolButton* remove = second->findChild<QToolButton*>(QStringLiteral("deleteButton"));
+    QVERIFY(remove);
+    QVERIFY(QMetaObject::invokeMethod(second, "deleteClicked"));
+    expect_summary(1, 9 * COIN, false);
+    if (QTest::currentTestFailed()) return;
+
+    vault_ptr->balance = 4 * COIN;
+    vault_ptr->block_hash = ArithToUint256(2);
+    model.pollBalanceChanged();
+    expect_summary(1, 9 * COIN, true);
+    if (QTest::currentTestFailed()) return;
+
+    const QString charge_word = QStringLiteral("fee");
+    for (QLabel* label : panel->findChildren<QLabel*>()) {
+        QVERIFY2(!label->text().contains(charge_word, Qt::CaseInsensitive),
+                 qPrintable(label->objectName() + QStringLiteral(": ") + label->text()));
+    }
+
+    QPushButton* review = dialog.findChild<QPushButton*>(QStringLiteral("sendButton"));
+    QVERIFY(review);
+    QVERIFY(panel->isAncestorOf(review));
+    QString review_text = review->text();
+    review_text.remove(QLatin1Char('&'));
+    QCOMPARE(review_text, QStringLiteral("Review"));
+}
+
+void VaultTests::captureBenchPageScreenshots()
+{
+    const QString dir = qEnvironmentVariable("QS_BENCH_SCREENSHOTS");
+    if (dir.isEmpty()) return;
+    QVERIFY(QDir().mkpath(dir));
+
+    // Render as the application does: its style, palette and sheet, and its
+    // bundled monospace face. A capture without them shows a different program.
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    QVERIFY2(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/monospace")) != -1,
+             "the capture needs a platform that loads application fonts: QT_QPA_PLATFORM=offscreen");
+
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+
+    QString unstyled;
+    auto save_page = [&](QuicksilverGUI& window, const char* action_name, const QString& file) {
+        if (action_name) {
+            QAction* action = window.findChild<QAction*>(QString::fromLatin1(action_name));
+            if (!action) return false;
+            action->trigger();
+        }
+        window.resize(1200, 800);
+        window.show();
+        if (!QTest::qWaitForWindowExposed(&window)) return false;
+        QCoreApplication::processEvents();
+        const QImage image = window.grab().toImage();
+        // A capture is evidence only if it was painted by the app sheet. Probe
+        // two surfaces only the sheet colours: the top bar and the rail.
+        const QWidget* top = window.findChild<QWidget*>(QStringLiteral("benchTopBar"));
+        const QWidget* rail = window.findChild<QWidget*>(QStringLiteral("primaryCommandRail"));
+        if (!top || !rail) return false;
+        const auto probe = [&](const QWidget* widget, QPoint at, QuicksilverStyle::Token token) {
+            const QColor seen = image.pixelColor(widget->mapTo(&window, at) * image.devicePixelRatio());
+            if (seen == QuicksilverStyle::Color(token)) return true;
+            unstyled = QStringLiteral("%1: %2 at %3 is %4, not %5").arg(file, widget->objectName())
+                           .arg(QStringLiteral("%1,%2").arg(at.x()).arg(at.y()), seen.name(), QuicksilverStyle::Color(token).name());
+            return false;
+        };
+        if (!probe(top, QPoint(4, 4), QuicksilverStyle::Token::BenchTop)) return false;
+        if (!probe(rail, QPoint(4, rail->height() - 60), QuicksilverStyle::Token::Rail)) return false;
+        return image.save(QDir(dir).filePath(file));
+    };
+
+    QuicksilverGUI bare(m_node, platform_style.get(), network_style.data());
+    if (ModalOverlay* overlay = bare.findChild<ModalOverlay*>()) {
+        const QDateTime stamp = QDateTime::currentDateTime();
+        overlay->setKnownBestHeight(1, stamp, false);
+        bare.setNumBlocks(1, stamp, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    }
+    QVERIFY2(save_page(bare, "homeBootstrapAction", QStringLiteral("home-none.png")), qPrintable(unstyled));
+    QVERIFY2(save_page(bare, "sendCoinsAction", QStringLiteral("transfer-none.png")), qPrintable(unstyled));
+    QVERIFY2(save_page(bare, "receiveCoinsAction", QStringLiteral("request.png")), qPrintable(unstyled));
+    QVERIFY2(save_page(bare, "historyAction", QStringLiteral("ledger.png")), qPrintable(unstyled));
+    QVERIFY2(save_page(bare, "agentAllotmentAction", QStringLiteral("agents.png")), qPrintable(unstyled));
+    QVERIFY2(save_page(bare, "mineMintAction", QStringLiteral("mine.png")), qPrintable(unstyled));
+    QVERIFY2(save_page(bare, "networkAction", QStringLiteral("network.png")), qPrintable(unstyled));
+    QVERIFY2(save_page(bare, "homeBootstrapAction", QStringLiteral("home-none.png")), qPrintable(unstyled));
+    QPushButton* cost = bare.findChild<QPushButton*>(QStringLiteral("launchConsensusCardButton"));
+    QVERIFY(cost);
+    cost->click();
+    bare.resize(1200, 800);
+    QVERIFY(QTest::qWaitForWindowExposed(&bare));
+    QVERIFY(bare.grab().save(QDir(dir).filePath(QStringLiteral("consensus.png"))));
+
+    // A vault with a ledger worth looking at: mature and maturing mining
+    // rewards, and two transfers still waiting for a block.
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    for (int i = 0; i < 5; ++i) {
+        test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+    }
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    MiniGUI mini_gui(m_node, platform_style.get());
+    mini_gui.initModelForVault(m_node, vault, platform_style.get());
+    QVERIFY(!SendCoins(*vault, mini_gui.sendCoinsDialog, PKHash(), 3 * COIN).IsNull());
+    QVERIFY(!SendCoins(*vault, mini_gui.sendCoinsDialog, PKHash(), COIN / 4).IsNull());
+    qApp->processEvents();
+    // Consensus on, so Mine / Mint and Network show their own pages rather than
+    // the consensus review.
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), true);
+    QuicksilverGUI funded(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = funded.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(mini_gui.vaultModel.get(), platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(mini_gui.vaultModel.get());
+    QVERIFY2(save_page(funded, "homeBootstrapAction", QStringLiteral("home-vault.png")), qPrintable(unstyled));
+    QVERIFY2(save_page(funded, "sendCoinsAction", QStringLiteral("transfer-vault.png")), qPrintable(unstyled));
+    for (QAction* action : funded.findChildren<QAction*>()) {
+        if (action->objectName().isEmpty()) continue;
+        action->setEnabled(true);
+    }
+    QVERIFY2(save_page(funded, "receiveCoinsAction", QStringLiteral("request-vault.png")), qPrintable(unstyled));
+    QVERIFY2(save_page(funded, "historyAction", QStringLiteral("ledger-vault.png")), qPrintable(unstyled));
+    QVERIFY2(save_page(funded, "agentAllotmentAction", QStringLiteral("agents-vault.png")), qPrintable(unstyled));
+    QVERIFY2(save_page(funded, "mineMintAction", QStringLiteral("mine-vault.png")), qPrintable(unstyled));
+    QVERIFY2(save_page(funded, "networkAction", QStringLiteral("network-vault.png")), qPrintable(unstyled));
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
 }
 
 void VaultTests::transferPageShowsItsFormAndTransmitButtonTogether()
@@ -3345,6 +4830,342 @@ void VaultTests::coinControlDialogQuantityAndBytesUseSeparateRows()
     if (!quantityAndBytesUseSeparateRows(dialog.get(), messages)) return;
 }
 
+//! Transfer: a recipients panel of two-line rows with the inputs line under
+//! them, beside a summary of label/value rows.
+//!
+//! The first port kept the old stacked form, three labelled rows and three icon
+//! buttons per recipient, under an input-control box that took half the page.
+//! Send-back 1 made each recipient one line, as in the concept; send-back 2
+//! (owner ruling, 2026-10-09) gives the address its own line, because a whole
+//! Bech32 address and the amount and label do not fit one line at 1200 px.
+void VaultTests::transferRecipientsAreCompactRows()
+{
+    CoinControlFormSetup setup(m_node);
+    if (!setup.ok) return;
+    PollMarkerVault* vault = nullptr;
+    {
+        auto owned = std::make_unique<PollMarkerVault>();
+        vault = owned.get();
+        vault->balance = 10 * COIN;
+        setup.model = std::make_unique<VaultModel>(std::move(owned), m_node, &setup.options, setup.style.get());
+    }
+    SendCoinsDialog dialog(setup.style.get());
+    dialog.setModel(setup.model.get());
+    vault->block_hash = ArithToUint256(1);
+    setup.model->pollBalanceChanged();
+    dialog.resize(1000, 700);
+    dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+
+    QFrame* recipients = dialog.findChild<QFrame*>(QStringLiteral("transferRecipientsPanel"));
+    QVERIFY(recipients);
+    QCOMPARE(recipients->property("benchPanel").toBool(), true);
+    QCOMPARE(recipients->findChild<QLabel*>(QStringLiteral("benchPanelTitle"))->text(), QStringLiteral("TRANSFER · RECIPIENTS"));
+    QWidget* header = recipients->findChild<QWidget*>(QStringLiteral("transferRecipientsHeader"));
+    QVERIFY(header);
+    QStringList heads;
+    for (QLabel* label : header->findChildren<QLabel*>()) {
+        if (!label->text().isEmpty()) heads << label->text();
+    }
+    const QString unit = QuicksilverUnits::shortName(setup.model->getOptionsModel()->getDisplayUnit());
+    QCOMPARE(heads, (QStringList{QStringLiteral("#"), QStringLiteral("ADDRESS")}));
+
+    // Two lines per recipient: the address and its commands, then the amount
+    // and label, each named by a key in the bench label grammar.
+    const auto entries = [&] {
+        QList<SendCoinsEntry*> list;
+        for (SendCoinsEntry* entry : dialog.findChildren<SendCoinsEntry*>()) {
+            if (!entry->isHidden()) list << entry;
+        }
+        std::sort(list.begin(), list.end(), [&](SendCoinsEntry* a, SendCoinsEntry* b) {
+            return a->mapTo(&dialog, QPoint(0, 0)).y() < b->mapTo(&dialog, QPoint(0, 0)).y();
+        });
+        return list;
+    };
+    QCOMPARE(entries().size(), 1);
+    SendCoinsEntry* first = entries().at(0);
+    QVERIFY(recipients->isAncestorOf(first));
+    for (const char* caption : {"payToLabel", "labellLabel", "amountLabel"}) {
+        QVERIFY2(!first->findChild<QLabel*>(QString::fromLatin1(caption)), caption);
+    }
+    const auto line_ok = [&](std::initializer_list<const char*> names) -> int {
+        int previous_right = -1;
+        int middle = -1;
+        for (const char* name : names) {
+            QWidget* field = first->findChild<QWidget*>(QString::fromLatin1(name));
+            if (!field) return -1;
+            const QPoint at = field->mapTo(first, QPoint(0, field->height() / 2));
+            if (middle < 0) middle = at.y();
+            if (qAbs(at.y() - middle) > 4 || at.x() <= previous_right) {
+                qWarning("%s at %d,%d; line middle %d, previous right %d", name, at.x(), at.y(), middle, previous_right);
+                return -1;
+            }
+            previous_right = at.x() + field->width() - 1;
+        }
+        return middle;
+    };
+    const int address_line = line_ok({"sendCoinsEntryIndex", "payTo", "addressBookButton", "pasteButton", "deleteButton"});
+    const int amount_line = line_ok({"recipientAmountKey", "payAmount", "useAvailableBalanceButton", "recipientLabelKey", "addAsLabel"});
+    QVERIFY(address_line >= 0);
+    QVERIFY(amount_line > address_line);
+    QLabel* amount_key = first->findChild<QLabel*>(QStringLiteral("recipientAmountKey"));
+    QCOMPARE(amount_key->text(), QStringLiteral("Amount ") + unit);
+    QCOMPARE(amount_key->property("class").toString(), QStringLiteral("benchKey"));
+    QCOMPARE(first->findChild<QLabel*>(QStringLiteral("recipientLabelKey"))->property("class").toString(), QStringLiteral("benchKey"));
+    // The second line starts under the address.
+    QCOMPARE(amount_key->mapTo(first, QPoint(0, 0)).x(), first->findChild<QWidget*>(QStringLiteral("payTo"))->mapTo(first, QPoint(0, 0)).x());
+    QVERIFY2(first->height() <= 80, qPrintable(QStringLiteral("a recipient is %1 px tall").arg(first->height())));
+
+    // Rows are numbered, and renumbered when one goes.
+    const auto index_of = [](SendCoinsEntry* entry) {
+        QLabel* index = entry->findChild<QLabel*>(QStringLiteral("sendCoinsEntryIndex"));
+        return index ? index->text() : QString();
+    };
+    QCOMPARE(index_of(first), QStringLiteral("1"));
+    SendCoinsEntry* second = dialog.addEntry();
+    QCoreApplication::processEvents();
+    QCOMPARE(index_of(second), QStringLiteral("2"));
+    QVERIFY(QMetaObject::invokeMethod(first, "deleteClicked"));
+    QCoreApplication::processEvents();
+    QCOMPARE(entries().size(), 1);
+    QCOMPARE(index_of(entries().at(0)), QStringLiteral("1"));
+
+    // Add and Clear sit under the rows; inputs are one line in the same panel,
+    // the coin control command at its right.
+    QVERIFY(recipients->isAncestorOf(dialog.findChild<QPushButton*>(QStringLiteral("addButton"))));
+    QVERIFY(recipients->isAncestorOf(dialog.findChild<QPushButton*>(QStringLiteral("clearButton"))));
+    QWidget* inputs = dialog.findChild<QWidget*>(QStringLiteral("frameCoinControl"));
+    QVERIFY(inputs);
+    QVERIFY(recipients->isAncestorOf(inputs));
+    QVERIFY(!inputs->isHidden());
+    QLabel* automatic = inputs->findChild<QLabel*>(QStringLiteral("labelCoinControlAutomaticallySelected"));
+    QPushButton* coin_control = inputs->findChild<QPushButton*>(QStringLiteral("pushButtonCoinControl"));
+    QVERIFY(automatic);
+    QVERIFY(coin_control);
+    QCOMPARE(automatic->text(), QStringLiteral("Automatic selection"));
+    QVERIFY(coin_control->mapTo(inputs, QPoint(0, 0)).x() > automatic->mapTo(inputs, QPoint(0, 0)).x());
+    QVERIFY2(inputs->height() <= 80, qPrintable(QStringLiteral("inputs take %1 px").arg(inputs->height())));
+    // A custom change address is a choice on the inputs line; its field opens
+    // under it once chosen.
+    QCheckBox* custom_change = inputs->findChild<QCheckBox*>(QStringLiteral("checkBoxCoinControlChange"));
+    QWidget* change_address = inputs->findChild<QWidget*>(QStringLiteral("lineEditCoinControlChange"));
+    QVERIFY(custom_change);
+    QVERIFY(change_address);
+    const int change_middle = custom_change->mapTo(inputs, QPoint(0, custom_change->height() / 2)).y();
+    const int command_top = coin_control->mapTo(inputs, QPoint(0, 0)).y();
+    QVERIFY(change_middle >= command_top && change_middle < command_top + coin_control->height());
+    QVERIFY(change_address->isHidden());
+    custom_change->setChecked(true);
+    QVERIFY(!change_address->isHidden());
+    custom_change->setChecked(false);
+    QVERIFY(change_address->isHidden());
+
+    // The summary is label/value rows; the full-amount and preparation notes
+    // and the review command live in it.
+    QFrame* summary = dialog.findChild<QFrame*>(QStringLiteral("transferSummaryPanel"));
+    QVERIFY(summary);
+    QCOMPARE(summary->findChild<QLabel*>(QStringLiteral("benchPanelTitle"))->text(), QStringLiteral("SUMMARY"));
+    QCOMPARE(summary->findChild<QLabel*>(QStringLiteral("transferSummaryFrom"))->text(), setup.model->getDisplayName());
+    QCOMPARE(summary->findChild<QLabel*>(QStringLiteral("transferSummaryRecipients"))->text(), QStringLiteral("1"));
+    QVERIFY(summary->isAncestorOf(dialog.findChild<QLabel*>(QStringLiteral("sendWorkDisclosureLabel"))));
+    QVERIFY(summary->isAncestorOf(dialog.findChild<QPushButton*>(QStringLiteral("sendButton"))));
+    QVERIFY(summary->width() <= 340);
+}
+
+//! F-442 owner walk, items 5 and 12: at the desktop's content width the
+//! address field shows its whole placeholder and outweighs the label, Sending
+//! is set like the other summary values, and Review comes straight after the
+//! figures at the height of the page's other commands.
+void VaultTests::transferKeepsTheAddressReadableAndReviewInReach()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    MiniGUI mini_gui(m_node, platform_style.get());
+    mini_gui.initModelForVault(m_node, vault, platform_style.get());
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(mini_gui.vaultModel.get(), platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(mini_gui.vaultModel.get());
+    window.resize(1200, 800);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QAction* transfer = window.findChild<QAction*>(QStringLiteral("sendCoinsAction"));
+    QVERIFY(transfer);
+    transfer->trigger();
+    QCoreApplication::processEvents();
+    SendCoinsDialog* page = view->findChild<SendCoinsDialog*>();
+    QVERIFY(page);
+    QTRY_VERIFY(page->isVisible());
+    QWidget& dialog = *page;
+
+    QValidatedLineEdit* address = dialog.findChild<QValidatedLineEdit*>(QStringLiteral("payTo"));
+    QLineEdit* label = dialog.findChild<QLineEdit*>(QStringLiteral("addAsLabel"));
+    QVERIFY(address);
+    QVERIFY(label);
+    const int placeholder = address->fontMetrics().horizontalAdvance(address->placeholderText());
+    QVERIFY2(address->width() >= placeholder + 20,
+             qPrintable(QStringLiteral("address %1 px for a %2 px placeholder").arg(address->width()).arg(placeholder)));
+    QVERIFY2(address->width() > label->width(), qPrintable(QStringLiteral("address %1 px, label %2 px").arg(address->width()).arg(label->width())));
+
+    // Send-back 2 item 1: a whole Bech32 address reads without scrolling, at
+    // 1200 px with the summary panel beside it: the text fits the room
+    // QLineEdit paints it in (the contents rect less text margins and the
+    // edit's 2 px side margins and cursor).
+    const QString bech32 = QString::fromStdString(EncodeDestination(WitnessV0KeyHash(test.coinbaseKey.GetPubKey())));
+    QVERIFY2(bech32.startsWith(QString::fromStdString(Params().Bech32HRP()) + QStringLiteral("1q")), qPrintable(bech32));
+    address->setText(bech32);
+    QCoreApplication::processEvents();
+    const int text_width = address->fontMetrics().horizontalAdvance(bech32);
+    QStyleOptionFrame frame_option;
+    frame_option.initFrom(address);
+    frame_option.rect = address->rect();
+    frame_option.lineWidth = address->style()->pixelMetric(QStyle::PM_DefaultFrameWidth, &frame_option, address);
+    const QRect contents = address->style()->subElementRect(QStyle::SE_LineEditContents, &frame_option, address);
+    const QMargins text_margins = address->textMargins();
+    const int room = contents.width() - text_margins.left() - text_margins.right() - 2 * 2 - 1;
+    QVERIFY2(text_width <= room,
+             qPrintable(QStringLiteral("address field %1 px has %2 px of room for a %3 px address").arg(address->width()).arg(room).arg(text_width)));
+    QFrame* summary_panel = dialog.findChild<QFrame*>(QStringLiteral("transferSummaryPanel"));
+    QVERIFY(summary_panel && summary_panel->isVisible());
+    QVERIFY(summary_panel->mapTo(&window, QPoint(0, 0)).x() > address->mapTo(&window, QPoint(address->width(), 0)).x());
+    // F-452: Amount is as wide as an amount with an eight-digit whole part,
+    // not the 1 000 000 000 cap; a longer one scrolls inside the box. Label
+    // takes the rest of its line, out to the row's remove button.
+    QWidget* amount_field = dialog.findChild<QWidget*>(QStringLiteral("payAmount"));
+    QVERIFY(amount_field);
+    QVERIFY2(amount_field->width() <= amount_field->sizeHint().width(), qPrintable(QStringLiteral("amount %1 px, content %2 px").arg(amount_field->width()).arg(amount_field->sizeHint().width())));
+    {
+        QLineEdit* amount_edit = amount_field->findChild<QLineEdit*>();
+        QVERIFY(amount_edit);
+        const QFontMetrics amount_metrics = amount_edit->fontMetrics();
+        const int eight_digits = amount_metrics.horizontalAdvance(QuicksilverUnits::format(QuicksilverUnit::HG, 99'999'999 * COIN + 99'999'999, false, QuicksilverUnits::SeparatorStyle::ALWAYS));
+        const int cap = amount_metrics.horizontalAdvance(QuicksilverUnits::format(QuicksilverUnit::HG, QuicksilverUnits::maxMoney(), false, QuicksilverUnits::SeparatorStyle::ALWAYS));
+        // The room QLineEdit paints text in: its width less 2 px a side and
+        // the cursor, as for the address and label above.
+        const int amount_room = amount_edit->width() - 2 * 2 - 1;
+        // Whether eight digits fit is a question about real glyphs: in
+        // "minimal"'s placeholder font they are wider than the box's cap.
+        if (!QFontDatabase().families().isEmpty()) {
+            QVERIFY2(amount_room >= eight_digits, qPrintable(QStringLiteral("amount has %1 px of room for %2 px").arg(amount_room).arg(eight_digits)));
+        }
+        QVERIFY2(amount_room < cap, qPrintable(QStringLiteral("amount has %1 px of room, enough for the %2 px cap").arg(amount_room).arg(cap)));
+    }
+    QWidget* remove = dialog.findChild<QWidget*>(QStringLiteral("deleteButton"));
+    QVERIFY(remove);
+    QCOMPARE(label->mapTo(&window, QPoint(label->width(), 0)).x(), remove->mapTo(&window, QPoint(remove->width(), 0)).x());
+    // Label's content is its text: a label filled in from the address book
+    // shows whole too.
+    const QString known_label = QStringLiteral("founding-payout-b58");
+    label->setText(known_label);
+    QCoreApplication::processEvents();
+    QStyleOptionFrame label_option;
+    label_option.initFrom(label);
+    label_option.rect = label->rect();
+    label_option.lineWidth = label->style()->pixelMetric(QStyle::PM_DefaultFrameWidth, &label_option, label);
+    const int label_room = label->style()->subElementRect(QStyle::SE_LineEditContents, &label_option, label).width() - 2 * 2 - 1;
+    QVERIFY2(label->fontMetrics().horizontalAdvance(known_label) <= label_room,
+             qPrintable(QStringLiteral("label field has %1 px of room for a %2 px label").arg(label_room).arg(label->fontMetrics().horizontalAdvance(known_label))));
+    label->clear();
+    address->clear();
+
+    auto* maximum = dialog.findChild<QPushButton*>(QStringLiteral("useAvailableBalanceButton"));
+    QVERIFY(maximum);
+    // A fit at 1200 px: in "minimal"'s placeholder glyphs the whole address
+    // alone over-fills the row and the layout takes the shortfall from Max, so
+    // this runs where fonts are real.
+    if (!QFontDatabase().families().isEmpty()) {
+        QVERIFY2(maximum->width() >= maximum->sizeHint().width(),
+                 qPrintable(QStringLiteral("Max is %1 px wide but needs %2 px with shared padding")
+                     .arg(maximum->width()).arg(maximum->sizeHint().width())));
+    }
+
+    QLabel* sending = dialog.findChild<QLabel*>(QStringLiteral("transferSummaryTotal"));
+    QLabel* recipients = dialog.findChild<QLabel*>(QStringLiteral("transferSummaryRecipients"));
+    QVERIFY(sending);
+    QVERIFY(recipients);
+    QCOMPARE(QFontInfo(sending->font()).pixelSize(), QFontInfo(recipients->font()).pixelSize());
+
+    QPushButton* review = dialog.findChild<QPushButton*>(QStringLiteral("sendButton"));
+    QLabel* notes = dialog.findChild<QLabel*>(QStringLiteral("sendWorkDisclosureLabel"));
+    QFrame* summary = dialog.findChild<QFrame*>(QStringLiteral("transferSummaryPanel"));
+    QVERIFY(review);
+    QVERIFY(notes);
+    QVERIFY(summary);
+    QVERIFY2(review->mapTo(summary, QPoint(0, 0)).y() < notes->mapTo(summary, QPoint(0, 0)).y(), "Review sits under the solver notes");
+    QCOMPARE(review->width(), review->sizeHint().width());
+    QPushButton* add = dialog.findChild<QPushButton*>(QStringLiteral("addButton"));
+    QPushButton* clear = dialog.findChild<QPushButton*>(QStringLiteral("clearButton"));
+    QVERIFY(add);
+    QVERIFY(clear);
+    QCOMPARE(review->height(), add->height());
+    QCOMPARE(clear->height(), add->height());
+}
+
+//! Request, Ledger, Agents, Mine / Mint and Network follow the Bench page
+//! grammar: no page heading (the breadcrumb names the page), content in
+//! titled panels rather than group boxes and red captions, state as
+//! label/value rows, and at most one primary command.
+void VaultTests::remainingPagesUseTheBenchGrammar()
+{
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    ReceiveCoinsDialog request(platform_style.get());
+    TransactionView ledger(platform_style.get());
+    AgentAllotmentPage agents;
+    MineMintPage mine;
+    NetworkPage network;
+    const QList<QWidget*> pages{&request, &ledger, &agents, &mine, &network};
+    for (QWidget* page : pages) {
+        const QString name = QString::fromLatin1(page->metaObject()->className());
+        for (QLabel* label : page->findChildren<QLabel*>()) {
+            const QString role = label->property("class").toString();
+            QVERIFY2(role != QStringLiteral("pageTitle"), qPrintable(name + QStringLiteral(" heading ") + label->text()));
+            QVERIFY2(role != QStringLiteral("hudHeading"), qPrintable(name + QStringLiteral(" caption ") + label->text()));
+        }
+        const QList<QGroupBox*> groups = page->findChildren<QGroupBox*>();
+        QVERIFY2(groups.isEmpty(), qPrintable(name + QStringLiteral(" group ") + (groups.isEmpty() ? QString() : groups.first()->title())));
+        int panels = 0;
+        for (QFrame* frame : page->findChildren<QFrame*>()) {
+            if (frame->property("benchPanel").toBool()) ++panels;
+        }
+        QVERIFY2(panels > 0, qPrintable(name));
+        QStringList primaries;
+        for (QPushButton* button : page->findChildren<QPushButton*>()) {
+            if (button->property("class").toString() == QStringLiteral("primaryActionButton")) primaries << button->objectName();
+        }
+        QVERIFY2(primaries.size() <= 1, qPrintable(name + QStringLiteral(" primaries: ") + primaries.join(QStringLiteral(", "))));
+    }
+
+    // Mine / Mint's mining state is label/value rows.
+    for (const char* value : {"miningStatusValue", "solverStatusValue", "attemptsRateValue"}) {
+        QLabel* label = mine.findChild<QLabel*>(QString::fromLatin1(value));
+        QVERIFY2(label, value);
+        QCOMPARE(label->property("class").toString(), QStringLiteral("benchValue"));
+    }
+
+    // Network: one panel, a row per network.
+    QFrame* networks = network.findChild<QFrame*>(QStringLiteral("developerNetworkContext"));
+    QVERIFY(networks);
+    QCOMPARE(networks->property("benchPanel").toBool(), true);
+    for (const char* row : {"developerNetworkMainCard", "developerNetworkPublicTestCard", "developerNetworkSandboxCard"}) {
+        QWidget* card = network.findChild<QWidget*>(QString::fromLatin1(row));
+        QVERIFY2(card, row);
+        QVERIFY2(networks->isAncestorOf(card), row);
+        QVERIFY2(!card->property("benchPanel").toBool(), row);
+    }
+}
+
 void VaultTests::transferSolverTextNamesRealMenuAndSetting()
 {
     TestChain100Setup test;
@@ -3356,7 +5177,7 @@ void VaultTests::transferSolverTextNamesRealMenuAndSetting()
     for (QAction* action : window.menuBar()->actions()) {
         menus << QString(action->text()).remove(QLatin1Char('&'));
     }
-    QVERIFY(menus.contains(QStringLiteral("Controls")));
+    QVERIFY(menus.contains(QStringLiteral("Settings")));
 
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
@@ -3390,11 +5211,12 @@ void VaultTests::transferSolverTextNamesRealMenuAndSetting()
         while (matches.hasNext()) {
             const auto match = matches.next();
             QVERIFY2(menus.contains(match.captured(1)), qPrintable(text));
-            QCOMPARE(match.captured(0), QStringLiteral("Controls > Options > Main"));
+            QCOMPARE(match.captured(0), QStringLiteral("Settings > Options > Main"));
             ++paths;
         }
         QVERIFY2(!text.contains(QStringLiteral("transfer helper")), qPrintable(text));
-        QVERIFY2(!text.contains(QStringLiteral("Settings")), qPrintable(text));
+        // The menu was renamed from Controls to Settings (owner ruling 2026-10-10).
+        QVERIFY2(!text.contains(QStringLiteral("Controls")), qPrintable(text));
     }
     QCOMPARE(paths, 5);
 }
@@ -3566,7 +5388,7 @@ void VaultTests::transferPreparationFailureWithoutGraphsHidesProgress()
     QVERIFY(fixture.dialog->findChild<QWidget*>(QStringLiteral("sendWorkProgressPanel"))->isHidden());
 }
 
-void VaultTests::requestPageAddressTypeCopyHasNoBitcoinVocabulary()
+void VaultTests::requestPageNamesFormatsAndShowsGeneratedFormat()
 {
     TestChain100Setup test;
     auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
@@ -3580,19 +5402,58 @@ void VaultTests::requestPageAddressTypeCopyHasNoBitcoinVocabulary()
     ReceiveCoinsDialog receive(platformStyle.get());
     receive.setModel(mini_gui.vaultModel.get());
 
-    QComboBox* types = receive.findChild<QComboBox*>(QStringLiteral("addressType"));
-    QVERIFY(types);
-    QVERIFY(mini_gui.vaultModel->vault().taprootEnabled());
+    auto* types = receive.findChild<QComboBox*>(QStringLiteral("addressType"));
+    auto* format_label = receive.findChild<QLabel*>(QStringLiteral("addressFormatLabel"));
+    auto* advice = receive.findChild<QLabel*>(QStringLiteral("addressFormatAdvice"));
+    QVERIFY(types && format_label && advice);
+    QCOMPARE(format_label->text(), QStringLiteral("Address &format"));
+    QCOMPARE(format_label->buddy(), types);
     QCOMPARE(types->count(), 3);
-    QCOMPARE(types->itemText(0), QStringLiteral("Base58"));
-    QCOMPARE(types->itemData(0, Qt::ToolTipRole).toString(),
-             QStringLiteral("Not recommended due to larger transactions and less protection against typos."));
-    QCOMPARE(types->itemText(1), QStringLiteral("Bech32"));
-    QCOMPARE(types->itemData(1, Qt::ToolTipRole).toString(),
-             QStringLiteral("Recommended. Smaller transfers and better protection against mistyped addresses."));
-    QCOMPARE(types->itemText(2), QStringLiteral("Bech32m"));
-    QCOMPARE(types->itemData(2, Qt::ToolTipRole).toString(),
-             QStringLiteral("Same benefits as Bech32, with a stronger checksum."));
+    QCOMPARE(types->itemText(types->findData(static_cast<int>(OutputType::BECH32))), QStringLiteral("Bech32 (recommended)"));
+    receive.resize(980, 600);
+    receive.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&receive));
+    auto* amount = receive.findChild<QuicksilverAmountField*>(QStringLiteral("reqAmount"));
+    QVERIFY(amount);
+    QVERIFY(types->mapTo(&receive, QPoint(0, 0)).y() >= amount->mapTo(&receive, QPoint(0, amount->height())).y());
+    for (const char* name : {"label", "label_2", "label_3"}) {
+        auto* label = receive.findChild<QLabel*>(QString::fromLatin1(name));
+        QVERIFY(label);
+        QVERIFY(!label->text().endsWith(QLatin1Char(':')));
+        QCOMPARE(label->property("class").toString(), QStringLiteral("benchKey"));
+        QVERIFY(label->alignment().testFlag(Qt::AlignLeft));
+    }
+    auto* table = receive.findChild<QTableView*>(QStringLiteral("recentRequestsView"));
+    QVERIFY(table);
+    QCOMPARE(table->model()->columnCount(), 4);
+    QCOMPARE(table->horizontalHeader()->defaultAlignment(), Qt::AlignLeft | Qt::AlignVCenter);
+    for (int column = 0; column < table->model()->columnCount(); ++column) {
+        QVERIFY(!table->model()->headerData(column, Qt::Horizontal).toString().isEmpty());
+    }
+    auto* generate = receive.findChild<QPushButton*>(QStringLiteral("receiveButton"));
+    QVERIFY(generate);
+    for (const auto type : {OutputType::BECH32, OutputType::BECH32M, OutputType::BASE58}) {
+        types->setCurrentIndex(types->findData(static_cast<int>(type)));
+        QVERIFY(advice->isVisible());
+        QVERIFY(!advice->text().isEmpty());
+        if (type == OutputType::BASE58) {
+            QVERIFY(advice->text().startsWith(QStringLiteral("Not recommended:")));
+        }
+        const int count = table->model()->rowCount();
+        generate->click();
+        QCOMPARE(table->model()->rowCount(), count + 1);
+        auto dialogs = receive.findChildren<ReceiveRequestDialog*>();
+        QVERIFY(!dialogs.isEmpty());
+        auto* generated = dialogs.last();
+        auto* address = generated->findChild<QLabel*>(QStringLiteral("address_content"));
+        auto* format = generated->findChild<QLabel*>(QStringLiteral("address_format_content"));
+        QVERIFY(address && format);
+        QCOMPARE(OutputTypeFromDestination(DecodeDestination(address->text().toStdString())).value(), type);
+        const QString expected = type == OutputType::BASE58 ? QStringLiteral("Base58") :
+            type == OutputType::BECH32 ? QStringLiteral("Bech32") : QStringLiteral("Bech32m");
+        QCOMPARE(format->text(), expected);
+        generated->close();
+    }
 }
 
 void VaultTests::signVerifyMessageRejectsNonBase58WithoutBitcoinVocabulary()
@@ -3615,6 +5476,21 @@ void VaultTests::signVerifyMessageRejectsNonBase58WithoutBitcoinVocabulary()
     CKey key = GenerateRandomKey();
     const QString bech32 = QString::fromStdString(EncodeDestination(WitnessV0KeyHash(key.GetPubKey())));
     const QString expected = QStringLiteral("Message signing is only supported for Base58 addresses. Please check the address and try again.");
+
+    // Signing needs a Base58 address, so the example in both address fields is one:
+    // this chain's key-hash prefix and a key-hash length, with a checksum that fails.
+    const std::vector<unsigned char>& prefix = Params().Base58Prefix(CChainParams::PUBKEY_ADDRESS);
+    for (const char* field : {"addressIn_SM", "addressIn_VM"}) {
+        const QString placeholder = dialog.findChild<QValidatedLineEdit*>(QString::fromLatin1(field))->placeholderText();
+        const QRegularExpressionMatch example = QRegularExpression(QStringLiteral("\\(e\\.g\\. (\\S+)\\)")).match(placeholder);
+        QVERIFY2(example.hasMatch(), qPrintable(placeholder));
+        const std::string address = example.captured(1).toStdString();
+        std::vector<unsigned char> raw;
+        QVERIFY2(DecodeBase58(address, raw, 64), address.c_str());
+        QCOMPARE(raw.size(), prefix.size() + 20 + 4);
+        QVERIFY(std::equal(prefix.begin(), prefix.end(), raw.begin()));
+        QVERIFY(!IsValidDestinationString(address));
+    }
 
     dialog.findChild<QValidatedLineEdit*>(QStringLiteral("addressIn_SM"))->setText(bech32);
     dialog.findChild<QPushButton*>(QStringLiteral("signMessageButton_SM"))->click();

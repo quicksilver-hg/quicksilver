@@ -7,7 +7,7 @@
 
 #include <QWidget>
 
-class QGroupBox;
+class QFrame;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -36,6 +36,8 @@ public:
 
     void showInitializing();
     void showStartFailed();
+    //! Consensus was not started because no Tor executable was found.
+    void showTorMissing();
     void updateStatus(int peers, double verification_progress, bool synced);
     //! Outcome of the last manual peer addition, reported by the container that owns
     //! the node handle.
@@ -60,12 +62,11 @@ private:
 
     QLabel* m_intro{nullptr};
     QLabel* m_developer_banner{nullptr};
-    QLabel* m_current_network_value{nullptr};
     QLabel* m_status_value{nullptr};
     QLabel* m_peers_value{nullptr};
     QLabel* m_sync_value{nullptr};
     QLabel* m_bootstrap_diagnosis{nullptr};
-    QGroupBox* m_tor_setup_panel{nullptr};
+    QFrame* m_tor_setup_panel{nullptr};
     QLabel* m_tor_setup_warning{nullptr};
     QLabel* m_tor_setup_steps{nullptr};
     QLabel* m_tor_setup_working{nullptr};

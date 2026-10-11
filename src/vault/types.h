@@ -57,13 +57,8 @@ enum class AddressPurpose {
     SEND,
 };
 
-enum class AgentAllotmentPolicyStatus : uint8_t {
-    PendingIntegration = 0,
-    Enforced = 1,
-};
-
 struct AgentAllotmentRecord {
-    static constexpr int CURRENT_VERSION{1};
+    static constexpr int CURRENT_VERSION{2};
 
     int version{CURRENT_VERSION};
     std::string id;
@@ -71,19 +66,19 @@ struct AgentAllotmentRecord {
     CAmount funding_limit{0};
     CAmount daily_limit{0};
     int64_t risk_accepted_time{0};
-    bool backend_created{false};
     std::string funding_address;
-    AgentAllotmentPolicyStatus policy_status{AgentAllotmentPolicyStatus::PendingIntegration};
+    //! Public descriptor, with checksum. The vault holds the private keys.
+    std::string funding_descriptor;
+    //! 0 while the allotment is active. A nonzero value is the time it was stopped.
+    int64_t stopped_time{0};
 
     SERIALIZE_METHODS(AgentAllotmentRecord, obj)
     {
         int version{CURRENT_VERSION};
         READWRITE(version);
         SER_READ(obj, if (version != CURRENT_VERSION) throw std::ios_base::failure("Unsupported agent allotment record version"));
-        uint8_t policy_status{static_cast<uint8_t>(obj.policy_status)};
-        READWRITE(obj.id, obj.label, obj.funding_limit, obj.daily_limit, obj.risk_accepted_time, obj.backend_created, obj.funding_address, policy_status);
-        SER_READ(obj, obj.version = CURRENT_VERSION;
-                      obj.policy_status = policy_status == static_cast<uint8_t>(AgentAllotmentPolicyStatus::Enforced) ? AgentAllotmentPolicyStatus::Enforced : AgentAllotmentPolicyStatus::PendingIntegration);
+        READWRITE(obj.id, obj.label, obj.funding_limit, obj.daily_limit, obj.risk_accepted_time, obj.funding_address, obj.funding_descriptor, obj.stopped_time);
+        SER_READ(obj, obj.version = CURRENT_VERSION);
     }
 };
 
@@ -91,13 +86,12 @@ struct AgentAllotmentPolicyRequestMetadata {
     std::string id;
     std::string label;
     std::string funding_address;
+    std::string funding_descriptor;
     CAmount funding_limit{0};
     CAmount funding_available{0};
     CAmount daily_limit{0};
     int64_t risk_accepted_time{0};
     int64_t request_created_time{0};
-    bool backend_created{false};
-    AgentAllotmentPolicyStatus policy_status{AgentAllotmentPolicyStatus::PendingIntegration};
 };
 
 struct AgentAllotmentFundingOutput {
@@ -109,7 +103,9 @@ struct AgentAllotmentFundingOutput {
 struct AgentAllotmentPolicyBundle {
     AgentAllotmentPolicyRequestMetadata metadata;
     std::string policy_request;
-    std::string funding_secret;
+    //! Private key of the agent's key inside the funding descriptor. Not stored on the record.
+    std::string agent_secret;
+    std::string funding_descriptor;
     std::vector<AgentAllotmentFundingOutput> funding_outputs;
     std::string bundle_json;
 };

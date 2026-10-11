@@ -17,10 +17,10 @@
 
 #include <addresstype.h>
 #include <common/args.h> // for GetBoolArg
-#include <common/messages.h>
 #include <interfaces/handler.h>
 #include <interfaces/node.h>
 #include <key_io.h>
+#include <node/context.h>
 #include <node/interface_ui.h>
 #include <node/types.h>
 #include <psqt.h>
@@ -38,7 +38,6 @@
 #include <QSet>
 #include <QTimer>
 
-using common::TransactionErrorString;
 using vault::CCoinControl;
 using vault::CRecipient;
 using vault::DEFAULT_DISABLE_VAULT;
@@ -84,6 +83,7 @@ void VaultModel::startPollBalance()
 void VaultModel::setClientModel(ClientModel* client_model)
 {
     m_client_model = client_model;
+    Q_EMIT agentAllotmentConsensusChanged();
 }
 
 void VaultModel::updateStatus()
@@ -588,27 +588,22 @@ CAmount VaultModel::agentAllotmentFundingAvailable(const vault::AgentAllotmentRe
     return available;
 }
 
-VaultModel::AgentSignedSpendBroadcastResult VaultModel::broadcastAgentAllotmentSignedSpend(CTransactionRef tx) const
+bool VaultModel::canCosignAgentAllotmentSpend() const
 {
-    if (!tx) {
-        return {.accepted = false, .txid = {}, .error = tr("Signed spend is empty.")};
-    }
-    if (!m_client_model) {
-        return {.accepted = false, .txid = QString::fromStdString(tx->GetHash().ToString()), .error = tr("Start consensus before submitting a signed agent spend.")};
-    }
+    return m_client_model && m_node.context() && m_node.context()->chainman;
+}
 
-    const QString txid{QString::fromStdString(tx->GetHash().ToString())};
-    std::string err_string;
-    const node::TransactionError error{m_node.broadcastTransaction(std::move(tx), err_string)};
-    if (error == node::TransactionError::OK) {
-        return {.accepted = true, .txid = txid, .error = {}};
+util::Result<CTransactionRef> VaultModel::cosignAgentAllotmentSpend(const QString& psqt)
+{
+    if (!canCosignAgentAllotmentSpend()) {
+        return util::Error{Untranslated("Turn on Consensus to co-sign: this desktop broadcasts the spend through its own node.")};
     }
+    return m_vault->cosignAgentAllotmentSpend(psqt.toStdString());
+}
 
-    QString error_text = QString::fromStdString(TransactionErrorString(error).translated);
-    if (!err_string.empty()) {
-        error_text += QStringLiteral(": ") + QString::fromStdString(err_string);
-    }
-    return {.accepted = false, .txid = txid, .error = error_text};
+bool VaultModel::stopAgentAllotment(const QString& id)
+{
+    return m_vault->stopAgentAllotment(id.toStdString());
 }
 
 bool VaultModel::tryListCoins(interfaces::Vault::CoinsList& coins) const

@@ -19,6 +19,7 @@ public:
     explicit OptionTests(interfaces::Node& node);
 
 private Q_SLOTS:
+    void optionsUseBenchPanelAndExplainAutomaticThreads();
     void init(); // called before each test function execution.
     void leftoverQSettingsKeysAreIgnored();
     void legacyDisplayUnitSettingIsIgnored();
@@ -36,14 +37,12 @@ private Q_SLOTS:
     void mainTabFitsAtTheOpeningSize();
     void mainTabMatchesCardSurface();
     void documentModeStripHasNoLightBase();
-    void allowCpuAgentTxPowPersists();
-    void allowCpuAgentTxPowCancelLeavesTheSettingOff();
     void parametersInteraction();
     void extractFilter();
     void openConfDoesNotNestEventLoop();
     void resetDoesNotNestEventLoop();
     void gpuSolverBrowseDoesNotNestEventLoop();
-    void customFontDoesNotNestEventLoop();
+    void displayTabHasNoDeadFontChoiceAndAlignsItsFields();
 
 private:
     interfaces::Node& m_node;

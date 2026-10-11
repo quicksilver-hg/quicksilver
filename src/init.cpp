@@ -1509,7 +1509,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     // discovers the SOCKS listener itself, and installs the onion proxy.
     // Nothing downstream of "a control port exists" knows this Tor is ours.
     if (args.GetBoolArg("-bundledtor", DEFAULT_BUNDLED_TOR)) {
-        if (!args.GetBoolArg("-listenonion", DEFAULT_LISTEN_ONION)) {
+        if (!tor::BundledTorWouldStart(args)) {
             // Nothing would talk to it: the torcontrol thread is its only client
             // and that thread runs only when -listenonion is on. This is a log
             // line and not a refusal because -listenonion is not necessarily

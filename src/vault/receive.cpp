@@ -338,8 +338,8 @@ Balance GetBalance(const CVault& vault, const int min_depth, bool avoid_reuse)
             const bool is_trusted{CachedTxIsTrusted(vault, wtx, trusted_parents)};
             const int tx_depth{vault.GetTxDepthInMainChain(wtx)};
             const CAmount tx_credit_mine{CachedTxGetAvailableCredit(vault, wtx, ISMINE_SPENDABLE | reuse_filter)};
-            // Coins handed to an agent still belong to this vault -- the parent key can
-            // sweep them back -- but coin selection cannot reach them. Reporting them apart
+            // Coins handed to an agent still belong to this vault -- its reclaim key can
+            // spend them back -- but coin selection cannot reach them. Reporting them apart
             // from the spendable balance keeps the figure on screen equal to the figure a
             // transfer can actually spend. See doc/design/agent-client.md.
             const CAmount tx_delegated{funding_scripts.empty() ? 0 : TxGetDelegatedCredit(vault, wtx, funding_scripts, ISMINE_SPENDABLE | reuse_filter)};

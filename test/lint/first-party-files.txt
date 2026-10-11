@@ -17,6 +17,7 @@
 .github/workflows/gpu-solver.yml
 ci/lto-qt-copy-reloc.sh
 ci/prune-gha-caches.sh
+cmake/script/CheckBundledTor.cmake
 cmake/script/CheckCtestManifest.cmake
 cmake/script/CheckNoQtCopyReloc.cmake
 contrib/calibration/mainnet_floor_model.py
@@ -105,10 +106,14 @@ src/node/mining_service.cpp
 src/node/mining_service.h
 src/qt/agentallotmentpage.cpp
 src/qt/agentallotmentpage.h
+src/qt/benchpanel.cpp
+src/qt/benchpanel.h
 src/qt/consensusreviewpage.cpp
 src/qt/consensusreviewpage.h
 src/qt/desktoplaunchpage.cpp
 src/qt/desktoplaunchpage.h
+src/qt/ledgerrows.cpp
+src/qt/ledgerrows.h
 src/qt/maturity.cpp
 src/qt/maturity.h
 src/qt/minemintpage.cpp
@@ -132,12 +137,8 @@ src/qt/test/quicksilverstyletests.h
 src/qt/test/solverprobestub.cpp
 src/qt/test/storagecoststests.cpp
 src/qt/test/storagecoststests.h
-src/qt/test/vaultsummarytests.cpp
-src/qt/test/vaultsummarytests.h
 src/qt/thinvaultheadersource.cpp
 src/qt/thinvaultheadersource.h
-src/qt/vaultsummary.cpp
-src/qt/vaultsummary.h
 src/quicksilver-agent.cpp
 src/test/agent_headerchain_tests.cpp
 src/test/bundled_tor_tests.cpp

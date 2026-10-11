@@ -77,6 +77,18 @@ function(add_windows_deploy_target)
     return()
   endif()
 
+  # The installer ships the Tor Project's tor.exe beside quicksilver.exe: the
+  # desktop starts its own Tor once Consensus is enabled, and someone who
+  # downloaded an installer cannot be assumed to have installed one (F-441).
+  # contrib/tor/fetch-tor.ps1 fetches the pinned Expert Bundle into
+  # build/tor; the pin below is of tor.exe inside it, and moves together with
+  # the archive pin in that script.
+  set(QUICKSILVER_BUNDLED_TOR_EXE "${PROJECT_SOURCE_DIR}/build/tor/tor/tor.exe" CACHE FILEPATH
+    "tor.exe to ship in the Windows installer, as unpacked by contrib/tor/fetch-tor.ps1."
+  )
+  # Tor Expert Bundle 15.0.24 (tor 0.4.9.13), windows-x86_64.
+  set(QUICKSILVER_BUNDLED_TOR_SHA256 "90bbdcafd586feea608a5e9b7d3959f4ee194f7770755cfde8fab240e9773ad1")
+
   # TODO: Consider replacing this code with the CPack NSIS Generator.
   #       See https://cmake.org/cmake/help/latest/cpack_gen/nsis.html
   # Generated either way, so that the configured script is available to run by
@@ -92,6 +104,19 @@ function(add_windows_deploy_target)
     PATHS "$ENV{ProgramFiles}/NSIS" "$ENV{ProgramFiles\(x86\)}/NSIS"
     DOC "Path to the NSIS makensis compiler, used to build the Windows installer."
   )
+  if(NOT EXISTS "${QUICKSILVER_BUNDLED_TOR_EXE}")
+    # Defined and failing, for the same reason as a missing makensis below: the
+    # remedy is one command away and "unknown target" would hide it.
+    message(STATUS "Windows installer: `deploy` target defined, but it will fail, because tor.exe was not found at ${QUICKSILVER_BUNDLED_TOR_EXE}. Run contrib\\tor\\fetch-tor.ps1 and re-run CMake.")
+    add_custom_target(deploy
+      COMMAND ${CMAKE_COMMAND} -E echo "Cannot build the Windows installer: tor.exe was not found at ${QUICKSILVER_BUNDLED_TOR_EXE}."
+      COMMAND ${CMAKE_COMMAND} -E echo "Run: powershell -NoProfile -ExecutionPolicy Bypass -File contrib\\tor\\fetch-tor.ps1 then re-run CMake, or set QUICKSILVER_BUNDLED_TOR_EXE."
+      COMMAND ${CMAKE_COMMAND} -E false
+      VERBATIM
+    )
+    return()
+  endif()
+
   if(NOT MAKENSIS_EXECUTABLE)
     # Deliberately still defined. This is a Windows build of every binary the
     # installer ships, so `deploy` is a reasonable thing to ask for, and the one
@@ -152,8 +177,19 @@ function(add_windows_deploy_target)
   add_custom_command(
     OUTPUT ${PROJECT_BINARY_DIR}/quicksilver-win64-setup.exe
     COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_BINARY_DIR}/release
+    COMMAND ${CMAKE_COMMAND}
+      -DTOR_EXE=${QUICKSILVER_BUNDLED_TOR_EXE}
+      -DEXPECTED_SHA256=${QUICKSILVER_BUNDLED_TOR_SHA256}
+      -DSTAGE_TO=${PROJECT_BINARY_DIR}/release/tor.exe
+      -P ${PROJECT_SOURCE_DIR}/cmake/script/CheckBundledTor.cmake
     ${stage_commands}
     COMMAND ${MAKENSIS_EXECUTABLE} -V2 ${PROJECT_BINARY_DIR}/quicksilver-win64-setup.nsi
+    # Without the binaries and the script here, an existing installer counts as
+    # up to date and a rebuilt binary never reaches release/ or the installer.
+    DEPENDS
+      quicksilver quicksilver-daemon quicksilver-cli quicksilver-agent quicksilver-tx quicksilver-vault
+      ${PROJECT_BINARY_DIR}/quicksilver-win64-setup.nsi
+      ${QUICKSILVER_BUNDLED_TOR_EXE} ${PROJECT_SOURCE_DIR}/share/tor/LICENSE-tor.txt
     VERBATIM
   )
   add_custom_target(deploy DEPENDS ${PROJECT_BINARY_DIR}/quicksilver-win64-setup.exe)

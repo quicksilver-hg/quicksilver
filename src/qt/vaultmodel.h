@@ -104,12 +104,6 @@ public:
         bool solver_configuration_required{false};
     };
 
-    struct AgentSignedSpendBroadcastResult {
-        bool accepted{false};
-        QString txid;
-        QString error;
-    };
-
     // Prepare transaction state before broadcasting a transfer.
     SendCoinsReturn prepareTransaction(VaultModelTransaction& transaction, const vault::CCoinControl& coinControl, const std::function<void(uint32_t nonce)>& tx_proof_progress = {});
 
@@ -199,7 +193,9 @@ public:
     util::Result<vault::AgentAllotmentPolicyRequestMetadata> validateAgentAllotmentPolicyRequest(const QString& request_json) const;
     util::Result<vault::AgentAllotmentPolicyBundle> agentAllotmentPolicyBundle(const QString& request_json) const;
     CAmount agentAllotmentFundingAvailable(const vault::AgentAllotmentRecord& record) const;
-    AgentSignedSpendBroadcastResult broadcastAgentAllotmentSignedSpend(CTransactionRef tx) const;
+    util::Result<CTransactionRef> cosignAgentAllotmentSpend(const QString& psqt);
+    bool stopAgentAllotment(const QString& id);
+    bool canCosignAgentAllotmentSpend() const;
     bool tryListCoins(interfaces::Vault::CoinsList& coins) const;
     bool tryGetCoins(const std::vector<COutPoint>& outputs, std::vector<interfaces::VaultTxOut>& coins) const;
 
@@ -259,6 +255,7 @@ private:
     void checkBalanceChanged(const interfaces::VaultBalances& new_balances);
 
 Q_SIGNALS:
+    void agentAllotmentConsensusChanged();
     // Signal that balance in vault changed
     void balanceChanged(const interfaces::VaultBalances& balances);
 

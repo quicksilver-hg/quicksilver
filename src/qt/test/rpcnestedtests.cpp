@@ -48,8 +48,16 @@ void RPCNestedTests::rpcNestedTests()
         tableRPC.appendCommand(c.name, &c);
     }
 
+    // The setup below lives on this stack. Leaving the application node pointed
+    // at it makes the next GUI test lock a destroyed args mutex.
+    node::NodeContext* const previous_context = m_node.context();
     TestingSetup test;
     m_node.setContext(&test.m_node);
+    struct RestoreContext {
+        interfaces::Node& node;
+        node::NodeContext* previous;
+        ~RestoreContext() { node.setContext(previous); }
+    } restore_context{m_node, previous_context};
 
     if (RPCIsInWarmup(nullptr)) SetRPCWarmupFinished();
 

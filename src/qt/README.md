@@ -49,7 +49,7 @@ To run:
 
 #### paymentserver.(h/cpp)
 
-- Used to process BIP21 payment URI requests. Also handles URI-based application switching (e.g. when following a quicksilver:... link from a browser).
+- Used to process quicksilver: payment URI requests. Also handles URI-based application switching (e.g. when following a quicksilver:... link from a browser).
 
 #### vaultview.(h/cpp)
 

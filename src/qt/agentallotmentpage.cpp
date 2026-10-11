@@ -4,73 +4,51 @@
 
 #include <qt/agentallotmentpage.h>
 
-#include <qt/optionsmodel.h>
+#include <qt/benchpanel.h>
+#include <qt/guiutil.h>
 #include <qt/quicksilveramountfield.h>
 #include <qt/quicksilverunits.h>
 #include <qt/vaultmodel.h>
 
-#include <agent/messageio.h>
-#include <agent/peertransport.h>
-#include <agent/txmessages.h>
 #include <agent/allotmentpolicy.h>
-#include <agent/allotmentspend.h>
-#include <agent/allotmentstore.h>
 #include <chainparams.h>
 #include <common/args.h>
-#include <consensus/amount.h>
 #include <consensus/params.h>
 #include <core_io.h>
 #include <interfaces/node.h>
 #include <key_io.h>
-#include <netbase.h>
 #include <node/context.h>
-#include <primitives/transaction.h>
-#include <protocol.h>
+#include <psqt.h>
+#include <script/solver.h>
 #include <util/fs.h>
 #include <util/fs_helpers.h>
 #include <util/readwritefile.h>
 #include <util/result.h>
 #include <util/strencodings.h>
 #include <univalue.h>
-#include <validation.h>
 
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QDateTime>
 #include <QFrame>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QStringList>
 #include <QStyle>
-#include <QThread>
-#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
-#include <atomic>
-#include <cstdlib>
-#include <exception>
 #include <memory>
 #include <string>
-#include <optional>
-#include <span>
-#include <utility>
-#include <vector>
 
 namespace {
-static constexpr size_t MAX_AGENT_RELAY_PEER_STORE_FILE_SIZE{100'000};
-
-struct AgentSignedSpendReview {
-    CTransactionRef tx;
-    CAmount output_total{0};
-};
-
 QLabel* MakeMutedLabel(const QString& text, QWidget* parent)
 {
     auto* label = new QLabel(text, parent);
@@ -93,79 +71,16 @@ bool AmountFieldEmpty(const QuicksilverAmountField* field)
     return !line_edit || line_edit->text().trimmed().isEmpty();
 }
 
-QString ExtractAgentTransactionHex(const QString& text)
-{
-    const QString trimmed = text.trimmed();
-    const QStringList lines = trimmed.split(QLatin1Char('\n'));
-    for (const QString& line : lines) {
-        const QString candidate = line.trimmed();
-        if (candidate.startsWith(QStringLiteral("hex="))) {
-            return candidate.mid(4).trimmed();
-        }
-    }
-    QString compact = trimmed.simplified();
-    compact.remove(QLatin1Char(' '));
-    return compact;
-}
-
-std::optional<QString> ExtractAgentTransactionPayloadHex(const QString& text)
-{
-    const QStringList lines = text.trimmed().split(QLatin1Char('\n'));
-    for (const QString& line : lines) {
-        const QString candidate = line.trimmed();
-        if (candidate.startsWith(QStringLiteral("tx_payload="))) {
-            return candidate.mid(11).trimmed();
-        }
-    }
-    return std::nullopt;
-}
-
-std::optional<QString> ExtractAgentChangePaymentReceiptJson(const QString& text)
-{
-    const QStringList lines = text.trimmed().split(QLatin1Char('\n'));
-    for (const QString& line : lines) {
-        const QString candidate = line.trimmed();
-        if (candidate.startsWith(QStringLiteral("change_paymentreceipt="))) {
-            return candidate.mid(22).trimmed();
-        }
-    }
-    return std::nullopt;
-}
-
 QString ShellQuote(QString value)
 {
     value.replace(QLatin1Char('\''), QStringLiteral("'\\''"));
     return QStringLiteral("'%1'").arg(value);
 }
 
-bool ContainsSpace(const QString& value)
-{
-    for (const QChar c : value) {
-        if (c.isSpace()) return true;
-    }
-    return false;
-}
-
 fs::path AgentPaymentReceiptInboxDirectory()
 {
     const fs::path configured_path{gArgs.GetPathArg("-paymentreceiptdir", fs::path{"agent"} / "payment-receipts.d")};
     return fsbridge::AbsPathJoin(gArgs.GetDataDirNet(), configured_path);
-}
-
-fs::path AgentPaymentReceiptStorePath()
-{
-    const fs::path configured_path{gArgs.GetPathArg("-receiptstore", fs::path{"agent"} / "payment-receipts.dat")};
-    return fsbridge::AbsPathJoin(gArgs.GetDataDirNet(), configured_path);
-}
-
-fs::path AgentPolicyBundleDirectory()
-{
-    return fsbridge::AbsPathJoin(gArgs.GetDataDirNet(), fs::path{"agent"} / "policy-bundles.d");
-}
-
-fs::path AgentRelayPeerStorePath()
-{
-    return fsbridge::AbsPathJoin(gArgs.GetDataDirNet(), fs::path{"agent"} / "relay-peers.json");
 }
 
 QString AgentPaymentReceiptScanCommand(const fs::path& receipt_dir)
@@ -175,23 +90,6 @@ QString AgentPaymentReceiptScanCommand(const fs::path& receipt_dir)
              ShellQuote(QString::fromStdString(fs::PathToString(receipt_dir))));
 }
 
-QString AgentSpendSignCommand(const fs::path& policy_bundle_path,
-                              const QString& destination,
-                              CAmount spend_amount,
-                              std::optional<CAmount> spent_today,
-                              bool allow_cpu_txpow)
-{
-    const QString spent_today_arg = spent_today.has_value() ? QStringLiteral(" -spenttoday=%1").arg(QString::fromStdString(util::ToString(*spent_today))) : QString();
-    const QString allow_cpu_arg = allow_cpu_txpow ? QStringLiteral(" -allowcputxpow") : QString();
-    return QStringLiteral("quicksilver-agent -chain=%1 -policybundle=\"$(cat %2)\" -destination=%3 -spendamount=%4%5%6 signbundle")
-        .arg(QString::fromStdString(Params().GetChainTypeString()),
-             ShellQuote(QString::fromStdString(fs::PathToString(policy_bundle_path))),
-             ShellQuote(destination),
-             QString::fromStdString(util::ToString(spend_amount)),
-             spent_today_arg,
-             allow_cpu_arg);
-}
-
 fs::path AgentPaymentReceiptInboxPath(const agent::AllotmentPaymentReceiptArtifact& receipt)
 {
     // util::ToString, not std::to_string: this names a file on disk, so a locale that
@@ -199,32 +97,6 @@ fs::path AgentPaymentReceiptInboxPath(const agent::AllotmentPaymentReceiptArtifa
     const std::string filename{receipt.funding_output.txid + "-" + util::ToString(receipt.funding_output.vout) + ".json"};
     return AgentPaymentReceiptInboxDirectory() /
            fs::PathFromString(filename);
-}
-
-std::string SanitizedPolicyBundleFileStem(const std::string& id)
-{
-    std::string stem;
-    stem.reserve(id.size());
-    for (const char c : id) {
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
-            stem.push_back(c);
-        }
-    }
-    return stem.empty() ? "agent-bundle" : stem;
-}
-
-util::Result<fs::path> SaveAgentPolicyBundleForSigning(const agent::AllotmentPolicyBundleArtifact& bundle, const QString& bundle_json)
-{
-    const fs::path bundle_dir{AgentPolicyBundleDirectory()};
-    if (!fs::is_directory(bundle_dir) && !TryCreateDirectories(bundle_dir)) {
-        return util::Error{Untranslated(strprintf("Could not create agent policy bundle directory %s.", fs::PathToString(bundle_dir)))};
-    }
-
-    const fs::path bundle_path{bundle_dir / fs::PathFromString(SanitizedPolicyBundleFileStem(bundle.policy_request.id) + ".json")};
-    if (!WriteBinaryFile(bundle_path, bundle_json.toStdString() + "\n")) {
-        return util::Error{Untranslated(strprintf("Could not write agent policy bundle to %s.", fs::PathToString(bundle_path)))};
-    }
-    return bundle_path;
 }
 
 util::Result<fs::path> SaveAgentPaymentReceiptToInbox(const agent::AllotmentPaymentReceiptArtifact& receipt, const QString& receipt_json)
@@ -239,65 +111,6 @@ util::Result<fs::path> SaveAgentPaymentReceiptToInbox(const agent::AllotmentPaym
         return util::Error{Untranslated(strprintf("Could not write payment receipt to %s.", fs::PathToString(receipt_path)))};
     }
     return receipt_path;
-}
-
-util::Result<agent::AllotmentReceiptStoreData> LoadAgentPaymentReceiptStore()
-{
-    return agent::LoadAllotmentReceiptStore(AgentPaymentReceiptStorePath(), Params().GetChainTypeString(), Params().GenesisBlock().GetHash());
-}
-
-util::Result<fs::path> SaveAgentPaymentReceiptStore(const agent::AllotmentReceiptStoreData& data)
-{
-    const fs::path receipt_store_path{AgentPaymentReceiptStorePath()};
-    const fs::path parent_path{receipt_store_path.parent_path()};
-    if (!parent_path.empty() && !fs::is_directory(parent_path) && !TryCreateDirectories(parent_path)) {
-        return util::Error{Untranslated(strprintf("Could not create agent receipt store directory %s.", fs::PathToString(parent_path)))};
-    }
-
-    const agent::AllotmentStoreResult saved{agent::SaveAllotmentReceiptStore(data, receipt_store_path, Params().GenesisBlock().GetHash())};
-    if (saved != agent::AllotmentStoreResult::OK) {
-        return util::Error{Untranslated(strprintf("Could not write receipt store %s: %s", fs::PathToString(receipt_store_path), agent::AllotmentStoreResultString(saved)))};
-    }
-    return receipt_store_path;
-}
-
-util::Result<size_t> AddReceiptsToStore(agent::AllotmentReceiptStoreData& store,
-                                        const std::vector<agent::AllotmentPaymentReceiptArtifact>& receipts,
-                                        std::vector<agent::AllotmentPaymentReceiptArtifact>* added_receipts = nullptr)
-{
-    return agent::AddAllotmentPaymentReceipts(store, receipts, added_receipts);
-}
-
-std::vector<agent::AllotmentFundingOutputArtifact> FundingOutputsFromSpendInputs(const std::vector<agent::AllotmentSpendInput>& inputs)
-{
-    std::vector<agent::AllotmentFundingOutputArtifact> outputs;
-    outputs.reserve(inputs.size());
-    for (const agent::AllotmentSpendInput& input : inputs) {
-        outputs.push_back(agent::AllotmentFundingOutputArtifact{
-            .txid = input.prevout.hash.ToString(),
-            .vout = input.prevout.n,
-            .amount = input.amount,
-        });
-    }
-    return outputs;
-}
-
-agent::AllotmentReceiptActivity MakeReceiptActivity(agent::AllotmentReceiptActivityType type,
-                                                      const agent::AllotmentPaymentReceiptArtifact& receipt,
-                                                      int64_t event_time,
-                                                      std::string related_txid = {})
-{
-    return agent::AllotmentReceiptActivity{
-        .type = type,
-        .funding_address = receipt.funding_address,
-        .funding_output = receipt.funding_output,
-        .event_time = event_time,
-        .related_txid = std::move(related_txid),
-        .payment_id = receipt.payment_id,
-        .label = receipt.label,
-        .memo = receipt.memo,
-        .payer = receipt.payer,
-    };
 }
 
 agent::AllotmentPaymentReceiptArtifact AgentPaymentReceiptFromFundingOutput(const vault::AgentAllotmentPolicyBundle& bundle,
@@ -350,186 +163,14 @@ QString ScantxoutsetRecoveryCommand(const QString& address)
              ShellQuote(address));
 }
 
-bool PushUniqueRelayPeer(std::vector<CService>& peers, const CService& peer)
+//! The base64 PSQT from a pasted spend request: the value of its psqt= line, or
+//! the whole paste when there is no such line.
+QString PastedSpendRequest(const QString& pasted)
 {
-    const std::string canonical{peer.ToStringAddrPort()};
-    const auto duplicate{std::find_if(peers.begin(), peers.end(), [&](const CService& existing) {
-        return existing.ToStringAddrPort() == canonical;
-    })};
-    if (duplicate != peers.end()) return false;
-    peers.push_back(peer);
-    return true;
-}
-
-void SortRelayPeers(std::vector<CService>& peers)
-{
-    std::sort(peers.begin(), peers.end(), [](const CService& left, const CService& right) {
-        return left.ToStringAddrPort() < right.ToStringAddrPort();
-    });
-}
-
-util::Result<std::vector<CService>> LoadAgentRelayPeers()
-{
-    const fs::path peer_store_path{AgentRelayPeerStorePath()};
-    if (!fs::exists(peer_store_path)) {
-        return std::vector<CService>{};
+    for (const QString& line : pasted.split(QLatin1Char('\n'))) {
+        if (line.trimmed().startsWith(QStringLiteral("psqt="))) return line.trimmed().mid(5).trimmed();
     }
-    if (!fs::is_regular_file(peer_store_path)) {
-        return util::Error{Untranslated(strprintf("Agent relay peer store %s is not a regular file.", fs::PathToString(peer_store_path)))};
-    }
-
-    const auto [ok, contents]{ReadBinaryFile(peer_store_path, MAX_AGENT_RELAY_PEER_STORE_FILE_SIZE)};
-    if (!ok) {
-        return util::Error{Untranslated(strprintf("Could not read agent relay peer store %s.", fs::PathToString(peer_store_path)))};
-    }
-    if (util::TrimString(contents).empty()) {
-        return std::vector<CService>{};
-    }
-
-    UniValue root{UniValue::VOBJ};
-    if (!root.read(contents) || !root.isObject()) {
-        return util::Error{Untranslated(strprintf("Agent relay peer store %s must be a JSON object.", fs::PathToString(peer_store_path)))};
-    }
-
-    const UniValue& chain{root.find_value("chain")};
-    if (chain.isStr() && chain.get_str() != Params().GetChainTypeString()) {
-        return util::Error{Untranslated(strprintf("Agent relay peer store %s is for chain %s, not %s.",
-                                                  fs::PathToString(peer_store_path),
-                                                  chain.get_str(),
-                                                  Params().GetChainTypeString()))};
-    }
-    const UniValue& genesis_hash{root.find_value("genesis_hash")};
-    if (genesis_hash.isStr() && genesis_hash.get_str() != Params().GenesisBlock().GetHash().ToString()) {
-        return util::Error{Untranslated(strprintf("Agent relay peer store %s is for a different genesis hash.", fs::PathToString(peer_store_path)))};
-    }
-
-    const UniValue& stored_peers{root.find_value("peers")};
-    if (!stored_peers.isArray()) {
-        return util::Error{Untranslated(strprintf("Agent relay peer store %s must contain a peers array.", fs::PathToString(peer_store_path)))};
-    }
-
-    std::vector<CService> peers;
-    for (const UniValue& value : stored_peers.getValues()) {
-        if (!value.isStr()) {
-            return util::Error{Untranslated(strprintf("Agent relay peer store %s contains a non-string peer.", fs::PathToString(peer_store_path)))};
-        }
-        const std::optional<CService> peer{Lookup(value.get_str(), Params().GetDefaultPort(), /*fAllowLookup=*/false)};
-        if (!peer.has_value() || !peer->IsValid()) {
-            return util::Error{Untranslated(strprintf("Agent relay peer store %s contains an invalid peer.", fs::PathToString(peer_store_path)))};
-        }
-        PushUniqueRelayPeer(peers, *peer);
-    }
-    SortRelayPeers(peers);
-    return peers;
-}
-
-util::Result<fs::path> SaveAgentRelayPeers(const std::vector<CService>& peers)
-{
-    const fs::path peer_store_path{AgentRelayPeerStorePath()};
-    const fs::path parent_path{peer_store_path.parent_path()};
-    if (!parent_path.empty() && !fs::is_directory(parent_path) && !TryCreateDirectories(parent_path)) {
-        return util::Error{Untranslated(strprintf("Could not create agent relay peer store directory %s.", fs::PathToString(parent_path)))};
-    }
-
-    UniValue peer_values{UniValue::VARR};
-    for (const CService& peer : peers) {
-        peer_values.push_back(peer.ToStringAddrPort());
-    }
-
-    UniValue root{UniValue::VOBJ};
-    root.pushKV("type", "quicksilver.agent_relay_peers");
-    root.pushKV("version", 1);
-    root.pushKV("chain", Params().GetChainTypeString());
-    root.pushKV("genesis_hash", Params().GenesisBlock().GetHash().ToString());
-    root.pushKV("peers", std::move(peer_values));
-
-    if (!WriteBinaryFile(peer_store_path, root.write(2) + "\n")) {
-        return util::Error{Untranslated(strprintf("Could not write agent relay peer store %s.", fs::PathToString(peer_store_path)))};
-    }
-    return peer_store_path;
-}
-
-QString RelayPeerAddCommand(const QString& peer)
-{
-    return QStringLiteral("quicksilver-agent -chain=%1 -peer=%2 addpeer")
-        .arg(QString::fromStdString(Params().GetChainTypeString()),
-             ShellQuote(peer));
-}
-
-QString RelayPeerDiscoveryCommand(const std::optional<QString>& peer)
-{
-    const QString peer_arg = peer.has_value() ? QStringLiteral(" -peer=%1").arg(ShellQuote(*peer)) : QString();
-    return QStringLiteral("quicksilver-agent -chain=%1%2 discoverpeers")
-        .arg(QString::fromStdString(Params().GetChainTypeString()),
-             peer_arg);
-}
-
-QString NodeAddressImportCommand()
-{
-    return QStringLiteral("quicksilver-cli -chain=%1 getnodeaddresses 64 | quicksilver-agent -chain=%1 -peeraddresses=- importnodeaddresses")
-        .arg(QString::fromStdString(Params().GetChainTypeString()));
-}
-
-QString HeaderPeerSyncCommand(const std::optional<QString>& peer)
-{
-    const QString peer_arg = peer.has_value() ? QStringLiteral(" -peer=%1").arg(ShellQuote(*peer)) : QString();
-    return QStringLiteral("quicksilver-agent -chain=%1%2 syncheaderspeer")
-        .arg(QString::fromStdString(Params().GetChainTypeString()),
-             peer_arg);
-}
-
-QString SignedSpendPeerRelayCommand(const QString& tx_payload, const std::optional<QString>& peer)
-{
-    const QString peer_arg = peer.has_value() ? QStringLiteral(" -peer=%1").arg(ShellQuote(*peer)) : QString();
-    return QStringLiteral("quicksilver-agent -chain=%1%2 -message=%3 sendtxpeer")
-        .arg(QString::fromStdString(Params().GetChainTypeString()),
-             peer_arg,
-             tx_payload);
-}
-
-std::optional<AgentSignedSpendReview> BuildAgentSignedSpendReview(CTransactionRef tx, QString& error)
-{
-    AgentSignedSpendReview review{.tx = std::move(tx)};
-    for (const CTxOut& output : review.tx->vout) {
-        if (!MoneyRange(output.nValue) || !MoneyRange(review.output_total + output.nValue)) {
-            error = AgentAllotmentPage::tr("Signed spend output amount is out of range.");
-            return std::nullopt;
-        }
-        review.output_total += output.nValue;
-    }
-    return review;
-}
-
-std::optional<AgentSignedSpendReview> DecodeAgentSignedSpendText(const QString& text, QString& error)
-{
-    if (text.trimmed().isEmpty()) {
-        error = AgentAllotmentPage::tr("Signed spend output is empty.");
-        return std::nullopt;
-    }
-
-    const std::optional<QString> tx_payload_hex{ExtractAgentTransactionPayloadHex(text)};
-    if (tx_payload_hex.has_value()) {
-        const agent::AgentMessageDecodeResult message{agent::DecodeAgentMessage(NetMsgType::TX, tx_payload_hex->toStdString())};
-        if (!message.ok()) {
-            error = AgentAllotmentPage::tr("Signed spend tx_payload is not valid hex.");
-            return std::nullopt;
-        }
-        const agent::TxMessageDecodeResult tx_message{agent::DecodeTxMessage(message.message)};
-        if (!tx_message.ok()) {
-            error = AgentAllotmentPage::tr("Signed spend tx_payload is not a valid Quicksilver transaction payload.");
-            return std::nullopt;
-        }
-        return BuildAgentSignedSpendReview(tx_message.transaction, error);
-    }
-
-    const QString tx_hex = ExtractAgentTransactionHex(text);
-    CMutableTransaction mutable_tx;
-    if (!DecodeHexTx(mutable_tx, tx_hex.toStdString())) {
-        error = AgentAllotmentPage::tr("Signed spend output is not a valid serialized Quicksilver transaction.");
-        return std::nullopt;
-    }
-
-    return BuildAgentSignedSpendReview(MakeTransactionRef(mutable_tx), error);
+    return pasted.trimmed();
 }
 
 void ClearLayout(QLayout* layout)
@@ -542,33 +183,8 @@ void ClearLayout(QLayout* layout)
 
 } // namespace
 
-static bool AgentGpuSolverConfigured()
-{
-    const char* solver{std::getenv("CUCKATOO_GPU_SOLVER")};
-    return solver != nullptr && solver[0] != '\0';
-}
-
-struct LocalAgentSpendOutcome {
-    agent::AllotmentSpendContext spend_context;
-    CAmount spend_amount{0};
-    uint256 anchor_hash;
-    // util::Result is move-only and not assignable, so the worker constructs it in place.
-    std::unique_ptr<util::Result<agent::AllotmentSignedSpend>> signed_spend;
-};
-
-AgentAllotmentPage::~AgentAllotmentPage()
-{
-    if (m_spend_cancel) m_spend_cancel->store(true);
-}
-
 AgentAllotmentPage::AgentAllotmentPage(QWidget* parent)
-    : AgentAllotmentPage(parent, agent::SendTransactionToOnePeer)
-{
-}
-
-AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_relay)
-    : QWidget(parent),
-      m_peer_relay(std::move(peer_relay))
+    : QWidget(parent)
 {
     setObjectName(QStringLiteral("agentAllotmentPage"));
     setProperty("class", QStringLiteral("quicksilverPage"));
@@ -588,49 +204,41 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_r
     auto* contents = new QWidget(scroll_area);
     contents->setObjectName(QStringLiteral("agentAllotmentScrollContents"));
     auto* root = new QVBoxLayout(contents);
-    root->setContentsMargins(20, 20, 20, 20);
+    root->setContentsMargins(14, 14, 14, 14);
     root->setSpacing(14);
 
-    auto* title = new QLabel(tr("Agent allotments"), contents);
-    title->setObjectName(QStringLiteral("agentAllotmentTitle"));
-    title->setProperty("class", QStringLiteral("pageTitle"));
-    root->addWidget(title);
-
     auto* intro = MakeMutedLabel(
-        tr("Fund agent keys from this vault. Agent spending uses shared keys, so create one only for hosts and agents you are prepared to monitor."),
+        tr("Create an allotment, fund its address, and review every spend request from the agent."),
         contents);
     intro->setObjectName(QStringLiteral("agentAllotmentIntro"));
-    root->addWidget(intro);
 
     auto* risk_panel = new QFrame(contents);
     risk_panel->setObjectName(QStringLiteral("agentAllotmentRiskPanel"));
-    auto* risk_layout = new QVBoxLayout(risk_panel);
-    risk_layout->setContentsMargins(16, 14, 16, 14);
+    QVBoxLayout* risk_layout = BenchPanel::Install(risk_panel, tr("How an agent allotment works")).body;
     risk_layout->setSpacing(8);
+    // The page's one-line purpose leads into the risks it names.
+    intro->setParent(risk_panel);
+    risk_layout->addWidget(intro);
 
-    auto* risk_title = new QLabel(tr("Shared-key risk"), risk_panel);
-    risk_title->setObjectName(QStringLiteral("agentAllotmentRiskTitle"));
-    risk_title->setProperty("class", QStringLiteral("hudHeading"));
-    risk_layout->addWidget(risk_title);
-
-    auto* dishonest_agent = MakeMutedLabel(tr("A dishonest agent can spend any quicksilver assigned to its shared key."), risk_panel);
+    auto* dishonest_agent = MakeMutedLabel(tr("The agent holds one key and this vault holds the other. The agent cannot spend without this vault's signature."), risk_panel);
     dishonest_agent->setObjectName(QStringLiteral("agentAllotmentDishonestAgentRisk"));
     risk_layout->addWidget(dishonest_agent);
 
-    auto* compromised_host = MakeMutedLabel(tr("A compromised host can spend that shared key even if the agent behaves."), risk_panel);
+    auto* compromised_host = MakeMutedLabel(tr("Stop an allotment and this vault refuses every later request. A request the vault has already signed and broadcast still confirms."), risk_panel);
     compromised_host->setObjectName(QStringLiteral("agentAllotmentCompromisedHostRisk"));
     risk_layout->addWidget(compromised_host);
 
-    auto* guarantee = MakeMutedLabel(tr("There is no guarantee that limits stop misuse; limits are guardrails for review and operations."), risk_panel);
+    auto* guarantee = MakeMutedLabel(tr("Spending limits are the agent's own check. This vault does not enforce them, and no limit is a guarantee."), risk_panel);
     guarantee->setObjectName(QStringLiteral("agentAllotmentGuaranteeRisk"));
     risk_layout->addWidget(guarantee);
 
     root->addWidget(risk_panel);
 
-    auto* setup_group = new QGroupBox(tr("Agent funding"), contents);
-    setup_group->setObjectName(QStringLiteral("agentAllotmentFundingGroup"));
-    auto* setup_layout = new QVBoxLayout(setup_group);
-    setup_layout->setContentsMargins(14, 14, 14, 14);
+    // Agent funding: the setup fields, the risk acceptance and the one
+    // primary command of the page, in one panel.
+    const BenchPanel::Parts setup = BenchPanel::Make(QStringLiteral("agentAllotmentFundingGroup"), tr("Agent funding"), contents);
+    QFrame* setup_group = setup.frame;
+    QVBoxLayout* setup_layout = setup.body;
     setup_layout->setSpacing(9);
 
     auto add_row = [setup_group, setup_layout](const QString& label_text, QWidget* field) {
@@ -639,6 +247,7 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_r
         row->setSpacing(10);
 
         auto* label = new QLabel(label_text, setup_group);
+        label->setProperty("class", QStringLiteral("benchKey"));
         label->setMinimumWidth(120);
         label->setBuddy(field);
         row->addWidget(label);
@@ -663,15 +272,14 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_r
     m_daily_limit->SetAllowEmpty(true);
     add_row(tr("Daily guardrail"), m_daily_limit);
 
-    root->addWidget(setup_group);
-
-    auto* acceptance_panel = new QFrame(contents);
+    auto* acceptance_panel = new QFrame(setup_group);
     acceptance_panel->setObjectName(QStringLiteral("agentAllotmentAcceptancePanel"));
+    acceptance_panel->setProperty("benchBody", true);
     auto* acceptance_layout = new QVBoxLayout(acceptance_panel);
-    acceptance_layout->setContentsMargins(16, 14, 16, 14);
+    acceptance_layout->setContentsMargins(0, 6, 0, 0);
     acceptance_layout->setSpacing(10);
 
-    m_acceptance = new QCheckBox(tr("I accept the shared-key risk for this funded agent."), acceptance_panel);
+    m_acceptance = new QCheckBox(tr("I understand that every spend by this agent needs this vault to co-sign it,\nand that I must back up this vault again after creating it."), acceptance_panel);
     m_acceptance->setObjectName(QStringLiteral("agentAllotmentAcceptanceCheck"));
     acceptance_layout->addWidget(m_acceptance);
 
@@ -679,10 +287,10 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_r
     action_row->setContentsMargins(0, 0, 0, 0);
     action_row->setSpacing(10);
 
-    m_create_button = new QPushButton(tr("Record shared-key risk and setup"), acceptance_panel);
+    m_create_button = new QPushButton(tr("Create agent allotment"), acceptance_panel);
     m_create_button->setObjectName(QStringLiteral("agentAllotmentCreateButton"));
     m_create_button->setProperty("class", QStringLiteral("primaryActionButton"));
-    m_create_button->setToolTip(tr("Records acceptance, requested guardrails, a reserved funding address, and pending policy status in this vault."));
+    m_create_button->setToolTip(tr("Creates an allotment with separate agent and vault keys and reserves its funding address."));
     action_row->addWidget(m_create_button);
 
     m_state_label = new QLabel(acceptance_panel);
@@ -691,19 +299,13 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_r
     m_state_label->setWordWrap(true);
     action_row->addWidget(m_state_label, 1);
     acceptance_layout->addLayout(action_row);
-
-    root->addWidget(acceptance_panel);
+    setup_layout->addWidget(acceptance_panel);
+    root->addWidget(setup_group);
 
     auto* records_panel = new QFrame(contents);
     records_panel->setObjectName(QStringLiteral("agentAllotmentRecordsPanel"));
-    auto* records_layout = new QVBoxLayout(records_panel);
-    records_layout->setContentsMargins(16, 14, 16, 14);
+    QVBoxLayout* records_layout = BenchPanel::Install(records_panel, tr("Agent allotments")).body;
     records_layout->setSpacing(8);
-
-    auto* records_title = new QLabel(tr("Queued setups"), records_panel);
-    records_title->setObjectName(QStringLiteral("agentAllotmentRecordsTitle"));
-    records_title->setProperty("class", QStringLiteral("hudHeading"));
-    records_layout->addWidget(records_title);
 
     m_records_label = MakeMutedLabel(QString(), records_panel);
     m_records_label->setObjectName(QStringLiteral("agentAllotmentRecordedSetups"));
@@ -717,14 +319,8 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_r
 
     auto* review_panel = new QFrame(contents);
     review_panel->setObjectName(QStringLiteral("agentAllotmentPolicyReviewPanel"));
-    auto* review_layout = new QVBoxLayout(review_panel);
-    review_layout->setContentsMargins(16, 14, 16, 14);
+    QVBoxLayout* review_layout = BenchPanel::Install(review_panel, tr("Policy request review")).body;
     review_layout->setSpacing(8);
-
-    auto* review_title = new QLabel(tr("Policy request review"), review_panel);
-    review_title->setObjectName(QStringLiteral("agentAllotmentPolicyReviewTitle"));
-    review_title->setProperty("class", QStringLiteral("hudHeading"));
-    review_layout->addWidget(review_title);
 
     m_policy_request_edit = new QPlainTextEdit(review_panel);
     m_policy_request_edit->setObjectName(QStringLiteral("agentAllotmentPolicyRequestEdit"));
@@ -739,8 +335,8 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_r
 
     m_policy_review_button = new QPushButton(tr("Review request"), review_panel);
     m_policy_review_button->setObjectName(QStringLiteral("agentAllotmentReviewPolicyButton"));
-    m_policy_review_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-    m_policy_review_button->setToolTip(tr("Checks policy request JSON against this vault's active chain without activating enforcement."));
+    m_policy_review_button->setProperty("class", QStringLiteral("benchQuiet"));
+    m_policy_review_button->setToolTip(tr("Checks policy request JSON against this vault's active chain."));
     review_action_row->addWidget(m_policy_review_button);
 
     m_policy_review_state = new QLabel(review_panel);
@@ -753,14 +349,8 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_r
 
     auto* receipt_panel = new QFrame(contents);
     receipt_panel->setObjectName(QStringLiteral("agentAllotmentPaymentReceiptPanel"));
-    auto* receipt_layout = new QVBoxLayout(receipt_panel);
-    receipt_layout->setContentsMargins(16, 14, 16, 14);
+    QVBoxLayout* receipt_layout = BenchPanel::Install(receipt_panel, tr("Payment receipt review")).body;
     receipt_layout->setSpacing(8);
-
-    auto* receipt_title = new QLabel(tr("Payment receipt review"), receipt_panel);
-    receipt_title->setObjectName(QStringLiteral("agentAllotmentPaymentReceiptTitle"));
-    receipt_title->setProperty("class", QStringLiteral("hudHeading"));
-    receipt_layout->addWidget(receipt_title);
 
     m_payment_receipt_edit = new QPlainTextEdit(receipt_panel);
     m_payment_receipt_edit->setObjectName(QStringLiteral("agentAllotmentPaymentReceiptEdit"));
@@ -775,13 +365,13 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_r
 
     m_payment_receipt_review_button = new QPushButton(tr("Review receipt"), receipt_panel);
     m_payment_receipt_review_button->setObjectName(QStringLiteral("agentAllotmentReviewPaymentReceiptButton"));
-    m_payment_receipt_review_button->setProperty("class", QStringLiteral("secondaryActionButton"));
+    m_payment_receipt_review_button->setProperty("class", QStringLiteral("benchQuiet"));
     m_payment_receipt_review_button->setToolTip(tr("Checks a pasted agent payment receipt against this desktop's active chain and shows its funding metadata."));
     receipt_action_row->addWidget(m_payment_receipt_review_button);
 
     m_payment_receipt_save_button = new QPushButton(tr("Save to agent inbox"), receipt_panel);
     m_payment_receipt_save_button->setObjectName(QStringLiteral("agentAllotmentSavePaymentReceiptButton"));
-    m_payment_receipt_save_button->setProperty("class", QStringLiteral("secondaryActionButton"));
+    m_payment_receipt_save_button->setProperty("class", QStringLiteral("benchQuiet"));
     m_payment_receipt_save_button->setToolTip(tr("Writes a valid payment receipt into the local quicksilver-agent scanreceipts inbox and copies the scan command."));
     receipt_action_row->addWidget(m_payment_receipt_save_button);
 
@@ -793,236 +383,40 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_r
     receipt_layout->addLayout(receipt_action_row);
     root->addWidget(receipt_panel);
 
-    auto* utxo_panel = new QFrame(contents);
-    utxo_panel->setObjectName(QStringLiteral("agentAllotmentUtxoPanel"));
-    auto* utxo_layout = new QVBoxLayout(utxo_panel);
-    utxo_layout->setContentsMargins(16, 14, 16, 14);
-    utxo_layout->setSpacing(8);
-
-    auto* utxo_title = new QLabel(tr("Spendable agent outputs"), utxo_panel);
-    utxo_title->setObjectName(QStringLiteral("agentAllotmentUtxoTitle"));
-    utxo_title->setProperty("class", QStringLiteral("hudHeading"));
-    utxo_layout->addWidget(utxo_title);
-
-    auto* utxo_action_row = new QHBoxLayout();
-    utxo_action_row->setContentsMargins(0, 0, 0, 0);
-    utxo_action_row->setSpacing(10);
-
-    m_agent_utxo_refresh_button = new QPushButton(tr("Refresh UTXOs"), utxo_panel);
-    m_agent_utxo_refresh_button->setObjectName(QStringLiteral("agentAllotmentRefreshUtxosButton"));
-    m_agent_utxo_refresh_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-    m_agent_utxo_refresh_button->setToolTip(tr("Scans the configured local receipt inbox and refreshes the durable agent output store."));
-    utxo_action_row->addWidget(m_agent_utxo_refresh_button);
-
-    m_agent_utxo_state = MakeMutedLabel(QString(), utxo_panel);
-    m_agent_utxo_state->setObjectName(QStringLiteral("agentAllotmentUtxoState"));
-    utxo_action_row->addWidget(m_agent_utxo_state, 1);
-    utxo_layout->addLayout(utxo_action_row);
-    root->addWidget(utxo_panel);
-
-    auto* spend_command_panel = new QFrame(contents);
-    spend_command_panel->setObjectName(QStringLiteral("agentAllotmentSpendCommandPanel"));
-    auto* spend_command_layout = new QVBoxLayout(spend_command_panel);
-    spend_command_layout->setContentsMargins(16, 14, 16, 14);
-    spend_command_layout->setSpacing(8);
-
-    auto* spend_command_title = new QLabel(tr("Agent spend command"), spend_command_panel);
-    spend_command_title->setObjectName(QStringLiteral("agentAllotmentSpendCommandTitle"));
-    spend_command_title->setProperty("class", QStringLiteral("hudHeading"));
-    spend_command_layout->addWidget(spend_command_title);
-
-    m_spend_bundle_edit = new QPlainTextEdit(spend_command_panel);
-    m_spend_bundle_edit->setObjectName(QStringLiteral("agentAllotmentSpendBundleEdit"));
-    m_spend_bundle_edit->setPlaceholderText(tr("Paste agent bundle JSON"));
-    m_spend_bundle_edit->setMinimumHeight(84);
-    m_spend_bundle_edit->setTabChangesFocus(true);
-    spend_command_layout->addWidget(m_spend_bundle_edit);
-
-    auto* spend_destination_row = new QHBoxLayout();
-    spend_destination_row->setContentsMargins(0, 0, 0, 0);
-    spend_destination_row->setSpacing(10);
-
-    auto* spend_destination_label = new QLabel(tr("Destination"), spend_command_panel);
-    spend_destination_label->setMinimumWidth(120);
-    spend_destination_row->addWidget(spend_destination_label);
-
-    m_spend_destination_edit = new QLineEdit(spend_command_panel);
-    m_spend_destination_edit->setObjectName(QStringLiteral("agentAllotmentSpendDestinationEdit"));
-    m_spend_destination_edit->setPlaceholderText(tr("quicksilver address"));
-    spend_destination_label->setBuddy(m_spend_destination_edit);
-    spend_destination_row->addWidget(m_spend_destination_edit, 1);
-    spend_command_layout->addLayout(spend_destination_row);
-
-    auto* spend_amount_row = new QHBoxLayout();
-    spend_amount_row->setContentsMargins(0, 0, 0, 0);
-    spend_amount_row->setSpacing(10);
-
-    auto* spend_amount_label = new QLabel(tr("Spend amount"), spend_command_panel);
-    spend_amount_label->setMinimumWidth(120);
-    spend_amount_row->addWidget(spend_amount_label);
-
-    m_spend_amount = new QuicksilverAmountField(spend_command_panel);
-    m_spend_amount->setObjectName(QStringLiteral("agentAllotmentSpendAmount"));
-    m_spend_amount->SetMinValue(0);
-    m_spend_amount->SetAllowEmpty(true);
-    spend_amount_label->setBuddy(m_spend_amount);
-    spend_amount_row->addWidget(m_spend_amount, 1);
-
-    auto* spent_today_label = new QLabel(tr("Spent today"), spend_command_panel);
-    spent_today_label->setMinimumWidth(100);
-    spend_amount_row->addWidget(spent_today_label);
-
-    m_spent_today = new QuicksilverAmountField(spend_command_panel);
-    m_spent_today->setObjectName(QStringLiteral("agentAllotmentSpentToday"));
-    m_spent_today->SetMinValue(0);
-    m_spent_today->SetAllowEmpty(true);
-    spent_today_label->setBuddy(m_spent_today);
-    spend_amount_row->addWidget(m_spent_today, 1);
-    spend_command_layout->addLayout(spend_amount_row);
-
-    auto* spend_command_action_row = new QHBoxLayout();
-    spend_command_action_row->setContentsMargins(0, 0, 0, 0);
-    spend_command_action_row->setSpacing(10);
-
-    m_copy_spend_command_button = new QPushButton(tr("Copy sign command"), spend_command_panel);
-    m_copy_spend_command_button->setObjectName(QStringLiteral("agentAllotmentCopySpendCommandButton"));
-    m_copy_spend_command_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-    m_copy_spend_command_button->setToolTip(tr("Saves the pasted bundle locally and copies a quicksilver-agent signbundle command for the requested spend."));
-    spend_command_action_row->addWidget(m_copy_spend_command_button);
-
-    m_sign_spend_button = new QPushButton(tr("Sign spend"), spend_command_panel);
-    m_sign_spend_button->setObjectName(QStringLiteral("agentAllotmentSignSpendButton"));
-    m_sign_spend_button->setProperty("class", QStringLiteral("primaryActionButton"));
-    m_sign_spend_button->setToolTip(tr("Signs the requested agent spend locally from the pasted bundle and fills the signed-spend reviewer."));
-    spend_command_action_row->addWidget(m_sign_spend_button);
-
-    m_cancel_spend_button = new QPushButton(tr("Stop"), spend_command_panel);
-    m_cancel_spend_button->setObjectName(QStringLiteral("agentAllotmentCancelSpendButton"));
-    m_cancel_spend_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-    m_cancel_spend_button->setToolTip(tr("Stops the agent spend preparation running on this computer. The spend stays unsigned."));
-    m_cancel_spend_button->setEnabled(false);
-    spend_command_action_row->addWidget(m_cancel_spend_button);
-
-    m_spend_command_state = new QLabel(spend_command_panel);
-    m_spend_command_state->setObjectName(QStringLiteral("agentAllotmentSpendCommandState"));
-    m_spend_command_state->setProperty("class", QStringLiteral("muted"));
-    m_spend_command_state->setWordWrap(true);
-    spend_command_action_row->addWidget(m_spend_command_state, 1);
-    spend_command_layout->addLayout(spend_command_action_row);
-    root->addWidget(spend_command_panel);
-
-    auto* signed_spend_panel = new QFrame(contents);
-    signed_spend_panel->setObjectName(QStringLiteral("agentAllotmentSignedSpendPanel"));
-    auto* signed_spend_layout = new QVBoxLayout(signed_spend_panel);
-    signed_spend_layout->setContentsMargins(16, 14, 16, 14);
-    signed_spend_layout->setSpacing(8);
-
-    auto* signed_spend_title = new QLabel(tr("Signed spend review"), signed_spend_panel);
-    signed_spend_title->setObjectName(QStringLiteral("agentAllotmentSignedSpendTitle"));
-    signed_spend_title->setProperty("class", QStringLiteral("hudHeading"));
-    signed_spend_layout->addWidget(signed_spend_title);
-
-    m_signed_spend_edit = new QPlainTextEdit(signed_spend_panel);
-    m_signed_spend_edit->setObjectName(QStringLiteral("agentAllotmentSignedSpendEdit"));
-    m_signed_spend_edit->setPlaceholderText(tr("Paste signed spend hex or quicksilver-agent output"));
-    m_signed_spend_edit->setMinimumHeight(84);
-    m_signed_spend_edit->setTabChangesFocus(true);
-    signed_spend_layout->addWidget(m_signed_spend_edit);
-
-    auto* relay_peer_row = new QHBoxLayout();
-    relay_peer_row->setContentsMargins(0, 0, 0, 0);
-    relay_peer_row->setSpacing(10);
-
-    auto* relay_peer_label = new QLabel(tr("Relay peer"), signed_spend_panel);
-    relay_peer_label->setMinimumWidth(120);
-    relay_peer_row->addWidget(relay_peer_label);
-
-    m_relay_peer_edit = new QLineEdit(signed_spend_panel);
-    m_relay_peer_edit->setObjectName(QStringLiteral("agentAllotmentRelayPeerEdit"));
-    m_relay_peer_edit->setPlaceholderText(tr("host[:port]"));
-    m_relay_peer_edit->setToolTip(tr("Peer address for quicksilver-agent addpeer or sendtxpeer."));
-    relay_peer_label->setBuddy(m_relay_peer_edit);
-    relay_peer_row->addWidget(m_relay_peer_edit, 1);
-
-    m_copy_add_peer_command_button = new QPushButton(tr("Copy save peer"), signed_spend_panel);
-    m_copy_add_peer_command_button->setObjectName(QStringLiteral("agentAllotmentCopyAddPeerCommandButton"));
-    m_copy_add_peer_command_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-    m_copy_add_peer_command_button->setToolTip(tr("Copies a quicksilver-agent addpeer command for the relay peer."));
-    relay_peer_row->addWidget(m_copy_add_peer_command_button);
-
-    m_copy_discover_peers_command_button = new QPushButton(tr("Copy discover peers"), signed_spend_panel);
-    m_copy_discover_peers_command_button->setObjectName(QStringLiteral("agentAllotmentCopyDiscoverPeersCommandButton"));
-    m_copy_discover_peers_command_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-    m_copy_discover_peers_command_button->setToolTip(tr("Copies a quicksilver-agent discoverpeers command for stored peers or the relay peer."));
-    relay_peer_row->addWidget(m_copy_discover_peers_command_button);
-
-    m_import_node_peers_button = new QPushButton(tr("Import node peers"), signed_spend_panel);
-    m_import_node_peers_button->setObjectName(QStringLiteral("agentAllotmentImportNodePeersButton"));
-    m_import_node_peers_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-    m_import_node_peers_button->setToolTip(tr("Imports peers from the active desktop node into the local agent relay peer store."));
-    relay_peer_row->addWidget(m_import_node_peers_button);
-
-    m_copy_node_address_import_command_button = new QPushButton(tr("Copy node peers"), signed_spend_panel);
-    m_copy_node_address_import_command_button->setObjectName(QStringLiteral("agentAllotmentCopyNodeAddressImportCommandButton"));
-    m_copy_node_address_import_command_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-    m_copy_node_address_import_command_button->setToolTip(tr("Copies a local-node getnodeaddresses import pipeline for the agent relay peer store."));
-    relay_peer_row->addWidget(m_copy_node_address_import_command_button);
-
-    m_copy_sync_headers_command_button = new QPushButton(tr("Copy sync headers"), signed_spend_panel);
-    m_copy_sync_headers_command_button->setObjectName(QStringLiteral("agentAllotmentCopySyncHeadersCommandButton"));
-    m_copy_sync_headers_command_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-    m_copy_sync_headers_command_button->setToolTip(tr("Copies a quicksilver-agent syncheaderspeer command for stored peers or the relay peer."));
-    relay_peer_row->addWidget(m_copy_sync_headers_command_button);
-    signed_spend_layout->addLayout(relay_peer_row);
-
-    auto* signed_spend_action_row = new QHBoxLayout();
-    signed_spend_action_row->setContentsMargins(0, 0, 0, 0);
-    signed_spend_action_row->setSpacing(10);
-
-    m_signed_spend_review_button = new QPushButton(tr("Review signed spend"), signed_spend_panel);
-    m_signed_spend_review_button->setObjectName(QStringLiteral("agentAllotmentReviewSignedSpendButton"));
-    m_signed_spend_review_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-    m_signed_spend_review_button->setToolTip(tr("Decodes pasted agent spend output locally before relay transport is available."));
-    signed_spend_action_row->addWidget(m_signed_spend_review_button);
-
-    m_signed_spend_copy_relay_button = new QPushButton(tr("Copy relay payloads"), signed_spend_panel);
-    m_signed_spend_copy_relay_button->setObjectName(QStringLiteral("agentAllotmentCopyRelayPayloadsButton"));
-    m_signed_spend_copy_relay_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-    m_signed_spend_copy_relay_button->setToolTip(tr("Copies tx and inv payloads for an external node-free relay transport."));
-    signed_spend_action_row->addWidget(m_signed_spend_copy_relay_button);
-
-    m_signed_spend_copy_peer_command_button = new QPushButton(tr("Copy peer relay command"), signed_spend_panel);
-    m_signed_spend_copy_peer_command_button->setObjectName(QStringLiteral("agentAllotmentCopyPeerRelayCommandButton"));
-    m_signed_spend_copy_peer_command_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-    m_signed_spend_copy_peer_command_button->setToolTip(tr("Copies a quicksilver-agent sendtxpeer command for the reviewed signed spend and relay peer."));
-    signed_spend_action_row->addWidget(m_signed_spend_copy_peer_command_button);
-
-    m_signed_spend_copy_stored_peer_command_button = new QPushButton(tr("Copy stored-peer relay"), signed_spend_panel);
-    m_signed_spend_copy_stored_peer_command_button->setObjectName(QStringLiteral("agentAllotmentCopyStoredPeerRelayCommandButton"));
-    m_signed_spend_copy_stored_peer_command_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-    m_signed_spend_copy_stored_peer_command_button->setToolTip(tr("Copies a quicksilver-agent sendtxpeer command that uses stored relay peers."));
-    signed_spend_action_row->addWidget(m_signed_spend_copy_stored_peer_command_button);
-
-    m_signed_spend_relay_peer_button = new QPushButton(tr("Relay to peer"), signed_spend_panel);
-    m_signed_spend_relay_peer_button->setObjectName(QStringLiteral("agentAllotmentRelayPeerButton"));
-    m_signed_spend_relay_peer_button->setProperty("class", QStringLiteral("primaryActionButton"));
-    m_signed_spend_relay_peer_button->setToolTip(tr("Relays the reviewed signed spend in the background through the typed peer, stored peers, or fixed seeds."));
-    signed_spend_action_row->addWidget(m_signed_spend_relay_peer_button);
-
-    m_signed_spend_submit_button = new QPushButton(tr("Submit signed spend"), signed_spend_panel);
-    m_signed_spend_submit_button->setObjectName(QStringLiteral("agentAllotmentSubmitSignedSpendButton"));
-    m_signed_spend_submit_button->setProperty("class", QStringLiteral("primaryActionButton"));
-    m_signed_spend_submit_button->setToolTip(tr("Submits the reviewed signed spend through the active consensus node."));
-    signed_spend_action_row->addWidget(m_signed_spend_submit_button);
-
-    m_signed_spend_state = new QLabel(signed_spend_panel);
-    m_signed_spend_state->setObjectName(QStringLiteral("agentAllotmentSignedSpendState"));
-    m_signed_spend_state->setProperty("class", QStringLiteral("muted"));
-    m_signed_spend_state->setWordWrap(true);
-    signed_spend_action_row->addWidget(m_signed_spend_state, 1);
-    signed_spend_layout->addLayout(signed_spend_action_row);
-    root->addWidget(signed_spend_panel);
-
+    auto* cosign_panel = new QFrame(contents);
+    cosign_panel->setObjectName(QStringLiteral("agentAllotmentCosignPanel"));
+    QVBoxLayout* cosign_layout = BenchPanel::Install(cosign_panel, tr("Agent spend request")).body;
+    cosign_layout->setSpacing(8);
+    m_cosign_edit = new QPlainTextEdit(cosign_panel);
+    m_cosign_edit->setObjectName(QStringLiteral("agentAllotmentCosignEdit"));
+    m_cosign_edit->setPlaceholderText(tr("Paste the agent's spend request (psqt=…)"));
+    m_cosign_edit->setMinimumHeight(84);
+    m_cosign_edit->setTabChangesFocus(true);
+    cosign_layout->addWidget(m_cosign_edit);
+    auto* cosign_actions = new QHBoxLayout();
+    cosign_actions->setContentsMargins(0, 0, 0, 0);
+    cosign_actions->setSpacing(10);
+    m_cosign_review_button = new QPushButton(tr("Review"), cosign_panel);
+    m_cosign_review_button->setObjectName(QStringLiteral("agentAllotmentReviewCosignButton"));
+    m_cosign_review_button->setProperty("class", QStringLiteral("benchQuiet"));
+    cosign_actions->addWidget(m_cosign_review_button);
+    m_cosign_button = new QPushButton(tr("Co-sign and broadcast"), cosign_panel);
+    // DU's unchanged viewport guard locates the final action by this object name.
+    m_cosign_button->setObjectName(QStringLiteral("agentAllotmentSubmitSignedSpendButton"));
+    m_cosign_button->setProperty("class", QStringLiteral("benchQuiet"));
+    cosign_actions->addWidget(m_cosign_button);
+    m_cosign_refuse_button = new QPushButton(tr("Refuse"), cosign_panel);
+    m_cosign_refuse_button->setObjectName(QStringLiteral("agentAllotmentRefuseButton"));
+    m_cosign_refuse_button->setProperty("class", QStringLiteral("benchQuiet"));
+    cosign_actions->addWidget(m_cosign_refuse_button);
+    cosign_actions->addStretch(1);
+    cosign_layout->addLayout(cosign_actions);
+    m_cosign_state = MakeMutedLabel(QString(), cosign_panel);
+    m_cosign_state->setObjectName(QStringLiteral("agentAllotmentCosignState"));
+    m_cosign_state->setTextFormat(Qt::PlainText);
+    m_cosign_state->setText(tr("Paste a spend request and review it before co-signing."));
+    cosign_layout->addWidget(m_cosign_state);
+    root->addWidget(cosign_panel);
     root->addStretch();
     scroll_area->setWidget(contents);
 
@@ -1036,40 +430,27 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent, PeerRelayFunction peer_r
     connect(m_payment_receipt_edit, &QPlainTextEdit::textChanged, this, &AgentAllotmentPage::updatePaymentReceiptReviewState);
     connect(m_payment_receipt_review_button, &QPushButton::clicked, this, &AgentAllotmentPage::reviewPaymentReceipt);
     connect(m_payment_receipt_save_button, &QPushButton::clicked, this, &AgentAllotmentPage::savePaymentReceiptToAgentInbox);
-    connect(m_agent_utxo_refresh_button, &QPushButton::clicked, this, [this] { refreshStoredAgentUtxos(/*requested=*/true); });
-    connect(m_spend_bundle_edit, &QPlainTextEdit::textChanged, this, &AgentAllotmentPage::updateAgentSpendCommandState);
-    connect(m_spend_destination_edit, &QLineEdit::textChanged, this, &AgentAllotmentPage::updateAgentSpendCommandState);
-    connect(m_spend_amount, &QuicksilverAmountField::valueChanged, this, &AgentAllotmentPage::updateAgentSpendCommandState);
-    connect(m_spent_today, &QuicksilverAmountField::valueChanged, this, &AgentAllotmentPage::updateAgentSpendCommandState);
-    connect(m_copy_spend_command_button, &QPushButton::clicked, this, &AgentAllotmentPage::copyAgentSpendSignCommand);
-    connect(m_sign_spend_button, &QPushButton::clicked, this, &AgentAllotmentPage::signAgentSpendLocally);
-    connect(m_cancel_spend_button, &QPushButton::clicked, this, &AgentAllotmentPage::cancelAgentSpendLocally);
-    connect(m_signed_spend_edit, &QPlainTextEdit::textChanged, this, &AgentAllotmentPage::updateSignedSpendReviewState);
-    connect(m_relay_peer_edit, &QLineEdit::textChanged, this, &AgentAllotmentPage::updatePeerRelayCommandState);
-    connect(m_signed_spend_review_button, &QPushButton::clicked, this, &AgentAllotmentPage::reviewSignedAgentSpend);
-    connect(m_signed_spend_copy_relay_button, &QPushButton::clicked, this, &AgentAllotmentPage::copySignedSpendRelayPayloads);
-    connect(m_copy_add_peer_command_button, &QPushButton::clicked, this, &AgentAllotmentPage::copyRelayPeerAddCommand);
-    connect(m_copy_discover_peers_command_button, &QPushButton::clicked, this, &AgentAllotmentPage::copyRelayPeerDiscoveryCommand);
-    connect(m_import_node_peers_button, &QPushButton::clicked, this, &AgentAllotmentPage::importNodePeersToAgentStore);
-    connect(m_copy_node_address_import_command_button, &QPushButton::clicked, this, &AgentAllotmentPage::copyNodeAddressImportCommand);
-    connect(m_copy_sync_headers_command_button, &QPushButton::clicked, this, &AgentAllotmentPage::copyHeaderPeerSyncCommand);
-    connect(m_signed_spend_copy_peer_command_button, &QPushButton::clicked, this, &AgentAllotmentPage::copySignedSpendPeerRelayCommand);
-    connect(m_signed_spend_copy_stored_peer_command_button, &QPushButton::clicked, this, &AgentAllotmentPage::copySignedSpendStoredPeerRelayCommand);
-    connect(m_signed_spend_relay_peer_button, &QPushButton::clicked, this, &AgentAllotmentPage::relaySignedSpendToConfiguredPeers);
-    connect(m_signed_spend_submit_button, &QPushButton::clicked, this, &AgentAllotmentPage::submitSignedAgentSpend);
-    auto* receipt_refresh_timer = new QTimer(this);
-    receipt_refresh_timer->setInterval(5000);
-    connect(receipt_refresh_timer, &QTimer::timeout, this, [this] {
-        if (isVisible()) refreshStoredAgentUtxos();
+    connect(m_cosign_edit, &QPlainTextEdit::textChanged, this, [this] {
+        m_reviewed_request.clear();
+        ++m_cosign_generation;
+        SetLabelClass(m_cosign_state, QStringLiteral("policyReviewReady"));
+        m_cosign_state->setText(tr("Paste a spend request and review it before co-signing."));
+        updateCosignState();
     });
-    receipt_refresh_timer->start();
+    connect(m_cosign_review_button, &QPushButton::clicked, this, &AgentAllotmentPage::reviewAgentSpendRequest);
+    connect(m_cosign_button, &QPushButton::clicked, this, &AgentAllotmentPage::cosignAgentSpendRequest);
+    connect(m_cosign_refuse_button, &QPushButton::clicked, this, [this] {
+        m_cosign_edit->clear();
+        m_reviewed_request.clear();
+        ++m_cosign_generation;
+        m_cosign_state->setText(tr("Refused. Nothing was signed."));
+        updateCosignState();
+    });
     updateRecordedSetups();
     updateCreateState();
     updatePolicyReviewState();
     updatePaymentReceiptReviewState();
-    refreshStoredAgentUtxos();
-    updateAgentSpendCommandState();
-    updateSignedSpendReviewState();
+    updateCosignState();
 }
 
 void AgentAllotmentPage::setModel(VaultModel* model)
@@ -1077,17 +458,19 @@ void AgentAllotmentPage::setModel(VaultModel* model)
     if (m_model) {
         disconnect(m_model, &VaultModel::balanceChanged, this, &AgentAllotmentPage::updateRecordedSetups);
     }
+    if (m_model) disconnect(m_model, &VaultModel::agentAllotmentConsensusChanged, this, &AgentAllotmentPage::updateCosignState);
+    m_reviewed_request.clear();
+    ++m_cosign_generation;
     m_model = model;
     if (m_model) {
         connect(m_model, &VaultModel::balanceChanged, this, &AgentAllotmentPage::updateRecordedSetups, Qt::UniqueConnection);
+        connect(m_model, &VaultModel::agentAllotmentConsensusChanged, this, &AgentAllotmentPage::updateCosignState);
     }
     updateRecordedSetups();
     updateCreateState();
     updatePolicyReviewState();
     updatePaymentReceiptReviewState();
-    refreshStoredAgentUtxos();
-    updateAgentSpendCommandState();
-    updateSignedSpendReviewState();
+    updateCosignState();
 }
 
 void AgentAllotmentPage::setDisplayUnit(QuicksilverUnit unit)
@@ -1095,16 +478,12 @@ void AgentAllotmentPage::setDisplayUnit(QuicksilverUnit unit)
     m_display_unit = unit;
     m_funding_limit->setDisplayUnit(unit);
     m_daily_limit->setDisplayUnit(unit);
-    m_spend_amount->setDisplayUnit(unit);
-    m_spent_today->setDisplayUnit(unit);
     updateRecordedSetups();
-    refreshStoredAgentUtxos();
 }
 
 void AgentAllotmentPage::refresh()
 {
     updateRecordedSetups();
-    refreshStoredAgentUtxos(/*requested=*/true);
 }
 
 void AgentAllotmentPage::recordAgentAllotmentSetup()
@@ -1121,18 +500,23 @@ void AgentAllotmentPage::recordAgentAllotmentSetup()
         return;
     }
 
-    auto record = m_model->recordAgentAllotmentSetup(m_name_edit->text().trimmed(), funding, daily);
-    if (!record) {
-        m_state_label->setText(QString::fromStdString(util::ErrorString(record).translated));
-        return;
-    }
-
-    m_name_edit->clear();
-    m_funding_limit->clear();
-    m_daily_limit->clear();
-    m_acceptance->setChecked(false);
-    updateRecordedSetups();
-    m_state_label->setText(tr("Setup recorded with a vault funding address. Agent policy integration remains pending."));
+    const QString name = m_name_edit->text().trimmed();
+    QPointer<AgentAllotmentPage> page(this);
+    QPointer<VaultModel> model(m_model);
+    m_model->requestUnlock([page, model, name, funding, daily](std::shared_ptr<VaultModel::UnlockContext> unlock) {
+        if (!page || !model || page->m_model != model || !unlock->isValid()) return;
+        auto record = model->recordAgentAllotmentSetup(name, funding, daily);
+        if (!record) {
+            page->m_state_label->setText(QString::fromStdString(util::ErrorString(record).original));
+            return;
+        }
+        page->m_name_edit->clear();
+        page->m_funding_limit->clear();
+        page->m_daily_limit->clear();
+        page->m_acceptance->setChecked(false);
+        page->updateRecordedSetups();
+        page->m_state_label->setText(tr("Agent allotment created. Back up this vault again."));
+    });
 }
 
 void AgentAllotmentPage::reviewAgentAllotmentPolicyRequest()
@@ -1155,832 +539,14 @@ void AgentAllotmentPage::reviewAgentAllotmentPolicyRequest()
     const QString funding_limit = QuicksilverUnits::formatWithUnit(m_display_unit, request->funding_limit, false, QuicksilverUnits::SeparatorStyle::ALWAYS);
     const QString funding_available = QuicksilverUnits::formatWithUnit(m_display_unit, request->funding_available, false, QuicksilverUnits::SeparatorStyle::ALWAYS);
     const QString daily_limit = request->daily_limit > 0 ? QuicksilverUnits::formatWithUnit(m_display_unit, request->daily_limit, false, QuicksilverUnits::SeparatorStyle::ALWAYS) : tr("none");
-    const QString policy_status = request->policy_status == vault::AgentAllotmentPolicyStatus::Enforced ? tr("enforced metadata") : tr("pending metadata");
-
     SetLabelClass(m_policy_review_state, QStringLiteral("policyReviewValid"));
-    m_policy_review_state->setText(tr("Valid request for %1 at %2. Funding %3 of %4; daily guardrail %5; status %6. Review does not activate enforcement.")
+    m_policy_review_state->setText(tr("Valid request for %1 at %2. Funding %3 of %4; daily guardrail %5; status %6. Spending limits are checked by the agent.")
                                        .arg(QString::fromStdString(request->label),
                                             QString::fromStdString(request->funding_address),
                                             funding_available,
                                             funding_limit,
                                             daily_limit,
-                                            policy_status));
-}
-
-void AgentAllotmentPage::copyAgentSpendSignCommand()
-{
-    if (!m_spend_bundle_edit || !m_spend_destination_edit || !m_spend_amount || !m_spent_today || !m_spend_command_state) return;
-
-    const QString bundle_json = m_spend_bundle_edit->toPlainText().trimmed();
-    if (bundle_json.isEmpty()) {
-        updateAgentSpendCommandState();
-        return;
-    }
-
-    const QString destination = m_spend_destination_edit->text().trimmed();
-    if (!IsValidDestination(DecodeDestination(destination.toStdString()))) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(tr("Enter a valid spend destination address."));
-        return;
-    }
-
-    bool spend_valid = false;
-    const CAmount spend_amount = m_spend_amount->value(&spend_valid);
-    if (!spend_valid || spend_amount <= 0) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(tr("Enter a spend amount greater than zero."));
-        return;
-    }
-
-    std::optional<CAmount> spent_today;
-    if (!AmountFieldEmpty(m_spent_today)) {
-        bool spent_today_valid = false;
-        const CAmount spent_today_amount = m_spent_today->value(&spent_today_valid);
-        if (!spent_today_valid || spent_today_amount < 0) {
-            SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-            m_spend_command_state->setText(tr("Spent today must be empty or a valid nonnegative amount."));
-            return;
-        }
-        spent_today = spent_today_amount;
-    }
-
-    auto bundle{agent::DecodeAllotmentPolicyBundle(
-        bundle_json.toStdString(),
-        Params().GetChainTypeString(),
-        Params().GenesisBlock().GetHash().ToString())};
-    if (!bundle) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(QString::fromStdString(util::ErrorString(bundle).translated));
-        return;
-    }
-
-    auto bundle_path{SaveAgentPolicyBundleForSigning(*bundle, bundle_json)};
-    if (!bundle_path) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(QString::fromStdString(util::ErrorString(bundle_path).translated));
-        return;
-    }
-
-    bool allow_cpu_txpow{false};
-    if (m_model && m_model->getOptionsModel()) {
-        allow_cpu_txpow = m_model->getOptionsModel()->getOption(OptionsModel::AllowCpuAgentTxPow).toBool();
-    }
-    QApplication::clipboard()->setText(AgentSpendSignCommand(*bundle_path, destination, spend_amount, spent_today, allow_cpu_txpow));
-
-    SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewValid"));
-    m_spend_command_state->setText(tr("Agent spend command copied for %1 using saved bundle %2.")
-                                       .arg(QString::fromStdString(bundle->policy_request.id),
-                                            QString::fromStdString(fs::PathToString(*bundle_path))));
-}
-
-void AgentAllotmentPage::signAgentSpendLocally()
-{
-    if (!m_spend_bundle_edit || !m_spend_destination_edit || !m_spend_amount || !m_spent_today || !m_spend_command_state || !m_signed_spend_edit) return;
-
-    if (!m_model) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(tr("Open a vault before signing an agent spend locally."));
-        return;
-    }
-
-    node::NodeContext* context{m_model->node().context()};
-    if (!context || !context->chainman) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(tr("Start consensus before signing an agent spend locally."));
-        return;
-    }
-
-    const QString bundle_json = m_spend_bundle_edit->toPlainText().trimmed();
-    if (bundle_json.isEmpty()) {
-        updateAgentSpendCommandState();
-        return;
-    }
-
-    const QString destination_text = m_spend_destination_edit->text().trimmed();
-    const CTxDestination destination{DecodeDestination(destination_text.toStdString())};
-    if (!IsValidDestination(destination)) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(tr("Enter a valid spend destination address."));
-        return;
-    }
-
-    bool spend_valid = false;
-    const CAmount spend_amount = m_spend_amount->value(&spend_valid);
-    if (!spend_valid || spend_amount <= 0) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(tr("Enter a spend amount greater than zero."));
-        return;
-    }
-
-    auto spend_context{agent::ImportAllotmentBundle(
-        bundle_json.toStdString(),
-        Params().GetChainTypeString(),
-        Params().GenesisBlock().GetHash().ToString())};
-    if (!spend_context) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(QString::fromStdString(util::ErrorString(spend_context).translated));
-        return;
-    }
-    auto receipt_store{LoadAgentPaymentReceiptStore()};
-    if (!receipt_store) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(QString::fromStdString(util::ErrorString(receipt_store).translated));
-        return;
-    }
-    auto receipt_outputs{agent::ApplyPaymentReceiptsToBundle(spend_context->bundle, receipt_store->receipts, receipt_store->activities)};
-    if (!receipt_outputs) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(QString::fromStdString(util::ErrorString(receipt_outputs).translated));
-        return;
-    }
-
-    CAmount spent_today{0};
-    if (!AmountFieldEmpty(m_spent_today)) {
-        bool spent_today_valid = false;
-        spent_today = m_spent_today->value(&spent_today_valid);
-        if (!spent_today_valid || spent_today < 0) {
-            SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-            m_spend_command_state->setText(tr("Spent today must be empty or a valid nonnegative amount."));
-            return;
-        }
-    } else {
-        auto summed{agent::SpentTodayFromActivities(receipt_store->activities, spend_context->bundle.funding_address, QDateTime::currentSecsSinceEpoch())};
-        if (!summed) {
-            SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-            m_spend_command_state->setText(QString::fromStdString(util::ErrorString(summed).translated));
-            return;
-        }
-        spent_today = *summed;
-    }
-
-    const CBlockIndex* anchor{WITH_LOCK(context->chainman->GetMutex(), return context->chainman->ActiveChain().Tip())};
-    if (!anchor) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(tr("No consensus anchor is available for the agent spend."));
-        return;
-    }
-    if (m_spend_in_flight) return;
-
-    bool allow_cpu_txpow{false};
-    if (m_model->getOptionsModel()) {
-        allow_cpu_txpow = m_model->getOptionsModel()->getOption(OptionsModel::AllowCpuAgentTxPow).toBool();
-    }
-    const bool processor_grind{Params().GetConsensus().nTxEdgeBits == 28 && allow_cpu_txpow && !AgentGpuSolverConfigured()};
-
-    auto outcome{std::make_shared<LocalAgentSpendOutcome>()};
-    outcome->spend_context = std::move(*spend_context);
-    outcome->spend_amount = spend_amount;
-    outcome->anchor_hash = anchor->GetBlockHash();
-
-    m_spend_in_flight = true;
-    const quint64 generation{++m_spend_generation};
-    m_spend_cancel = std::make_shared<std::atomic<bool>>(false);
-    updateAgentSpendCommandState();
-    SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewReady"));
-    m_spend_command_state->setText(processor_grind
-                                       ? tr("Preparing this agent spend on the processor. It takes many minutes and uses every core. Stop leaves it unsigned.")
-                                       : tr("Preparing this agent spend. Stop leaves it unsigned."));
-
-    const auto cancel_flag{m_spend_cancel};
-    const Consensus::Params consensus{Params().GetConsensus()};
-    // Same shape as the peer-relay worker below: the grind must not run on the
-    // GUI thread, and a generation check drops a result the user already stopped.
-    QThread* thread{QThread::create([outcome, destination, spend_amount, spent_today, anchor, consensus, allow_cpu_txpow, cancel_flag] {
-        try {
-            outcome->signed_spend = std::make_unique<util::Result<agent::AllotmentSignedSpend>>(agent::CreateSignedAllotmentSpendFromBundleOutputs(
-                outcome->spend_context,
-                agent::AllotmentBundleSpendRequest{
-                    .destination = destination,
-                    .spend_amount = spend_amount,
-                    .spent_today = spent_today,
-                    .prove = true,
-                    .anchor = anchor,
-                    .cancel = [cancel_flag] { return cancel_flag && cancel_flag->load(); },
-                    .allow_cpu_txpow = allow_cpu_txpow,
-                },
-                consensus));
-        } catch (const std::exception& e) {
-            outcome->signed_spend = std::make_unique<util::Result<agent::AllotmentSignedSpend>>(util::Error{Untranslated(std::string{e.what()})});
-        } catch (...) {
-            outcome->signed_spend = std::make_unique<util::Result<agent::AllotmentSignedSpend>>(util::Error{Untranslated("Agent spend preparation failed.")});
-        }
-    })};
-    connect(thread, &QThread::finished, this, [this, outcome, generation] {
-        finishLocalAgentSpend(outcome, generation);
-    });
-    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
-    thread->start();
-}
-
-void AgentAllotmentPage::cancelAgentSpendLocally()
-{
-    if (!m_spend_in_flight) return;
-    if (m_spend_cancel) m_spend_cancel->store(true);
-    ++m_spend_generation;
-    m_spend_in_flight = false;
-    updateAgentSpendCommandState();
-    SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-    m_spend_command_state->setText(tr("Agent spend preparation was stopped. Nothing was signed."));
-}
-
-void AgentAllotmentPage::finishLocalAgentSpend(const std::shared_ptr<LocalAgentSpendOutcome>& outcome, quint64 generation)
-{
-    if (generation != m_spend_generation || !m_spend_in_flight || !outcome || !m_spend_command_state) return;
-
-    m_spend_in_flight = false;
-    m_spend_cancel.reset();
-    updateAgentSpendCommandState();
-
-    if (!outcome->signed_spend || !*outcome->signed_spend) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        const std::string message{outcome->signed_spend ? util::ErrorString(*outcome->signed_spend).translated
-                                                        : std::string{"Agent spend preparation did not finish."}};
-        m_spend_command_state->setText(QString::fromStdString(message));
-        return;
-    }
-    const agent::AllotmentSignedSpend& signed_spend{outcome->signed_spend->value()};
-
-    auto receipt_store{LoadAgentPaymentReceiptStore()};
-    if (!receipt_store) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-        m_spend_command_state->setText(QString::fromStdString(util::ErrorString(receipt_store).translated));
-        return;
-    }
-
-    const QString txid{QString::fromStdString(signed_spend.transaction.GetHash().ToString())};
-    std::optional<agent::AllotmentPaymentReceiptArtifact> change_receipt;
-    size_t stored_spent_receipts_removed{0};
-    size_t stored_change_receipts_added{0};
-    bool receipt_store_saved{false};
-    const int64_t activity_time{QDateTime::currentSecsSinceEpoch()};
-    std::vector<agent::AllotmentPaymentReceiptArtifact> spent_receipts;
-    const std::vector<agent::AllotmentFundingOutputArtifact> spent_outputs{FundingOutputsFromSpendInputs(signed_spend.inputs)};
-    stored_spent_receipts_removed = agent::RemoveSpentReceipts(receipt_store->receipts, spent_outputs, &spent_receipts);
-    agent::AppendSpentActivities(*receipt_store, outcome->spend_context.bundle.funding_address, spent_outputs, spent_receipts, activity_time, txid.toStdString());
-    if (signed_spend.change_amount > 0) {
-        change_receipt = agent::AllotmentPaymentReceiptArtifact{
-            .chain = Params().GetChainTypeString(),
-            .genesis_hash = Params().GenesisBlock().GetHash().ToString(),
-            .funding_address = outcome->spend_context.bundle.funding_address,
-            .funding_output = {
-                .txid = txid.toStdString(),
-                .vout = 1,
-                .amount = signed_spend.change_amount,
-            },
-            .received_time = activity_time,
-            .payment_id = outcome->spend_context.bundle.policy_request.id + ":change:" + txid.toStdString() + ":1",
-            .label = outcome->spend_context.bundle.policy_request.label,
-            .memo = "agent spend change",
-            .payer = "desktop vault",
-        };
-        std::vector<agent::AllotmentPaymentReceiptArtifact> change_receipts_added;
-        auto added{AddReceiptsToStore(*receipt_store, {*change_receipt}, &change_receipts_added)};
-        if (!added) {
-            SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-            m_spend_command_state->setText(QString::fromStdString(util::ErrorString(added).translated));
-            return;
-        }
-        stored_change_receipts_added = *added;
-        for (const agent::AllotmentPaymentReceiptArtifact& receipt : change_receipts_added) {
-            receipt_store->activities.push_back(MakeReceiptActivity(agent::AllotmentReceiptActivityType::CHANGE, receipt, activity_time, txid.toStdString()));
-        }
-    }
-    if (!spent_outputs.empty() || stored_change_receipts_added > 0) {
-        auto saved{SaveAgentPaymentReceiptStore(*receipt_store)};
-        if (!saved) {
-            SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewError"));
-            m_spend_command_state->setText(QString::fromStdString(util::ErrorString(saved).translated));
-            return;
-        }
-        receipt_store_saved = true;
-    }
-
-    const CSerializedNetMsg tx_message{agent::MakeTxMessage(signed_spend.transaction)};
-    const CInv inventory{MSG_WTX, signed_spend.transaction.GetWitnessHash()};
-    const CSerializedNetMsg inv_message{agent::MakeTxInvMessage(std::span{&inventory, 1})};
-
-    QStringList output;
-    output << QStringLiteral("policy_id=%1").arg(QString::fromStdString(outcome->spend_context.bundle.policy_request.id));
-    output << QStringLiteral("funding_address=%1").arg(QString::fromStdString(outcome->spend_context.bundle.funding_address));
-    output << QStringLiteral("selected_input_count=%1").arg(QString::number(signed_spend.inputs.size()));
-    for (size_t i{0}; i < signed_spend.inputs.size(); ++i) {
-        const agent::AllotmentSpendInput& input{signed_spend.inputs[i]};
-        output << QStringLiteral("selected_input_%1=%2:%3")
-                      .arg(QString::number(i),
-                           QString::fromStdString(input.prevout.hash.ToString()),
-                           QString::number(input.prevout.n));
-        output << QStringLiteral("selected_input_%1_amount_cinnabar=%2")
-                      .arg(QString::number(i),
-                           QString::fromStdString(util::ToString(input.amount)));
-    }
-    output << QStringLiteral("input_amount_cinnabar=%1").arg(QString::fromStdString(util::ToString(signed_spend.input_amount)));
-    output << QStringLiteral("spend_amount_cinnabar=%1").arg(QString::fromStdString(util::ToString(outcome->spend_amount)));
-    output << QStringLiteral("change_amount_cinnabar=%1").arg(QString::fromStdString(util::ToString(signed_spend.change_amount)));
-    output << QStringLiteral("policy_result=%1").arg(QString::fromStdString(agent::AllotmentPolicyResultCodeString(signed_spend.policy_check.code)));
-    output << QStringLiteral("proved=true");
-    output << QStringLiteral("anchor_height=%1").arg(QString::number(signed_spend.transaction.nAnchorHeight));
-    output << QStringLiteral("anchor_hash=%1").arg(QString::fromStdString(outcome->anchor_hash.ToString()));
-    output << QStringLiteral("hex=%1").arg(QString::fromStdString(EncodeHexTx(signed_spend.transaction)));
-    output << QStringLiteral("tx_payload=%1").arg(QString::fromStdString(agent::AgentMessagePayloadHex(tx_message)));
-    output << QStringLiteral("inv_payload=%1").arg(QString::fromStdString(agent::AgentMessagePayloadHex(inv_message)));
-    if (change_receipt.has_value()) {
-        output << QStringLiteral("change_paymentreceipt=%1").arg(AgentPaymentReceiptJson(*change_receipt));
-    }
-    output << QStringLiteral("receipt_store_saved=%1").arg(receipt_store_saved ? QStringLiteral("true") : QStringLiteral("false"));
-    output << QStringLiteral("receipt_store_spent_removed=%1").arg(QString::number(stored_spent_receipts_removed));
-    output << QStringLiteral("receipt_store_change_added=%1").arg(QString::number(stored_change_receipts_added));
-    output << QStringLiteral("receipt_activity_count=%1").arg(QString::number(receipt_store->activities.size()));
-    output << QStringLiteral("receipt_store=%1").arg(QString::fromStdString(fs::PathToString(AgentPaymentReceiptStorePath())));
-
-    m_signed_spend_edit->setPlainText(output.join(QLatin1Char('\n')));
-    reviewSignedAgentSpend();
-    refreshStoredAgentUtxos();
-
-    SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewValid"));
-    m_spend_command_state->setText(tr("Agent spend signed locally for %1 and loaded into signed-spend review.")
-                                       .arg(QString::fromStdString(outcome->spend_context.bundle.policy_request.id)));
-}
-
-void AgentAllotmentPage::reviewSignedAgentSpend()
-{
-    if (!m_signed_spend_edit || !m_signed_spend_state) return;
-
-    QString error;
-    const std::optional<AgentSignedSpendReview> review{DecodeAgentSignedSpendText(m_signed_spend_edit->toPlainText(), error)};
-    if (!review) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(error);
-        m_signed_spend_review_valid = false;
-        if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(false);
-        if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(false);
-        updatePeerRelayCommandState();
-        if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(false);
-        return;
-    }
-
-    m_signed_spend_review_valid = true;
-    SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewValid"));
-    QString review_status = tr("Valid signed spend %1 with %2 input(s), %3 output(s), and %4 total output. Submit starts consensus-backed relay.")
-                                .arg(QString::fromStdString(review->tx->GetHash().ToString()),
-                                     QString::number(review->tx->vin.size()),
-                                     QString::number(review->tx->vout.size()),
-                                     QuicksilverUnits::formatWithUnit(m_display_unit, review->output_total, false, QuicksilverUnits::SeparatorStyle::ALWAYS));
-    const std::optional<QString> change_receipt_json{ExtractAgentChangePaymentReceiptJson(m_signed_spend_edit->toPlainText())};
-    if (change_receipt_json.has_value() && !change_receipt_json->isEmpty()) {
-        auto change_receipt{agent::DecodeAllotmentPaymentReceipt(
-            change_receipt_json->toStdString(),
-            Params().GetChainTypeString(),
-            Params().GenesisBlock().GetHash().ToString())};
-        if (!change_receipt) {
-            SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-            m_signed_spend_state->setText(tr("Signed spend is valid, but the change receipt was not saved: %1")
-                                              .arg(QString::fromStdString(util::ErrorString(change_receipt).translated)));
-            m_signed_spend_review_valid = false;
-            if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(false);
-            if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(false);
-            updatePeerRelayCommandState();
-            if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(false);
-            return;
-        }
-
-        auto receipt_path{SaveAgentPaymentReceiptToInbox(*change_receipt, *change_receipt_json)};
-        if (!receipt_path) {
-            SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-            m_signed_spend_state->setText(tr("Signed spend is valid, but the change receipt was not saved: %1")
-                                              .arg(QString::fromStdString(util::ErrorString(receipt_path).translated)));
-            m_signed_spend_review_valid = false;
-            if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(false);
-            if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(false);
-            updatePeerRelayCommandState();
-            if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(false);
-            return;
-        }
-
-        review_status += QStringLiteral(" ") + tr("Change receipt saved to %1.")
-                                               .arg(QString::fromStdString(fs::PathToString(*receipt_path)));
-        refreshStoredAgentUtxos();
-    }
-    m_signed_spend_state->setText(review_status);
-    if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(true);
-    if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(true);
-    updatePeerRelayCommandState();
-    if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(m_model != nullptr);
-}
-
-void AgentAllotmentPage::copySignedSpendRelayPayloads()
-{
-    if (!m_signed_spend_edit || !m_signed_spend_state) return;
-
-    QString error;
-    const std::optional<AgentSignedSpendReview> review{DecodeAgentSignedSpendText(m_signed_spend_edit->toPlainText(), error)};
-    if (!review) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(error);
-        m_signed_spend_review_valid = false;
-        if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(false);
-        if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(false);
-        updatePeerRelayCommandState();
-        if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(false);
-        return;
-    }
-
-    m_signed_spend_review_valid = true;
-    const CSerializedNetMsg tx_message{agent::MakeTxMessage(*review->tx)};
-    const CInv inventory{MSG_WTX, review->tx->GetWitnessHash()};
-    const CSerializedNetMsg inv_message{agent::MakeTxInvMessage(std::span{&inventory, 1})};
-    const QString payloads = QStringLiteral("tx_payload=%1\ninv_payload=%2")
-                                 .arg(QString::fromStdString(agent::AgentMessagePayloadHex(tx_message)),
-                                      QString::fromStdString(agent::AgentMessagePayloadHex(inv_message)));
-    QApplication::clipboard()->setText(payloads);
-
-    SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewValid"));
-    m_signed_spend_state->setText(tr("Relay payloads copied for node-free transport handoff."));
-    if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(true);
-    if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(true);
-    updatePeerRelayCommandState();
-    if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(m_model != nullptr);
-}
-
-void AgentAllotmentPage::copyRelayPeerAddCommand()
-{
-    if (!m_relay_peer_edit || !m_signed_spend_state) return;
-
-    const QString peer = m_relay_peer_edit->text().trimmed();
-    if (peer.isEmpty()) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(tr("Enter a relay peer before copying a save-peer command."));
-        updatePeerRelayCommandState();
-        return;
-    }
-    if (ContainsSpace(peer)) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(tr("Relay peer must be a host[:port] value without spaces."));
-        updatePeerRelayCommandState();
-        return;
-    }
-
-    QApplication::clipboard()->setText(RelayPeerAddCommand(peer));
-
-    SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewValid"));
-    m_signed_spend_state->setText(tr("Relay peer save command copied for %1.").arg(peer));
-    updatePeerRelayCommandState();
-}
-
-void AgentAllotmentPage::copyRelayPeerDiscoveryCommand()
-{
-    if (!m_relay_peer_edit || !m_signed_spend_state) return;
-
-    const QString peer = m_relay_peer_edit->text().trimmed();
-    if (!peer.isEmpty() && ContainsSpace(peer)) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(tr("Relay peer must be a host[:port] value without spaces."));
-        updatePeerRelayCommandState();
-        return;
-    }
-
-    QApplication::clipboard()->setText(RelayPeerDiscoveryCommand(peer.isEmpty() ? std::optional<QString>{} : std::optional<QString>{peer}));
-
-    SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewValid"));
-    if (peer.isEmpty()) {
-        m_signed_spend_state->setText(tr("Stored-peer discovery command copied."));
-    } else {
-        m_signed_spend_state->setText(tr("Relay peer discovery command copied for %1.").arg(peer));
-    }
-    updatePeerRelayCommandState();
-}
-
-void AgentAllotmentPage::importNodePeersToAgentStore()
-{
-    if (!m_signed_spend_state) return;
-    if (!m_model) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(tr("Open a vault before importing local-node peers."));
-        updatePeerRelayCommandState();
-        return;
-    }
-
-    std::vector<CService> node_peers{m_model->node().getNodeAddresses(64)};
-    if (node_peers.empty()) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(tr("No local-node peers are available to import."));
-        updatePeerRelayCommandState();
-        return;
-    }
-
-    auto stored_peers{LoadAgentRelayPeers()};
-    if (!stored_peers) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(QString::fromStdString(util::ErrorString(stored_peers).translated));
-        updatePeerRelayCommandState();
-        return;
-    }
-
-    size_t imported{0};
-    for (const CService& peer : node_peers) {
-        if (PushUniqueRelayPeer(*stored_peers, peer)) {
-            ++imported;
-        }
-    }
-    SortRelayPeers(*stored_peers);
-
-    auto saved{SaveAgentRelayPeers(*stored_peers)};
-    if (!saved) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(QString::fromStdString(util::ErrorString(saved).translated));
-        updatePeerRelayCommandState();
-        return;
-    }
-
-    SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewValid"));
-    m_signed_spend_state->setText(tr("Local-node peers imported: %1 new of %2 available. Agent peer store: %3.")
-                                      .arg(QString::number(imported),
-                                           QString::number(node_peers.size()),
-                                           QString::fromStdString(fs::PathToString(*saved))));
-    updatePeerRelayCommandState();
-}
-
-void AgentAllotmentPage::copyNodeAddressImportCommand()
-{
-    if (!m_signed_spend_state) return;
-
-    QApplication::clipboard()->setText(NodeAddressImportCommand());
-
-    SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewValid"));
-    m_signed_spend_state->setText(tr("Local-node peer import command copied."));
-    updatePeerRelayCommandState();
-}
-
-void AgentAllotmentPage::copyHeaderPeerSyncCommand()
-{
-    if (!m_relay_peer_edit || !m_signed_spend_state) return;
-
-    const QString peer = m_relay_peer_edit->text().trimmed();
-    if (!peer.isEmpty() && ContainsSpace(peer)) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(tr("Relay peer must be a host[:port] value without spaces."));
-        updatePeerRelayCommandState();
-        return;
-    }
-
-    QApplication::clipboard()->setText(HeaderPeerSyncCommand(peer.isEmpty() ? std::optional<QString>{} : std::optional<QString>{peer}));
-
-    SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewValid"));
-    if (peer.isEmpty()) {
-        m_signed_spend_state->setText(tr("Stored-peer header sync command copied."));
-    } else {
-        m_signed_spend_state->setText(tr("Relay peer header sync command copied for %1.").arg(peer));
-    }
-    updatePeerRelayCommandState();
-}
-
-void AgentAllotmentPage::copySignedSpendPeerRelayCommand()
-{
-    if (!m_relay_peer_edit || !m_signed_spend_edit || !m_signed_spend_state) return;
-
-    const QString peer = m_relay_peer_edit->text().trimmed();
-    if (peer.isEmpty()) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(tr("Enter a relay peer before copying a peer relay command."));
-        updatePeerRelayCommandState();
-        return;
-    }
-    if (ContainsSpace(peer)) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(tr("Relay peer must be a host[:port] value without spaces."));
-        updatePeerRelayCommandState();
-        return;
-    }
-
-    QString error;
-    const std::optional<AgentSignedSpendReview> review{DecodeAgentSignedSpendText(m_signed_spend_edit->toPlainText(), error)};
-    if (!review) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(error);
-        m_signed_spend_review_valid = false;
-        if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(false);
-        if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(false);
-        updatePeerRelayCommandState();
-        if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(false);
-        return;
-    }
-
-    m_signed_spend_review_valid = true;
-    const CSerializedNetMsg tx_message{agent::MakeTxMessage(*review->tx)};
-    QApplication::clipboard()->setText(SignedSpendPeerRelayCommand(QString::fromStdString(agent::AgentMessagePayloadHex(tx_message)), peer));
-
-    SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewValid"));
-    m_signed_spend_state->setText(tr("Peer relay command copied for %1.").arg(peer));
-    if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(true);
-    if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(true);
-    updatePeerRelayCommandState();
-    if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(m_model != nullptr);
-}
-
-void AgentAllotmentPage::copySignedSpendStoredPeerRelayCommand()
-{
-    if (!m_signed_spend_edit || !m_signed_spend_state) return;
-
-    QString error;
-    const std::optional<AgentSignedSpendReview> review{DecodeAgentSignedSpendText(m_signed_spend_edit->toPlainText(), error)};
-    if (!review) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(error);
-        m_signed_spend_review_valid = false;
-        if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(false);
-        if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(false);
-        updatePeerRelayCommandState();
-        if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(false);
-        return;
-    }
-
-    m_signed_spend_review_valid = true;
-    const CSerializedNetMsg tx_message{agent::MakeTxMessage(*review->tx)};
-    QApplication::clipboard()->setText(SignedSpendPeerRelayCommand(QString::fromStdString(agent::AgentMessagePayloadHex(tx_message)), std::nullopt));
-
-    SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewValid"));
-    m_signed_spend_state->setText(tr("Stored-peer relay command copied for the reviewed signed spend."));
-    if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(true);
-    if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(true);
-    updatePeerRelayCommandState();
-    if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(m_model != nullptr);
-}
-
-void AgentAllotmentPage::relaySignedSpendToConfiguredPeers()
-{
-    if (!m_relay_peer_edit || !m_signed_spend_edit || !m_signed_spend_state || m_peer_relay_in_flight) return;
-    if (!m_peer_relay) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(tr("Background peer relay is not available."));
-        updatePeerRelayCommandState();
-        return;
-    }
-
-    QString error;
-    std::optional<CSerializedNetMsg> tx_message;
-    const std::optional<QString> tx_payload_hex{ExtractAgentTransactionPayloadHex(m_signed_spend_edit->toPlainText())};
-    if (tx_payload_hex.has_value()) {
-        const agent::AgentMessageDecodeResult message{agent::DecodeAgentMessage(NetMsgType::TX, tx_payload_hex->toStdString())};
-        if (!message.ok()) {
-            error = tr("Signed spend tx_payload is not valid hex.");
-        } else {
-            const agent::TxMessageDecodeResult decoded_tx{agent::DecodeTxMessage(message.message)};
-            if (!decoded_tx.ok() || !decoded_tx.transaction) {
-                error = tr("Signed spend tx_payload is not a valid Quicksilver transaction payload.");
-            } else {
-                tx_message.emplace(message.message.Copy());
-            }
-        }
-    } else if (const std::optional<AgentSignedSpendReview> review{DecodeAgentSignedSpendText(m_signed_spend_edit->toPlainText(), error)}) {
-        tx_message = agent::MakeTxMessage(*review->tx);
-    }
-    if (!tx_message.has_value()) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(error);
-        m_signed_spend_review_valid = false;
-        if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(false);
-        if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(false);
-        updatePeerRelayCommandState();
-        if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(false);
-        return;
-    }
-
-    std::vector<CService> peers;
-    const QString peer_text = m_relay_peer_edit->text().trimmed();
-    if (!peer_text.isEmpty()) {
-        if (ContainsSpace(peer_text)) {
-            SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-            m_signed_spend_state->setText(tr("Relay peer must be a host[:port] value without spaces."));
-            updatePeerRelayCommandState();
-            return;
-        }
-        const std::optional<CService> peer{Lookup(peer_text.toStdString(), Params().GetDefaultPort(), /*fAllowLookup=*/true)};
-        if (!peer.has_value() || !peer->IsValid()) {
-            SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-            m_signed_spend_state->setText(tr("Relay peer is not a valid host[:port] value."));
-            updatePeerRelayCommandState();
-            return;
-        }
-        peers.push_back(*peer);
-    } else {
-        auto stored_peers{LoadAgentRelayPeers()};
-        if (!stored_peers) {
-            SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-            m_signed_spend_state->setText(QString::fromStdString(util::ErrorString(stored_peers).translated));
-            updatePeerRelayCommandState();
-            return;
-        }
-        if (stored_peers->empty()) {
-            try {
-                peers = agent::FixedSeedPeers();
-            } catch (const std::exception& e) {
-                SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-                m_signed_spend_state->setText(tr("Could not load fixed relay seeds: %1")
-                                                  .arg(QString::fromUtf8(e.what())));
-                updatePeerRelayCommandState();
-                return;
-            }
-            if (peers.empty()) {
-                SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-                m_signed_spend_state->setText(tr("No relay peers are available. Enter a peer, import local-node peers, or configure a network with fixed seeds."));
-                updatePeerRelayCommandState();
-                return;
-            }
-        } else {
-            peers = std::move(*stored_peers);
-        }
-    }
-
-    m_peer_relay_in_flight = true;
-    const quint64 generation{++m_peer_relay_generation};
-    m_signed_spend_edit->setEnabled(false);
-    m_relay_peer_edit->setEnabled(false);
-    if (m_signed_spend_review_button) m_signed_spend_review_button->setEnabled(false);
-    if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(false);
-    if (m_signed_spend_copy_peer_command_button) m_signed_spend_copy_peer_command_button->setEnabled(false);
-    if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(false);
-    if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(false);
-    updatePeerRelayCommandState();
-    SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewReady"));
-    m_signed_spend_state->setText(tr("Relaying the reviewed signed spend to %1 peer(s) in the background…")
-                                      .arg(QString::number(peers.size())));
-
-    const PeerRelayFunction peer_relay{m_peer_relay};
-    const auto timeout{std::chrono::milliseconds{agent::DEFAULT_AGENT_PEER_TIMEOUT_MS}};
-    auto results{std::make_shared<std::vector<agent::PeerTransactionRelayResult>>()};
-    results->reserve(peers.size());
-    QThread* thread{QThread::create([peers = std::move(peers),
-                                     tx_message = std::move(*tx_message),
-                                     peer_relay,
-                                     timeout,
-                                     results]() mutable {
-        for (const CService& peer : peers) {
-            try {
-                results->push_back(peer_relay(peer, tx_message, timeout));
-            } catch (const std::exception& e) {
-                results->push_back(agent::PeerTransactionRelayResult{
-                    .peer = peer,
-                    .error = e.what(),
-                });
-            } catch (...) {
-                results->push_back(agent::PeerTransactionRelayResult{
-                    .peer = peer,
-                    .error = "unexpected relay transport failure",
-                });
-            }
-        }
-    })};
-    connect(thread, &QThread::finished, this, [this, results, generation] {
-        finishPeerRelay(std::move(*results), generation);
-    });
-    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
-    thread->start();
-}
-
-void AgentAllotmentPage::finishPeerRelay(std::vector<agent::PeerTransactionRelayResult> results, quint64 generation)
-{
-    if (generation != m_peer_relay_generation || !m_peer_relay_in_flight || !m_signed_spend_state) return;
-
-    m_peer_relay_in_flight = false;
-    if (m_signed_spend_edit) m_signed_spend_edit->setEnabled(true);
-    if (m_relay_peer_edit) m_relay_peer_edit->setEnabled(true);
-    if (m_signed_spend_review_button) m_signed_spend_review_button->setEnabled(true);
-    if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(m_signed_spend_review_valid);
-    if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(m_signed_spend_review_valid);
-    if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(m_signed_spend_review_valid && m_model != nullptr);
-
-    size_t sent_count{0};
-    QStringList failures;
-    for (const agent::PeerTransactionRelayResult& result : results) {
-        if (result.sent_tx) {
-            ++sent_count;
-        } else {
-            failures << QStringLiteral("%1: %2")
-                            .arg(QString::fromStdString(result.peer.ToStringAddrPort()),
-                                 QString::fromStdString(result.error.empty() ? std::string{"relay failed"} : result.error));
-        }
-    }
-
-    if (sent_count == 0) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(tr("Background peer relay failed for %1 peer(s): %2")
-                                          .arg(QString::number(results.size()),
-                                               failures.join(QStringLiteral("; "))));
-        updatePeerRelayCommandState();
-        return;
-    }
-
-    SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewValid"));
-    if (failures.empty()) {
-        m_signed_spend_state->setText(tr("Background peer relay sent the reviewed signed spend to %1 peer(s).")
-                                          .arg(QString::number(sent_count)));
-    } else {
-        m_signed_spend_state->setText(tr("Background peer relay sent to %1 of %2 peer(s). Failures: %3")
-                                          .arg(QString::number(sent_count),
-                                               QString::number(results.size()),
-                                               failures.join(QStringLiteral("; "))));
-    }
-    m_signed_spend_review_valid = true;
-    updatePeerRelayCommandState();
+                                            tr("Co-signed by this vault")));
 }
 
 void AgentAllotmentPage::reviewPaymentReceipt()
@@ -2053,93 +619,9 @@ void AgentAllotmentPage::savePaymentReceiptToAgentInbox()
 
     QApplication::clipboard()->setText(AgentPaymentReceiptScanCommand(AgentPaymentReceiptInboxDirectory()));
 
-    const bool imported{refreshStoredAgentUtxos(/*requested=*/true)};
-
-    if (imported) {
-        SetLabelClass(m_payment_receipt_state, QStringLiteral("policyReviewValid"));
-        m_payment_receipt_state->setText(tr("Payment receipt saved to %1 and imported into the durable agent output store. External-agent scan command copied.")
-                                             .arg(QString::fromStdString(fs::PathToString(*receipt_path))));
-    } else {
-        SetLabelClass(m_payment_receipt_state, QStringLiteral("policyReviewError"));
-        m_payment_receipt_state->setText(tr("Payment receipt saved to %1, but the durable agent output refresh failed. See the UTXO status. External-agent scan command copied.")
-                                             .arg(QString::fromStdString(fs::PathToString(*receipt_path))));
-    }
-}
-
-bool AgentAllotmentPage::refreshStoredAgentUtxos(bool requested)
-{
-    if (!m_agent_utxo_state) return false;
-
-    auto scan{agent::ScanAllotmentPaymentReceiptDirectory(
-        AgentPaymentReceiptInboxDirectory(),
-        AgentPaymentReceiptStorePath(),
-        Params().GetChainTypeString(),
-        Params().GenesisBlock().GetHash())};
-    if (!scan) {
-        SetLabelClass(m_agent_utxo_state, QStringLiteral("policyReviewError"));
-        m_agent_utxo_state->setText(tr("Agent UTXO refresh failed: %1")
-                                         .arg(QString::fromStdString(util::ErrorString(scan).translated)));
-        return false;
-    }
-
-    CAmount total{0};
-    for (const agent::AllotmentPaymentReceiptArtifact& receipt : scan->store.receipts) {
-        if (!MoneyRange(total + receipt.funding_output.amount)) {
-            SetLabelClass(m_agent_utxo_state, QStringLiteral("policyReviewError"));
-            m_agent_utxo_state->setText(tr("Agent UTXO refresh failed: stored output total is out of range."));
-            return false;
-        }
-        total += receipt.funding_output.amount;
-    }
-
-    SetLabelClass(m_agent_utxo_state, QStringLiteral("policyReviewValid"));
-    const QString formatted_total{QuicksilverUnits::formatWithUnit(m_display_unit, total, false, QuicksilverUnits::SeparatorStyle::ALWAYS)};
-    QString status{tr("Spendable agent UTXOs: %1 totaling %2. Durable activity entries: %3.")
-                       .arg(QString::number(scan->store.receipts.size()),
-                            formatted_total,
-                            QString::number(scan->store.activities.size()))};
-    if (scan->imported_receipts > 0) {
-        status += QStringLiteral(" ") + tr("Imported %1 new receipt(s) from %2 inbox file(s).")
-                                           .arg(QString::number(scan->imported_receipts),
-                                                QString::number(scan->scanned_files));
-    } else if (requested) {
-        status += QStringLiteral(" ") + tr("Inbox scan is current across %1 receipt file(s).")
-                                           .arg(QString::number(scan->scanned_files));
-    }
-    m_agent_utxo_state->setText(status);
-    return true;
-}
-
-void AgentAllotmentPage::submitSignedAgentSpend()
-{
-    if (!m_signed_spend_edit || !m_signed_spend_state) return;
-
-    QString error;
-    const std::optional<AgentSignedSpendReview> review{DecodeAgentSignedSpendText(m_signed_spend_edit->toPlainText(), error)};
-    if (!review) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(error);
-        m_signed_spend_review_valid = false;
-        if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(false);
-        updatePeerRelayCommandState();
-        return;
-    }
-    if (!m_model) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(tr("Open a vault before submitting a signed agent spend."));
-        return;
-    }
-
-    const auto submitted{m_model->broadcastAgentAllotmentSignedSpend(review->tx)};
-    if (!submitted.accepted) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewError"));
-        m_signed_spend_state->setText(tr("Signed spend submission failed: %1").arg(submitted.error));
-        return;
-    }
-
-    SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewValid"));
-    m_signed_spend_state->setText(tr("Signed spend submitted. Transaction ID: %1").arg(submitted.txid));
-    if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(false);
+    SetLabelClass(m_payment_receipt_state, QStringLiteral("policyReviewValid"));
+    m_payment_receipt_state->setText(tr("Payment receipt saved to %1. External-agent scan command copied.")
+        .arg(QString::fromStdString(fs::PathToString(*receipt_path))));
 }
 
 void AgentAllotmentPage::updateRecordedSetups()
@@ -2147,13 +629,13 @@ void AgentAllotmentPage::updateRecordedSetups()
     if (!m_records_label) return;
     if (m_records_list) ClearLayout(m_records_list);
     if (!m_model) {
-        m_records_label->setText(tr("Queued agent setups: none"));
+        m_records_label->setText(tr("Agent allotments: none"));
         return;
     }
 
     const auto records = m_model->listAgentAllotmentRecords();
     if (records.empty()) {
-        m_records_label->setText(tr("Queued agent setups: none"));
+        m_records_label->setText(tr("Agent allotments: none"));
         return;
     }
 
@@ -2171,7 +653,7 @@ void AgentAllotmentPage::updateRecordedSetups()
         if (record.daily_limit > 0) {
             summary += tr(", daily guardrail %1").arg(QuicksilverUnits::formatWithUnit(m_display_unit, record.daily_limit, false, QuicksilverUnits::SeparatorStyle::ALWAYS));
         }
-        summary += record.policy_status == vault::AgentAllotmentPolicyStatus::Enforced ? tr(", policy enforced") : tr(", policy pending");
+        summary += record.stopped_time == 0 ? tr(", Co-signed by this vault") : tr(", Stopped");
         if (!record.funding_address.empty()) {
             summary += tr(", funding address %1").arg(QString::fromStdString(record.funding_address));
         }
@@ -2194,18 +676,18 @@ void AgentAllotmentPage::updateRecordedSetups()
             funding_state->setProperty("class", QStringLiteral("launchCapabilityState"));
             row_layout->addWidget(funding_state);
 
-            const bool policy_enforced{record.policy_status == vault::AgentAllotmentPolicyStatus::Enforced};
-            auto* policy_state = new QLabel(policy_enforced ? tr("Policy enforced") : tr("Policy pending"), row);
+            const bool stopped{record.stopped_time != 0};
+            auto* policy_state = new QLabel(stopped ? tr("Stopped") : tr("Co-signed by this vault"), row);
             policy_state->setObjectName(QStringLiteral("agentAllotmentPolicyState"));
             policy_state->setProperty("class", QStringLiteral("launchCapabilityState"));
-            policy_state->setToolTip(policy_enforced ? tr("This setup has an active child-key policy backend.") : tr("Child-key creation and limit enforcement are not active for this setup yet."));
+            policy_state->setToolTip(stopped ? tr("This allotment is stopped.") : tr("This vault co-signs spends from this allotment."));
             row_layout->addWidget(policy_state);
 
-            const QString funding_text = funding_available <= 0 ? tr("%1 awaits funding up to %2. Policy integration remains pending.")
+            const QString funding_text = funding_available <= 0 ? tr("%1 awaits funding up to %2.")
                                                                       .arg(QString::fromStdString(record.label), formatted_limit) :
-                                         funding_confirmed ? tr("%1 has confirmed funding at its reserved address. Policy integration remains pending.")
+                                         funding_confirmed ? tr("%1 has confirmed funding at its reserved address.")
                                                                  .arg(QString::fromStdString(record.label)) :
-                                                             tr("%1 has %2 of %3 at its reserved address; %4 remains. Policy integration remains pending.")
+                                                             tr("%1 has %2 of %3 at its reserved address; %4 remains.")
                                                                  .arg(QString::fromStdString(record.label), formatted_available, formatted_limit, formatted_remaining);
             auto* row_label = MakeMutedLabel(funding_text, row);
             row_label->setObjectName(QStringLiteral("agentAllotmentFundingRowLabel"));
@@ -2213,9 +695,11 @@ void AgentAllotmentPage::updateRecordedSetups()
 
             auto* fund_button = new QPushButton(funding_confirmed ? tr("Funding complete") : (funding_available > 0 ? tr("Fund remaining") : tr("Fund setup")), row);
             fund_button->setObjectName(QStringLiteral("agentAllotmentFundSetupButton"));
-            fund_button->setProperty("class", QStringLiteral("secondaryActionButton"));
-            fund_button->setEnabled(!funding_confirmed);
-            fund_button->setToolTip(funding_confirmed ? tr("This setup's reserved address has at least the requested funding amount.") : tr("Prefills the transfer screen with this setup's reserved vault funding address and remaining requested funding amount."));
+            fund_button->setProperty("class", QStringLiteral("benchQuiet"));
+            fund_button->setEnabled(!funding_confirmed && !stopped);
+            fund_button->setToolTip(stopped ? tr("This allotment is stopped. Create a new allotment to fund the agent again.") :
+                                    funding_confirmed ? tr("This setup's reserved address has at least the requested funding amount.") :
+                                                        tr("Prefills the transfer screen with this setup's reserved vault funding address and remaining requested funding amount."));
             row_layout->addWidget(fund_button);
 
             const QString address = QString::fromStdString(record.funding_address);
@@ -2233,45 +717,63 @@ void AgentAllotmentPage::updateRecordedSetups()
             handoff_layout->setContentsMargins(0, 0, 0, 0);
             handoff_layout->setSpacing(10);
 
-            const QString handoff_text = funding_confirmed ? tr("Copy a gateway bundle for this funded setup. The bundle includes the policy request, reserved funding key, and current spendable outputs.") : tr("Policy request export becomes available after the reserved address has the requested funding.");
+            const QString handoff_text = funding_confirmed ? tr("Copy a co-sign bundle for this funded setup. The bundle includes the policy request, the agent's key, and current spendable outputs.") : tr("Policy request export becomes available after the reserved address has the requested funding.");
             auto* handoff_label = MakeMutedLabel(handoff_text, handoff_row);
             handoff_label->setObjectName(QStringLiteral("agentAllotmentPolicyHandoffLabel"));
             handoff_layout->addWidget(handoff_label, 1);
 
             auto* copy_policy_button = new QPushButton(tr("Copy agent bundle"), handoff_row);
             copy_policy_button->setObjectName(QStringLiteral("agentAllotmentCopyPolicyButton"));
-            copy_policy_button->setProperty("class", QStringLiteral("secondaryActionButton"));
+            copy_policy_button->setProperty("class", QStringLiteral("benchQuiet"));
             copy_policy_button->setEnabled(funding_confirmed);
-            copy_policy_button->setToolTip(funding_confirmed ? tr("Copies a JSON policy, key, and funding-output bundle for the Agent Allotment Gateway handoff.") : tr("Fund this setup before copying a policy request."));
+            copy_policy_button->setToolTip(funding_confirmed ? tr("Copies a JSON policy, agent key, and funding-output bundle.") : tr("Fund this setup before copying a policy request."));
             handoff_layout->addWidget(copy_policy_button);
+
+            auto* stop_button = new QPushButton(tr("Stop"), handoff_row);
+            stop_button->setObjectName(QStringLiteral("agentAllotmentStopButton"));
+            stop_button->setProperty("class", QStringLiteral("benchQuiet"));
+            stop_button->setEnabled(!stopped);
+            handoff_layout->addWidget(stop_button);
+            connect(stop_button, &QPushButton::clicked, this, [this, id = QString::fromStdString(record.id)] {
+                auto* box = new QMessageBox(QMessageBox::Question, tr("Stop agent allotment"),
+                    tr("Stop this allotment? This vault will refuse every later spend request from this agent. This cannot be undone; create a new allotment to fund the agent again."),
+                    QMessageBox::Yes | QMessageBox::Cancel, this);
+                box->setObjectName(QStringLiteral("agentAllotmentStopConfirmation"));
+                box->setDefaultButton(QMessageBox::Cancel);
+                QPointer<VaultModel> model(m_model);
+                connect(box, &QMessageBox::finished, this, [this, model, id](int result) {
+                    if (result != QMessageBox::Yes || !model || m_model != model) return;
+                    if (!model->stopAgentAllotment(id)) {
+                        m_state_label->setText(tr("Could not stop this agent allotment."));
+                        return;
+                    }
+                    updateRecordedSetups();
+                });
+                GUIUtil::ShowModalDialogAsynchronously(box);
+            });
 
             auto* save_receipts_button = new QPushButton(tr("Save receipts"), handoff_row);
             save_receipts_button->setObjectName(QStringLiteral("agentAllotmentSaveFundingReceiptsButton"));
-            save_receipts_button->setProperty("class", QStringLiteral("secondaryActionButton"));
+            save_receipts_button->setProperty("class", QStringLiteral("benchQuiet"));
             save_receipts_button->setEnabled(funding_confirmed);
             save_receipts_button->setToolTip(funding_confirmed ? tr("Writes this setup's current spendable funding outputs into the local quicksilver-agent receipt inbox.") : tr("Fund this setup before saving funding receipts."));
             handoff_layout->addWidget(save_receipts_button);
 
             auto* copy_recovery_button = new QPushButton(tr("Copy recovery import"), handoff_row);
             copy_recovery_button->setObjectName(QStringLiteral("agentAllotmentCopyRecoveryScanButton"));
-            copy_recovery_button->setProperty("class", QStringLiteral("secondaryActionButton"));
+            copy_recovery_button->setProperty("class", QStringLiteral("benchQuiet"));
             copy_recovery_button->setToolTip(tr("Copies a scantxoutset-to-importrecovery command for recovering spendable outputs at this setup's funding address."));
             handoff_layout->addWidget(copy_recovery_button);
 
             connect(copy_policy_button, &QPushButton::clicked, this, [this, record, funding_available] {
                 if (!m_model) return;
-                const QString policy_request{m_model->agentAllotmentPolicyRequest(record, funding_available)};
-                const auto bundle{m_model->agentAllotmentPolicyBundle(policy_request)};
-                if (!bundle) {
-                    if (m_state_label) {
-                        m_state_label->setText(tr("Agent bundle export failed: %1").arg(QString::fromStdString(util::ErrorString(bundle).original)));
-                    }
-                    return;
-                }
-                QApplication::clipboard()->setText(QString::fromStdString(bundle->bundle_json));
-                if (m_state_label) {
-                    m_state_label->setText(tr("Agent bundle copied with current spendable outputs."));
-                }
+                QPointer<AgentAllotmentPage> page(this);
+                QPointer<VaultModel> model(m_model);
+                model->requestUnlock([page, model, record, funding_available](std::shared_ptr<VaultModel::UnlockContext> unlock) {
+                    if (!page || !model || page->m_model != model || !unlock->isValid()) return;
+                    page->copyAgentBundle(record, funding_available);
+                });
+
             });
             connect(save_receipts_button, &QPushButton::clicked, this, [this, record, funding_available] {
                 if (!m_model) return;
@@ -2303,11 +805,9 @@ void AgentAllotmentPage::updateRecordedSetups()
                 }
 
                 QApplication::clipboard()->setText(AgentPaymentReceiptScanCommand(AgentPaymentReceiptInboxDirectory()));
-                const bool imported{refreshStoredAgentUtxos(/*requested=*/true)};
                 if (m_state_label) {
-                    m_state_label->setText(imported ?
-                                               tr("Agent funding receipts saved and imported: %1. External-agent scan command copied.").arg(QString::number(bundle->funding_outputs.size())) :
-                                               tr("Agent funding receipts saved, but the durable output refresh failed. See the UTXO status. External-agent scan command copied."));
+                    m_state_label->setText(tr("Agent funding receipts saved: %1. External-agent scan command copied.")
+                        .arg(QString::number(bundle->funding_outputs.size())));
                 }
             });
             connect(copy_recovery_button, &QPushButton::clicked, this, [this, address] {
@@ -2319,7 +819,7 @@ void AgentAllotmentPage::updateRecordedSetups()
             m_records_list->addWidget(handoff_row);
         }
     }
-    m_records_label->setText(tr("Queued agent setups: %1").arg(summaries.join(QStringLiteral("; "))));
+    m_records_label->setText(tr("Agent allotments: %1").arg(summaries.join(QStringLiteral("; "))));
 }
 
 void AgentAllotmentPage::updateCreateState()
@@ -2337,7 +837,7 @@ void AgentAllotmentPage::updateCreateState()
     if (!m_model) {
         m_state_label->setText(tr("Open a vault before recording an agent setup."));
     } else if (ready_to_record) {
-        m_state_label->setText(tr("Reserves a vault funding address and marks agent policy integration pending."));
+        m_state_label->setText(tr("Creates an allotment and reserves its vault funding address."));
     } else {
         m_state_label->setText(tr("Enter a name, funding amount, and risk acceptance before recording setup."));
     }
@@ -2350,13 +850,13 @@ void AgentAllotmentPage::updatePolicyReviewState()
     const bool has_request = !m_policy_request_edit->toPlainText().trimmed().isEmpty();
     m_policy_review_button->setEnabled(m_model && has_request);
     if (!m_model) {
-        SetLabelClass(m_policy_review_state, QStringLiteral("policyReviewIdle"));
+        SetLabelClass(m_policy_review_state, QStringLiteral("muted"));
         m_policy_review_state->setText(tr("Open a vault before reviewing a policy request."));
     } else if (has_request) {
         SetLabelClass(m_policy_review_state, QStringLiteral("policyReviewReady"));
         m_policy_review_state->setText(tr("Ready to review pasted policy request."));
     } else {
-        SetLabelClass(m_policy_review_state, QStringLiteral("policyReviewIdle"));
+        SetLabelClass(m_policy_review_state, QStringLiteral("muted"));
         m_policy_review_state->setText(tr("Paste a policy request to review."));
     }
 }
@@ -2372,72 +872,130 @@ void AgentAllotmentPage::updatePaymentReceiptReviewState()
         SetLabelClass(m_payment_receipt_state, QStringLiteral("policyReviewReady"));
         m_payment_receipt_state->setText(tr("Ready to review pasted payment receipt."));
     } else {
-        SetLabelClass(m_payment_receipt_state, QStringLiteral("policyReviewIdle"));
+        SetLabelClass(m_payment_receipt_state, QStringLiteral("muted"));
         m_payment_receipt_state->setText(tr("Paste a payment receipt to review funding output metadata."));
     }
 }
 
-void AgentAllotmentPage::updateAgentSpendCommandState()
+void AgentAllotmentPage::copyAgentBundle(const vault::AgentAllotmentRecord& record, CAmount funding_available)
 {
-    if (!m_copy_spend_command_button || !m_sign_spend_button || !m_spend_bundle_edit || !m_spend_destination_edit || !m_spend_amount || !m_spent_today || !m_spend_command_state) return;
-
-    bool spend_valid = false;
-    const CAmount spend_amount = m_spend_amount->value(&spend_valid);
-    bool spent_today_valid = true;
-    if (!AmountFieldEmpty(m_spent_today)) {
-        m_spent_today->value(&spent_today_valid);
+    const QString policy_request{m_model->agentAllotmentPolicyRequest(record, funding_available)};
+    const auto bundle{m_model->agentAllotmentPolicyBundle(policy_request)};
+    if (!bundle) {
+        m_state_label->setText(QString::fromStdString(util::ErrorString(bundle).original));
+        return;
     }
-    const bool has_bundle = !m_spend_bundle_edit->toPlainText().trimmed().isEmpty();
-    const bool has_destination = !m_spend_destination_edit->text().trimmed().isEmpty();
-    const bool ready = has_bundle && has_destination && spend_valid && spend_amount > 0 && spent_today_valid;
-
-    m_copy_spend_command_button->setEnabled(ready && !m_spend_in_flight);
-    m_sign_spend_button->setEnabled(ready && !m_spend_in_flight);
-    if (m_cancel_spend_button) m_cancel_spend_button->setEnabled(m_spend_in_flight);
-    if (m_spend_bundle_edit) m_spend_bundle_edit->setReadOnly(m_spend_in_flight);
-    if (m_spend_destination_edit) m_spend_destination_edit->setReadOnly(m_spend_in_flight);
-    if (m_spend_amount) m_spend_amount->setEnabled(!m_spend_in_flight);
-    if (m_spent_today) m_spent_today->setEnabled(!m_spend_in_flight);
-    if (m_spend_in_flight) return;
-    if (ready) {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewReady"));
-        m_spend_command_state->setText(tr("Ready to sign locally or copy a signbundle command."));
-    } else {
-        SetLabelClass(m_spend_command_state, QStringLiteral("policyReviewIdle"));
-        m_spend_command_state->setText(tr("Paste an agent bundle, destination, and spend amount to sign locally or copy a sign command."));
-    }
+    QApplication::clipboard()->setText(QString::fromStdString(bundle->bundle_json));
+    m_state_label->setText(tr("Agent bundle copied with current spendable outputs."));
 }
 
-void AgentAllotmentPage::updateSignedSpendReviewState()
+void AgentAllotmentPage::updateCosignState()
 {
-    if (!m_signed_spend_review_button || !m_signed_spend_edit || !m_signed_spend_state) return;
-
-    m_signed_spend_review_valid = false;
-    const bool has_spend = !m_signed_spend_edit->toPlainText().trimmed().isEmpty();
-    m_signed_spend_review_button->setEnabled(has_spend);
-    if (m_signed_spend_copy_relay_button) m_signed_spend_copy_relay_button->setEnabled(false);
-    if (m_signed_spend_copy_stored_peer_command_button) m_signed_spend_copy_stored_peer_command_button->setEnabled(false);
-    updatePeerRelayCommandState();
-    if (m_signed_spend_submit_button) m_signed_spend_submit_button->setEnabled(false);
-    if (has_spend) {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewReady"));
-        m_signed_spend_state->setText(tr("Ready to review pasted signed spend output."));
-    } else {
-        SetLabelClass(m_signed_spend_state, QStringLiteral("policyReviewIdle"));
-        m_signed_spend_state->setText(tr("Paste signed spend output from the agent gateway to review."));
-    }
+    const bool running = m_model && m_model->canCosignAgentAllotmentSpend();
+    const bool reviewed = !m_reviewed_request.isEmpty() && m_reviewed_request == m_cosign_edit->toPlainText();
+    const bool has_request = !m_cosign_edit->toPlainText().trimmed().isEmpty();
+    m_cosign_review_button->setEnabled(m_model && has_request);
+    m_cosign_refuse_button->setEnabled(has_request);
+    m_cosign_button->setEnabled(running && reviewed);
+    m_cosign_button->setToolTip(running ? tr("Co-signs this reviewed request and broadcasts it through this desktop's node.") :
+        tr("Turn on Consensus to co-sign: this desktop broadcasts the spend through its own node."));
 }
 
-void AgentAllotmentPage::updatePeerRelayCommandState()
+void AgentAllotmentPage::reviewAgentSpendRequest()
 {
-    if (!m_relay_peer_edit) return;
+    if (!m_model) return;
+    m_reviewed_request.clear();
+    ++m_cosign_generation;
+    const QString pasted = m_cosign_edit->toPlainText();
+    const QString encoded = PastedSpendRequest(pasted);
+    PartiallySignedQuicksilverTransaction request;
+    std::string error;
+    auto refuse_review = [this](const QString& message) {
+        SetLabelClass(m_cosign_state, QStringLiteral("policyReviewError"));
+        m_cosign_state->setText(message);
+        updateCosignState();
+    };
+    if (!DecodeBase64PSQT(request, encoded.toStdString(), error)) {
+        refuse_review(QString::fromStdString(error));
+        return;
+    }
+    if (!request.tx || request.inputs.empty() || request.tx->vout.empty()) {
+        refuse_review(tr("Agent spend request has no inputs or outputs."));
+        return;
+    }
+    const auto records = m_model->listAgentAllotmentRecords();
+    const vault::AgentAllotmentRecord* allotment = nullptr;
+    CAmount input_total{0};
+    for (const auto& input : request.inputs) {
+        const auto found = std::find_if(records.begin(), records.end(), [&](const auto& record) {
+            return input.witness_utxo.scriptPubKey == GetScriptForDestination(DecodeDestination(record.funding_address));
+        });
+        if (found == records.end() || (allotment && allotment->id != found->id)) {
+            refuse_review(tr("Agent spend request must spend outputs from one allotment in this vault."));
+            return;
+        }
+        allotment = &*found;
+        if (!MoneyRange(input.witness_utxo.nValue) || !MoneyRange(input_total + input.witness_utxo.nValue)) {
+            refuse_review(tr("Agent spend request has an invalid input amount."));
+            return;
+        }
+        input_total += input.witness_utxo.nValue;
+    }
+    const auto format = [this](CAmount value) {
+        return QuicksilverUnits::formatWithUnit(m_display_unit, value, false, QuicksilverUnits::SeparatorStyle::ALWAYS);
+    };
+    QStringList details{tr("Allotment: %1").arg(QString::fromStdString(allotment->label)),
+                        tr("Input total: %1").arg(format(input_total))};
+    const CScript funding_script = GetScriptForDestination(DecodeDestination(allotment->funding_address));
+    CAmount change{0};
+    CAmount output_total{0};
+    for (const auto& output : request.tx->vout) {
+        if (!MoneyRange(output.nValue) || !MoneyRange(output_total + output.nValue)) {
+            refuse_review(tr("Agent spend request has an invalid output amount."));
+            return;
+        }
+        output_total += output.nValue;
+        CTxDestination destination;
+        if (!ExtractDestination(output.scriptPubKey, destination)) {
+            refuse_review(tr("Agent spend request has an output without an address."));
+            return;
+        }
+        details << tr("Output: %1 — %2").arg(QString::fromStdString(EncodeDestination(destination)), format(output.nValue));
+        if (output.scriptPubKey == funding_script) change += output.nValue;
+    }
+    if (output_total != input_total) {
+        refuse_review(tr("Agent spend request's output total does not match its input total."));
+        return;
+    }
+    details << tr("Change back to the allotment: %1").arg(format(change));
+    const auto* context = m_model->node().context();
+    const QString age = context && context->chainman ?
+        QString::number(int64_t{m_model->node().getNumBlocks()} - request.tx->nAnchorHeight) : tr("unavailable");
+    details << tr("Anchor age: %1 blocks out of %2 maximum").arg(age, QString::number(Params().GetConsensus().nMaxAnchorAge));
+    SetLabelClass(m_cosign_state, QStringLiteral("policyReviewValid"));
+    m_cosign_state->setText(details.join(QLatin1Char('\n')));
+    m_reviewed_request = pasted;
+    updateCosignState();
+}
 
-    const QString peer = m_relay_peer_edit->text().trimmed();
-    const bool has_peer = !peer.isEmpty() && !ContainsSpace(peer);
-    if (m_copy_add_peer_command_button) m_copy_add_peer_command_button->setEnabled(has_peer);
-    if (m_copy_discover_peers_command_button) m_copy_discover_peers_command_button->setEnabled(peer.isEmpty() || has_peer);
-    if (m_import_node_peers_button) m_import_node_peers_button->setEnabled(m_model != nullptr);
-    if (m_copy_sync_headers_command_button) m_copy_sync_headers_command_button->setEnabled(peer.isEmpty() || has_peer);
-    if (m_signed_spend_copy_peer_command_button) m_signed_spend_copy_peer_command_button->setEnabled(m_signed_spend_review_valid && has_peer);
-    if (m_signed_spend_relay_peer_button) m_signed_spend_relay_peer_button->setEnabled(!m_peer_relay_in_flight && m_signed_spend_review_valid && (peer.isEmpty() || has_peer));
+void AgentAllotmentPage::cosignAgentSpendRequest()
+{
+    if (!m_model || m_reviewed_request.isEmpty() || m_reviewed_request != m_cosign_edit->toPlainText() ||
+        !m_model->canCosignAgentAllotmentSpend()) return;
+    const QString reviewed = m_reviewed_request;
+    const quint64 generation = m_cosign_generation;
+    QPointer<AgentAllotmentPage> page(this);
+    QPointer<VaultModel> model(m_model);
+    m_model->requestUnlock([page, model, reviewed, generation](std::shared_ptr<VaultModel::UnlockContext> unlock) {
+        if (!page || !model || page->m_model != model || !unlock->isValid() ||
+            generation != page->m_cosign_generation ||
+            reviewed != page->m_reviewed_request || reviewed != page->m_cosign_edit->toPlainText()) return;
+        const auto result = model->cosignAgentAllotmentSpend(PastedSpendRequest(reviewed));
+        page->m_reviewed_request.clear();
+        SetLabelClass(page->m_cosign_state, result ? QStringLiteral("policyReviewValid") : QStringLiteral("policyReviewError"));
+        page->m_cosign_state->setText(result ? QString::fromStdString((*result)->GetHash().ToString()) :
+            QString::fromStdString(util::ErrorString(result).original));
+        page->updateCosignState();
+        page->updateRecordedSetups();
+    });
 }

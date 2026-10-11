@@ -51,7 +51,7 @@ autodetection.
    cookie (normally through the `debian-tor` group; see the authentication
    section below).
 4. Start Quicksilver with `-onion=127.0.0.1:9050`, or enable the separate Tor
-   SOCKS5 proxy at `127.0.0.1:9050` in **Controls > Options > Network** and
+   SOCKS5 proxy at `127.0.0.1:9050` in **Settings > Options > Network** and
    restart Quicksilver.
 
 On `quicksilver-daemon`, `-onion=` alone leaves address discovery on, so the node
@@ -86,7 +86,7 @@ things Quicksilver needs are the same, but they are configured differently.
    permission settings; leave them out on Windows. Restart `tor.exe`.
 
 3. Start Quicksilver with `-onion=127.0.0.1:9050`, or enable the separate Tor
-   SOCKS5 proxy at `127.0.0.1:9050` in **Controls > Options > Network** and
+   SOCKS5 proxy at `127.0.0.1:9050` in **Settings > Options > Network** and
    restart Quicksilver.
 
 On `quicksilver-daemon`, `-onion=` alone leaves address discovery on, so the node
@@ -116,6 +116,14 @@ The node's Tor exits with the node.
 - `-bundledtorpath=<path>` names the `tor` executable. By default the desktop
   looks for one beside its own executable, then on `PATH`.
 
+The Windows installer ships the Tor Project's `tor.exe`, from the pinned Tor
+Expert Bundle and unmodified, beside `quicksilver.exe`, with its licenses in
+`LICENSE-tor.txt`. If the desktop cannot find a `tor` executable, it does not
+start the node: it opens vault-only and the Network page says Tor is missing.
+Place one beside `quicksilver.exe` and enable Consensus again. A change to
+`PATH` or `quicksilver.conf` (such as `bundledtorpath=` or `bundledtor=0`) is
+read at launch, so restart Quicksilver after it.
+
 On Windows, a source checkout can fetch the pinned Tor Expert Bundle and print
 the resulting executable path with:
 
@@ -125,7 +133,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File contrib\tor\fetch-tor.ps1
 
 The bypass applies only to that PowerShell process; it does not change the
 user's or machine's execution policy. The script verifies the archive's pinned
-SHA-256 before extracting it under `build\tor`. See the
+SHA-256 before extracting it under `build\tor`, then `tor.exe`'s own pinned
+SHA-256. Building the installer checks `tor.exe` against that pin again. See the
 [Windows build guide](build-windows-msvc.md#4-tor-desktop-only) for details.
 
 **Where things are:** `<datadir>/tor/torrc` (regenerated at every start — edits

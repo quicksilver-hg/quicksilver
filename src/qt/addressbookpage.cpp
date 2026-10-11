@@ -7,6 +7,7 @@
 #include <qt/forms/ui_addressbookpage.h>
 
 #include <qt/addresstablemodel.h>
+#include <qt/benchpanel.h>
 #include <qt/csvmodelwriter.h>
 #include <qt/editaddressdialog.h>
 #include <qt/guiutil.h>
@@ -14,6 +15,8 @@
 #include <qt/quicksilverstyle.h>
 
 #include <QIcon>
+#include <QLayout>
+#include <QPushButton>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPointer>
@@ -68,16 +71,39 @@ AddressBookPage::AddressBookPage(const PlatformStyle *platformStyle, Mode _mode,
 {
     ui->setupUi(this);
 
+    // The bench grammar of the pages: the list, its filter and its commands in
+    // one titled panel, a note above the list, quiet commands.
+    const BenchPanel::Parts panel = BenchPanel::Make(QStringLiteral("addressBookPanel"),
+        tab == SendingTab ? tr("Sending addresses") : tr("Receiving addresses"), this);
+    while (QLayoutItem* item = ui->verticalLayout->takeAt(0)) {
+        if (QWidget* widget = item->widget()) {
+            panel.body->addWidget(widget, widget == ui->tableView ? 1 : 0);
+            delete item;
+        } else if (QLayout* layout = item->layout()) {
+            layout->setParent(nullptr);
+            panel.body->addLayout(layout);
+        } else {
+            panel.body->addItem(item);
+        }
+    }
+    ui->verticalLayout->addWidget(panel.frame, 1);
+    ui->labelExplanation->setProperty("class", QStringLiteral("benchNote"));
+    for (QPushButton* button : findChildren<QPushButton*>()) {
+        button->setProperty("class", QStringLiteral("benchQuiet"));
+    }
+
     if (!platformStyle->getImagesOnButtons()) {
         ui->newAddress->setIcon(QIcon());
         ui->copyAddress->setIcon(QIcon());
         ui->deleteAddress->setIcon(QIcon());
         ui->exportButton->setIcon(QIcon());
     } else {
-        ui->newAddress->setIcon(platformStyle->ColorIcon(":/icons/add", QuicksilverStyle::Color(QuicksilverStyle::Token::Teal)));
-        ui->copyAddress->setIcon(platformStyle->ColorIcon(":/icons/editcopy", QuicksilverStyle::Color(QuicksilverStyle::Token::SilverMuted)));
-        ui->deleteAddress->setIcon(platformStyle->ColorIcon(":/icons/remove", QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarBright)));
-        ui->exportButton->setIcon(platformStyle->ColorIcon(":/icons/export", QuicksilverStyle::Color(QuicksilverStyle::Token::Amber)));
+        // One quiet tint for every command, as on the pages.
+        const QColor tint = QuicksilverStyle::Color(QuicksilverStyle::Token::RailText);
+        ui->newAddress->setIcon(platformStyle->ColorIcon(":/icons/add", tint));
+        ui->copyAddress->setIcon(platformStyle->ColorIcon(":/icons/editcopy", tint));
+        ui->deleteAddress->setIcon(platformStyle->ColorIcon(":/icons/remove", tint));
+        ui->exportButton->setIcon(platformStyle->ColorIcon(":/icons/export", tint));
     }
 
     if (mode == ForSelection) {

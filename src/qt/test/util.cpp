@@ -10,6 +10,8 @@
 #include <QDialog>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QStyle>
+#include <QStyleFactory>
 #include <QString>
 #include <QTest>
 #include <QTimer>
@@ -80,4 +82,21 @@ void ExpectModalWithoutNestedEventLoop(const char* class_name, const std::functi
     QVERIFY2(!nested_loop, "dialog used QDialog::exec() (nested event loop)");
     QVERIFY2(saw_modal, qPrintable(QStringLiteral("expected visible modal %1, got %2")
                                        .arg(QString::fromUtf8(class_name), got_class)));
+}
+
+RestoreApplicationStyle::RestoreApplicationStyle()
+    : m_style{qApp->style()->objectName()},
+      m_palette{qApp->palette()},
+      m_stylesheet{qApp->styleSheet()},
+      m_base_style{qApp->property("quicksilverBaseStyle")}
+{
+}
+
+RestoreApplicationStyle::~RestoreApplicationStyle()
+{
+    qApp->setStyleSheet(QString());
+    qApp->setStyle(QStyleFactory::create(m_style));
+    qApp->setPalette(m_palette);
+    qApp->setStyleSheet(m_stylesheet);
+    qApp->setProperty("quicksilverBaseStyle", m_base_style);
 }

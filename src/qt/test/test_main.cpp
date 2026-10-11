@@ -23,7 +23,6 @@
 
 #ifdef ENABLE_VAULT
 #include <qt/test/addressbooktests.h>
-#include <qt/test/vaultsummarytests.h>
 #include <qt/test/vaulttests.h>
 #endif // ENABLE_VAULT
 
@@ -128,7 +127,6 @@ int main(int argc, char* argv[])
             {&URITests::staticMetaObject, [&] { return std::make_unique<URITests>(); }},
             {&RPCNestedTests::staticMetaObject, [&] { return std::make_unique<RPCNestedTests>(app.node()); }},
 #ifdef ENABLE_VAULT
-            {&VaultSummaryTests::staticMetaObject, [&] { return std::make_unique<VaultSummaryTests>(); }},
             {&VaultTests::staticMetaObject, [&] { return std::make_unique<VaultTests>(app.node()); }},
             {&AddressBookTests::staticMetaObject, [&] { return std::make_unique<AddressBookTests>(app.node()); }},
 #endif

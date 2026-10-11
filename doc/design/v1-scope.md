@@ -39,15 +39,15 @@ The 2026-07-29 repositioning described a gateway with six components. Measured a
 
 | component | status | what actually exists |
 | --- | --- | --- |
-| policy engine | **partial** | `CheckAllotmentSpend` enforces a funding limit and a daily limit (`allotmentpolicy.cpp`), applied by the `checkpolicy` and `checkbundle` commands |
-| capability issuance | **partial** | the vault exports a policy-plus-funding-key bundle (`CVault::ExportAgentAllotmentPolicyBundle`). This is a key handover, not a capability token |
-| revocation | **absent** | no revocation path exists. The only way to withdraw an agent's authority is for the user to sweep the funds back with the parent key |
+| policy engine | **partial** | `CheckAllotmentSpend` applies a funding limit and a daily limit (`allotmentpolicy.cpp`) through the `checkpolicy`, `checkbundle` and `signbundle` commands. It is the agent's own check; the vault does not enforce a numeric limit |
+| capability issuance | **partial** | the allotment is a taproot output, `tr(V,multi_a(2,A,C))`. The vault keeps the reclaim key V and the cosigner key C, and its bundle (`CVault::ExportAgentAllotmentPolicyBundle`) gives the agent only A, which cannot spend alone. This is not a capability token |
+| revocation | **shipped** | Stop (`CVault::StopAgentAllotment`) makes the vault refuse every later co-signature, so the agent can produce no new spend. A spend the vault has already co-signed and broadcast still confirms. The vault takes the remaining coins back alone, by key path with V, at the cost of one proof |
 | durable job queue | **absent** | nothing |
 | receipts | **shipped** | `allotmentstore` persists payment receipts and their activities, and `checkbundle` merges them |
 | authenticated API distinct from RPC | **absent** | `quicksilver-agent` is a command-line tool. It does not listen |
 
-So the gateway is roughly one third built, and the third that is built is the part that
-needed no new trust model.
+So the gateway is roughly half built, and the half that is built needed no listener and
+no party beyond the vault and the agent.
 
 ### What may and may not be claimed
 
@@ -56,15 +56,18 @@ before signing and verifies the returned proof, so the work can be done by a par
 cannot alter or steal the payment. This is backed by existing code — see
 [delegation.md](delegation.md) §1.
 
-**Must never be said: that limits are guarantees.** Keys are shared with the agent by the
-user's own explicit decision, so a limit is client-side policy that the agent's own
-software applies to itself. An agent that ignores its limits is not stopped by anything.
-The interface says this in as many words — the word *guarantee* appears once on the agent
+**Must never be said: that limits are guarantees.** The script does not contain a limit,
+and the vault does not enforce one: it co-signs any request for an active allotment that
+passes its checks. A limit is the agent's own check, applied by its own software, and an
+agent that ignores it is stopped only when the user stops the allotment. Stop binds only
+spends the vault has not already signed. Do not call it a protocol guarantee either. The
+interface says this in as many words — the word *guarantee* appears once on the agent
 screen, negated (`src/qt/agentallotmentpage.cpp`) — and it must stay that way.
 
 The honest summary of what a user gets: a funded allotment whose spending the user can
-review, with receipts, and whose blast radius is bounded by how much was funded into it —
-not by a limit the protocol enforces.
+review, with receipts. A stolen agent key spends nothing on its own, because every spend
+needs the vault's co-signature. Once the vault has co-signed, the exposure is that
+transaction. The protocol still does not enforce the numeric limit.
 
 **Trigger for revisiting:** revocation is the component whose absence matters most,
 because it is the difference between "I have decided to stop this agent" and "I must move

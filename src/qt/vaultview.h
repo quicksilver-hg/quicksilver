@@ -16,7 +16,6 @@ class ClientModel;
 class MineMintPage;
 class MiningModel;
 class NetworkPage;
-class OverviewPage;
 class PlatformStyle;
 class ReceiveCoinsDialog;
 class SendCoinsDialog;
@@ -25,6 +24,10 @@ class TransactionView;
 class VaultModel;
 class AddressBookPage;
 class AgentAllotmentPage;
+
+namespace interfaces {
+struct MiningStatus;
+}
 
 QT_BEGIN_NAMESPACE
 class QModelIndex;
@@ -50,11 +53,8 @@ public:
     */
     void setClientModel(ClientModel *clientModel);
     VaultModel* getVaultModel() const noexcept { return vaultModel; }
-    void setBackupState(bool backup_done);
 
     bool handlePaymentRequest(const SendCoinsRecipient& recipient);
-
-    void showOutOfSyncWarning(bool fShow);
 
 private:
     ClientModel* clientModel{nullptr};
@@ -65,7 +65,6 @@ private:
     //!
     VaultModel* const vaultModel;
 
-    OverviewPage *overviewPage;
     AgentAllotmentPage* agentAllotmentPage{nullptr};
     MineMintPage* mineMintPage{nullptr};
     MiningModel* miningModel{nullptr};
@@ -82,8 +81,6 @@ private:
     const PlatformStyle *platformStyle;
 
 public Q_SLOTS:
-    /** Switch to overview (home) page */
-    void gotoOverviewPage();
     /** Switch to history (transactions) page */
     void gotoHistoryPage();
     /** Switch to mine/mint page */
@@ -129,19 +126,16 @@ private Q_SLOTS:
 
 Q_SIGNALS:
     void setPrivacy(bool privacy);
-    void transactionClicked();
     void coinsSent();
     void solverSettingsRequested();
     /**  Fired when a message should be reported to the user */
     void message(const QString &title, const QString &message, unsigned int style);
     /** Encryption status of vault changed */
     void encryptionStatusChanged();
+    /** One reading from this vault's mining model. Same status the mine page shows. */
+    void miningStatusUpdated(const interfaces::MiningStatus& status);
     /** Notify that a new transaction appeared */
     void incomingTransaction(const QString& date, QuicksilverUnit unit, const CAmount& amount, const QString& type, const QString& address, const QString& label, const QString& vaultName);
-    /** Notify that the out of sync warning icon has been pressed */
-    void outOfSyncWarningClicked();
-    /** Request backup for this vault */
-    void backupRequested();
 };
 
 #endif // QUICKSILVER_QT_VAULTVIEW_H

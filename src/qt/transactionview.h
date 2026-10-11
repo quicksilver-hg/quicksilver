@@ -15,6 +15,7 @@
 
 class PlatformStyle;
 class TransactionDescDialog;
+class LedgerRows;
 class TransactionFilterProxy;
 class VaultModel;
 
@@ -67,6 +68,8 @@ protected:
 private:
     VaultModel *model{nullptr};
     TransactionFilterProxy *transactionProxyModel{nullptr};
+    //! Home's reading of the rows (F-451), over the filtered, sorted ones.
+    LedgerRows* m_ledger_rows{nullptr};
     QTableView *transactionView{nullptr};
 
     QComboBox *dateWidget;
@@ -90,6 +93,7 @@ private:
     const PlatformStyle* m_platform_style;
 
     QList<TransactionDescDialog*> m_opened_dialogs;
+    bool m_third_party_actions{false};
 
 private Q_SLOTS:
     void contextualMenu(const QPoint &);
@@ -104,6 +108,9 @@ private Q_SLOTS:
     void copyTxPlainText();
     void openThirdPartyTxUrl(QString url);
     void abandonTx();
+    //! Give Date and Type their content, Amount exactly its figures, and the
+    //! rest to Label.
+    void fitColumns();
 
 Q_SIGNALS:
     void doubleClicked(const QModelIndex&);

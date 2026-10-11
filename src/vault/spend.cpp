@@ -18,10 +18,14 @@
 #include <numeric>
 #include <policy/policy.h>
 #include <pow.h>
+#include <psqt.h>
+#include <script/interpreter.h>
 #include <primitives/transaction.h>
+#include <script/descriptor.h>
 #include <script/script.h>
 #include <script/signingprovider.h>
 #include <script/solver.h>
+#include <util/strencodings.h>
 #include <univalue.h>
 #include <util/check.h>
 #include <util/moneystr.h>
@@ -1503,6 +1507,22 @@ util::Result<CreatedTransactionResult> FundTransaction(CVault& vault, const CMut
     return res;
 }
 
+// The agent's key is the first key inside multi_a(2,A,C).
+static std::optional<XOnlyPubKey> AgentKeyFromFundingDescriptor(const std::string& funding_descriptor)
+{
+    const std::string marker{"multi_a(2,"};
+    const size_t marker_pos{funding_descriptor.find(marker)};
+    if (marker_pos == std::string::npos) return std::nullopt;
+    const size_t key_begin{marker_pos + marker.size()};
+    const size_t key_end{funding_descriptor.find(',', key_begin)};
+    if (key_end == std::string::npos || key_end == key_begin) return std::nullopt;
+    const std::vector<unsigned char> bytes{ParseHex(funding_descriptor.substr(key_begin, key_end - key_begin))};
+    if (bytes.size() != 32) return std::nullopt;
+    const XOnlyPubKey key{bytes};
+    if (!key.IsFullyValid()) return std::nullopt;
+    return key;
+}
+
 // Defined here rather than in vault.cpp: building the bundle needs AvailableCoins, and
 // vault including spend would close a vault -> spend -> vault cycle. Coin enumeration
 // belongs to the spend layer, so the definition lives where the dependency already points.
@@ -1516,8 +1536,8 @@ util::Result<AgentAllotmentPolicyBundle> CVault::ExportAgentAllotmentPolicyBundl
         return util::Error{Untranslated("Agent allotment policy request funding address is not valid for this chain.")};
     }
 
-    // IsMine and GetScriptPubKeyMans both read m_cached_spks. Callers are bare,
-    // so the lock is taken here and held through AvailableCoins / LockCoin.
+    // IsMine reads m_cached_spks. Callers are bare, so the lock is taken here and
+    // held through AvailableCoins / LockCoin.
     LOCK(cs_vault);
 
     if (!(IsMine(dest) & ISMINE_SPENDABLE)) {
@@ -1525,25 +1545,30 @@ util::Result<AgentAllotmentPolicyBundle> CVault::ExportAgentAllotmentPolicyBundl
     }
 
     const CScript funding_script{GetScriptForDestination(dest)};
-    std::unique_ptr<FlatSigningProvider> provider;
-    for (const auto spk_man : GetScriptPubKeyMans(funding_script)) {
-        const auto desc_spk_man{dynamic_cast<DescriptorScriptPubKeyMan*>(spk_man)};
-        if (!desc_spk_man) continue;
-        provider = desc_spk_man->GetPrivateSigningProvider(funding_script);
-        if (provider) break;
+    FlatSigningProvider parsed_keys;
+    std::string parse_error;
+    auto parsed{Parse(metadata->funding_descriptor, parsed_keys, parse_error, /*require_checksum=*/true)};
+    if (parsed.size() != 1) {
+        return util::Error{Untranslated("Agent allotment funding descriptor could not be parsed.")};
     }
+    std::shared_ptr<Descriptor> parsed_descriptor{std::move(parsed.at(0))};
+    VaultDescriptor stored_descriptor{parsed_descriptor, /*creation_time=*/0, /*range_start=*/0, /*range_end=*/0, /*next_index=*/0};
+    DescriptorScriptPubKeyMan* desc_spk_man{GetDescriptorScriptPubKeyMan(stored_descriptor)};
+    if (!desc_spk_man) {
+        return util::Error{Untranslated("Agent allotment funding descriptor is not in this vault.")};
+    }
+    const auto agent_xonly{AgentKeyFromFundingDescriptor(metadata->funding_descriptor)};
+    if (!agent_xonly) {
+        return util::Error{Untranslated("Agent allotment funding descriptor has no agent key.")};
+    }
+    std::unique_ptr<FlatSigningProvider> provider{desc_spk_man->GetPrivateSigningProvider(funding_script)};
     if (!provider) {
         return util::Error{Untranslated("Agent allotment policy request funding address key metadata is not available.")};
     }
 
-    const CKeyID key_id{GetKeyForDestination(*provider, dest)};
-    if (key_id.IsNull()) {
-        return util::Error{Untranslated("Agent allotment policy request funding address does not map to a single exportable key.")};
-    }
-
-    CKey funding_key;
-    if (!provider->GetKey(key_id, funding_key) || !funding_key.IsValid()) {
-        return util::Error{Untranslated("Agent allotment policy request funding private key is not available.")};
+    CKey agent_key;
+    if (!provider->GetKeyByXOnly(*agent_xonly, agent_key) || !agent_key.IsValid()) {
+        return util::Error{Untranslated("Agent allotment agent private key is not available.")};
     }
 
     std::vector<AgentAllotmentFundingOutput> funding_outputs;
@@ -1563,12 +1588,11 @@ util::Result<AgentAllotmentPolicyBundle> CVault::ExportAgentAllotmentPolicyBundl
         outpoints_to_lock.push_back(coin.outpoint);
     }
 
-    // From here the agent holds a key that signs for these outputs, so both sides can
-    // spend them. Lock them so ordinary coin selection in this vault cannot: keys are
-    // shared by the user's decision, but the two spenders do not have to race for the
-    // same coins. A collision is not a double-spend — it wastes a full grind, which is
-    // 50 seconds on a GPU and about 16 minutes on a CPU. Coin control still shows them
-    // as locked, so an explicit sweep remains possible.
+    // The vault can spend this output by key path. Lock it so ordinary coin selection
+    // does not spend the agent's allotment that way. Coin control can still select it,
+    // which is how the vault reclaims the output. A collision with the agent would not
+    // double-spend, but it would waste a full grind: 50 seconds on a GPU and about 16
+    // minutes on a CPU.
     if (!outpoints_to_lock.empty()) {
         if (!RunWithinTxn(GetDatabase(), /*process_desc=*/"lock agent funding outputs",
                           [&](VaultBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(cs_vault) {
@@ -1589,15 +1613,17 @@ util::Result<AgentAllotmentPolicyBundle> CVault::ExportAgentAllotmentPolicyBundl
     AgentAllotmentPolicyBundle bundle;
     bundle.metadata = *metadata;
     bundle.policy_request = request_json;
-    bundle.funding_secret = EncodeSecret(funding_key);
+    bundle.agent_secret = EncodeSecret(agent_key);
+    bundle.funding_descriptor = metadata->funding_descriptor;
     bundle.funding_outputs = funding_outputs;
 
     UniValue bundle_json{UniValue::VOBJ};
-    bundle_json.pushKV("type", "quicksilver.agent_allotment_key_bundle");
+    bundle_json.pushKV("type", "quicksilver.agent_allotment_cosign_bundle");
     bundle_json.pushKV("version", 1);
     bundle_json.pushKV("policy_request", policy);
     bundle_json.pushKV("funding_address", metadata->funding_address);
-    bundle_json.pushKV("funding_secret_wif", bundle.funding_secret);
+    bundle_json.pushKV("funding_descriptor", metadata->funding_descriptor);
+    bundle_json.pushKV("agent_secret_wif", bundle.agent_secret);
     UniValue funding_outputs_json{UniValue::VARR};
     for (const AgentAllotmentFundingOutput& output : bundle.funding_outputs) {
         UniValue output_json{UniValue::VOBJ};
@@ -1607,8 +1633,169 @@ util::Result<AgentAllotmentPolicyBundle> CVault::ExportAgentAllotmentPolicyBundl
         funding_outputs_json.push_back(std::move(output_json));
     }
     bundle_json.pushKV("funding_outputs", std::move(funding_outputs_json));
-    bundle_json.pushKV("policy_enforcement", metadata->policy_status == AgentAllotmentPolicyStatus::Enforced ? "enforced" : "pending_integration");
     bundle.bundle_json = bundle_json.write();
     return bundle;
+}
+util::Result<CTransactionRef> CVault::CosignAgentAllotmentSpend(const std::string& psqt_base64)
+{
+    PartiallySignedQuicksilverTransaction request;
+    std::string decode_error;
+    if (!DecodeBase64PSQT(request, psqt_base64, decode_error)) {
+        return util::Error{Untranslated(decode_error)};
+    }
+
+    // Stop and the entire refusal/sign/commit sequence share this lock. A stop
+    // cannot race a signature into existence after its stopped record is saved.
+    LOCK(cs_vault);
+    const auto records{ListAgentAllotmentRecords()};
+    const AgentAllotmentRecord* record{nullptr};
+    for (const auto& input : request.inputs) {
+        const auto found{std::find_if(records.begin(), records.end(), [&](const auto& candidate) {
+            return input.witness_utxo.scriptPubKey == GetScriptForDestination(DecodeDestination(candidate.funding_address));
+        })};
+        if (found == records.end()) {
+            return util::Error{Untranslated("Agent spend request spends an output that is not this vault's agent allotment.")};
+        }
+        if (record && record->id != found->id) {
+            return util::Error{Untranslated("Agent spend request mixes inputs from more than one allotment.")};
+        }
+        record = &*found;
+    }
+    if (!record) {
+        return util::Error{Untranslated("Agent spend request spends an output that is not this vault's agent allotment.")};
+    }
+    if (record->stopped_time != 0) {
+        return util::Error{Untranslated("This agent allotment is stopped. The vault no longer co-signs for it.")};
+    }
+
+    CoinFilterParams filter;
+    filter.skip_locked = false;
+    const auto coins{AvailableCoins(*this, /*coinControl=*/nullptr, filter).All()};
+    for (size_t i = 0; i < request.inputs.size(); ++i) {
+        const auto found{std::find_if(coins.begin(), coins.end(), [&](const COutput& coin) {
+            return coin.outpoint == request.tx->vin[i].prevout && coin.txout == request.inputs[i].witness_utxo;
+        })};
+        if (found == coins.end()) {
+            return util::Error{Untranslated("Agent spend request spends an output this vault does not hold unspent.")};
+        }
+    }
+
+    FlatSigningProvider public_provider;
+    std::string parse_error;
+    auto parsed{Parse(record->funding_descriptor, public_provider, parse_error, /*require_checksum=*/true)};
+    if (parsed.size() != 1) {
+        return util::Error{Untranslated("Agent allotment funding descriptor could not be parsed.")};
+    }
+    std::shared_ptr<Descriptor> descriptor{std::move(parsed[0])};
+    std::vector<CScript> scripts;
+    if (!descriptor->Expand(0, public_provider, scripts, public_provider) || scripts.size() != 1 ||
+        scripts[0] != request.inputs[0].witness_utxo.scriptPubKey || public_provider.tr_trees.size() != 1) {
+        return util::Error{Untranslated("Agent allotment funding descriptor did not produce its funding script.")};
+    }
+    const auto agent_key{AgentKeyFromFundingDescriptor(record->funding_descriptor)};
+    const auto spend_data{public_provider.tr_trees.begin()->second.GetSpendData()};
+    if (!agent_key || spend_data.scripts.size() != 1) {
+        return util::Error{Untranslated("Agent allotment funding descriptor has no agent key.")};
+    }
+    const auto& leaf{spend_data.scripts.begin()->first};
+    const uint256 leaf_hash{ComputeTapleafHash(leaf.second, leaf.first)};
+    const auto signature_key{std::make_pair(*agent_key, leaf_hash)};
+    PartiallySignedQuicksilverTransaction canonical{*request.tx};
+    for (size_t i = 0; i < canonical.inputs.size(); ++i) canonical.inputs[i].witness_utxo = request.inputs[i].witness_utxo;
+    const auto txdata{PrecomputePSQTData(canonical)};
+    for (size_t i = 0; i < request.inputs.size(); ++i) {
+        const auto& input{request.inputs[i]};
+        const auto signature{input.m_tap_script_sigs.find(signature_key)};
+        // A supplied final/key-path witness or cosigner signature cannot stand in
+        // for A's signature on the canonical stored leaf.
+        if (!input.final_script_sig.empty() || !input.final_script_witness.IsNull() || !input.m_tap_key_sig.empty() ||
+            input.m_tap_script_sigs.size() != 1 || signature == input.m_tap_script_sigs.end()) {
+            return util::Error{Untranslated("Agent spend request is not signed by the agent's key.")};
+        }
+        ScriptExecutionData execdata;
+        execdata.m_annex_init = true;
+        execdata.m_annex_present = false;
+        execdata.m_tapleaf_hash_init = true;
+        execdata.m_tapleaf_hash = leaf_hash;
+        execdata.m_codeseparator_pos_init = true;
+        execdata.m_codeseparator_pos = 0xFFFFFFFF;
+        const MutableTransactionSignatureChecker checker{&*request.tx, static_cast<unsigned int>(i), input.witness_utxo.nValue, txdata, MissingDataBehavior::FAIL};
+        if (!checker.CheckSchnorrSignature(signature->second, *agent_key, SigVersion::TAPSCRIPT, execdata)) {
+            return util::Error{Untranslated("Agent spend request is not signed by the agent's key.")};
+        }
+    }
+
+    // Genesis height and a zero nonce are valid. Only an all-zero cycle is unproved.
+    if (std::all_of(request.tx->nCycle.begin(), request.tx->nCycle.end(), [](uint32_t edge) { return edge == 0; })) {
+        return util::Error{Untranslated("Agent spend request carries no proof of work; the agent proves before it hands the request over.")};
+    }
+    // Resolve an immutable tip hash and its ancestor without an asserting height
+    // lookup: the active chain can retreat between these interface calls.
+    const auto tip{chain().getTipLocator()};
+    int tip_height{-1};
+    const uint32_t anchor{request.tx->nAnchorHeight};
+    bool tip_active{false};
+    bool anchor_active{false};
+    if (tip.vHave.empty() || !chain().findBlock(tip.vHave.front(), FoundBlock{}.height(tip_height).inActiveChain(tip_active)) ||
+        !tip_active || tip_height < 0 || anchor > static_cast<uint32_t>(tip_height) ||
+        static_cast<uint32_t>(tip_height) - anchor > static_cast<uint32_t>(Params().GetConsensus().nMaxAnchorAge) ||
+        !chain().findAncestorByHeight(tip.vHave.front(), static_cast<int>(anchor), FoundBlock{}.inActiveChain(anchor_active)) || !anchor_active) {
+        return util::Error{Untranslated("Agent spend request's proof has expired. Ask the agent for a fresh request.")};
+    }
+
+    if (IsLocked()) return util::Error{Untranslated("Unlock this vault to co-sign an agent spend request.")};
+    VaultDescriptor stored{descriptor, /*creation_time=*/0, /*range_start=*/0, /*range_end=*/0, /*next_index=*/0};
+    auto* manager{GetDescriptorScriptPubKeyMan(stored)};
+    const auto private_provider{manager ? manager->GetPrivateSigningProvider(scripts[0]) : nullptr};
+    // C is the second key inside multi_a(2,A,C), not the tr() reclaim key V.
+    const size_t agent_begin{record->funding_descriptor.find("multi_a(2,") + std::string("multi_a(2,").size()};
+    const size_t cosigner_begin{record->funding_descriptor.find(',', agent_begin) + 1};
+    const size_t cosigner_end{record->funding_descriptor.find(')', cosigner_begin)};
+    const auto cosigner_bytes{ParseHex(record->funding_descriptor.substr(cosigner_begin, cosigner_end - cosigner_begin))};
+    CKey cosigner;
+    if (cosigner_bytes.size() != 32 || !private_provider || !private_provider->GetKeyByXOnly(XOnlyPubKey{cosigner_bytes}, cosigner)) {
+        return util::Error{Untranslated("Agent allotment cosigner private key is not available.")};
+    }
+    public_provider.keys.clear();
+    public_provider.keys.emplace(cosigner.GetPubKey().GetID(), cosigner);
+
+    // Rebuild from the known outputs and verified A signatures, so caller-supplied
+    // finalization metadata cannot select a different spending path.
+    PartiallySignedQuicksilverTransaction signing{std::move(canonical)};
+    for (size_t i = 0; i < signing.inputs.size(); ++i) {
+        signing.inputs[i].witness_utxo = request.inputs[i].witness_utxo;
+        signing.inputs[i].m_tap_script_sigs.emplace(signature_key, request.inputs[i].m_tap_script_sigs.at(signature_key));
+        if (!SignPSQTInput(public_provider, signing, i, &txdata, SIGHASH_DEFAULT)) {
+            return util::Error{Untranslated("Agent spend request could not be co-signed.")};
+        }
+    }
+    CMutableTransaction extracted;
+    if (!FinalizeAndExtractPSQT(signing, extracted)) {
+        return util::Error{Untranslated("Agent spend request could not be finalized.")};
+    }
+    const CTransactionRef tx{MakeTransactionRef(std::move(extracted))};
+    // Change returned to the allotment stays the agent's: its next request spends it. Lock
+    // it as the export locks the funding outputs, before anything is broadcast.
+    std::vector<COutPoint> change_outpoints;
+    for (uint32_t i = 0; i < tx->vout.size(); ++i) {
+        if (tx->vout[i].scriptPubKey == scripts[0]) change_outpoints.emplace_back(tx->GetHash(), i);
+    }
+    if (!change_outpoints.empty() &&
+        !RunWithinTxn(GetDatabase(), /*process_desc=*/"lock agent change outputs",
+                      [&](VaultBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(cs_vault) {
+                          for (const COutPoint& outpoint : change_outpoints) {
+                              if (!LockCoin(outpoint, &batch)) return false;
+                          }
+                          return true;
+                      })) {
+        return util::Error{Untranslated("Agent spend request's change could not be reserved for the agent.")};
+    }
+    const auto committed{CommitTransaction(tx, {{"agent_allotment", record->id}}, {})};
+    if (!committed) {
+        VaultBatch batch(GetDatabase());
+        for (const COutPoint& outpoint : change_outpoints) UnlockCoin(outpoint, &batch);
+        return util::Error{Untranslated(committed.reject_reason)};
+    }
+    return tx;
 }
 } // namespace vault

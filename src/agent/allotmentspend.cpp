@@ -7,7 +7,6 @@
 #include <addresstype.h>
 #include <arith_uint256.h>
 #include <chain.h>
-#include <coins.h>
 #include <consensus/amount.h>
 #include <consensus/params.h>
 #include <crypto/cuckatoo/cuckatoo.h>
@@ -16,16 +15,20 @@
 #include <key_io.h>
 #include <pow.h>
 #include <primitives/transaction.h>
+#include <psqt.h>
+#include <script/descriptor.h>
 #include <script/interpreter.h>
 #include <script/sign.h>
 #include <script/signingprovider.h>
 #include <tinyformat.h>
 #include <util/result.h>
+#include <util/strencodings.h>
 #include <util/translation.h>
 
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <regex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -34,35 +37,101 @@
 namespace agent {
 namespace {
 
-util::Result<void> AddFundingKey(AllotmentSpendContext& context, const std::string& funding_secret)
+util::Result<void> ImportAgentDescriptor(AllotmentSpendContext& context)
 {
-    const CKey key{DecodeSecret(funding_secret)};
+    // Exactly one public 2-of-2 leaf, A first and C second. Keep this boundary
+    // narrower than the descriptor parser: ranged keys, extra leaves, alternate
+    // thresholds, private descriptors and duplicate role keys are not allotments.
+    static const std::regex shape{R"(^tr\(([0-9a-f]{64}),multi_a\(2,([0-9a-f]{64}),([0-9a-f]{64})\)\)#[0-9a-z]{8}$)"};
+    std::smatch roles;
+    const std::string& descriptor{context.bundle.funding_descriptor};
+    const std::string shape_error{"funding_descriptor must be a canonical tr(V,multi_a(2,A,C)) descriptor with distinct public keys"};
+    if (!std::regex_match(descriptor, roles, shape)) {
+        return util::Error{Untranslated(shape_error)};
+    }
+    const XOnlyPubKey vault_key{ParseHex(roles[1].str())};
+    const XOnlyPubKey agent_key{ParseHex(roles[2].str())};
+    const XOnlyPubKey cosigner_key{ParseHex(roles[3].str())};
+    if (!vault_key.IsFullyValid() || !agent_key.IsFullyValid() || !cosigner_key.IsFullyValid() ||
+        vault_key == agent_key || vault_key == cosigner_key || agent_key == cosigner_key) {
+        return util::Error{Untranslated(shape_error)};
+    }
+    FlatSigningProvider parsed;
+    std::string error;
+    auto descs{Parse(descriptor, parsed, error, /*require_checksum=*/true)};
+    if (descs.size() != 1 || descs[0]->ToString() != descriptor || !parsed.keys.empty()) {
+        return util::Error{Untranslated(shape_error)};
+    }
+    std::vector<CScript> scripts;
+    if (!descs[0]->Expand(0, parsed, scripts, context.signing_provider) || scripts.size() != 1) {
+        return util::Error{Untranslated(shape_error)};
+    }
+    if (scripts[0] != GetScriptForDestination(context.funding_destination)) {
+        return util::Error{Untranslated("funding_descriptor does not match the bundle funding address")};
+    }
+    const CKey key{DecodeSecret(context.bundle.agent_secret)};
     if (!key.IsValid()) {
-        return util::Error{Untranslated("funding_secret_wif is not a valid private key for this chain")};
+        return util::Error{Untranslated("agent_secret_wif is not a valid private key for this chain")};
     }
-
     const CPubKey pubkey{key.GetPubKey()};
-    const CKeyID key_id{pubkey.GetID()};
-    if (const auto* pkhash{std::get_if<PKHash>(&context.funding_destination)}) {
-        if (ToKeyID(*pkhash) != key_id) {
-            return util::Error{Untranslated("funding_secret_wif does not match the bundle funding address")};
-        }
-    } else if (const auto* witness_hash{std::get_if<WitnessV0KeyHash>(&context.funding_destination)}) {
-        if (ToKeyID(*witness_hash) != key_id) {
-            return util::Error{Untranslated("funding_secret_wif does not match the bundle funding address")};
-        }
-    } else {
-        return util::Error{Untranslated("funding_address does not map to an importable single-key agent address")};
+    if (XOnlyPubKey(pubkey) != agent_key) {
+        return util::Error{Untranslated("agent_secret_wif does not match the descriptor agent key")};
     }
-
-    context.signing_provider.keys.emplace(key_id, key);
-    context.signing_provider.pubkeys.emplace(key_id, pubkey);
+    context.funding_script = scripts[0];
+    context.signing_provider.keys.emplace(pubkey.GetID(), key);
+    context.signing_provider.pubkeys.emplace(pubkey.GetID(), pubkey);
     return {};
+}
+
+// The generic dummy signer accepts every key, including Taproot key-path keys,
+// and its Schnorr dummy is 64 bytes even in MAXIMUM mode. Allotments must price
+// their A+C leaf and allow the 65-byte explicit-sighash form of each signature.
+class MaximumAllotmentSignatureCreator final : public BaseSignatureCreator {
+    const std::map<std::pair<XOnlyPubKey, uint256>, std::vector<unsigned char>>& m_allowed;
+public:
+    explicit MaximumAllotmentSignatureCreator(const SignatureData& leaf_data) : m_allowed{leaf_data.taproot_script_sigs} {}
+    const BaseSignatureChecker& Checker() const override { return DUMMY_MAXIMUM_SIGNATURE_CREATOR.Checker(); }
+    bool CreateSig(const SigningProvider&, std::vector<unsigned char>&, const CKeyID&, const CScript&, SigVersion) const override { return false; }
+    bool CreateSchnorrSig(const SigningProvider& provider, std::vector<unsigned char>& sig, const XOnlyPubKey& pubkey,
+                          const uint256* leaf_hash, const uint256* merkle_root, SigVersion version) const override
+    {
+        if (version != SigVersion::TAPSCRIPT || leaf_hash == nullptr || !m_allowed.contains({pubkey, *leaf_hash})) return false;
+        if (!DUMMY_MAXIMUM_SIGNATURE_CREATOR.CreateSchnorrSig(provider, sig, pubkey, leaf_hash, merkle_root, version)) return false;
+        sig.resize(65);
+        sig.back() = SIGHASH_ALL;
+        return true;
+    }
+};
+
+util::Result<CMutableTransaction> MaximumAllotmentSpend(const AllotmentSpendContext& context,
+                                                       const PartiallySignedQuicksilverTransaction& psqt)
+{
+    CMutableTransaction maximum{*psqt.tx};
+    const HidingSigningProvider public_provider{&context.signing_provider, /*hide_secret=*/true, /*hide_origin=*/false};
+    for (size_t i{0}; i < maximum.vin.size(); ++i) {
+        SignatureData allowed;
+        psqt.inputs[i].FillSignatureData(allowed);
+        // Restrict dummy signatures to the sole canonical leaf and its A/C keys.
+        const auto& leaf{*psqt.inputs[i].m_tap_scripts.begin()};
+        const uint256 leaf_hash{psqt.inputs[i].m_tap_script_sigs.begin()->first.second};
+        for (const auto offset : {1, 35}) {
+            const XOnlyPubKey pubkey{Span{leaf.first.first}.subspan(offset, 32)};
+            allowed.taproot_script_sigs.try_emplace({pubkey, leaf_hash}, std::vector<unsigned char>{});
+        }
+        const MaximumAllotmentSignatureCreator creator{allowed};
+        SignatureData dummy;
+        if (!ProduceSignature(public_provider, creator, context.funding_script, dummy) || dummy.scriptWitness.stack.size() != 4) {
+            return util::Error{Untranslated("Could not price the allotment script-path witness.")};
+        }
+        UpdateInput(maximum.vin[i], dummy);
+    }
+    return maximum;
 }
 
 util::Result<void> ProveAgentSpend(CMutableTransaction& transaction,
                                    const CBlockIndex* anchor,
                                    const Consensus::Params& consensus,
+                                   const uint256& proof_target,
                                    const cuckatoo::SolverCancelCallback& cancel,
                                    bool allow_cpu_txpow)
 {
@@ -78,13 +147,11 @@ util::Result<void> ProveAgentSpend(CMutableTransaction& transaction,
     // (too high wastes work, too low gets the transaction rejected; neither loses funds).
     transaction.nAnchorHeight = static_cast<uint32_t>(anchor->nHeight);
 
-    // Required work is per-transaction and moves with the serialized bytes, so the
-    // target has to be taken from this transaction rather than the chain alone. The
-    // caller grinds after signing, so the bytes charged for already exist and no
-    // upper-bound estimate is needed: the pre-image covers neither scriptSig nor the
-    // witness, so a proof found now stays valid over what was already signed.
-    const arith_uint256 target{
-        UintToArith256(GetTxPowTarget(consensus, anchor, CTransaction(transaction)))};
+    // The agent grinds before the cosigner signs, so price the largest witness
+    // the canonical A+C leaf can carry. A larger size only lowers the target;
+    // a proof found for it still holds for the real, smaller witness. The proof
+    // pre-image omits signatures and witness, so co-signing preserves the proof.
+    const arith_uint256 target{UintToArith256(proof_target)};
 
     const std::vector<unsigned char> preimage{CTransaction(transaction).PowPreimage(anchor->GetBlockHash())};
     cuckatoo::Cycle cycle{};
@@ -192,29 +259,38 @@ util::Result<AllotmentSignedSpend> CreateSignedAllotmentSpendWithInputs(const Al
         transaction.vout.emplace_back(change_amount, context.funding_script);
     }
 
-    std::map<COutPoint, Coin> coins;
-    for (const AllotmentSpendInput& input : inputs) {
-        coins.emplace(input.prevout, Coin(CTxOut(input.amount, context.funding_script), /*nHeightIn=*/1, /*fCoinBaseIn=*/false));
+    PartiallySignedQuicksilverTransaction psqt{transaction};
+    for (size_t i{0}; i < inputs.size(); ++i) {
+        psqt.inputs[i].witness_utxo = CTxOut{inputs[i].amount, context.funding_script};
     }
-    std::map<int, bilingual_str> input_errors;
-    if (!SignTransaction(transaction, &context.signing_provider, coins, SIGHASH_ALL, input_errors)) {
-        if (!input_errors.empty()) {
-            return util::Error{Untranslated(strprintf("Agent allotment signing failed for input %d: %s", input_errors.begin()->first, input_errors.begin()->second.original))};
+    const auto txdata{PrecomputePSQTData(psqt)};
+    for (size_t i{0}; i < inputs.size(); ++i) {
+        // False is expected: A signs its half, C is absent, and nothing finalizes.
+        SignPSQTInput(context.signing_provider, psqt, i, &txdata, SIGHASH_DEFAULT, nullptr, /*finalize=*/false);
+        const auto& input{psqt.inputs[i]};
+        if (input.m_tap_script_sigs.size() != 1 || input.m_tap_scripts.size() != 1 || !input.m_tap_key_sig.empty()) {
+            return util::Error{Untranslated("Agent allotment signing failed.")};
         }
-        return util::Error{Untranslated("Agent allotment signing failed.")};
+        const auto& leaf{*input.m_tap_scripts.begin()};
+        transaction.vin[i].scriptWitness.stack = {{}, input.m_tap_script_sigs.begin()->second, leaf.first.first, *leaf.second.begin()};
     }
 
-    // Prove after signing, not before. Required work now depends on the serialized
-    // size, and scriptSig and the witness are part of that size but are deliberately
-    // outside the proof pre-image. Grinding here charges the true final size instead
-    // of an estimate, and cannot invalidate the signatures just made.
+    uint256 proof_target;
     if (prove) {
-        auto proof_result{ProveAgentSpend(transaction, anchor, consensus, cancel, allow_cpu_txpow)};
+        auto maximum{MaximumAllotmentSpend(context, psqt)};
+        if (!maximum) return util::Error{util::ErrorString(maximum)};
+        proof_target = GetTxPowTarget(consensus, anchor, CTransaction{*maximum});
+        auto proof_result{ProveAgentSpend(transaction, anchor, consensus, proof_target, cancel, allow_cpu_txpow)};
         if (!proof_result) return util::Error{util::ErrorString(proof_result)};
+        psqt.tx->nAnchorHeight = transaction.nAnchorHeight;
+        psqt.tx->nCycle = transaction.nCycle;
+        psqt.tx->nPowNonce = transaction.nPowNonce;
     }
 
     return AllotmentSignedSpend{
         .transaction = CTransaction{transaction},
+        .psqt = std::move(psqt),
+        .proof_target = proof_target,
         .policy_check = check,
         .change_amount = change_amount,
         .input_amount = input_amount,
@@ -277,9 +353,7 @@ util::Result<AllotmentSpendContext> ImportAllotmentBundle(std::string_view bundl
     AllotmentSpendContext context;
     context.bundle = *bundle;
     context.funding_destination = funding_destination;
-    context.funding_script = GetScriptForDestination(context.funding_destination);
-
-    auto key_result{AddFundingKey(context, bundle->funding_secret)};
+    auto key_result{ImportAgentDescriptor(context)};
     if (!key_result) return util::Error{util::ErrorString(key_result)};
 
     return context;

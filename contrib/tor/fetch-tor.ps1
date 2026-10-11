@@ -4,17 +4,27 @@
 #
 # Fetch the Tor Project's Expert Bundle for the Windows build.
 #
-# Quicksilver does not build or vendor Tor: a vendored or self-built Tor makes
-# the OpenSSL and Tor CVE stream ours for the life of the project, and buys
-# reproducibility that only matters for binary distribution, which 0.1.x does
-# not do. On Unix the platform's package manager delivers tor; Windows has no
-# package manager to delegate to, so the build fetches it -- pinned.
+# Quicksilver does not build Tor. On Unix the platform's package manager
+# delivers tor; Windows has no package manager to delegate to, so the build
+# fetches the Tor Project's own build -- pinned -- and the Windows installer
+# ships its tor.exe unmodified beside quicksilver.exe (F-441: the desktop starts
+# its own Tor, and someone who downloaded an installer cannot be assumed to
+# have installed one).
+#
+# Shipping it has a cost that building from source alone did not: Tor's and
+# OpenSSL's security releases are now this project's to ship. Before every
+# release, check https://dist.torproject.org/torbrowser/ for a newer Expert
+# Bundle and move the pins (both here and QUICKSILVER_BUNDLED_TOR_SHA256 in
+# cmake/module/Maintenance.cmake).
 #
 # The SHA-256 below IS the integrity boundary. It is checked BEFORE the archive
 # is opened, and a mismatch deletes the download. Do not "temporarily" skip it.
 #
-# To move to a newer bundle, change $Version and $Sha256 together, taking the
-# digest from that release's own sha256sums-unsigned-build.txt:
+# To move to a newer bundle, change $Version, $Sha256 and $TorExeSha256
+# together. Take the archive digest from that release's own
+# sha256sums-unsigned-build.txt, check the archive's .asc against the Tor
+# Browser Developers signing key (EF6E 286D DA85 EA2A 4BA7  DE68 4E2C 6E87 9329 8290),
+# then hash tor\tor.exe inside it:
 #   https://dist.torproject.org/torbrowser/<version>/sha256sums-unsigned-build.txt
 #
 # Usage:  powershell -NoProfile -ExecutionPolicy Bypass -File contrib\tor\fetch-tor.ps1 [-OutDir <path>]
@@ -42,13 +52,16 @@ Set-StrictMode -Version Latest
 # can paste into -bundledtorpath without it reading like a mistake.
 if (-not $OutDir) { $OutDir = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\build\tor')) }
 
-$Version = '15.0.22'
+$Version = '15.0.24'
 $Archive = "tor-expert-bundle-windows-x86_64-$Version.tar.gz"
 $DistUrl = "https://dist.torproject.org/torbrowser/$Version/$Archive"
 $ArchiveUrl = "https://archive.torproject.org/tor-package-archive/torbrowser/$Version/$Archive"
-# From that release's sha256sums-unsigned-build.txt, and independently recomputed
-# over the downloaded archive on 2026-09-09.
-$Sha256  = '231dad6b9cb401a54c260db7046965ef04e4f72ff071b140d423fb5da281ab1e'
+# From that release's sha256sums-unsigned-build.txt; the archive's signature was
+# checked against the Tor Browser Developers key on 2026-10-08.
+$Sha256  = 'e9dc6ccc93cd6afa507193f4de284d6424233ff5102155cd2c94b259e8a22b65'
+# tor\tor.exe inside that archive (tor 0.4.9.13). The installer build checks the
+# same digest, as QUICKSILVER_BUNDLED_TOR_SHA256.
+$TorExeSha256 = '90bbdcafd586feea608a5e9b7d3959f4ee194f7770755cfde8fab240e9773ad1'
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $Download = Join-Path $OutDir $Archive
@@ -80,9 +93,14 @@ if ($LASTEXITCODE -ne 0) { throw "tar failed with exit code $LASTEXITCODE" }
 
 $TorExe = Join-Path $OutDir 'tor\tor.exe'
 if (-not (Test-Path $TorExe)) { throw "tor.exe not found at $TorExe after extraction" }
+$TorExeActual = (Get-FileHash -Path $TorExe -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($TorExeActual -ne $TorExeSha256.ToLowerInvariant()) {
+    throw "SHA-256 mismatch for $TorExe`n  expected $TorExeSha256`n  actual   $TorExeActual"
+}
+Write-Host "tor.exe SHA-256 verified: $TorExeActual"
 
 # This bundle's tor.exe is self-contained: the archive ships no DLLs anywhere in
-# it (verified against 15.0.22 -- 19 archive entries, 4 directories and 15 files,
+# it (verified against 15.0.24 -- 19 archive entries, 4 directories and 15 files,
 # zero *.dll; of those, 7 entries live under tor\). The pluggable transports in
 # tor\pluggable_transports and the geoip files in data\ are NOT used by
 # Quicksilver -- no bridges, no country selection -- so tor.exe alone is enough.

@@ -12,6 +12,9 @@
 
 class VaultModel;
 class PlatformStyle;
+QT_BEGIN_NAMESPACE
+class QLabel;
+QT_END_NAMESPACE
 
 namespace Ui {
     class SendCoinsEntry;
@@ -45,6 +48,14 @@ public:
     QWidget *setupTabChain(QWidget *prev);
 
     void setFocus();
+    //! The row's position in the recipient list, from 1.
+    void setIndex(int index);
+
+    //! Column widths shared with the recipient list's heading row.
+    static constexpr int INDEX_WIDTH{16};
+    static constexpr int MAX_WIDTH{56};
+    static constexpr int REMOVE_WIDTH{26};
+    static constexpr int SPACING{8};
 
 public Q_SLOTS:
     void clear();
@@ -70,6 +81,8 @@ private:
     Ui::SendCoinsEntry *ui;
     VaultModel* model{nullptr};
     const PlatformStyle *platformStyle;
+    //! Names the amount field and its unit on the recipient's second line.
+    QLabel* m_amount_key{nullptr};
 
     bool updateLabel(const QString &address);
 };

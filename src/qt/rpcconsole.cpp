@@ -6,6 +6,7 @@
 #include <quicksilver-build-config.h> // IWYU pragma: keep
 
 #include <qt/rpcconsole.h>
+#include <qt/benchpanel.h>
 #include <qt/forms/ui_debugwindow.h>
 
 #include <chainparams.h>
@@ -34,6 +35,7 @@
 #include <QDateTime>
 #include <QFont>
 #include <QFrame>
+#include <QGridLayout>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
@@ -481,28 +483,35 @@ RPCConsole::RPCConsole(interfaces::Node& node, const PlatformStyle *_platformSty
     ui->verticalLayout_2->setSpacing(12);
     ui->tabWidget->setDocumentMode(true);
 
-    auto* header = new QFrame(this);
-    header->setObjectName(QStringLiteral("nodeWindowHeader"));
-    auto* header_layout = new QVBoxLayout(header);
-    header_layout->setContentsMargins(2, 0, 2, 12);
-    header_layout->setSpacing(2);
-
-    auto* eyebrow = new QLabel(tr("Node operations").toUpper(), header);
-    eyebrow->setObjectName(QStringLiteral("nodeWindowEyebrow"));
-    eyebrow->setProperty("class", QStringLiteral("pageEyebrow"));
-    header_layout->addWidget(eyebrow);
-
-    auto* title = new QLabel(tr("Node window"), header);
-    title->setObjectName(QStringLiteral("nodeWindowTitle"));
-    title->setProperty("class", QStringLiteral("pageTitle"));
-    header_layout->addWidget(title);
-
-    auto* subtitle = new QLabel(tr("Live diagnostics, peer state, network traffic, and RPC console."), header);
-    subtitle->setObjectName(QStringLiteral("nodeWindowSubtitle"));
-    subtitle->setProperty("class", QStringLiteral("muted"));
-    subtitle->setWordWrap(true);
-    header_layout->addWidget(subtitle);
-    ui->verticalLayout_2->insertWidget(0, header);
+    // The bench grammar of the pages: the tabs in one titled panel, section
+    // heads as captions, label/value rows with key and value roles, quiet
+    // commands.
+    const BenchPanel::Parts panel = BenchPanel::Make(QStringLiteral("nodeWindowPanel"), tr("Node window"), this);
+    panel.frame->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    ui->verticalLayout_2->removeWidget(ui->tabWidget);
+    panel.body->addWidget(ui->tabWidget, 1);
+    ui->verticalLayout_2->addWidget(panel.frame, 1);
+    for (QGridLayout* grid : ui->tabWidget->findChildren<QGridLayout*>()) {
+        for (int i = 0; i < grid->count(); ++i) {
+            auto* label = qobject_cast<QLabel*>(grid->itemAt(i)->widget());
+            if (!label) continue;
+            int row, column, row_span, column_span;
+            grid->getItemPosition(i, &row, &column, &row_span, &column_span);
+            if (label->font().bold()) {
+                label->setFont(QFont());
+                label->setText(label->text().toUpper());
+                label->setProperty("class", QStringLiteral("benchSection"));
+            } else {
+                label->setProperty("class", column == 1 ? QStringLiteral("benchValue") : QStringLiteral("benchKey"));
+            }
+        }
+    }
+    for (QPushButton* button : findChildren<QPushButton*>()) {
+        button->setProperty("class", QStringLiteral("benchQuiet"));
+    }
+    ui->consensusOffBanner->setStyleSheet(QString());
+    ui->consensusOffBanner->setProperty("class", QStringLiteral("benchNote"));
+    ui->consensusOffBanner->setProperty("benchTone", QStringLiteral("warn"));
 
     QSettings settings;
 #ifdef ENABLE_VAULT
@@ -731,6 +740,7 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
             ui->peerWidget->setColumnWidth(PeerTableModel::Ping, PING_COLUMN_WIDTH);
         }
         ui->peerWidget->horizontalHeader()->setSectionResizeMode(PeerTableModel::Age, QHeaderView::ResizeToContents);
+        ui->peerWidget->horizontalHeader()->setSectionResizeMode(PeerTableModel::ConnectionType, QHeaderView::ResizeToContents);
         ui->peerWidget->horizontalHeader()->setStretchLastSection(true);
         ui->peerWidget->setItemDelegateForColumn(PeerTableModel::NetNodeId, new PeerIdViewDelegate(this));
 

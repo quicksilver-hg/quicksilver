@@ -9,6 +9,7 @@
 // OUTSIDE the #ifdef, or it never runs anywhere it is tested.
 #include <tor/bundled_tor.h>
 
+#include <common/args.h>
 #include <test/util/setup_common.h>
 #include <util/fs_helpers.h>
 #include <util/readwritefile.h>
@@ -264,6 +265,48 @@ BOOST_AUTO_TEST_CASE(a_missing_tor_names_the_remedy)
     const std::string message = util::ErrorString(result).original;
     BOOST_CHECK(message.find("-bundledtorpath") != std::string::npos);
     BOOST_CHECK(message.find("-bundledtor=0") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(would_start_mirrors_the_init_condition)
+{
+    // The desktop asks this before it starts a node, and init asks it before it
+    // starts Tor. Both must give the same answer, or the desktop's preflight
+    // passes a node that then dies on a missing Tor -- the F-441 exit.
+    for (const bool bundled : {false, true}) {
+        for (const bool onion : {false, true}) {
+            ArgsManager args;
+            args.AddArg("-bundledtor", "", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+            args.AddArg("-listenonion", "", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+            args.ForceSetArg("-bundledtor", bundled ? "1" : "0");
+            args.ForceSetArg("-listenonion", onion ? "1" : "0");
+            BOOST_CHECK_EQUAL(tor::BundledTorWouldStart(args), bundled && onion);
+        }
+    }
+    // Neither set: the daemon default (off) decides, whatever -listenonion's is.
+    ArgsManager unset;
+    BOOST_CHECK_EQUAL(tor::BundledTorWouldStart(unset), DEFAULT_BUNDLED_TOR);
+}
+
+BOOST_AUTO_TEST_CASE(missing_tor_message_is_the_start_error)
+{
+    // One sentence, two callers: the node's InitError and the desktop's
+    // Tor-missing screen. A second copy would drift.
+    const auto result = tor::StartBundledTor(m_args.GetDataDirNet(),
+                                             m_args.GetDataDirNet() / "no-such-tor");
+    BOOST_REQUIRE(!result);
+    BOOST_CHECK_EQUAL(util::ErrorString(result).original, tor::MissingTorMessage().original);
+}
+
+BOOST_AUTO_TEST_CASE(locate_honours_an_override_and_refuses_a_missing_one)
+{
+    const fs::path present = m_args.GetDataDirNet() / "my-tor";
+    BOOST_REQUIRE(WriteBinaryFile(present, "#!/bin/sh\n"));
+    // Executable where that matters (POSIX X_OK); harmless on Windows.
+    fs::permissions(present, fs::perms::owner_all);
+    const auto found = tor::LocateBundledTor(present);
+    BOOST_REQUIRE(found.has_value());
+    BOOST_CHECK(*found == present);
+    BOOST_CHECK(!tor::LocateBundledTor(m_args.GetDataDirNet() / "no-such-tor").has_value());
 }
 
 BOOST_AUTO_TEST_CASE(stopping_leaves_no_orphan)

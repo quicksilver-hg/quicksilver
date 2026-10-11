@@ -6,6 +6,7 @@
 #include <quicksilver-build-config.h> // IWYU pragma: keep
 
 #include <qt/optionsdialog.h>
+#include <qt/benchpanel.h>
 #include <qt/forms/ui_optionsdialog.h>
 
 #include <qt/quicksilverunits.h>
@@ -22,8 +23,8 @@
 #include <node/chainstatemanager_args.h>
 #include <util/strencodings.h>
 
+#include <algorithm>
 #include <chrono>
-#include <memory>
 
 #include <QApplication>
 #include <QCheckBox>
@@ -55,67 +56,6 @@ QStringList ShippedUiLanguages()
 }
 } // namespace
 
-int setFontChoice(QComboBox* cb, const OptionsModel::FontChoice& fc)
-{
-    int i;
-    for (i = cb->count(); --i >= 0; ) {
-        QVariant item_data = cb->itemData(i);
-        if (!item_data.canConvert<OptionsModel::FontChoice>()) continue;
-        if (item_data.value<OptionsModel::FontChoice>() == fc) {
-            break;
-        }
-    }
-    if (i == -1) {
-        // New item needed
-        QFont chosen_font = OptionsModel::getFontForChoice(fc);
-        QSignalBlocker block_currentindexchanged_signal(cb);  // avoid triggering QFontDialog
-        cb->insertItem(0, QFontInfo(chosen_font).family(), QVariant::fromValue(fc));
-        i = 0;
-    }
-
-    cb->setCurrentIndex(i);
-    return i;
-}
-
-void setupFontOptions(QComboBox* cb, QLabel* preview)
-{
-    QFont embedded_font{GUIUtil::fixedPitchFont(true)};
-    QFont system_font{GUIUtil::fixedPitchFont(false)};
-    cb->addItem(QObject::tr("Embedded \"%1\"").arg(QFontInfo(embedded_font).family()), QVariant::fromValue(OptionsModel::FontChoice{OptionsModel::FontChoiceAbstract::EmbeddedFont}));
-    cb->addItem(QObject::tr("Default system font \"%1\"").arg(QFontInfo(system_font).family()), QVariant::fromValue(OptionsModel::FontChoice{OptionsModel::FontChoiceAbstract::BestSystemFont}));
-    cb->addItem(QObject::tr("Custom…"));
-
-    auto previous_index = std::make_shared<int>(-1);
-    const auto& on_font_choice_changed = [cb, preview, previous_index](int index) {
-        QVariant item_data = cb->itemData(index);
-        QFont f;
-        if (item_data.canConvert<OptionsModel::FontChoice>()) {
-            f = OptionsModel::getFontForChoice(item_data.value<OptionsModel::FontChoice>());
-        } else {
-            QPointer<QComboBox> combo{cb};
-            QPointer<QLabel> preview_label{preview};
-            GUIUtil::getFont(cb->parentWidget(), GUIUtil::fixedPitchFont(false),
-                [combo, preview_label, previous_index](const QFont& chosen, bool ok) {
-                    if (!combo) return;
-                    if (!ok) {
-                        combo->setCurrentIndex(*previous_index);
-                        return;
-                    }
-                    int chosen_index = setFontChoice(combo, OptionsModel::FontChoice{chosen});
-                    if (preview_label) preview_label->setFont(chosen);
-                    *previous_index = chosen_index;
-                });
-            return;
-        }
-        if (preview) {
-            preview->setFont(f);
-        }
-        *previous_index = index;
-    };
-    QObject::connect(cb, QOverload<int>::of(&QComboBox::currentIndexChanged), on_font_choice_changed);
-    on_font_choice_changed(cb->currentIndex());
-}
-
 OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
     : QDialog(parent, GUIUtil::dialog_flags | Qt::WindowMaximizeButtonHint),
       ui(new Ui::OptionsDialog)
@@ -129,7 +69,7 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
     // every Main-tab control into what is left. Take the dialog's width, keep
     // the height of the lines, and let the scroll area move when a short screen
     // cannot show them all.
-    for (QCheckBox* box : {ui->allowCpuBlockMining, ui->allowCpuAgentTxPow}) {
+    for (QCheckBox* box : {ui->allowCpuBlockMining}) {
         QSizePolicy policy = box->sizePolicy();
         policy.setHorizontalPolicy(QSizePolicy::Ignored);
         policy.setVerticalPolicy(QSizePolicy::Fixed);
@@ -140,30 +80,17 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
     ui->verticalLayout->setSpacing(12);
     ui->tabWidget->setDocumentMode(true);
 
-    auto* header = new QFrame(this);
-    header->setObjectName(QStringLiteral("optionsHeader"));
-    auto* header_layout = new QVBoxLayout(header);
-    header_layout->setContentsMargins(2, 0, 2, 2);
-    header_layout->setSpacing(2);
-
-    auto* eyebrow = new QLabel(tr("Application controls").toUpper(), header);
-    eyebrow->setObjectName(QStringLiteral("optionsEyebrow"));
-    eyebrow->setProperty("class", QStringLiteral("pageEyebrow"));
-    header_layout->addWidget(eyebrow);
-
-    auto* title = new QLabel(tr("Quicksilver options"), header);
-    title->setObjectName(QStringLiteral("optionsTitle"));
-    title->setProperty("class", QStringLiteral("pageTitle"));
-    header_layout->addWidget(title);
-
-    auto* subtitle = new QLabel(tr("Node, vault, network, window, and display settings."), header);
-    subtitle->setObjectName(QStringLiteral("optionsSubtitle"));
-    subtitle->setProperty("class", QStringLiteral("muted"));
-    subtitle->setWordWrap(true);
-    header_layout->addWidget(subtitle);
-    ui->verticalLayout->insertWidget(0, header);
-
-    ui->verticalLayout->setStretchFactor(ui->tabWidget, 1);
+    const auto panel = BenchPanel::Make(QStringLiteral("optionsPanel"), tr("Options"), this);
+    panel.frame->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    ui->verticalLayout->removeWidget(ui->tabWidget);
+    panel.body->addWidget(ui->tabWidget, 1);
+    ui->verticalLayout->insertWidget(0, panel.frame, 1);
+    for (QLabel* label : ui->tabWidget->findChildren<QLabel*>()) {
+        label->setProperty("class", QStringLiteral("benchKey"));
+    }
+    for (QPushButton* button : findChildren<QPushButton*>()) {
+        button->setProperty("class", QStringLiteral("benchQuiet"));
+    }
 
     /* Main elements init */
     ui->databaseCache->setRange(MIN_DB_CACHE >> 20, std::numeric_limits<int>::max());
@@ -228,6 +155,14 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
 
     ui->lang->setToolTip(ui->lang->toolTip().arg(CLIENT_NAME));
     configureLanguageRow(ShippedUiLanguages(), ui->lang, ui->langLabel);
+    // The Display rows share one label column, so their fields start together.
+    int display_label_width{0};
+    for (QLabel* label : {ui->langLabel, ui->unitLabel, ui->thirdPartyTxUrlsLabel}) {
+        display_label_width = std::max(display_label_width, label->sizeHint().width());
+    }
+    for (QLabel* label : {ui->langLabel, ui->unitLabel, ui->thirdPartyTxUrlsLabel}) {
+        label->setFixedWidth(display_label_width);
+    }
     ui->unit->setModel(new QuicksilverUnits(this));
 
     /* Widget-to-option mapper */
@@ -260,7 +195,6 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
         ui->minimizeToTray->setEnabled(false);
     }
 
-    setupFontOptions(ui->moneyFont, ui->moneyFont_preview);
 
     GUIUtil::handleCloseWindowShortcut(this);
 }
@@ -299,8 +233,6 @@ void OptionsDialog::setModel(OptionsModel *_model)
         setMapper();
         mapper->toFirst();
 
-        const auto& font_for_money = _model->data(_model->index(OptionsModel::FontForMoney, 0), Qt::EditRole).value<OptionsModel::FontChoice>();
-        setFontChoice(ui->moneyFont, font_for_money);
 
         updateDefaultProxyNets();
     }
@@ -383,7 +315,6 @@ void OptionsDialog::setMapper()
     mapper->addMapping(ui->databaseCache, OptionsModel::DatabaseCache);
     mapper->addMapping(ui->gpuSolverPath, OptionsModel::GpuSolverPath);
     mapper->addMapping(ui->allowCpuBlockMining, OptionsModel::AllowCpuBlockMining);
-    mapper->addMapping(ui->allowCpuAgentTxPow, OptionsModel::AllowCpuAgentTxPow);
     mapper->addMapping(ui->prune, OptionsModel::Prune);
     mapper->addMapping(ui->pruneSize, OptionsModel::PruneSize);
 
@@ -612,61 +543,9 @@ void OptionsDialog::on_openQuicksilverConfButton_clicked()
 
 void OptionsDialog::on_okButton_clicked()
 {
-    auto submit = [this] {
-        model->setData(model->index(OptionsModel::FontForMoney, 0), ui->moneyFont->itemData(ui->moneyFont->currentIndex()));
-        mapper->submit();
-        accept();
-        updateDefaultProxyNets();
-    };
-
-    // The mapper writes the widget on submit, so a tick that the user then
-    // refuses would be stored unless this returns before submit and unticks
-    // the widget. The question is asked here, once, because an agent spend
-    // can start with nobody present to answer a later dialog.
-    const bool turning_on{ui->allowCpuAgentTxPow->isChecked() && !model->getOption(OptionsModel::AllowCpuAgentTxPow).toBool()};
-    if (!turning_on || property("agentTxPowConfirmOpen").toBool()) {
-        if (!property("agentTxPowConfirmOpen").toBool()) submit();
-        return;
-    }
-
-    auto* box = new QMessageBox{QMessageBox::Warning,
-                                 tr("Let agent spends use this computer's processor?"),
-                                 tr("Agent spends will be prepared by this computer's processor whenever no GPU solver is available."),
-                                 QMessageBox::NoButton,
-                                 this};
-    box->setObjectName(QStringLiteral("cpuAgentTxPowWarning"));
-    box->setInformativeText(tr(
-        "An agent decides for itself when to spend. It can begin while you are working, playing, or away from the computer, and it will not ask first.\n\n"
-        "Preparing a single spend on a processor takes many minutes. A measured reference for this kind of work is about 16 minutes on an eight-thread desktop; a slower computer or a larger spend takes longer. That figure is a calibration result, not a promise.\n\n"
-        "While that work runs it uses every processor core. The rest of the computer will feel slow, and video, calls, and games may stutter until it finishes.\n\n"
-        "A GPU solver does the same work in a fraction of the time. This setting is for computers that do not have one."));
-    auto* acknowledge = new QCheckBox{tr("I understand that an agent may start a long job that slows this computer."), box};
-    acknowledge->setObjectName(QStringLiteral("cpuAgentTxPowAcknowledge"));
-    box->setCheckBox(acknowledge);
-    QPushButton* cancel_button{box->addButton(QMessageBox::Cancel)};
-    QPushButton* proceed_button{box->addButton(tr("Allow processor spends"), QMessageBox::AcceptRole)};
-    proceed_button->setObjectName(QStringLiteral("cpuAgentTxPowProceedButton"));
-    proceed_button->setEnabled(false);
-    proceed_button->setAutoDefault(false);
-    cancel_button->setAutoDefault(true);
-    box->setDefaultButton(cancel_button);
-    connect(acknowledge, &QCheckBox::toggled, box, [box, proceed_button, cancel_button](bool checked) {
-        proceed_button->setEnabled(checked);
-        box->setDefaultButton(cancel_button);
-    });
-    setProperty("agentTxPowConfirmOpen", true);
-    connect(box, &QMessageBox::finished, this, [this, submit, box, proceed_button] {
-        const bool allowed{box->clickedButton() == proceed_button};
-        setProperty("agentTxPowConfirmOpen", false);
-        QTimer::singleShot(0, this, [this, submit, allowed] {
-            if (!allowed) {
-                ui->allowCpuAgentTxPow->setChecked(false);
-                return;
-            }
-            submit();
-        });
-    });
-    GUIUtil::ShowModalDialogAsynchronously(box);
+    mapper->submit();
+    accept();
+    updateDefaultProxyNets();
 }
 
 void OptionsDialog::on_cancelButton_clicked()

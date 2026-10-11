@@ -9,7 +9,6 @@
 
 #include <cstdint>
 
-class PlatformStyle;
 
 QT_BEGIN_NAMESPACE
 class QLabel;
@@ -22,7 +21,7 @@ class ConsensusReviewPage : public QWidget
 
 public:
     //! Storage sizes are injected rather than read from Params(); see DesktopLaunchPage.
-    explicit ConsensusReviewPage(const PlatformStyle* platform_style, uint64_t blockchain_size_gb, uint64_t chain_state_size_gb, QWidget* parent = nullptr);
+    explicit ConsensusReviewPage(uint64_t blockchain_size_gb, uint64_t chain_state_size_gb, QWidget* parent = nullptr);
 
     void setConsensusEnabled(bool enabled);
     void setStartupFailed(bool failed);

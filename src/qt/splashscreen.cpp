@@ -82,7 +82,7 @@ SplashScreen::SplashScreen(const NetworkStyle* networkStyle)
     pixPaint.drawLine(logicalSize.width() - 44, 78, logicalSize.width() - 44, 286);
     pixPaint.drawLine(logicalSize.width() - 218, 286, logicalSize.width() - 44, 286);
 
-    // Draw the Quicksilver icon as a large HUD watermark and a sharp foreground mark.
+    // Draw the Quicksilver icon as a large watermark and a sharp foreground mark.
     QRect rectIcon(QPoint(38, 74), QSize(190, 190));
 
     const QSize requiredSize(1024,1024);
@@ -122,7 +122,7 @@ SplashScreen::SplashScreen(const NetworkStyle* networkStyle)
 
     pixPaint.setFont(QFont(font, 10*fontFactor, QFont::Bold));
     pixPaint.setPen(QuicksilverStyle::Color(QuicksilverStyle::Token::Cinnabar));
-    pixPaint.drawText(logicalSize.width()-titleTextWidth-paddingRight+2,paddingTop+titleVersionVSpace+24,QStringLiteral("QUICKSILVER NODE HUD"));
+    pixPaint.drawText(logicalSize.width()-titleTextWidth-paddingRight+2,paddingTop+titleVersionVSpace+24,tr("Vault and node").toUpper());
 
     // draw copyright stuff
     {

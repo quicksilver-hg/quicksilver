@@ -15,6 +15,10 @@ class QuicksilverStyleTests : public QObject
 private Q_SLOTS:
     void paletteTokens();
     void applySetsGlobalPaletteAndStylesheet();
+    void benchPaletteTokens();
+    void benchSheetRules();
+    void dialogButtonsCarryNoStockIcon();
+    void disabledPrimaryButtonLooksDisabled();
 };
 
 #endif // QUICKSILVER_QT_TEST_QUICKSILVERSTYLETESTS_H

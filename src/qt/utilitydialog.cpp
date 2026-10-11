@@ -7,6 +7,7 @@
 
 #include <qt/utilitydialog.h>
 
+#include <qt/benchpanel.h>
 #include <qt/forms/ui_helpmessagedialog.h>
 
 #include <qt/guiutil.h>
@@ -21,6 +22,7 @@
 #include <QCloseEvent>
 #include <QLabel>
 #include <QMainWindow>
+#include <QPushButton>
 #include <QRegularExpression>
 #include <QString>
 #include <QTextCursor>
@@ -49,18 +51,17 @@ HelpMessageDialog::HelpMessageDialog(QWidget *parent, bool about) :
         // Replace newlines with HTML breaks
         licenseInfoHTML.replace("\n", "<br>");
 
-        ui->aboutMessage->setTextFormat(Qt::RichText);
-        ui->scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        ui->aboutMessage->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
         text = version + "\n" + QString::fromStdString(FormatParagraph(licenseInfo));
-        ui->aboutMessage->setText(version + "<br><br>" + licenseInfoHTML);
-        ui->aboutMessage->setWordWrap(true);
+        ui->aboutMessage->setHtml(version.toHtmlEscaped() + "<br><br>" + licenseInfoHTML);
+        ui->aboutMessage->setWordWrapMode(QTextOption::WordWrap);
         ui->helpMessage->setVisible(false);
     } else {
         setWindowTitle(tr("Command-line options"));
         QString header = "The quicksilver application provides a graphical interface for interacting with " CLIENT_NAME ".\n\n"
                          "It combines the core functionalities of quicksilver-daemon with a user-friendly interface for vault management, transaction history, and network statistics.\n\n"
                          "It is suitable for users who prefer a graphical over a command-line interface.\n\n"
-                         "You can optionally specify a payment [URI], in e.g. the BIP21 URI format.\n\n"
+                         "You can optionally specify a payment [URI] in the quicksilver: form, e.g. quicksilver:<address>?amount=1.\n\n"
                          "Usage: quicksilver [options] [URI]\n\n";
         QTextCursor cursor(ui->helpMessage->document());
         cursor.insertText(version);
@@ -104,8 +105,15 @@ HelpMessageDialog::HelpMessageDialog(QWidget *parent, bool about) :
         }
 
         ui->helpMessage->moveCursor(QTextCursor::Start);
-        ui->scrollArea->setVisible(false);
+        ui->aboutMessage->setVisible(false);
         ui->aboutLogo->setVisible(false);
+    }
+
+    // The page grammar: the text in one panel titled like the window, the OK
+    // button below it.
+    BenchPanel::Adopt(this, ui->okButton, QStringLiteral("helpPanel"), windowTitle());
+    for (QPushButton* button : findChildren<QPushButton*>()) {
+        button->setProperty("class", QStringLiteral("benchQuiet"));
     }
 
     GUIUtil::handleCloseWindowShortcut(this);

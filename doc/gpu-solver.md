@@ -16,7 +16,7 @@ of the node or vault build.
 - An agent spend falls back to the built-in CPU solver on `main` or
   `publictest` only when the operator opts in. The command-line agent takes
   `-allowcputxpow`. The desktop stores the same choice as a checkbox under
-  Controls > Options > Main. That checkbox does not reach the command-line
+  Settings > Options > Main. That checkbox does not reach the command-line
   agent, which does not read desktop settings, so the sign command the desktop
   copies includes the flag when the checkbox is on. The default is off because
   an agent starts the work on its own schedule, while the computer may be in
@@ -36,7 +36,7 @@ command-line agent does not read desktop settings. It is opt-in for blocks
 because block mining is a continuous race against GPU cards: a CPU can run
 the graph, but an unbounded grind at near-zero odds would look like a broken
 miner. The block opt-in is `-allowcpumining`, and the same switch is the
-checkbox in the desktop's Controls > Options > Main that allows this
+checkbox in the desktop's Settings > Options > Main that allows this
 computer's processor to mine blocks.
 
 The measured times are calibration results, not performance guarantees. GPU,
@@ -290,7 +290,7 @@ quicksilver-daemon -cuckatoosolver=/absolute/path/to/qsgpusolve
 quicksilver-agent -cuckatoosolver=/absolute/path/to/qsgpusolve <command>
 ```
 
-The desktop also exposes the helper path in Controls → Options → Main and probes
+The desktop also exposes the helper path in Settings → Options → Main and probes
 the selected executable before reporting acceleration as ready. Restart after
 changing the configured path.
 

@@ -22,8 +22,13 @@
 #include <key_io.h>
 #include <node/blockstorage.h>
 #include <policy/policy.h>
+#include <psqt.h>
+#include <script/interpreter.h>
+#include <pubkey.h>
 #include <rpc/server.h>
+#include <script/descriptor.h>
 #include <script/solver.h>
+#include <util/strencodings.h>
 #include <streams.h>
 #include <sync.h>
 #include <test/util/logging.h>
@@ -47,7 +52,7 @@ using node::MAX_BLOCKFILE_SIZE;
 
 namespace vault {
 
-class RejectingChain final : public interfaces::Chain
+class RejectingChain : public interfaces::Chain
 {
 public:
     RejectingChain(interfaces::Chain& chain, node::TransactionError error, std::string reason, std::function<bool()> shutdown = {})
@@ -105,11 +110,70 @@ public:
     bool hasChainstate() override { return m_chain.hasChainstate(); }
     node::NodeContext* context() override { return m_chain.context(); }
 
-private:
+protected:
     interfaces::Chain& m_chain;
+
+private:
     node::TransactionError m_error;
     std::string m_reason;
     std::function<bool()> m_shutdown;
+};
+
+// Model a tip retreat between chain observations without aborting the test process.
+class RetreatingChain final : public RejectingChain
+{
+public:
+    enum class RetreatAt { TIP_METADATA, ANCESTOR_METADATA };
+    explicit RetreatingChain(interfaces::Chain& chain) : RejectingChain(chain, node::TransactionError::OK, "") {}
+
+    std::optional<int> getHeight() override { return m_chain.getHeight(); }
+    uint256 getBlockHash(int height) override
+    {
+        if (!armed) return m_chain.getBlockHash(height);
+        ++unsafe_height_lookups;
+        BOOST_ERROR("An asserting height lookup would abort after the modeled tip retreat.");
+        return {};
+    }
+    CBlockLocator getTipLocator() override
+    {
+        auto locator{m_chain.getTipLocator()};
+        if (armed && !locator.vHave.empty()) {
+            snapshot = locator.vHave.front();
+            ++tip_snapshots;
+        }
+        return locator;
+    }
+    bool findBlock(const uint256& hash, const interfaces::FoundBlock& block = {}) override
+    {
+        const bool found{m_chain.findBlock(hash, block)};
+        if (armed && hash == snapshot && retreat_at == RetreatAt::TIP_METADATA) {
+            BOOST_REQUIRE(block.m_in_active_chain);
+            *block.m_in_active_chain = false;
+            ++retreat_observations;
+        }
+        return found;
+    }
+    bool findAncestorByHeight(const uint256& hash, int height, const interfaces::FoundBlock& ancestor = {}) override
+    {
+        const bool found{m_chain.findAncestorByHeight(hash, height, ancestor)};
+        if (armed && hash == snapshot && retreat_at == RetreatAt::ANCESTOR_METADATA) {
+            BOOST_REQUIRE(ancestor.m_in_active_chain);
+            *ancestor.m_in_active_chain = false;
+            ++retreat_observations;
+        }
+        return found;
+    }
+    node::TransactionError broadcastTransaction(const CTransactionRef& tx, bool relay, std::string& error) override
+    {
+        return m_chain.broadcastTransaction(tx, relay, error);
+    }
+
+    bool armed{false};
+    RetreatAt retreat_at{RetreatAt::TIP_METADATA};
+    uint256 snapshot;
+    unsigned int tip_snapshots{0};
+    unsigned int retreat_observations{0};
+    unsigned int unsafe_height_lookups{0};
 };
 
 BOOST_FIXTURE_TEST_SUITE(vault_tests, VaultTestingSetup)
@@ -925,6 +989,27 @@ BOOST_AUTO_TEST_CASE(backup_records_vault_metadata)
     BOOST_CHECK(vault.IsBackupRecorded());
 }
 
+static void EnableDescriptorVault(CVault& vault)
+{
+    LOCK(vault.cs_vault);
+    vault.SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
+    vault.SetupDescriptorScriptPubKeyMans();
+}
+
+//! The agent's key is the first key inside multi_a(2,A,C) on the public descriptor.
+static std::optional<XOnlyPubKey> DescriptorAgentKey(const std::string& funding_descriptor)
+{
+    const std::string marker{"multi_a(2,"};
+    const size_t marker_pos{funding_descriptor.find(marker)};
+    if (marker_pos == std::string::npos) return std::nullopt;
+    const size_t key_begin{marker_pos + marker.size()};
+    const size_t key_end{funding_descriptor.find(',', key_begin)};
+    if (key_end == std::string::npos || key_end == key_begin) return std::nullopt;
+    const auto bytes{ParseHex(funding_descriptor.substr(key_begin, key_end - key_begin))};
+    if (bytes.size() != 32) return std::nullopt;
+    return XOnlyPubKey{bytes};
+}
+
 BOOST_AUTO_TEST_CASE(agent_allotment_setup_records_vault_metadata)
 {
     CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
@@ -935,77 +1020,46 @@ BOOST_AUTO_TEST_CASE(agent_allotment_setup_records_vault_metadata)
     BOOST_CHECK(!vault.RecordAgentAllotmentSetup("test-agent", COIN, -1));
     BOOST_CHECK(vault.ListAgentAllotmentRecords().empty());
 
-    {
-        LOCK(vault.cs_vault);
-        vault.SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
-        vault.SetupDescriptorScriptPubKeyMans();
-    }
+    EnableDescriptorVault(vault);
 
     auto first = vault.RecordAgentAllotmentSetup(" test-agent ", COIN, COIN / 2);
     BOOST_REQUIRE(first);
     BOOST_CHECK_EQUAL(first->version, AgentAllotmentRecord::CURRENT_VERSION);
+    BOOST_CHECK_EQUAL(AgentAllotmentRecord::CURRENT_VERSION, 2);
     BOOST_CHECK_EQUAL(first->id, "agent-1");
     BOOST_CHECK_EQUAL(first->label, "test-agent");
     BOOST_CHECK_EQUAL(first->funding_limit, COIN);
     BOOST_CHECK_EQUAL(first->daily_limit, COIN / 2);
     BOOST_CHECK_GT(first->risk_accepted_time, 0);
-    BOOST_CHECK(!first->backend_created);
+    BOOST_CHECK_EQUAL(first->stopped_time, 0);
+    BOOST_CHECK(!first->funding_descriptor.empty());
     BOOST_CHECK(IsValidDestinationString(first->funding_address));
-    BOOST_CHECK(first->policy_status == AgentAllotmentPolicyStatus::PendingIntegration);
     const std::string policy_request{vault.AgentAllotmentPolicyRequest(*first, COIN)};
     BOOST_CHECK_NE(policy_request.find(R"("type":"quicksilver.agent_allotment_policy_request")"), std::string::npos);
-    BOOST_CHECK_NE(policy_request.find(R"("version":1)"), std::string::npos);
+    BOOST_CHECK_NE(policy_request.find(R"("version":2)"), std::string::npos);
     BOOST_CHECK_NE(policy_request.find(strprintf(R"("chain":"%s")", Params().GetChainTypeString())), std::string::npos);
     BOOST_CHECK_NE(policy_request.find(strprintf(R"("genesis_hash":"%s")", Params().GenesisBlock().GetHash().ToString())), std::string::npos);
     BOOST_CHECK_NE(policy_request.find(R"("id":"agent-1")"), std::string::npos);
     BOOST_CHECK_NE(policy_request.find(R"("label":"test-agent")"), std::string::npos);
     BOOST_CHECK_NE(policy_request.find(strprintf(R"("funding_address":"%s")", first->funding_address)), std::string::npos);
+    BOOST_CHECK_NE(policy_request.find(strprintf(R"("funding_descriptor":"%s")", first->funding_descriptor)), std::string::npos);
     BOOST_CHECK_NE(policy_request.find(R"("funding_limit_cinnabar":"100000000")"), std::string::npos);
     BOOST_CHECK_NE(policy_request.find(R"("funding_available_cinnabar":"100000000")"), std::string::npos);
     BOOST_CHECK_NE(policy_request.find(R"("daily_limit_cinnabar":"50000000")"), std::string::npos);
     BOOST_CHECK_NE(policy_request.find(R"("request_created_time":")"), std::string::npos);
-    BOOST_CHECK_NE(policy_request.find(R"("policy_status":"pending_integration")"), std::string::npos);
-    BOOST_CHECK_NE(policy_request.find(R"("backend_created":false)"), std::string::npos);
+    BOOST_CHECK_EQUAL(policy_request.find("policy_status"), std::string::npos);
+    BOOST_CHECK_EQUAL(policy_request.find("backend_created"), std::string::npos);
     auto validated_policy_request = vault.ValidateAgentAllotmentPolicyRequest(policy_request);
     BOOST_REQUIRE(validated_policy_request);
     BOOST_CHECK_EQUAL(validated_policy_request->id, first->id);
     BOOST_CHECK_EQUAL(validated_policy_request->label, first->label);
     BOOST_CHECK_EQUAL(validated_policy_request->funding_address, first->funding_address);
+    BOOST_CHECK_EQUAL(validated_policy_request->funding_descriptor, first->funding_descriptor);
     BOOST_CHECK_EQUAL(validated_policy_request->funding_limit, first->funding_limit);
     BOOST_CHECK_EQUAL(validated_policy_request->funding_available, COIN);
     BOOST_CHECK_EQUAL(validated_policy_request->daily_limit, first->daily_limit);
     BOOST_CHECK_EQUAL(validated_policy_request->risk_accepted_time, first->risk_accepted_time);
     BOOST_CHECK_GT(validated_policy_request->request_created_time, 0);
-    BOOST_CHECK(!validated_policy_request->backend_created);
-    BOOST_CHECK(validated_policy_request->policy_status == AgentAllotmentPolicyStatus::PendingIntegration);
-    auto policy_bundle = vault.ExportAgentAllotmentPolicyBundle(policy_request);
-    BOOST_REQUIRE_MESSAGE(policy_bundle, util::ErrorString(policy_bundle).original);
-    BOOST_CHECK_EQUAL(policy_bundle->metadata.id, first->id);
-    BOOST_CHECK_EQUAL(policy_bundle->metadata.funding_address, first->funding_address);
-    BOOST_CHECK_EQUAL(policy_bundle->policy_request, policy_request);
-    BOOST_CHECK(!policy_bundle->funding_secret.empty());
-    CKey funding_secret{DecodeSecret(policy_bundle->funding_secret)};
-    BOOST_REQUIRE(funding_secret.IsValid());
-    const CKeyID funding_secret_id{funding_secret.GetPubKey().GetID()};
-    const CTxDestination funding_dest{DecodeDestination(first->funding_address)};
-    bool funding_secret_matches{false};
-    if (const auto* pkhash{std::get_if<PKHash>(&funding_dest)}) {
-        funding_secret_matches = ToKeyID(*pkhash) == funding_secret_id;
-    } else if (const auto* witness_hash{std::get_if<WitnessV0KeyHash>(&funding_dest)}) {
-        funding_secret_matches = ToKeyID(*witness_hash) == funding_secret_id;
-    }
-    BOOST_CHECK(funding_secret_matches);
-    UniValue bundle_json{UniValue::VOBJ};
-    BOOST_REQUIRE(bundle_json.read(policy_bundle->bundle_json));
-    BOOST_CHECK_EQUAL(bundle_json.find_value("type").get_str(), "quicksilver.agent_allotment_key_bundle");
-    BOOST_CHECK_EQUAL(bundle_json.find_value("version").getInt<int>(), 1);
-    BOOST_CHECK(bundle_json.find_value("policy_request").isObject());
-    BOOST_CHECK_EQUAL(bundle_json.find_value("funding_address").get_str(), first->funding_address);
-    BOOST_CHECK_EQUAL(bundle_json.find_value("funding_secret_wif").get_str(), policy_bundle->funding_secret);
-    const UniValue& bundle_funding_outputs{bundle_json.find_value("funding_outputs")};
-    BOOST_REQUIRE(bundle_funding_outputs.isArray());
-    BOOST_CHECK_EQUAL(policy_bundle->funding_outputs.size(), bundle_funding_outputs.size());
-    BOOST_CHECK_EQUAL(bundle_json.find_value("policy_enforcement").get_str(), "pending_integration");
 
     auto replace_first = [](std::string value, const std::string& from, const std::string& to) {
         const size_t pos{value.find(from)};
@@ -1014,7 +1068,7 @@ BOOST_AUTO_TEST_CASE(agent_allotment_setup_records_vault_metadata)
         return value;
     };
     BOOST_CHECK(!vault.ValidateAgentAllotmentPolicyRequest("[]"));
-    BOOST_CHECK(!vault.ValidateAgentAllotmentPolicyRequest(replace_first(policy_request, R"("version":1)", R"("version":2)")));
+    BOOST_CHECK(!vault.ValidateAgentAllotmentPolicyRequest(replace_first(policy_request, R"("version":2)", R"("version":1)")));
     BOOST_CHECK(!vault.ValidateAgentAllotmentPolicyRequest(replace_first(
         policy_request,
         strprintf(R"("chain":"%s")", Params().GetChainTypeString()),
@@ -1027,6 +1081,10 @@ BOOST_AUTO_TEST_CASE(agent_allotment_setup_records_vault_metadata)
         policy_request,
         strprintf(R"("funding_address":"%s")", first->funding_address),
         R"("funding_address":"not-a-quicksilver-address")")));
+    BOOST_CHECK(!vault.ValidateAgentAllotmentPolicyRequest(replace_first(
+        policy_request,
+        R"("funding_descriptor":")",
+        R"("funding_descriptor":"not-the-recorded-descriptor)")));
     BOOST_CHECK(!vault.ValidateAgentAllotmentPolicyRequest(replace_first(
         policy_request,
         R"("funding_limit_cinnabar":"100000000")",
@@ -1059,16 +1117,194 @@ BOOST_AUTO_TEST_CASE(agent_allotment_setup_records_vault_metadata)
     BOOST_CHECK_EQUAL(second->id, "agent-2");
     BOOST_CHECK(IsValidDestinationString(second->funding_address));
     BOOST_CHECK_NE(second->funding_address, first->funding_address);
+    BOOST_CHECK_NE(second->funding_descriptor, first->funding_descriptor);
+    BOOST_CHECK_EQUAL(second->stopped_time, 0);
 
     const auto records = vault.ListAgentAllotmentRecords();
     BOOST_REQUIRE_EQUAL(records.size(), 2U);
     BOOST_CHECK_EQUAL(records[0].label, "test-agent");
     BOOST_CHECK_EQUAL(records[0].funding_address, first->funding_address);
-    BOOST_CHECK(records[0].policy_status == AgentAllotmentPolicyStatus::PendingIntegration);
+    BOOST_CHECK_EQUAL(records[0].funding_descriptor, first->funding_descriptor);
+    BOOST_CHECK_EQUAL(records[0].stopped_time, 0);
     BOOST_CHECK_EQUAL(records[1].label, "second-agent");
     BOOST_CHECK_EQUAL(records[1].funding_address, second->funding_address);
-    BOOST_CHECK(records[1].policy_status == AgentAllotmentPolicyStatus::PendingIntegration);
+    BOOST_CHECK_EQUAL(records[1].funding_descriptor, second->funding_descriptor);
+    BOOST_CHECK_EQUAL(records[1].stopped_time, 0);
+}
 
+BOOST_AUTO_TEST_CASE(agent_allotment_setup_imports_cosigned_taproot_descriptor)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    EnableDescriptorVault(vault);
+
+    auto record{vault.RecordAgentAllotmentSetup("taproot-agent", COIN, 0)};
+    BOOST_REQUIRE(record);
+    const CTxDestination dest{DecodeDestination(record->funding_address)};
+    BOOST_CHECK(std::holds_alternative<WitnessV1Taproot>(dest));
+
+    FlatSigningProvider parsed;
+    std::string error;
+    const auto descs{Parse(record->funding_descriptor, parsed, error, /*require_checksum=*/true)};
+    BOOST_REQUIRE_MESSAGE(descs.size() == 1, error);
+    BOOST_CHECK(parsed.keys.empty());
+    std::string private_descriptor;
+    BOOST_CHECK(!descs[0]->ToPrivateString(parsed, private_descriptor));
+    BOOST_CHECK_NE(record->funding_descriptor.find("multi_a(2,"), std::string::npos);
+    BOOST_CHECK_EQUAL(record->funding_descriptor.find("xprv"), std::string::npos);
+    BOOST_CHECK_EQUAL(record->funding_descriptor.find("tprv"), std::string::npos);
+
+    LOCK(vault.cs_vault);
+    BOOST_CHECK(vault.IsMine(dest) & ISMINE_SPENDABLE);
+}
+
+BOOST_AUTO_TEST_CASE(agent_allotment_agent_key_is_not_a_vault_child)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    EnableDescriptorVault(vault);
+
+    auto record{vault.RecordAgentAllotmentSetup("fresh-agent", COIN, 0)};
+    BOOST_REQUIRE(record);
+    const std::string policy_request{vault.AgentAllotmentPolicyRequest(*record, 0)};
+    auto bundle{vault.ExportAgentAllotmentPolicyBundle(policy_request)};
+    BOOST_REQUIRE_MESSAGE(bundle, util::ErrorString(bundle).original);
+    const CKey agent_key{DecodeSecret(bundle->agent_secret)};
+    BOOST_REQUIRE(agent_key.IsValid());
+    const XOnlyPubKey agent_pubkey{agent_key.GetPubKey()};
+
+    int seen_in_allotment{0};
+    int seen_elsewhere{0};
+    {
+        LOCK(vault.cs_vault);
+        for (ScriptPubKeyMan* spk_man : vault.GetAllScriptPubKeyMans()) {
+            auto* desc_spk_man{dynamic_cast<DescriptorScriptPubKeyMan*>(spk_man)};
+            BOOST_REQUIRE(desc_spk_man);
+            LOCK(desc_spk_man->cs_desc_man);
+            const VaultDescriptor stored{desc_spk_man->GetVaultDescriptor()};
+            const bool allotment{stored.descriptor->ToString() == record->funding_descriptor};
+            std::set<CPubKey> pubkeys;
+            std::set<CExtPubKey> extpubs;
+            stored.descriptor->GetPubKeys(pubkeys, extpubs);
+            const auto count_match = [&](const CPubKey& pubkey) {
+                if (XOnlyPubKey{pubkey} != agent_pubkey) return;
+                if (allotment) {
+                    ++seen_in_allotment;
+                } else {
+                    ++seen_elsewhere;
+                }
+            };
+            for (const CPubKey& pubkey : pubkeys) count_match(pubkey);
+            for (const CExtPubKey& extpub : extpubs) count_match(extpub.pubkey);
+        }
+    }
+    BOOST_CHECK_GT(seen_in_allotment, 0);
+    BOOST_CHECK_EQUAL(seen_elsewhere, 0);
+    BOOST_CHECK_EQUAL(bundle->bundle_json.find("xpub"), std::string::npos);
+    BOOST_CHECK_EQUAL(bundle->bundle_json.find("tpub"), std::string::npos);
+    BOOST_CHECK_EQUAL(bundle->bundle_json.find("xprv"), std::string::npos);
+    BOOST_CHECK_EQUAL(bundle->bundle_json.find("tprv"), std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(agent_allotment_setup_requires_unlocked_vault)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    EnableDescriptorVault(vault);
+    const SecureString passphrase{"test"};
+    BOOST_REQUIRE(vault.EncryptVault(passphrase));
+    BOOST_CHECK(vault.IsCrypted());
+    BOOST_CHECK(vault.IsLocked());
+
+    auto refused{vault.RecordAgentAllotmentSetup("locked-agent", COIN, 0)};
+    BOOST_CHECK(!refused);
+    BOOST_CHECK_EQUAL(util::ErrorString(refused).original, "Unlock this vault to create an agent allotment.");
+    BOOST_CHECK(vault.ListAgentAllotmentRecords().empty());
+}
+
+BOOST_AUTO_TEST_CASE(agent_allotment_setup_refuses_private_keys_disabled)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    EnableDescriptorVault(vault);
+    {
+        LOCK(vault.cs_vault);
+        vault.SetVaultFlag(VAULT_FLAG_DISABLE_PRIVATE_KEYS);
+    }
+    const auto managers_before{WITH_LOCK(vault.cs_vault, return vault.GetAllScriptPubKeyMans().size())};
+    auto result{vault.RecordAgentAllotmentSetup("watch-only-agent", COIN, 0)};
+    BOOST_REQUIRE(!result);
+    BOOST_CHECK_EQUAL(util::ErrorString(result).original, "Agent allotment setup requires a vault with private keys.");
+    BOOST_CHECK(vault.ListAgentAllotmentRecords().empty());
+    BOOST_CHECK_EQUAL(WITH_LOCK(vault.cs_vault, return vault.GetAllScriptPubKeyMans().size()), managers_before);
+}
+
+BOOST_AUTO_TEST_CASE(agent_allotment_setup_clears_backup_recorded)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    EnableDescriptorVault(vault);
+    BOOST_CHECK(vault.SetBackupRecorded(true));
+    BOOST_CHECK(vault.IsBackupRecorded());
+
+    auto record{vault.RecordAgentAllotmentSetup("backup-agent", COIN, 0)};
+    BOOST_REQUIRE(record);
+    BOOST_CHECK(!vault.IsBackupRecorded());
+}
+
+BOOST_AUTO_TEST_CASE(agent_allotment_bundle_is_cosign_bundle)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    EnableDescriptorVault(vault);
+    auto record{vault.RecordAgentAllotmentSetup("bundle-agent", COIN, COIN / 2)};
+    BOOST_REQUIRE(record);
+    const std::string policy_request{vault.AgentAllotmentPolicyRequest(*record, COIN)};
+    auto bundle{vault.ExportAgentAllotmentPolicyBundle(policy_request)};
+    BOOST_REQUIRE_MESSAGE(bundle, util::ErrorString(bundle).original);
+    BOOST_CHECK_EQUAL(bundle->agent_secret, bundle->bundle_json.substr(bundle->bundle_json.find(bundle->agent_secret), bundle->agent_secret.size()));
+    BOOST_CHECK_EQUAL(bundle->funding_descriptor, record->funding_descriptor);
+    BOOST_CHECK_EQUAL(bundle->policy_request, policy_request);
+
+    UniValue bundle_json{UniValue::VOBJ};
+    BOOST_REQUIRE(bundle_json.read(bundle->bundle_json));
+    BOOST_CHECK_EQUAL(bundle_json.find_value("type").get_str(), "quicksilver.agent_allotment_cosign_bundle");
+    BOOST_CHECK_EQUAL(bundle_json.find_value("version").getInt<int>(), 1);
+    BOOST_CHECK(bundle_json.find_value("policy_request").isObject());
+    BOOST_CHECK_EQUAL(bundle_json.find_value("funding_address").get_str(), record->funding_address);
+    BOOST_CHECK_EQUAL(bundle_json.find_value("funding_descriptor").get_str(), record->funding_descriptor);
+    BOOST_CHECK_EQUAL(bundle_json.find_value("agent_secret_wif").get_str(), bundle->agent_secret);
+    BOOST_CHECK(!bundle_json.exists("funding_secret_wif"));
+    BOOST_CHECK(!bundle_json.exists("policy_enforcement"));
+    BOOST_CHECK(!bundle_json.find_value("policy_request").exists("policy_status"));
+    BOOST_CHECK(!bundle_json.find_value("policy_request").exists("backend_created"));
+    BOOST_CHECK_EQUAL(bundle->bundle_json.find("\"funding_secret_wif\""), std::string::npos);
+    BOOST_CHECK_EQUAL(bundle->bundle_json.find("\"policy_enforcement\""), std::string::npos);
+    BOOST_CHECK_EQUAL(bundle->bundle_json.find("\"policy_status\""), std::string::npos);
+    BOOST_CHECK_EQUAL(bundle->bundle_json.find("\"backend_created\""), std::string::npos);
+
+    const CKey agent_key{DecodeSecret(bundle->agent_secret)};
+    BOOST_REQUIRE(agent_key.IsValid());
+    const auto agent_pubkey{DescriptorAgentKey(record->funding_descriptor)};
+    BOOST_REQUIRE(agent_pubkey);
+    BOOST_CHECK(XOnlyPubKey{agent_key.GetPubKey()} == *agent_pubkey);
+}
+
+BOOST_AUTO_TEST_CASE(agent_allotment_stop_is_persistent)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    EnableDescriptorVault(vault);
+    auto record{vault.RecordAgentAllotmentSetup("stopping-agent", COIN, 0)};
+    BOOST_REQUIRE(record);
+    BOOST_CHECK_EQUAL(record->stopped_time, 0);
+    BOOST_CHECK(vault.StopAgentAllotment(record->id));
+    BOOST_CHECK(vault.StopAgentAllotment(record->id));
+
+    const auto stopped{vault.ListAgentAllotmentRecords()};
+    BOOST_REQUIRE_EQUAL(stopped.size(), 1U);
+    BOOST_CHECK_GT(stopped[0].stopped_time, 0);
+
+    CVault reloaded(m_node.chain.get(), "", DuplicateMockDatabase(vault.GetDatabase()));
+    BOOST_CHECK_EQUAL(reloaded.LoadVault(), DBErrors::LOAD_OK);
+    const auto records{reloaded.ListAgentAllotmentRecords()};
+    BOOST_REQUIRE_EQUAL(records.size(), 1U);
+    BOOST_CHECK_EQUAL(records[0].id, record->id);
+    BOOST_CHECK_EQUAL(records[0].stopped_time, stopped[0].stopped_time);
+    BOOST_CHECK_NE(records[0].stopped_time, 0);
 }
 
 void TestLoadVault(const std::string& name, DatabaseFormat format, std::function<void(std::shared_ptr<CVault>)> f)
@@ -1409,10 +1645,10 @@ BOOST_FIXTURE_TEST_CASE(vault_archive_restores_address_without_purpose, ListCoin
     BOOST_CHECK(*payee->purpose == AddressPurpose::SEND);
 }
 
-// Exporting an agent bundle hands the agent the funding key AND the list of outputs it
-// may spend. Both sides can sign for those outputs from that moment on, so the vault has
-// to stop selecting them: a collision does not double-spend, but it does throw away a
-// full transaction grind. See doc/design/agent-client.md.
+// Exporting an agent bundle lists the outputs the agent may spend. The vault can still
+// spend them by key path, so the lock keeps ordinary coin selection away from the
+// allotment. A collision does not double-spend, but it does throw away a full
+// transaction grind. See doc/design/agent-client.md.
 BOOST_FIXTURE_TEST_CASE(agent_bundle_export_locks_funding_outputs, ListCoinsTestingSetup)
 {
     auto record{vault->RecordAgentAllotmentSetup("locking-agent", COIN, COIN / 2)};
@@ -1486,6 +1722,403 @@ BOOST_FIXTURE_TEST_CASE(agent_bundle_export_moves_balance_to_delegated, ListCoin
     // Nothing left the vault, so what it owns in total is unchanged. Quicksilver is
     // feeless, so a self-send moves the money without shrinking it.
     BOOST_CHECK_EQUAL(after.m_mine_trusted + after.m_mine_delegated, before.m_mine_trusted);
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_allotment_reclaim_spends_by_key_path, ListCoinsTestingSetup)
+{
+    constexpr CAmount funding_amount{COIN / 4};
+    auto record{vault->RecordAgentAllotmentSetup("reclaim-agent", COIN, 0)};
+    BOOST_REQUIRE(record);
+    const CTxDestination funding_dest{DecodeDestination(record->funding_address)};
+    BOOST_REQUIRE(std::holds_alternative<WitnessV1Taproot>(funding_dest));
+
+    AddTx(CRecipient{funding_dest, funding_amount});
+
+    COutPoint funding_outpoint;
+    {
+        LOCK(vault->cs_vault);
+        for (const COutput& coin : AvailableCoins(*vault).All()) {
+            if (coin.txout.scriptPubKey == GetScriptForDestination(funding_dest)) {
+                funding_outpoint = coin.outpoint;
+                break;
+            }
+        }
+    }
+    BOOST_REQUIRE(!funding_outpoint.IsNull());
+
+    const CTxDestination fresh{*Assert(vault->GetNewDestination(OutputType::BECH32, ""))};
+    CCoinControl coin_control;
+    coin_control.m_allow_other_inputs = false;
+    coin_control.Select(funding_outpoint);
+    auto created{CreateTransaction(*vault, {CRecipient{fresh, funding_amount}}, /*change_pos=*/std::nullopt, coin_control)};
+    BOOST_REQUIRE_MESSAGE(created, util::ErrorString(created).original);
+    BOOST_REQUIRE_EQUAL(created->tx->vin.size(), 1U);
+    BOOST_CHECK(created->tx->vin[0].prevout == funding_outpoint);
+    const CScriptWitness& witness{created->tx->vin[0].scriptWitness};
+    BOOST_REQUIRE_EQUAL(witness.stack.size(), 1U);
+    BOOST_CHECK(witness.stack[0].size() == 64 || witness.stack[0].size() == 65);
+}
+
+// Agent requests carry public descriptor metadata and only the agent's private key.
+struct AgentCosignTestingSetup : ListCoinsTestingSetup {
+    AgentCosignTestingSetup()
+    {
+        const_cast<Consensus::Params&>(Params().GetConsensus()).fTxPowNoCycle = true;
+        vault->SetBroadcastTransactions(true);
+    }
+
+    AgentAllotmentPolicyBundle FundAgent()
+    {
+        auto record{vault->RecordAgentAllotmentSetup("cosigned-agent", COIN, 0)};
+        BOOST_REQUIRE(record);
+        AddTx(CRecipient{DecodeDestination(record->funding_address), COIN / 4});
+        auto bundle{vault->ExportAgentAllotmentPolicyBundle(vault->AgentAllotmentPolicyRequest(*record, COIN / 4))};
+        BOOST_REQUIRE_MESSAGE(bundle, util::ErrorString(bundle).original);
+        BOOST_REQUIRE_EQUAL(bundle->funding_outputs.size(), 1U);
+        return *bundle;
+    }
+
+    //! A nonzero change returns that much to the allotment's own address, as the agent does.
+    PartiallySignedQuicksilverTransaction AgentRequest(const AgentAllotmentPolicyBundle& bundle, bool sign = true, CAmount change = 0)
+    {
+        FlatSigningProvider provider;
+        std::string error;
+        auto descriptors{Parse(bundle.funding_descriptor, provider, error, true)};
+        BOOST_REQUIRE_EQUAL(descriptors.size(), 1U);
+        std::vector<CScript> scripts;
+        BOOST_REQUIRE(descriptors[0]->Expand(0, provider, scripts, provider));
+        const CKey agent{DecodeSecret(bundle.agent_secret)};
+        provider.keys.emplace(agent.GetPubKey().GetID(), agent);
+        CMutableTransaction tx;
+        for (const auto& coin : bundle.funding_outputs) {
+            tx.vin.emplace_back(Txid::FromHex(coin.txid).value(), coin.vout);
+        }
+        tx.vout.emplace_back(COIN / 4 - change, GetScriptForDestination(PKHash(GenerateRandomKey().GetPubKey())));
+        if (change > 0) tx.vout.emplace_back(change, scripts.at(0));
+        PartiallySignedQuicksilverTransaction psqt{tx};
+        for (auto& input : psqt.inputs) input.witness_utxo = CTxOut(COIN / 4, scripts.at(0));
+        auto data{PrecomputePSQTData(psqt)};
+        for (size_t i = 0; i < psqt.inputs.size(); ++i) {
+            SignPSQTInput(provider, psqt, i, &data, SIGHASH_DEFAULT, nullptr, false);
+            BOOST_REQUIRE_EQUAL(psqt.inputs[i].m_tap_script_sigs.size(), 1U);
+        }
+        // Prove against the maximum final witness, as the agent must do before C signs.
+        CMutableTransaction maximum{*psqt.tx};
+        for (size_t i = 0; i < maximum.vin.size(); ++i) {
+            const auto& leaf{*psqt.inputs[i].m_tap_scripts.begin()};
+            maximum.vin[i].scriptWitness.stack = {std::vector<unsigned char>(65), std::vector<unsigned char>(65), leaf.first.first, *leaf.second.begin()};
+        }
+        {
+            LOCK(::cs_main);
+            ProveTxPowForTest(maximum, *Assert(m_node.chainman->ActiveChain().Tip()), Params().GetConsensus());
+        }
+        psqt.tx->nAnchorHeight = maximum.nAnchorHeight;
+        psqt.tx->nCycle = maximum.nCycle;
+        psqt.tx->nPowNonce = maximum.nPowNonce;
+        if (!sign) for (auto& input : psqt.inputs) input.m_tap_script_sigs.clear();
+        return psqt;
+    }
+
+    //! Replace the agent's signature after a test has edited the transaction.
+    void ResignAgent(const AgentAllotmentPolicyBundle& bundle, PartiallySignedQuicksilverTransaction& psqt)
+    {
+        FlatSigningProvider provider;
+        std::string error;
+        auto parsed{Parse(bundle.funding_descriptor, provider, error, true)};
+        BOOST_REQUIRE_EQUAL(parsed.size(), 1U);
+        std::vector<CScript> scripts;
+        BOOST_REQUIRE(parsed[0]->Expand(0, provider, scripts, provider));
+        const auto agent{DecodeSecret(bundle.agent_secret)};
+        provider.keys.emplace(agent.GetPubKey().GetID(), agent);
+        psqt.inputs[0].m_tap_script_sigs.clear();
+        const auto data{PrecomputePSQTData(psqt)};
+        BOOST_CHECK(!SignPSQTInput(provider, psqt, 0, &data, SIGHASH_DEFAULT, nullptr, false));
+        BOOST_REQUIRE_EQUAL(psqt.inputs[0].m_tap_script_sigs.size(), 1U);
+    }
+
+    static std::string Encode(const PartiallySignedQuicksilverTransaction& psqt)
+    {
+        DataStream stream;
+        stream << psqt;
+        return EncodeBase64(stream.str());
+    }
+
+    void Refuses(const PartiallySignedQuicksilverTransaction& psqt, const std::string& message)
+    {
+        const auto txid{psqt.tx->GetHash()};
+        auto result{vault->CosignAgentAllotmentSpend(Encode(psqt))};
+        BOOST_REQUIRE(!result);
+        BOOST_CHECK_EQUAL(util::ErrorString(result).original, message);
+        BOOST_CHECK(!m_node.chain->isInRelayPool(txid));
+        LOCK(vault->cs_vault);
+        BOOST_CHECK_EQUAL(vault->mapVault.count(txid), 0U);
+        for (const auto& input : psqt.tx->vin) BOOST_CHECK(!vault->IsSpent(input.prevout));
+    }
+};
+
+struct AgentCosignRetreatTestingSetup : AgentCosignTestingSetup {
+    AgentCosignRetreatTestingSetup() : proxy{*m_node.chain}
+    {
+        vault.reset();
+        vault = CreateSyncedVault(proxy, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
+        vault->SetBroadcastTransactions(true);
+    }
+    ~AgentCosignRetreatTestingSetup() { vault.reset(); }
+    RetreatingChain proxy;
+};
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_tip_retreat_after_snapshot, AgentCosignRetreatTestingSetup)
+{
+    const auto psqt{AgentRequest(FundAgent())};
+    proxy.armed = true;
+    proxy.retreat_at = RetreatingChain::RetreatAt::TIP_METADATA;
+    Refuses(psqt, "Agent spend request's proof has expired. Ask the agent for a fresh request.");
+    BOOST_CHECK_EQUAL(proxy.tip_snapshots, 1U);
+    BOOST_CHECK_EQUAL(proxy.retreat_observations, 1U);
+    BOOST_CHECK_EQUAL(proxy.unsafe_height_lookups, 0U);
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_anchor_retreat_after_tip_metadata, AgentCosignRetreatTestingSetup)
+{
+    const auto psqt{AgentRequest(FundAgent())};
+    proxy.armed = true;
+    proxy.retreat_at = RetreatingChain::RetreatAt::ANCESTOR_METADATA;
+    Refuses(psqt, "Agent spend request's proof has expired. Ask the agent for a fresh request.");
+    BOOST_CHECK_EQUAL(proxy.tip_snapshots, 1U);
+    BOOST_CHECK_EQUAL(proxy.retreat_observations, 1U);
+    BOOST_CHECK_EQUAL(proxy.unsafe_height_lookups, 0U);
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_broadcasts_cosigned_spend, AgentCosignTestingSetup)
+{
+    const auto bundle{FundAgent()};
+    const auto psqt{AgentRequest(bundle)};
+    auto result{vault->CosignAgentAllotmentSpend(Encode(psqt))};
+    BOOST_REQUIRE_MESSAGE(result, util::ErrorString(result).original);
+    BOOST_CHECK(m_node.chain->isInRelayPool((*result)->GetHash()));
+    BOOST_REQUIRE_EQUAL((*result)->vin[0].scriptWitness.stack.size(), 4U);
+    LOCK(vault->cs_vault);
+    BOOST_REQUIRE_EQUAL(vault->mapVault.count((*result)->GetHash()), 1U);
+    BOOST_CHECK_EQUAL(vault->mapVault.at((*result)->GetHash()).mapValue.at("agent_allotment"), bundle.metadata.id);
+}
+
+// The agent spends its next request from this change, so the vault must not count it as
+// treasury balance or let ordinary coin selection spend it by the reclaim key.
+BOOST_FIXTURE_TEST_CASE(agent_cosign_locks_change_returned_to_the_allotment, AgentCosignTestingSetup)
+{
+    constexpr CAmount change{COIN / 8};
+    const auto bundle{FundAgent()};
+    const Balance before{GetBalance(*vault)};
+    BOOST_CHECK_EQUAL(before.m_mine_delegated, COIN / 4);
+
+    const auto psqt{AgentRequest(bundle, /*sign=*/true, change)};
+    auto result{vault->CosignAgentAllotmentSpend(Encode(psqt))};
+    BOOST_REQUIRE_MESSAGE(result, util::ErrorString(result).original);
+    const CTransactionRef& tx{*result};
+    BOOST_REQUIRE_EQUAL(tx->vout.size(), 2U);
+    BOOST_REQUIRE(tx->vout[1].scriptPubKey == GetScriptForDestination(DecodeDestination(bundle.metadata.funding_address)));
+    const COutPoint change_outpoint{tx->GetHash(), 1};
+
+    const Balance after{GetBalance(*vault)};
+    BOOST_CHECK_EQUAL(after.m_mine_delegated, change);
+    BOOST_CHECK_EQUAL(after.m_mine_trusted, before.m_mine_trusted);
+
+    LOCK(vault->cs_vault);
+    BOOST_CHECK(vault->IsLockedCoin(change_outpoint));
+    for (const COutput& coin : AvailableCoins(*vault).All()) {
+        BOOST_CHECK(coin.outpoint != change_outpoint);
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_after_stop, AgentCosignTestingSetup)
+{
+    const auto bundle{FundAgent()};
+    const auto psqt{AgentRequest(bundle)};
+    BOOST_REQUIRE(vault->StopAgentAllotment(bundle.metadata.id));
+    Refuses(psqt, "This agent allotment is stopped. The vault no longer co-signs for it.");
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_expired_anchor, AgentCosignTestingSetup)
+{
+    auto psqt{AgentRequest(FundAgent())};
+    psqt.tx->nAnchorHeight -= Params().GetConsensus().nMaxAnchorAge + 1;
+    Refuses(psqt, "Agent spend request's proof has expired. Ask the agent for a fresh request.");
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_expired_genesis_anchor, AgentCosignTestingSetup)
+{
+    auto psqt{AgentRequest(FundAgent())};
+    psqt.tx->nAnchorHeight = 0;
+    Refuses(psqt, "Agent spend request's proof has expired. Ask the agent for a fresh request.");
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_unproved_request, AgentCosignTestingSetup)
+{
+    auto psqt{AgentRequest(FundAgent())};
+    psqt.tx->nCycle.fill(0);
+    Refuses(psqt, "Agent spend request carries no proof of work; the agent proves before it hands the request over.");
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_unsigned_request, AgentCosignTestingSetup)
+{
+    Refuses(AgentRequest(FundAgent(), false), "Agent spend request is not signed by the agent's key.");
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_invalid_agent_signature, AgentCosignTestingSetup)
+{
+    auto psqt{AgentRequest(FundAgent())};
+    psqt.inputs[0].m_tap_script_sigs.begin()->second[0] ^= 1;
+    Refuses(psqt, "Agent spend request is not signed by the agent's key.");
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_foreign_input, AgentCosignTestingSetup)
+{
+    auto psqt{AgentRequest(FundAgent())};
+    const auto ordinary{WITH_LOCK(vault->cs_vault, return COutput{AvailableCoins(*vault).All().at(0)})};
+    psqt.tx->vin.emplace_back(ordinary.outpoint);
+    psqt.inputs.emplace_back();
+    psqt.inputs.back().witness_utxo = ordinary.txout;
+    Refuses(psqt, "Agent spend request spends an output that is not this vault's agent allotment.");
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_two_allotments, AgentCosignTestingSetup)
+{
+    auto psqt{AgentRequest(FundAgent())};
+    const auto other{AgentRequest(FundAgent())};
+    psqt.tx->vin.push_back(other.tx->vin[0]);
+    psqt.inputs.push_back(other.inputs[0]);
+    Refuses(psqt, "Agent spend request mixes inputs from more than one allotment.");
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_unknown_output, AgentCosignTestingSetup)
+{
+    auto psqt{AgentRequest(FundAgent())};
+    psqt.tx->vin[0].prevout.n += 100;
+    Refuses(psqt, "Agent spend request spends an output this vault does not hold unspent.");
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_signs_script_path_with_cosigner_only, AgentCosignTestingSetup)
+{
+    const auto bundle{FundAgent()};
+    const auto psqt{AgentRequest(bundle)};
+    auto result{vault->CosignAgentAllotmentSpend(Encode(psqt))};
+    BOOST_REQUIRE_MESSAGE(result, util::ErrorString(result).original);
+    const auto& witness{(*result)->vin[0].scriptWitness};
+    BOOST_REQUIRE_EQUAL(witness.stack.size(), 4U);
+    const auto& leaf{*psqt.inputs[0].m_tap_scripts.begin()};
+    BOOST_CHECK(witness.stack[2] == leaf.first.first);
+    BOOST_CHECK(witness.stack[3] == *leaf.second.begin());
+    BOOST_CHECK(witness.stack[1] == psqt.inputs[0].m_tap_script_sigs.begin()->second);
+    // This exact 2-of-2 script and successful verification require precisely A and C.
+    auto data{PrecomputePSQTData(psqt)};
+    BOOST_CHECK(VerifyScript({}, psqt.inputs[0].witness_utxo.scriptPubKey, &witness, STANDARD_SCRIPT_VERIFY_FLAGS,
+                            TransactionSignatureChecker{result->get(), 0, psqt.inputs[0].witness_utxo.nValue, data, MissingDataBehavior::FAIL}));
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_only_spend_fails_script_verification, AgentCosignTestingSetup)
+{
+    auto psqt{AgentRequest(FundAgent())};
+    const auto data{PrecomputePSQTData(psqt)};
+    const auto leaf{*psqt.inputs[0].m_tap_scripts.begin()};
+    const auto signature{psqt.inputs[0].m_tap_script_sigs.begin()->second};
+    BOOST_CHECK(!FinalizePSQT(psqt));
+    CMutableTransaction forced{*psqt.tx};
+    forced.vin[0].scriptWitness.stack = {{}, signature, leaf.first.first, *leaf.second.begin()};
+    BOOST_REQUIRE_EQUAL(forced.vin[0].scriptWitness.stack.size(), 4U);
+    BOOST_REQUIRE(forced.vin[0].scriptWitness.stack[0].empty());
+    BOOST_REQUIRE_EQUAL(forced.vin[0].scriptWitness.stack[1].size(), 64U);
+    ScriptError error;
+    BOOST_CHECK(!VerifyScript({}, psqt.inputs[0].witness_utxo.scriptPubKey, &forced.vin[0].scriptWitness, STANDARD_SCRIPT_VERIFY_FLAGS,
+                             MutableTransactionSignatureChecker{&forced, 0, psqt.inputs[0].witness_utxo.nValue, data, MissingDataBehavior::FAIL}, &error));
+    // A valid A signature reaches the threshold check; it is C that is missing.
+    BOOST_CHECK_EQUAL(error, SCRIPT_ERR_EVAL_FALSE);
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_prefinalized_key_path, AgentCosignTestingSetup)
+{
+    const auto bundle{FundAgent()};
+    auto psqt{AgentRequest(bundle)};
+    FlatSigningProvider parsed_provider;
+    std::string error;
+    auto parsed{Parse(bundle.funding_descriptor, parsed_provider, error, true)};
+    BOOST_REQUIRE_EQUAL(parsed.size(), 1U);
+    VaultDescriptor stored{std::shared_ptr<Descriptor>{std::move(parsed[0])}, 0, 0, 0, 0};
+    std::unique_ptr<FlatSigningProvider> keys;
+    {
+        LOCK(vault->cs_vault);
+        auto* manager{vault->GetDescriptorScriptPubKeyMan(stored)};
+        BOOST_REQUIRE(manager);
+        keys = manager->GetPrivateSigningProvider(psqt.inputs[0].witness_utxo.scriptPubKey);
+    }
+    BOOST_REQUIRE(keys);
+    const auto data{PrecomputePSQTData(psqt)};
+    BOOST_REQUIRE(SignPSQTInput(*keys, psqt, 0, &data, SIGHASH_DEFAULT));
+    BOOST_REQUIRE_EQUAL(psqt.inputs[0].final_script_witness.stack.size(), 1U);
+    BOOST_REQUIRE(PSQTInputSignedAndVerified(psqt, 0, &data));
+    Refuses(psqt, "Agent spend request is not signed by the agent's key.");
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_cosigner_signature_without_agent, AgentCosignTestingSetup)
+{
+    const auto bundle{FundAgent()};
+    auto psqt{AgentRequest(bundle)};
+    FlatSigningProvider provider;
+    std::string error;
+    auto parsed{Parse(bundle.funding_descriptor, provider, error, true)};
+    BOOST_REQUIRE_EQUAL(parsed.size(), 1U);
+    VaultDescriptor stored{std::shared_ptr<Descriptor>{std::move(parsed[0])}, 0, 0, 0, 0};
+    std::vector<CScript> scripts;
+    BOOST_REQUIRE(stored.descriptor->Expand(0, provider, scripts, provider));
+    std::unique_ptr<FlatSigningProvider> all_keys;
+    {
+        LOCK(vault->cs_vault);
+        all_keys = Assert(vault->GetDescriptorScriptPubKeyMan(stored))->GetPrivateSigningProvider(scripts[0]);
+    }
+    BOOST_REQUIRE(all_keys);
+    const XOnlyPubKey agent{DecodeSecret(bundle.agent_secret).GetPubKey()};
+    const auto reclaim{provider.tr_trees.begin()->second.GetSpendData().internal_key};
+    for (const auto& [id, key] : all_keys->keys) {
+        const XOnlyPubKey pubkey{key.GetPubKey()};
+        if (pubkey != agent && pubkey != reclaim) provider.keys.emplace(id, key);
+    }
+    BOOST_REQUIRE_EQUAL(provider.keys.size(), 1U);
+    psqt.inputs[0].m_tap_script_sigs.clear();
+    const auto data{PrecomputePSQTData(psqt)};
+    BOOST_CHECK(!SignPSQTInput(provider, psqt, 0, &data, SIGHASH_DEFAULT, nullptr, false));
+    BOOST_REQUIRE_EQUAL(psqt.inputs[0].m_tap_script_sigs.size(), 1U);
+    BOOST_CHECK(psqt.inputs[0].m_tap_script_sigs.begin()->first.first != agent);
+    Refuses(psqt, "Agent spend request is not signed by the agent's key.");
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_future_anchor, AgentCosignTestingSetup)
+{
+    auto psqt{AgentRequest(FundAgent())};
+    psqt.tx->nAnchorHeight += 1;
+    Refuses(psqt, "Agent spend request's proof has expired. Ask the agent for a fresh request.");
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_consensus_rejection_leaves_no_vault_transaction, AgentCosignTestingSetup)
+{
+    const auto bundle{FundAgent()};
+    auto psqt{AgentRequest(bundle)};
+    // A correctly signed request can still be consensus-invalid. The permissive
+    // sandbox target cannot supply a proof-threshold rejection for this small tx.
+    psqt.tx->vout[0].nValue = -1;
+    ResignAgent(bundle, psqt);
+    Refuses(psqt, "bad-txns-vout-negative");
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_consensus_rejection_releases_change_lock, AgentCosignTestingSetup)
+{
+    const auto bundle{FundAgent()};
+    auto psqt{AgentRequest(bundle, /*sign=*/true, /*change=*/COIN / 8)};
+    psqt.tx->vout[0].nValue = -1;
+    ResignAgent(bundle, psqt);
+    Refuses(psqt, "bad-txns-vout-negative");
+    const COutPoint change_outpoint{psqt.tx->GetHash(), 1};
+    LOCK(vault->cs_vault);
+    BOOST_CHECK(!vault->IsLockedCoin(change_outpoint));
+    BOOST_CHECK(!vault->GetDatabase().MakeBatch()->Exists(std::make_pair(DBKeys::LOCKED_UTXO, std::make_pair(change_outpoint.hash, change_outpoint.n))));
 }
 
 BOOST_FIXTURE_TEST_CASE(vault_disableprivkeys, TestChain100Setup)

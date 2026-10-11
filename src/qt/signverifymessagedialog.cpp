@@ -7,6 +7,7 @@
 #include <qt/forms/ui_signverifymessagedialog.h>
 
 #include <qt/addressbookpage.h>
+#include <qt/benchpanel.h>
 #include <qt/guiutil.h>
 #include <qt/platformstyle.h>
 #include <qt/vaultmodel.h>
@@ -18,7 +19,9 @@
 #include <vector>
 
 #include <QClipboard>
+#include <QLabel>
 #include <QPointer>
+#include <QPushButton>
 
 SignVerifyMessageDialog::SignVerifyMessageDialog(const PlatformStyle *_platformStyle, QWidget *parent) :
     QDialog(parent, GUIUtil::dialog_flags),
@@ -27,17 +30,25 @@ SignVerifyMessageDialog::SignVerifyMessageDialog(const PlatformStyle *_platformS
 {
     ui->setupUi(this);
 
+    // The page grammar, as in the Node window: the tabs in one titled panel,
+    // notes above the fields, quiet commands.
+    ui->tabWidget->setDocumentMode(true);
+    BenchPanel::Adopt(this, nullptr, QStringLiteral("signaturesPanel"), tr("Signatures"));
+    for (QLabel* note : {ui->infoLabel_SM, ui->infoLabel_VM}) {
+        note->setProperty("class", QStringLiteral("benchNote"));
+    }
+    for (QPushButton* button : findChildren<QPushButton*>()) {
+        button->setProperty("class", QStringLiteral("benchQuiet"));
+    }
+
     ui->addressBookButton_SM->setIcon(platformStyle->SingleColorIcon(":/icons/address-book"));
     ui->pasteButton_SM->setIcon(platformStyle->SingleColorIcon(":/icons/editpaste"));
     ui->copySignatureButton_SM->setIcon(platformStyle->SingleColorIcon(":/icons/editcopy"));
-    ui->signMessageButton_SM->setIcon(platformStyle->SingleColorIcon(":/icons/edit"));
-    ui->clearButton_SM->setIcon(platformStyle->SingleColorIcon(":/icons/remove"));
     ui->addressBookButton_VM->setIcon(platformStyle->SingleColorIcon(":/icons/address-book"));
-    ui->verifyMessageButton_VM->setIcon(platformStyle->SingleColorIcon(":/icons/transaction_0"));
-    ui->clearButton_VM->setIcon(platformStyle->SingleColorIcon(":/icons/remove"));
 
-    GUIUtil::setupAddressWidget(ui->addressIn_SM, this);
-    GUIUtil::setupAddressWidget(ui->addressIn_VM, this);
+    // Message signing works only with key-hash addresses, so the example is one.
+    GUIUtil::setupAddressWidget(ui->addressIn_SM, this, GUIUtil::AddressExample::KeyHash);
+    GUIUtil::setupAddressWidget(ui->addressIn_VM, this, GUIUtil::AddressExample::KeyHash);
 
     ui->addressIn_SM->installEventFilter(this);
     ui->messageIn_SM->installEventFilter(this);
@@ -291,11 +302,7 @@ void SignVerifyMessageDialog::changeEvent(QEvent* e)
         ui->addressBookButton_SM->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/address-book")));
         ui->pasteButton_SM->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/editpaste")));
         ui->copySignatureButton_SM->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/editcopy")));
-        ui->signMessageButton_SM->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/edit")));
-        ui->clearButton_SM->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/remove")));
         ui->addressBookButton_VM->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/address-book")));
-        ui->verifyMessageButton_VM->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/transaction_0")));
-        ui->clearButton_VM->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/remove")));
     }
 
     QDialog::changeEvent(e);

@@ -37,13 +37,13 @@ Vault encryption may also not protect against more sophisticated attacks. An att
 
 After encrypting the vault or changing the passphrase, a new backup needs to be created immediately. The reason is that the keypool is flushed and a new HD seed is generated after encryption. Any coins received by the new seed cannot be recovered from the previous backups.
 
-The vault's private key may be encrypted with `Controls` -> `Encrypt Vault…` in the GUI, or with the following command:
+The vault's private key may be encrypted with `Settings` -> `Encrypt Vault…` in the GUI, or with the following command:
 
 ```
 $ quicksilver-cli -rpcvault="vault-01" encryptvault "passphrase"
 ```
 
-Once encrypted, the passphrase can be changed with the `vaultpassphrasechange` command, or in the GUI with `Controls` -> `Change Passphrase…`.
+Once encrypted, the passphrase can be changed with the `vaultpassphrasechange` command, or in the GUI with `Settings` -> `Change Passphrase…`.
 
 ```
 $ quicksilver-cli -rpcvault="vault-01" vaultpassphrasechange "oldpassphrase" "newpassphrase"

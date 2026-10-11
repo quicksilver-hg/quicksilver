@@ -8,6 +8,7 @@
 #include <chainparams.h>
 #include <node/interface_ui.h>
 #include <psqt.h>
+#include <qt/benchpanel.h>
 #include <qt/clientmodel.h>
 #include <qt/consensusreviewpage.h>
 #include <qt/desktoplaunchpage.h>
@@ -16,12 +17,10 @@
 #include <qt/miningmodel.h>
 #include <qt/networkpage.h>
 #include <qt/optionsmodel.h>
-#include <qt/overviewpage.h>
 #include <qt/platformstyle.h>
 #include <qt/psqtoperationsdialog.h>
 #include <qt/transactiontablemodel.h>
 #include <qt/vaultmodel.h>
-#include <qt/vaultsummary.h>
 #include <qt/vaultview.h>
 #include <interfaces/node.h>
 #include <util/fs.h>
@@ -50,8 +49,7 @@ const char* CONSENSUS_ENABLED_SETTING = "Desktop/ConsensusEnabled";
 
 VaultFrame::VaultFrame(const PlatformStyle* _platformStyle, QWidget* parent)
     : QFrame(parent),
-      platformStyle(_platformStyle),
-      m_size_hint(OverviewPage{platformStyle, nullptr}.sizeHint())
+      platformStyle(_platformStyle)
 {
     setObjectName(QStringLiteral("vaultFrame"));
 
@@ -68,9 +66,12 @@ VaultFrame::VaultFrame(const PlatformStyle* _platformStyle, QWidget* parent)
     connect(m_launch_page, &DesktopLaunchPage::consensusRequested, this, &VaultFrame::gotoNetworkPage);
     connect(m_launch_page, &DesktopLaunchPage::miningRequested, this, &VaultFrame::gotoMineMintPage);
     connect(m_launch_page, &DesktopLaunchPage::privacyRequested, this, &VaultFrame::privacyRequested);
+    connect(m_launch_page, &DesktopLaunchPage::ledgerRequested, this, &VaultFrame::ledgerRequested);
     vaultStack->addWidget(m_launch_page);
+    // Home is the page a vault opens on, so the frame asks for Home's room.
+    m_size_hint = m_launch_page->sizeHint();
 
-    m_consensus_review_page = new ConsensusReviewPage(platformStyle, Params().AssumedBlockchainSize(), Params().AssumedChainStateSize(), vaultStack);
+    m_consensus_review_page = new ConsensusReviewPage(Params().AssumedBlockchainSize(), Params().AssumedChainStateSize(), vaultStack);
     connect(m_consensus_review_page, &ConsensusReviewPage::continueRequested, this, &VaultFrame::acceptConsensusAndShowStatus);
     connect(m_consensus_review_page, &ConsensusReviewPage::declined, this, [this] {
         if (!m_consensus_enabled) setConsensusEnabled(false);
@@ -91,63 +92,44 @@ VaultFrame::VaultFrame(const PlatformStyle* _platformStyle, QWidget* parent)
     m_no_vault_page = new QWidget(vaultStack);
     m_no_vault_page->setObjectName(QStringLiteral("noVaultPage"));
     m_no_vault_page->setProperty("class", QStringLiteral("quicksilverPage"));
+    // The page grammar, as on the consensus review: one panel across the top of
+    // the page saying where the desktop stands, with the two ways forward.
     auto* no_vault_page_layout = new QVBoxLayout(m_no_vault_page);
-    no_vault_page_layout->setContentsMargins(24, 24, 24, 24);
-    no_vault_page_layout->addStretch();
+    no_vault_page_layout->setContentsMargins(14, 14, 14, 14);
+    no_vault_page_layout->setSpacing(14);
+    const BenchPanel::Parts no_vault = BenchPanel::Make(QStringLiteral("noVaultState"), tr("Vault access"), m_no_vault_page);
 
-    auto* no_vault_state = new QFrame(m_no_vault_page);
-    no_vault_state->setObjectName(QStringLiteral("noVaultState"));
-    no_vault_state->setMaximumWidth(460);
-    auto* no_vault_layout = new QVBoxLayout(no_vault_state);
-    no_vault_layout->setContentsMargins(38, 34, 38, 36);
-    no_vault_layout->setSpacing(10);
-
-    auto* mark = new QLabel(no_vault_state);
-    mark->setObjectName(QStringLiteral("emptyVaultMark"));
-    mark->setPixmap(QIcon(QStringLiteral(":/icons/quicksilver")).pixmap(QSize(50, 50)));
-    mark->setAlignment(Qt::AlignCenter);
-    mark->setFixedSize(QSize(50, 50));
-    no_vault_layout->addWidget(mark, 0, Qt::AlignHCenter);
-
-    auto* eyebrow = new QLabel(tr("Vault access").toUpper(), no_vault_state);
-    eyebrow->setObjectName(QStringLiteral("emptyVaultEyebrow"));
-    eyebrow->setProperty("class", QStringLiteral("pageEyebrow"));
-    eyebrow->setAlignment(Qt::AlignCenter);
-    no_vault_layout->addWidget(eyebrow);
-
-    auto* title = new QLabel(tr("No vault is open"), no_vault_state);
+    auto* title = new QLabel(tr("No vault is open"), no_vault.frame);
     title->setObjectName(QStringLiteral("emptyVaultTitle"));
-    title->setProperty("class", QStringLiteral("pageTitle"));
-    title->setAlignment(Qt::AlignCenter);
-    no_vault_layout->addWidget(title);
+    title->setProperty("class", QStringLiteral("benchValue"));
+    no_vault.body->addWidget(title);
 
-    m_no_vault_body = new QLabel(no_vault_state);
+    m_no_vault_body = new QLabel(no_vault.frame);
     m_no_vault_body->setObjectName(QStringLiteral("emptyVaultBody"));
-    m_no_vault_body->setProperty("class", QStringLiteral("muted"));
-    m_no_vault_body->setAlignment(Qt::AlignCenter);
+    m_no_vault_body->setProperty("class", QStringLiteral("benchNote"));
     m_no_vault_body->setWordWrap(true);
-    no_vault_layout->addWidget(m_no_vault_body);
+    no_vault.body->addWidget(m_no_vault_body);
 
     auto* button_row = new QHBoxLayout();
-    button_row->setContentsMargins(0, 0, 0, 0);
+    button_row->setContentsMargins(0, 4, 0, 0);
     button_row->setSpacing(10);
 
-    m_no_vault_create_button = new QPushButton(tr("Create vault"), no_vault_state);
+    m_no_vault_create_button = new QPushButton(tr("Create vault"), no_vault.frame);
     m_no_vault_create_button->setObjectName(QStringLiteral("emptyVaultCreateButton"));
     m_no_vault_create_button->setProperty("class", QStringLiteral("primaryActionButton"));
     connect(m_no_vault_create_button, &QPushButton::clicked, this, &VaultFrame::createVaultButtonClicked);
 
-    m_no_vault_open_button = new QPushButton(tr("Open existing"), no_vault_state);
+    m_no_vault_open_button = new QPushButton(tr("Open existing"), no_vault.frame);
     m_no_vault_open_button->setObjectName(QStringLiteral("emptyVaultOpenButton"));
     m_no_vault_open_button->setProperty("class", QStringLiteral("secondaryActionButton"));
     connect(m_no_vault_open_button, &QPushButton::clicked, this, &VaultFrame::openVaultButtonClicked);
 
     button_row->addWidget(m_no_vault_create_button);
     button_row->addWidget(m_no_vault_open_button);
-    no_vault_layout->addSpacing(6);
-    no_vault_layout->addLayout(button_row);
+    button_row->addStretch();
+    no_vault.body->addLayout(button_row);
 
-    no_vault_page_layout->addWidget(no_vault_state, 0, Qt::AlignHCenter);
+    no_vault_page_layout->addWidget(no_vault.frame);
     no_vault_page_layout->addStretch();
     vaultStack->addWidget(m_no_vault_page);
     m_consensus_enabled = QSettings().value(QLatin1String(CONSENSUS_ENABLED_SETTING), false).toBool();
@@ -191,6 +173,7 @@ void VaultFrame::setClientModel(ClientModel *_clientModel)
         // because the status call happens to null-check one member first.
         delete m_mining_model;
         m_mining_model = nullptr;
+        if (m_launch_page) m_launch_page->clearMiningStatus();
     }
 
     if (clientModel) {
@@ -204,11 +187,15 @@ void VaultFrame::setClientModel(ClientModel *_clientModel)
                 m_mining_page->setPayoutAddress(m_mining_model->freshPayoutAddress());
             });
             connect(m_mining_model, &MiningModel::statusUpdated, m_mining_page, &MineMintPage::setStatus);
+            connect(m_mining_model, &MiningModel::statusUpdated, this, &VaultFrame::setMiningStatus);
             connect(m_mining_model, &MiningModel::miningError, this, [this](const QString& m){
                 Q_EMIT message(tr("Mining"), m, CClientUIInterface::MSG_ERROR);
             });
             m_mining_model->refresh();
         }
+        // The node's warnings, such as a build that is not a release, read on Home.
+        connect(clientModel, &ClientModel::alertsChanged, m_launch_page, &DesktopLaunchPage::setAlerts, Qt::UniqueConnection);
+        m_launch_page->setAlerts(clientModel->getStatusBarWarnings());
         connect(clientModel, &ClientModel::numBlocksChanged, this,
                 [this](int, const QDateTime&, double, SyncType, SynchronizationState) { refreshNetworkPage(); });
         connect(clientModel, &ClientModel::numConnectionsChanged, this,
@@ -216,6 +203,17 @@ void VaultFrame::setClientModel(ClientModel *_clientModel)
     }
     refreshNetworkPage();
     refreshTopLevelMiningAddressHelper();
+}
+
+void VaultFrame::setMiningStatus(const interfaces::MiningStatus& status)
+{
+    if (m_launch_page) m_launch_page->setMiningStatus(status);
+    Q_EMIT miningStatusUpdated(status);
+}
+
+void VaultFrame::setSyncState(bool synced, double progress)
+{
+    if (m_launch_page) m_launch_page->setSyncState(synced, progress);
 }
 
 void VaultFrame::setVaultRuntimeAvailable(bool available)
@@ -239,22 +237,11 @@ bool VaultFrame::addView(VaultView* vaultView)
 {
     if (mapVaultViews.count(vaultView->getVaultModel()) > 0) return false;
 
+    connect(vaultView, &VaultView::miningStatusUpdated, this, &VaultFrame::setMiningStatus);
     if (clientModel) vaultView->setClientModel(clientModel);
-    vaultView->showOutOfSyncWarning(bOutOfSync);
-
-    VaultView* current_vault_view = currentVaultView();
-    if (current_vault_view) {
-        vaultView->setCurrentIndex(current_vault_view->currentIndex());
-    } else {
-        vaultView->gotoOverviewPage();
-    }
 
     vaultStack->addWidget(vaultView);
     mapVaultViews[vaultView->getVaultModel()] = vaultView;
-    connect(vaultView, &VaultView::backupRequested, this, [this, vaultView] {
-        setCurrentVault(vaultView->getVaultModel());
-        backupVault();
-    }, Qt::UniqueConnection);
     connectLaunchSummarySignals(vaultView->getVaultModel());
     if (!m_current_vault_view) {
         m_current_vault_view = vaultView;
@@ -272,9 +259,20 @@ void VaultFrame::setCurrentVault(VaultModel* vault_model)
     VaultView *vaultView = mapVaultViews.value(vault_model);
     assert(vaultView);
 
-    // Hidden pages are kept out of this stack's size demands by PageStack, so
-    // switching is all there is to do here.
-    vaultStack->setCurrentWidget(vaultView);
+    // A vault choice keeps the page the rail names. On one of a vault's own pages
+    // the chosen vault shows the same page; Home, and the no-vault page a vault was
+    // just opened from, become this vault's Home; the node's pages (Network, the
+    // consensus review, a launch refused for want of Tor) stay as they are.
+    QWidget* const showing = vaultStack->currentWidget();
+    if (auto* previous = qobject_cast<VaultView*>(showing)) {
+        if (previous != vaultView) vaultView->setCurrentIndex(previous->currentIndex());
+        vaultStack->setCurrentWidget(vaultView);
+    } else if (showing == m_no_vault_page || showing == m_launch_page) {
+        vaultStack->setCurrentWidget(m_launch_page);
+    } else if (showing == m_mining_page) {
+        vaultView->gotoMineMintPage();
+        vaultStack->setCurrentWidget(vaultView);
+    }
     m_current_vault_view = vaultView;
     updateLaunchSummary();
     refreshTopLevelMiningAddressHelper();
@@ -292,10 +290,14 @@ void VaultFrame::removeVault(VaultModel* vault_model)
     if (m_current_vault_view == vaultView) {
         m_current_vault_view = mapVaultViews.isEmpty() ? nullptr : mapVaultViews.constBegin().value();
     }
-    delete vaultView;
-    if (was_current_widget || !m_current_vault_view) {
+    // The next vault keeps the page the rail names, as a vault choice does.
+    if (was_current_widget && m_current_vault_view) {
+        m_current_vault_view->setCurrentIndex(vaultView->currentIndex());
+        vaultStack->setCurrentWidget(m_current_vault_view);
+    } else if (was_current_widget || !m_current_vault_view) {
         gotoLaunchPage();
     }
+    delete vaultView;
     updateLaunchSummary();
     refreshTopLevelMiningAddressHelper();
 }
@@ -321,14 +323,6 @@ bool VaultFrame::handlePaymentRequest(const SendCoinsRecipient &recipient)
     return vaultView->handlePaymentRequest(recipient);
 }
 
-void VaultFrame::showOutOfSyncWarning(bool fShow)
-{
-    bOutOfSync = fShow;
-    QMap<VaultModel*, VaultView*>::const_iterator i;
-    for (i = mapVaultViews.constBegin(); i != mapVaultViews.constEnd(); ++i)
-        i.value()->showOutOfSyncWarning(fShow);
-}
-
 void VaultFrame::markConsensusInitializationFailed()
 {
     m_consensus_start_failed = true;
@@ -337,22 +331,17 @@ void VaultFrame::markConsensusInitializationFailed()
     vaultStack->setCurrentWidget(m_network_page);
 }
 
+void VaultFrame::markConsensusTorMissing()
+{
+    m_consensus_tor_missing = true;
+    setConsensusEnabled(false);
+    m_network_page->showTorMissing();
+    vaultStack->setCurrentWidget(m_network_page);
+}
+
 void VaultFrame::gotoLaunchPage()
 {
     vaultStack->setCurrentWidget(m_launch_page);
-}
-
-void VaultFrame::gotoOverviewPage()
-{
-    VaultView* vaultView = currentVaultView();
-    if (!vaultView) {
-        gotoVaultPage();
-        return;
-    }
-    QMap<VaultModel*, VaultView*>::const_iterator i;
-    for (i = mapVaultViews.constBegin(); i != mapVaultViews.constEnd(); ++i)
-        i.value()->gotoOverviewPage();
-    vaultStack->setCurrentWidget(vaultView);
 }
 
 void VaultFrame::gotoVaultPage()
@@ -361,9 +350,7 @@ void VaultFrame::gotoVaultPage()
         vaultStack->setCurrentWidget(m_no_vault_page);
         return;
     }
-
-    m_current_vault_view->gotoOverviewPage();
-    vaultStack->setCurrentWidget(m_current_vault_view);
+    gotoLaunchPage();
 }
 
 void VaultFrame::gotoHistoryPage()
@@ -599,21 +586,8 @@ void VaultFrame::updateLaunchSummary()
     if (!vault_model) {
         m_launch_page->setVaultSummary(false, QString());
         m_launch_page->setBackupState(false, false);
+        m_launch_page->setVaultModel(nullptr);
         return;
-    }
-
-    const interfaces::VaultBalances balances = vault_model->getCachedBalance();
-    const QStringList holdings = qsvaultsummary::FormatHoldings(
-        balances, vault_model->getOptionsModel()->getDisplayUnit(), m_privacy);
-
-    QString last_activity;
-    if (TransactionTableModel* tx_model = vault_model->getTransactionTableModel()) {
-        QDateTime latest;
-        for (int row = 0; row < tx_model->rowCount(QModelIndex()); ++row) {
-            const QDateTime date = tx_model->index(row, TransactionTableModel::Date, QModelIndex()).data(TransactionTableModel::DateRole).toDateTime();
-            if (date.isValid() && (!latest.isValid() || date > latest)) latest = date;
-        }
-        if (latest.isValid()) last_activity = GUIUtil::dateTimeStr(latest);
     }
 
     const auto agent_records = vault_model->listAgentAllotmentRecords();
@@ -626,13 +600,11 @@ void VaultFrame::updateLaunchSummary()
     const size_t agent_setups = agent_records.size();
     const QString agent_summary = agent_setups == 0
         ? QString()
-        : tr("Agent funding: %1 of %2 confirmed").arg(funded_agent_setups).arg(agent_setups);
-    m_launch_page->setVaultSummary(true, vault_model->getDisplayName(), holdings, last_activity, agent_summary);
+        : tr("Funding %1 of %2 confirmed").arg(funded_agent_setups).arg(agent_setups);
+    m_launch_page->setVaultSummary(true, vault_model->getDisplayName(), agent_summary);
+    m_launch_page->setVaultModel(vault_model);
     const bool backup_recorded = currentVaultBackupRecorded();
     m_launch_page->setBackupState(true, backup_recorded);
-    if (VaultView* vault_view = currentVaultView()) {
-        vault_view->setBackupState(backup_recorded);
-    }
 }
 
 void VaultFrame::connectLaunchSummarySignals(VaultModel* vault_model)
@@ -663,6 +635,9 @@ void VaultFrame::setCurrentVaultBackupRecorded(bool backed_up)
 
     vault_model->setBackupRecorded(backed_up);
     updateLaunchSummary();
+    // The status strip reads this label. currentVaultSet is the notification
+    // the window already uses to repaint vault chrome.
+    Q_EMIT currentVaultSet();
 }
 
 void VaultFrame::updateConsensusState()
@@ -686,11 +661,15 @@ void VaultFrame::acceptConsensusAndShowStatus()
 {
     if (m_consensus_start_failed) return;
 
+    m_consensus_tor_missing = false;
     setConsensusEnabled(true);
     // The state-change signal may show the vault-handover dialog. "Not now"
     // reverts the opt-in; if that happens before this function continues, do
     // not overwrite that truthful state with the consensus-starting screen.
     if (m_consensus_enabled) {
+        gotoNetworkStatusPage();
+    } else if (m_consensus_tor_missing) {
+        // Refused for want of Tor: markConsensusTorMissing() already shows why.
         gotoNetworkStatusPage();
     } else {
         gotoLaunchPage();
@@ -707,6 +686,12 @@ void VaultFrame::refreshNetworkPage()
         return;
     }
 
+    if (m_consensus_tor_missing && !clientModel) {
+        m_network_page->showTorMissing();
+        setPeerCount(-1);
+        return;
+    }
+
     if (!clientModel) {
         m_network_page->showInitializing();
         setPeerCount(-1);
@@ -717,6 +702,11 @@ void VaultFrame::refreshNetworkPage()
     const double progress = clientModel->node().getVerificationProgress();
     m_network_page->updateStatus(peers, progress, !clientModel->node().isInitialBlockDownload());
     setPeerCount(peers);
+}
+
+void VaultFrame::setChainTip(int height, const QDateTime& block_time)
+{
+    if (m_launch_page) m_launch_page->setChainTip(height, block_time);
 }
 
 void VaultFrame::setPeerCount(int peers)

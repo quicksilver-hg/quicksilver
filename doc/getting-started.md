@@ -68,11 +68,18 @@ other one. The choice is remembered per network, in that network's Qt settings
 (`Desktop/ConsensusEnabled`) rather than in `quicksilver.conf`, so it is made
 once per network and not per launch.
 
-Before enabling Consensus, provide a `tor` executable: install Tor through your
-package manager on Unix; on Windows, obtain it separately as described in
-[tor.md](tor.md#0-the-desktop-starts-its-own-tor).
+Consensus needs a `tor` executable. The Windows installer puts one beside
+`quicksilver.exe`, so an installed desktop needs nothing more. On Unix, install
+Tor through your package manager; a Windows source build fetches it as described
+in [tor.md](tor.md#0-the-desktop-starts-its-own-tor).
 The desktop looks beside its own executable and on `PATH`; `-bundledtorpath`
-can name another location. Once enabled, the node starts, the desktop's own
+can name another location. If it finds none, it does not start the node: the
+Network page says Tor is missing and the vault stays usable. A `tor` placed
+beside `quicksilver.exe` is found when you enable Consensus again; a change to
+`PATH` or `quicksilver.conf` needs a restart of Quicksilver first. The first time the
+node starts on Windows, Windows Defender Firewall may ask whether to allow
+Quicksilver on your networks; the node works either way, because it reaches its
+peers through Tor. Once enabled, the node starts, the desktop's own
 Tor bootstraps, and the shipped onion seed is dialled with no further
 configuration — no manual torrc or `-addnode`. On a measured first run against
 a short `publictest` chain this reached the seed about 65 seconds after the
@@ -144,7 +151,7 @@ before treating it as a fault.
 If you are running `quicksilver`, do not reach for `quicksilver-cli` — the
 desktop runs no RPC server by default, so it cannot answer. The same checks are
 in the **Node window**: press `Ctrl+Shift+D`, or pick Information, Console,
-Network Traffic or Peers from the **Panels** menu. The Information tab reports
+Network Traffic or Peers from the **Window** menu. The Information tab reports
 the connection count and sync height, the Peers tab is `getpeerinfo`, and the
 Console tab runs the RPCs below. `Ctrl+Shift+C` opens the Node window with the
 Console focused; if the window is already open it raises it without changing

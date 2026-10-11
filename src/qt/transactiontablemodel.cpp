@@ -367,22 +367,45 @@ QString TransactionTableModel::lookupAddress(const std::string &address, bool to
     return description;
 }
 
-QString TransactionTableModel::formatTxType(const TransactionRecord *wtx) const
+QString TransactionTableModel::typeWord(int type)
 {
-    switch(wtx->type)
-    {
+    switch (type) {
+    case TransactionRecord::Generated:
+        return tr("Mining reward");
     case TransactionRecord::RecvWithAddress:
-        return tr("Received with");
     case TransactionRecord::RecvFromOther:
-        return tr("Received from");
+        return tr("Received");
     case TransactionRecord::SendToAddress:
     case TransactionRecord::SendToOther:
-        return tr("Sent to");
-    case TransactionRecord::Generated:
-        return tr("Mined");
-    default:
-        return QString();
+        return tr("Transferred");
     }
+    return tr("Other");
+}
+
+QString TransactionTableModel::stateWord(int status)
+{
+    switch (status) {
+    case TransactionStatus::Unconfirmed: return tr("Pending");
+    case TransactionStatus::Confirming: return tr("Confirming");
+    case TransactionStatus::Confirmed: return tr("Confirmed");
+    case TransactionStatus::Conflicted: return tr("Conflicted");
+    case TransactionStatus::Abandoned: return tr("Abandoned");
+    case TransactionStatus::Immature: return tr("Maturing");
+    case TransactionStatus::NotAccepted: return tr("Not accepted");
+    }
+    return tr("Unknown");
+}
+
+QString TransactionTableModel::signedAmount(QuicksilverUnit unit, qint64 net, bool privacy)
+{
+    const CAmount magnitude = net < 0 ? -net : net;
+    const QString value = QuicksilverUnits::formatInlineValueWithPrivacy(unit, magnitude, QuicksilverUnits::SeparatorStyle::ALWAYS, privacy);
+    return (net < 0 ? QStringLiteral("− ") : QStringLiteral("+ ")) + value;
+}
+
+QString TransactionTableModel::formatTxType(const TransactionRecord *wtx) const
+{
+    return typeWord(wtx->type);
 }
 
 QVariant TransactionTableModel::txAddressDecoration(const TransactionRecord *wtx) const
@@ -521,7 +544,8 @@ QVariant TransactionTableModel::data(const QModelIndex &index, int role) const
     }
     case Qt::DisplayRole:
         switch (column) {
-        case Status: return {};
+        case Status:
+            return stateWord(rec->status.status);
         case Date:
             return formatTxDate(rec);
         case Type:
@@ -529,7 +553,7 @@ QVariant TransactionTableModel::data(const QModelIndex &index, int role) const
         case ToAddress:
             return formatTxToAddress(rec, false);
         case Amount:
-            return formatTxAmount(rec, true, QuicksilverUnits::SeparatorStyle::ALWAYS);
+            return signedAmount(vaultModel->getOptionsModel()->getDisplayUnit(), rec->credit + rec->debit, false);
         } // no default case, so the compiler can warn about missing cases
         assert(false);
     case Qt::EditRole:

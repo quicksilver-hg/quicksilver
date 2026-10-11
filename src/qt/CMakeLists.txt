@@ -148,6 +148,8 @@ if(ENABLE_VAULT)
       addresstablemodel.h
       askpassphrasedialog.cpp
       askpassphrasedialog.h
+      benchpanel.cpp
+      benchpanel.h
       coincontroldialog.cpp
       coincontroldialog.h
       coincontroltreewidget.cpp
@@ -160,6 +162,8 @@ if(ENABLE_VAULT)
       desktoplaunchpage.h
       editaddressdialog.cpp
       editaddressdialog.h
+      ledgerrows.cpp
+      ledgerrows.h
       minemintpage.cpp
       minemintpage.h
       miningmodel.cpp
@@ -168,8 +172,6 @@ if(ENABLE_VAULT)
       networkpage.h
       openuridialog.cpp
       openuridialog.h
-      overviewpage.cpp
-      overviewpage.h
       pagestack.cpp
       pagestack.h
       paymentserver.cpp
@@ -214,8 +216,6 @@ if(ENABLE_VAULT)
       vaultmodel.h
       vaultmodeltransaction.cpp
       vaultmodeltransaction.h
-      vaultsummary.cpp
-      vaultsummary.h
       vaultview.cpp
       vaultview.h
   )

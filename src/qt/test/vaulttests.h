@@ -23,12 +23,34 @@ class VaultTests : public QObject
 
 private Q_SLOTS:
     void agentAllotmentPageScrollsWithinLaptopViewport();
-    void agentAllotmentImportsNodePeers();
-    void agentAllotmentRelaysInBackgroundWithPeerFallback();
+    void agentsPageHasNoSideScrollAt1200();
+    void pagesKeepTheirTextInsidePanels();
+    void agentAllotmentSetupAsksToUnlock();
+    void agentAllotmentStatusNeverPromisesEnforcementLater();
+    void agentAllotmentStopAsksThenRefusesCosign();
+    void agentAllotmentCosignDisabledWithoutNode();
+    void agentAllotmentRiskTextNamesTheCosigner();
+    void agentAllotmentCosignReviewTracksPastedText();
+    void agentAllotmentCosignUnlockDiesWithItsReview();
+    void agentAllotmentStoppedAllotmentOffersNoFunding();
     void vaultTests();
+    void benchTickerMatchesVaultBalances();
+    void homeLedgerListsVaultTransactions();
+    void homeLaysOutLedgerBesideInstruments();
+    void homeAndLedgerReadTransactionsAlike();
+    void transferSummaryTracksAmountsAgainstSpendable();
+    void captureBenchPageScreenshots();
+    void transferRecipientsAreCompactRows();
+    void transferKeepsTheAddressReadableAndReviewInReach();
+    void remainingPagesUseTheBenchGrammar();
+    void benchStyleKeepsOneScaleAndQuietStates();
+    void benchSpinAndCheckControlsStayWhole();
+    void ledgerPageNamesItsFiltersAndFitsItsColumns();
     void sendConfirmationNamesUnconfirmedChange();
     void coinControlMarksUnconfirmedChange();
     void mineMintPageRendersStatus();
+    void minePageSeparatesDraftPayoutAndHealthNote();
+    void aboutDialogWrapsAtWords();
     void mineMintPageNamesAnArmedMinerWithNoPermittedSolver();
     void mineMintPageRefusesToPresentIsolatedMiningAsSuccess();
     void mineMintPageShowsARawScriptPayout();
@@ -37,6 +59,12 @@ private Q_SLOTS:
     void networkPageDiagnosesBootstrapAndAddsPeers();
     void networkPageHidesTheManualTorRecipeWhenAProxyIsCarryingOnions();
     void nodeWindowSaysWhyEveryFieldReadsNotApplicable();
+    void devBuildBannerUsesTheWarningTone();
+    void panelsMenuWindowsUseTheBenchGrammar();
+    void menuDialogsUseTheBenchGrammar();
+    void agentSpendRequestRefuseWaitsForARequest();
+    void peerTableNamesTheConnectionInOneColumn();
+    void noVaultPageIsOneBenchPanel();
     void launchPageSaysWhenConsensusHasNoPeers();
     void miningPollStopsWithTheClientModel();
     void consensusCancelDoesNotShowStarting();
@@ -46,7 +74,7 @@ private Q_SLOTS:
     void vaultModelLoadsStoredConfirmationBeforeConsensus();
     void thinHeaderSourceRefreshesDetachedVault();
     void vaultModelSkipsCoinControlOutputsBeforeConsensusClientModel();
-    void overviewPageMasksValuesWithoutClientModel();
+    void vaultViewMasksValuesWithoutClientModel();
     void vaultModelReportsProofOfWorkInFlightWhilePreparing();
     void vaultModelPassesCancelRequestIntoTheGrind();
     void vaultModelRejectsSendBeforeConsensusClientModel();
@@ -66,7 +94,7 @@ private Q_SLOTS:
     void transferPrecheckDefersUncertainBalance_data();
     void transferPrecheckDefersUncertainBalance();
     void transferPreparationFailureWithoutGraphsHidesProgress();
-    void requestPageAddressTypeCopyHasNoBitcoinVocabulary();
+    void requestPageNamesFormatsAndShowsGeneratedFormat();
     void signVerifyMessageRejectsNonBase58WithoutBitcoinVocabulary();
     void sendEntryAddressBookFillsDestinationWithoutNestedEventLoop();
     void signVerifyAddressBookDoesNotNestEventLoop();

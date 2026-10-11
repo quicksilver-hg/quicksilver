@@ -19,11 +19,14 @@
 
 #include <util/fs.h>
 #include <util/result.h>
+#include <util/translation.h>
 
 #include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
+
+class ArgsManager;
 
 //! quicksilver-daemon default. The GUI soft-sets this to true; see
 //! QuicksilverApplication::parameterSetup().
@@ -98,6 +101,23 @@ std::optional<fs::path> FindTorBinary(const fs::path& override_path,
                                       char path_separator,
                                       const std::string& binary_name,
                                       const std::function<bool(const fs::path&)>& usable);
+
+/**
+ * True when node startup will try to start a bundled Tor: -bundledtor is on
+ * (default DEFAULT_BUNDLED_TOR; the desktop soft-sets it) and -listenonion is
+ * on. This is the condition init uses, so a caller that checks it first and
+ * then finds a Tor can rely on startup not failing for want of one.
+ */
+bool BundledTorWouldStart(const ArgsManager& args);
+
+/**
+ * Locate the tor executable the way StartBundledTor does: `override_path` if
+ * non-empty (and nothing else), else beside our own executable, else PATH.
+ */
+std::optional<fs::path> LocateBundledTor(const fs::path& override_path);
+
+//! The sentence shown when no usable tor executable is found.
+bilingual_str MissingTorMessage();
 
 /**
  * Start Tor under `datadir` and return its control endpoint as "host:port".

@@ -157,6 +157,13 @@ ALLOWED = {
     Path("test/functional/vault_txn_doublespend.py"): [
         re.compile(r'assert "fee" not in '),
     ],
+    # Negative coverage: no desktop label outside the feeless slogan names a charge.
+    Path("src/qt/test/apptests.cpp"): [
+        re.compile(r'const QString charge_word = QStringLiteral\("fee"\);'),
+    ],
+    Path("src/qt/test/vaulttests.cpp"): [
+        re.compile(r'const QString charge_word = QStringLiteral\("fee"\);'),
+    ],
     Path("src/test/net_tests.cpp"): [
         re.compile(r'ALL_NET_MESSAGE_TYPES, "feefilter"'),
     ],
@@ -276,6 +283,8 @@ def self_test() -> int:
     allowance_cases = [
         (Path("test/functional/feature_quicksilver_no_fee_rpcs.py"), '("bumpfee", [txid])', True),
         (Path("test/functional/vault_listsinceblock.py"), "node.bumpfee(txid)", False),
+        (Path("src/qt/test/vaulttests.cpp"), '    const QString charge_word = QStringLiteral("fee");', True),
+        (Path("src/qt/test/vaulttests.cpp"), '    ui->label->setText(QStringLiteral("fee"));', False),
     ]
     for rel, line, expected in allowance_cases:
         got = line_allowed(rel, line)

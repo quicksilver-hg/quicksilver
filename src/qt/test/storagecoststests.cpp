@@ -51,8 +51,7 @@ void StorageCostsTests::launchPageQuotesTheDerivedArchivalTotal()
 
 void StorageCostsTests::consensusReviewQuotesTheDerivedArchivalTotal()
 {
-    const std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate(QStringLiteral("other"))};
-    ConsensusReviewPage page(style.get(), BLOCKCHAIN_SIZE_GB, CHAIN_STATE_SIZE_GB, nullptr);
+    ConsensusReviewPage page(BLOCKCHAIN_SIZE_GB, CHAIN_STATE_SIZE_GB, nullptr);
 
     QLabel* cost = page.findChild<QLabel*>(QStringLiteral("consensusStorageCostValue"));
     QVERIFY(cost);
@@ -70,7 +69,7 @@ void StorageCostsTests::bothScreensAgreeWithIntroOnTheArchivalTotal()
 {
     const std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate(QStringLiteral("other"))};
     DesktopLaunchPage launch(style.get(), BLOCKCHAIN_SIZE_GB, CHAIN_STATE_SIZE_GB, nullptr);
-    ConsensusReviewPage review(style.get(), BLOCKCHAIN_SIZE_GB, CHAIN_STATE_SIZE_GB, nullptr);
+    ConsensusReviewPage review(BLOCKCHAIN_SIZE_GB, CHAIN_STATE_SIZE_GB, nullptr);
     Intro intro(nullptr, BLOCKCHAIN_SIZE_GB, CHAIN_STATE_SIZE_GB);
 
     // The intro ships prune checked (intro.cpp), so by default it quotes the pruned

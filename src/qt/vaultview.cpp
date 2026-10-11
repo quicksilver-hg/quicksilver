@@ -14,9 +14,7 @@
 #include <qt/miningmodel.h>
 #include <qt/networkpage.h>
 #include <qt/optionsmodel.h>
-#include <qt/overviewpage.h>
 #include <qt/platformstyle.h>
-#include <qt/quicksilverstyle.h>
 #include <qt/receivecoinsdialog.h>
 #include <qt/sendcoinsdialog.h>
 #include <qt/sendcoinsrecipient.h>
@@ -30,10 +28,8 @@
 #include <util/strencodings.h>
 
 #include <QAction>
-#include <QHBoxLayout>
 #include <QPointer>
 #include <QProgressDialog>
-#include <QPushButton>
 #include <QVBoxLayout>
 
 VaultView::VaultView(VaultModel* vault_model, const PlatformStyle* _platformStyle, QWidget* parent)
@@ -44,24 +40,13 @@ VaultView::VaultView(VaultModel* vault_model, const PlatformStyle* _platformStyl
     assert(vaultModel);
 
     // Create tabs
-    overviewPage = new OverviewPage(platformStyle);
-    overviewPage->setVaultModel(vaultModel);
-
     transactionsPage = new QWidget(this);
+    // The ledger brings its own page margins and its Export command.
     QVBoxLayout *vbox = new QVBoxLayout();
-    QHBoxLayout *hbox_buttons = new QHBoxLayout();
+    vbox->setContentsMargins(0, 0, 0, 0);
     transactionView = new TransactionView(platformStyle, this);
     transactionView->setModel(vaultModel);
-
     vbox->addWidget(transactionView);
-    QPushButton *exportButton = new QPushButton(tr("&Export"), this);
-    exportButton->setToolTip(tr("Export the data in the current tab to a file"));
-    if (platformStyle->getImagesOnButtons()) {
-        exportButton->setIcon(platformStyle->ColorIcon(":/icons/export", QuicksilverStyle::Color(QuicksilverStyle::Token::Amber)));
-    }
-    hbox_buttons->addStretch();
-    hbox_buttons->addWidget(exportButton);
-    vbox->addLayout(hbox_buttons);
     transactionsPage->setLayout(vbox);
 
     receiveCoinsPage = new ReceiveCoinsDialog(platformStyle);
@@ -89,20 +74,12 @@ VaultView::VaultView(VaultModel* vault_model, const PlatformStyle* _platformStyl
     usedReceivingAddressesPage = new AddressBookPage(platformStyle, AddressBookPage::ForEditing, AddressBookPage::ReceivingTab, this);
     usedReceivingAddressesPage->setModel(vaultModel->getAddressTableModel());
 
-    addWidget(overviewPage);
     addWidget(transactionsPage);
     addWidget(receiveCoinsPage);
     addWidget(sendCoinsPage);
     addWidget(agentAllotmentPage);
     addWidget(mineMintPage);
     addWidget(networkPage);
-
-    connect(overviewPage, &OverviewPage::transactionClicked, this, &VaultView::transactionClicked);
-    // Clicking on a transaction on the overview pre-selects the transaction on the transaction history page
-    connect(overviewPage, &OverviewPage::transactionClicked, transactionView, qOverload<const QModelIndex&>(&TransactionView::focusTransaction));
-
-    connect(overviewPage, &OverviewPage::outOfSyncWarningClicked, this, &VaultView::outOfSyncWarningClicked);
-    connect(overviewPage, &OverviewPage::backupRequested, this, &VaultView::backupRequested);
 
     connect(sendCoinsPage, &SendCoinsDialog::coinsSent, this, &VaultView::coinsSent);
     connect(sendCoinsPage, &SendCoinsDialog::solverSettingsRequested, this, &VaultView::solverSettingsRequested);
@@ -123,15 +100,20 @@ VaultView::VaultView(VaultModel* vault_model, const PlatformStyle* _platformStyl
     // Highlight transaction after send
     connect(sendCoinsPage, &SendCoinsDialog::coinsSent, transactionView, qOverload<const uint256&>(&TransactionView::focusTransaction));
 
-    // Clicking on "Export" allows to export the transaction list
-    connect(exportButton, &QPushButton::clicked, transactionView, &TransactionView::exportClicked);
-
     // Pass through messages from sendCoinsPage
     connect(sendCoinsPage, &SendCoinsDialog::message, this, &VaultView::message);
     // Pass through messages from transactionView
     connect(transactionView, &TransactionView::message, this, &VaultView::message);
 
-    connect(this, &VaultView::setPrivacy, overviewPage, &OverviewPage::setPrivacy);
+    // Privacy mode is a saved option. The client model only comes into existence
+    // once consensus has been enabled, but a vault opens and runs without it, so
+    // reach the options model through the vault model when consensus is off. Both
+    // models hold the application's single OptionsModel.
+    connect(this, &VaultView::setPrivacy, this, [this](bool privacy) {
+        if (OptionsModel* options_model = clientModel ? clientModel->getOptionsModel() : vaultModel->getOptionsModel()) {
+            options_model->setOption(OptionsModel::OptionID::MaskValues, privacy);
+        }
+    });
     connect(this, &VaultView::setPrivacy, this, &VaultView::disableTransactionView);
 
     // Receive and pass through messages from vault model
@@ -156,7 +138,6 @@ void VaultView::setClientModel(ClientModel *_clientModel)
 {
     this->clientModel = _clientModel;
 
-    overviewPage->setClientModel(_clientModel);
     sendCoinsPage->setClientModel(_clientModel);
     vaultModel->setClientModel(_clientModel);
 
@@ -176,6 +157,7 @@ void VaultView::setClientModel(ClientModel *_clientModel)
             mineMintPage->setPayoutAddress(miningModel->freshPayoutAddress());
         });
         connect(miningModel, &MiningModel::statusUpdated, mineMintPage, &MineMintPage::setStatus);
+        connect(miningModel, &MiningModel::statusUpdated, this, &VaultView::miningStatusUpdated);
         connect(miningModel, &MiningModel::miningError, this, [this](const QString& m){
             Q_EMIT message(tr("Mining"), m, CClientUIInterface::MSG_ERROR);
         });
@@ -217,11 +199,6 @@ void VaultView::processNewTransaction(const QModelIndex& parent, int start, int 
     QString label = GUIUtil::HtmlEscape(ttm->data(index, TransactionTableModel::LabelRole).toString());
 
     Q_EMIT incomingTransaction(date, vaultModel->getOptionsModel()->getDisplayUnit(), amount, type, address, label, GUIUtil::HtmlEscape(vaultModel->getVaultName()));
-}
-
-void VaultView::gotoOverviewPage()
-{
-    setCurrentWidget(overviewPage);
 }
 
 void VaultView::gotoHistoryPage()
@@ -285,16 +262,6 @@ void VaultView::gotoVerifyMessageTab(QString addr)
 bool VaultView::handlePaymentRequest(const SendCoinsRecipient& recipient)
 {
     return sendCoinsPage->handlePaymentRequest(recipient);
-}
-
-void VaultView::showOutOfSyncWarning(bool fShow)
-{
-    overviewPage->showOutOfSyncWarning(fShow);
-}
-
-void VaultView::setBackupState(bool backup_done)
-{
-    overviewPage->setBackupState(backup_done);
 }
 
 void VaultView::encryptVault()

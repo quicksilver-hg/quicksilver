@@ -72,14 +72,10 @@ QVariant PeerTableModel::data(const QModelIndex& index, int role) const
             return GUIUtil::FormatPeerAge(rec->nodeStats.m_connected);
         case Address:
             return QString::fromStdString(rec->nodeStats.m_addr_name);
-        case Direction:
-            return QString(rec->nodeStats.fInbound ?
-                               //: An Inbound Connection from a Peer.
-                               tr("Inbound") :
-                               //: An Outbound Connection to a Peer.
-                               tr("Outbound"));
         case ConnectionType:
-            return GUIUtil::ConnectionTypeToQString(rec->nodeStats.m_conn_type, /*prepend_direction=*/false);
+            // An inbound connection has no further type, so direction and type share
+            // one column rather than leaving a type cell blank for every inbound peer.
+            return GUIUtil::ConnectionTypeToQString(rec->nodeStats.m_conn_type, /*prepend_direction=*/true);
         case Network:
             return GUIUtil::NetworkToQString(rec->nodeStats.m_network);
         case Ping:
@@ -99,7 +95,6 @@ QVariant PeerTableModel::data(const QModelIndex& index, int role) const
             return QVariant(Qt::AlignRight | Qt::AlignVCenter);
         case Address:
             return {};
-        case Direction:
         case ConnectionType:
         case Network:
             return QVariant(Qt::AlignCenter);

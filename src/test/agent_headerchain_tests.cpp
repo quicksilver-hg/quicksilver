@@ -31,6 +31,11 @@
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <protocol.h>
+#include <psqt.h>
+#include <script/descriptor.h>
+#include <script/sign.h>
+#include <util/strencodings.h>
+#include <univalue.h>
 #include <script/interpreter.h>
 #include <script/script.h>
 #include <streams.h>
@@ -153,20 +158,90 @@ struct AgentHeaderChainTestingSetup : public BasicTestingSetup {
     }
 };
 
+std::string AllotmentDescriptorChecksum(const std::string& body)
+{
+    return body + "#" + GetDescriptorChecksum(body);
+}
+
+CKey AllotmentFixtureKey(unsigned char value)
+{
+    std::array<unsigned char, 32> bytes{};
+    bytes.back() = value;
+    CKey key;
+    key.Set(bytes.begin(), bytes.end(), true);
+    return key;
+}
+
+std::string AgentAllotmentDescriptor(const CKey& agent_key)
+{
+    return AllotmentDescriptorChecksum(strprintf("tr(%s,multi_a(2,%s,%s))",
+        HexStr(XOnlyPubKey(AllotmentFixtureKey(1).GetPubKey())),
+        HexStr(XOnlyPubKey(agent_key.GetPubKey())),
+        HexStr(XOnlyPubKey(AllotmentFixtureKey(2).GetPubKey()))));
+}
+
+std::string AgentAllotmentAddress(const CKey& agent_key)
+{
+    FlatSigningProvider provider;
+    std::string error;
+    auto descs{Parse(AgentAllotmentDescriptor(agent_key), provider, error, true)};
+    BOOST_REQUIRE_EQUAL(descs.size(), 1U);
+    std::vector<CScript> scripts;
+    BOOST_REQUIRE(descs[0]->Expand(0, provider, scripts, provider));
+    CTxDestination destination;
+    BOOST_REQUIRE(ExtractDestination(scripts[0], destination));
+    return EncodeDestination(destination);
+}
+
+// Build the canonical maximum script-path witness independently of production's
+// dummy signer: C then A, followed by the only leaf and its control block.
+CTransaction MaximumAllotmentTransaction(const agent::AllotmentSignedSpend& spend)
+{
+    CMutableTransaction maximum{spend.transaction};
+    for (size_t i{0}; i < maximum.vin.size(); ++i) {
+        const auto& input{spend.psqt.inputs[i]};
+        BOOST_REQUIRE_EQUAL(input.m_tap_scripts.size(), 1U);
+        const auto& leaf{*input.m_tap_scripts.begin()};
+        maximum.vin[i].scriptWitness.stack = {
+            std::vector<unsigned char>(65), std::vector<unsigned char>(65),
+            leaf.first.first, *leaf.second.begin()};
+        BOOST_REQUIRE_EQUAL(maximum.vin[i].scriptWitness.stack.size(), 4U);
+    }
+    return CTransaction{maximum};
+}
+
+void CheckAgentHalf(const agent::AllotmentSignedSpend& spend, const CKey& agent_key)
+{
+    BOOST_REQUIRE(spend.psqt.tx);
+    BOOST_REQUIRE_EQUAL(spend.psqt.inputs.size(), spend.transaction.vin.size());
+    BOOST_CHECK(spend.psqt.tx->GetHash() == spend.transaction.GetHash());
+    for (const auto& input : spend.psqt.inputs) {
+        BOOST_REQUIRE_EQUAL(input.m_tap_script_sigs.size(), 1U);
+        BOOST_CHECK(input.m_tap_script_sigs.begin()->first.first == XOnlyPubKey(agent_key.GetPubKey()));
+        BOOST_CHECK_EQUAL(input.m_tap_script_sigs.begin()->second.size(), 64U);
+        BOOST_CHECK(input.m_tap_key_sig.empty());
+        BOOST_CHECK(input.final_script_sig.empty());
+        BOOST_CHECK(input.final_script_witness.IsNull());
+    }
+    auto partial{spend.psqt};
+    BOOST_CHECK(!FinalizePSQT(partial));
+}
+
 std::string AgentAllotmentBundleJson(const CKey& funding_key,
                                   CAmount funding_available = COIN,
                                   CAmount daily_limit = COIN / 2,
                                   const std::vector<agent::AllotmentFundingOutputArtifact>& funding_outputs = {})
 {
-    const std::string funding_address{EncodeDestination(WitnessV0KeyHash(funding_key.GetPubKey()))};
+    const std::string funding_address{AgentAllotmentAddress(funding_key)};
     const std::string policy_request{strprintf(
-        R"({"type":"quicksilver.agent_allotment_policy_request","version":1,"chain":"%s","genesis_hash":"%s","id":"agent-1","label":"test-agent","funding_address":"%s","funding_limit_cinnabar":"%s","funding_available_cinnabar":"%s","daily_limit_cinnabar":"%s","risk_accepted_time":"123","request_created_time":"456","policy_status":"pending_integration","backend_created":false})",
+        R"({"type":"quicksilver.agent_allotment_policy_request","version":2,"chain":"%s","genesis_hash":"%s","id":"agent-1","label":"test-agent","funding_address":"%s","funding_limit_cinnabar":"%s","funding_available_cinnabar":"%s","daily_limit_cinnabar":"%s","risk_accepted_time":"123","request_created_time":"456","funding_descriptor":"%s"})",
         Params().GetChainTypeString(),
         Params().GenesisBlock().GetHash().ToString(),
         funding_address,
         util::ToString(COIN),
         util::ToString(funding_available),
-        util::ToString(daily_limit))};
+        util::ToString(daily_limit),
+        AgentAllotmentDescriptor(funding_key))};
 
     std::string funding_outputs_json;
     if (!funding_outputs.empty()) {
@@ -183,10 +258,11 @@ std::string AgentAllotmentBundleJson(const CKey& funding_key,
     }
 
     return strprintf(
-        R"({"type":"quicksilver.agent_allotment_key_bundle","version":1,"policy_request":%s,"funding_address":"%s","funding_secret_wif":"%s"%s,"policy_enforcement":"pending_integration"})",
+        R"({"type":"quicksilver.agent_allotment_cosign_bundle","version":1,"policy_request":%s,"funding_address":"%s","agent_secret_wif":"%s","funding_descriptor":"%s"%s})",
         policy_request,
         funding_address,
         EncodeSecret(funding_key),
+        AgentAllotmentDescriptor(funding_key),
         funding_outputs_json);
 }
 
@@ -2176,7 +2252,7 @@ BOOST_AUTO_TEST_CASE(agent_client_exposes_transport_supplied_peer_ids)
 BOOST_AUTO_TEST_CASE(agent_allotment_policy_decodes_desktop_policy_request)
 {
     const std::string policy_request{strprintf(
-        R"({"type":"quicksilver.agent_allotment_policy_request","version":1,"chain":"%s","genesis_hash":"%s","id":"agent-1","label":"test-agent","funding_address":"agent-address","funding_limit_cinnabar":"100000000","funding_available_cinnabar":"75000000","daily_limit_cinnabar":"25000000","risk_accepted_time":"123","request_created_time":"456","policy_status":"pending_integration","backend_created":false})",
+        R"({"type":"quicksilver.agent_allotment_policy_request","version":2,"chain":"%s","genesis_hash":"%s","id":"agent-1","label":"test-agent","funding_address":"agent-address","funding_limit_cinnabar":"100000000","funding_available_cinnabar":"75000000","daily_limit_cinnabar":"25000000","risk_accepted_time":"123","request_created_time":"456","funding_descriptor":"agent-descriptor"})",
         Params().GetChainTypeString(),
         Params().GenesisBlock().GetHash().ToString())};
 
@@ -2193,34 +2269,37 @@ BOOST_AUTO_TEST_CASE(agent_allotment_policy_decodes_desktop_policy_request)
     BOOST_CHECK_EQUAL(artifact->policy.daily_limit, COIN / 4);
     BOOST_CHECK_EQUAL(artifact->risk_accepted_time, 123);
     BOOST_CHECK_EQUAL(artifact->request_created_time, 456);
-    BOOST_CHECK_EQUAL(artifact->policy_status, "pending_integration");
-    BOOST_CHECK(!artifact->backend_created);
+    BOOST_CHECK_EQUAL(artifact->funding_descriptor, "agent-descriptor");
 }
 
-BOOST_AUTO_TEST_CASE(agent_allotment_policy_decodes_desktop_key_bundle)
+BOOST_AUTO_TEST_CASE(agent_allotment_policy_decodes_desktop_cosign_bundle)
 {
-    const std::string policy_request{strprintf(
-        R"({"type":"quicksilver.agent_allotment_policy_request","version":1,"chain":"%s","genesis_hash":"%s","id":"agent-1","label":"test-agent","funding_address":"agent-address","funding_limit_cinnabar":"100000000","funding_available_cinnabar":"75000000","daily_limit_cinnabar":"25000000","risk_accepted_time":"123","request_created_time":"456","policy_status":"pending_integration","backend_created":false})",
-        Params().GetChainTypeString(),
-        Params().GenesisBlock().GetHash().ToString())};
-    const std::string bundle{strprintf(
-        R"({"type":"quicksilver.agent_allotment_key_bundle","version":1,"policy_request":%s,"funding_address":"agent-address","funding_secret_wif":"agent-secret","policy_enforcement":"pending_integration"})",
-        policy_request)};
-
-    auto artifact{agent::DecodeAllotmentPolicyBundle(bundle, Params().GetChainTypeString(), Params().GenesisBlock().GetHash().ToString())};
-
+    const auto key{GenerateRandomKey()};
+    auto artifact{agent::DecodeAllotmentPolicyBundle(
+        AgentAllotmentBundleJson(key, 75 * COIN / 100, COIN / 4),
+        Params().GetChainTypeString(), Params().GenesisBlock().GetHash().ToString())};
     BOOST_REQUIRE_MESSAGE(artifact, util::ErrorString(artifact).original);
     BOOST_CHECK_EQUAL(artifact->policy_request.id, "agent-1");
     BOOST_CHECK_EQUAL(artifact->policy_request.label, "test-agent");
-    BOOST_CHECK_EQUAL(artifact->policy_request.funding_address, "agent-address");
+    BOOST_CHECK_EQUAL(artifact->funding_address, AgentAllotmentAddress(key));
+    BOOST_CHECK_EQUAL(artifact->agent_secret, EncodeSecret(key));
+    BOOST_CHECK_EQUAL(artifact->funding_descriptor, AgentAllotmentDescriptor(key));
     BOOST_CHECK_EQUAL(artifact->policy_request.policy.funding_limit, COIN);
     BOOST_CHECK_EQUAL(artifact->policy_request.funding_available, 75 * COIN / 100);
     BOOST_CHECK_EQUAL(artifact->policy_request.policy.daily_limit, COIN / 4);
-    BOOST_CHECK_EQUAL(artifact->funding_address, "agent-address");
-    BOOST_CHECK_EQUAL(artifact->funding_secret, "agent-secret");
-    BOOST_CHECK_EQUAL(artifact->policy_enforcement, "pending_integration");
+    BOOST_CHECK_EQUAL(artifact->policy_request.funding_descriptor, AgentAllotmentDescriptor(key));
     BOOST_CHECK(artifact->funding_outputs.empty());
     BOOST_CHECK(!artifact->policy_request_json.empty());
+}
+
+BOOST_AUTO_TEST_CASE(agent_allotment_policy_refuses_pre_0_1_2_key_bundle)
+{
+    auto artifact{agent::DecodeAllotmentPolicyBundle(
+        R"({"type":"quicksilver.agent_allotment_key_bundle","version":1})",
+        Params().GetChainTypeString(), Params().GenesisBlock().GetHash().ToString())};
+    BOOST_REQUIRE(!artifact);
+    BOOST_CHECK_EQUAL(util::ErrorString(artifact).original,
+        "This bundle was exported before 0.1.2. Its key can spend the funding outputs alone and cannot be revoked; this agent no longer uses that format. See \"Bundles exported before 0.1.2\" in doc/design/agent-client.md.");
 }
 
 BOOST_AUTO_TEST_CASE(agent_allotment_policy_decodes_bundle_funding_outputs)
@@ -2265,7 +2344,7 @@ BOOST_AUTO_TEST_CASE(agent_allotment_policy_decodes_bundle_funding_outputs)
 BOOST_AUTO_TEST_CASE(agent_allotment_policy_decodes_payment_receipt)
 {
     const CKey funding_key{GenerateRandomKey()};
-    const std::string funding_address{EncodeDestination(WitnessV0KeyHash(funding_key.GetPubKey()))};
+    const std::string funding_address{AgentAllotmentAddress(funding_key)};
     const agent::AllotmentFundingOutputArtifact funding_output{
         .txid = Txid::FromUint256(ArithToUint256(51)).ToString(),
         .vout = 4,
@@ -2331,7 +2410,7 @@ BOOST_AUTO_TEST_CASE(agent_allotment_policy_decodes_payment_receipt)
 BOOST_AUTO_TEST_CASE(agent_allotment_payment_receipts_round_trip_store)
 {
     const CKey funding_key{GenerateRandomKey()};
-    const std::string funding_address{EncodeDestination(WitnessV0KeyHash(funding_key.GetPubKey()))};
+    const std::string funding_address{AgentAllotmentAddress(funding_key)};
     const std::vector<agent::AllotmentPaymentReceiptArtifact> receipts{
         agent::AllotmentPaymentReceiptArtifact{
             .chain = Params().GetChainTypeString(),
@@ -2433,7 +2512,7 @@ BOOST_AUTO_TEST_CASE(agent_allotment_payment_receipts_round_trip_store)
 BOOST_AUTO_TEST_CASE(agent_allotment_payment_receipt_directory_scan_is_durable_and_idempotent)
 {
     const CKey funding_key{GenerateRandomKey()};
-    const std::string funding_address{EncodeDestination(WitnessV0KeyHash(funding_key.GetPubKey()))};
+    const std::string funding_address{AgentAllotmentAddress(funding_key)};
     const agent::AllotmentFundingOutputArtifact output{
         .txid = Txid::FromUint256(ArithToUint256(81)).ToString(),
         .vout = 3,
@@ -2511,7 +2590,7 @@ BOOST_AUTO_TEST_CASE(agent_allotment_payment_receipt_directory_scan_is_durable_a
 BOOST_AUTO_TEST_CASE(agent_allotment_policy_rejects_wrong_policy_request_metadata)
 {
     const std::string policy_request{strprintf(
-        R"({"type":"quicksilver.agent_allotment_policy_request","version":1,"chain":"%s","genesis_hash":"%s","id":"agent-1","label":"test-agent","funding_address":"agent-address","funding_limit_cinnabar":"100000000","funding_available_cinnabar":"75000000","daily_limit_cinnabar":"25000000","risk_accepted_time":"123","request_created_time":"456","policy_status":"pending_integration","backend_created":false})",
+        R"({"type":"quicksilver.agent_allotment_policy_request","version":2,"chain":"%s","genesis_hash":"%s","id":"agent-1","label":"test-agent","funding_address":"agent-address","funding_limit_cinnabar":"100000000","funding_available_cinnabar":"75000000","daily_limit_cinnabar":"25000000","risk_accepted_time":"123","request_created_time":"456","funding_descriptor":"agent-descriptor"})",
         Params().GetChainTypeString(),
         Params().GenesisBlock().GetHash().ToString())};
 
@@ -2520,18 +2599,15 @@ BOOST_AUTO_TEST_CASE(agent_allotment_policy_rejects_wrong_policy_request_metadat
     BOOST_CHECK(!wrong_chain);
     BOOST_CHECK_EQUAL(util::ErrorString(wrong_chain).original, "Agent allotment policy request is for a different chain.");
 
-    std::string bad_status{policy_request};
-    const std::string pending_status{R"("policy_status":"pending_integration")"};
-    const size_t status_pos{bad_status.find(pending_status)};
-    BOOST_REQUIRE_NE(status_pos, std::string::npos);
-    bad_status.replace(status_pos, pending_status.size(), R"("policy_status":"unknown")");
-    BOOST_REQUIRE_NE(bad_status, policy_request);
-    auto unknown_status{agent::DecodeAllotmentPolicyRequest(bad_status, Params().GetChainTypeString(), Params().GenesisBlock().GetHash().ToString())};
-    BOOST_CHECK(!unknown_status);
-    BOOST_CHECK_EQUAL(util::ErrorString(unknown_status).original, "Agent allotment policy request has an unknown policy_status.");
+    UniValue old_request;
+    BOOST_REQUIRE(old_request.read(policy_request));
+    old_request.pushKV("version", 1);
+    auto old_version{agent::DecodeAllotmentPolicyRequest(old_request.write(), Params().GetChainTypeString(), Params().GenesisBlock().GetHash().ToString())};
+    BOOST_CHECK(!old_version);
+    BOOST_CHECK_EQUAL(util::ErrorString(old_version).original, "Agent allotment policy request version is not supported.");
 
     const std::string bundle{strprintf(
-        R"({"type":"quicksilver.agent_allotment_key_bundle","version":1,"policy_request":%s,"funding_address":"wrong-address","funding_secret_wif":"agent-secret","policy_enforcement":"pending_integration"})",
+        R"({"type":"quicksilver.agent_allotment_cosign_bundle","version":1,"policy_request":%s,"funding_address":"wrong-address","agent_secret_wif":"agent-secret","funding_descriptor":"agent-descriptor"})",
         policy_request)};
     auto wrong_bundle_address{agent::DecodeAllotmentPolicyBundle(bundle, Params().GetChainTypeString(), Params().GenesisBlock().GetHash().ToString())};
     BOOST_CHECK(!wrong_bundle_address);
@@ -2584,6 +2660,7 @@ BOOST_AUTO_TEST_CASE(agent_allotment_policy_rejects_invalid_or_unfunded_spends)
 
 BOOST_AUTO_TEST_CASE(agent_allotment_imports_bundle_and_signs_known_output_spend)
 {
+    agent::HeaderChain chain{Params().GetConsensus(), Params().GenesisBlock()};
     const CKey funding_key{GenerateRandomKey()};
     auto context{agent::ImportAllotmentBundle(
         AgentAllotmentBundleJson(funding_key),
@@ -2600,7 +2677,8 @@ BOOST_AUTO_TEST_CASE(agent_allotment_imports_bundle_and_signs_known_output_spend
         .destination = PKHash(destination_key.GetPubKey()),
         .spend_amount = spend_amount,
         .spent_today = COIN / 8,
-        .prove = false,
+        .prove = true,
+        .anchor = &chain.Tip(),
     };
 
     auto signed_spend{agent::CreateSignedAllotmentSpend(*context, request, Params().GetConsensus())};
@@ -2617,14 +2695,13 @@ BOOST_AUTO_TEST_CASE(agent_allotment_imports_bundle_and_signs_known_output_spend
     BOOST_CHECK_EQUAL(signed_spend->change_amount, prevout_value - spend_amount);
     BOOST_CHECK_EQUAL(signed_spend->policy_check.code, agent::AllotmentPolicyResultCode::ALLOWED);
 
-    ScriptError script_error{SCRIPT_ERR_OK};
-    BOOST_CHECK(VerifyScript(tx.vin[0].scriptSig,
-                             context->funding_script,
-                             &tx.vin[0].scriptWitness,
-                             STANDARD_SCRIPT_VERIFY_FLAGS,
-                             TransactionSignatureChecker(&tx, 0, prevout_value, MissingDataBehavior::FAIL),
-                             &script_error));
-    BOOST_CHECK_EQUAL(script_error, SCRIPT_ERR_OK);
+    CheckAgentHalf(*signed_spend, funding_key);
+    BOOST_REQUIRE_EQUAL(context->signing_provider.keys.size(), 1U);
+    BOOST_CHECK(context->signing_provider.keys.contains(funding_key.GetPubKey().GetID()));
+    const auto maximum{MaximumAllotmentTransaction(*signed_spend)};
+    const auto target{GetTxPowTarget(Params().GetConsensus(), &chain.Tip(), maximum)};
+    BOOST_CHECK(signed_spend->proof_target == target);
+    BOOST_CHECK(CheckTxProofOfWork(tx, target, chain.Tip().GetBlockHash(), Params().GetConsensus()));
 }
 
 // --- F-153: CTRL-C MUST REACH THE GRIND -----------------------------------
@@ -2794,6 +2871,7 @@ BOOST_AUTO_TEST_CASE(agent_allotment_proof_uses_header_sourced_congestion_at_thi
 
 BOOST_AUTO_TEST_CASE(agent_allotment_selects_bundle_outputs_and_signs_spend)
 {
+    agent::HeaderChain chain{Params().GetConsensus(), Params().GenesisBlock()};
     const CKey funding_key{GenerateRandomKey()};
     const std::vector<agent::AllotmentFundingOutputArtifact> funding_outputs{
         {
@@ -2819,7 +2897,8 @@ BOOST_AUTO_TEST_CASE(agent_allotment_selects_bundle_outputs_and_signs_spend)
         .destination = PKHash(destination_key.GetPubKey()),
         .spend_amount = spend_amount,
         .spent_today = 0,
-        .prove = false,
+        .prove = true,
+        .anchor = &chain.Tip(),
     };
 
     auto signed_spend{agent::CreateSignedAllotmentSpendFromBundleOutputs(*context, request, Params().GetConsensus())};
@@ -2834,16 +2913,13 @@ BOOST_AUTO_TEST_CASE(agent_allotment_selects_bundle_outputs_and_signs_spend)
     BOOST_CHECK_EQUAL(tx.vout[0].nValue, spend_amount);
     BOOST_CHECK(tx.vout[1].scriptPubKey == context->funding_script);
 
-    for (size_t i{0}; i < tx.vin.size(); ++i) {
-        ScriptError script_error{SCRIPT_ERR_OK};
-        BOOST_CHECK(VerifyScript(tx.vin[i].scriptSig,
-                                 context->funding_script,
-                                 &tx.vin[i].scriptWitness,
-                                 STANDARD_SCRIPT_VERIFY_FLAGS,
-                                 TransactionSignatureChecker(&tx, i, signed_spend->inputs[i].amount, MissingDataBehavior::FAIL),
-                                 &script_error));
-        BOOST_CHECK_EQUAL(script_error, SCRIPT_ERR_OK);
-    }
+    CheckAgentHalf(*signed_spend, funding_key);
+    BOOST_REQUIRE_EQUAL(context->signing_provider.keys.size(), 1U);
+    BOOST_CHECK(context->signing_provider.keys.contains(funding_key.GetPubKey().GetID()));
+    const auto maximum{MaximumAllotmentTransaction(*signed_spend)};
+    const auto target{GetTxPowTarget(Params().GetConsensus(), &chain.Tip(), maximum)};
+    BOOST_CHECK(signed_spend->proof_target == target);
+    BOOST_CHECK(CheckTxProofOfWork(tx, target, chain.Tip().GetBlockHash(), Params().GetConsensus()));
 }
 
 BOOST_AUTO_TEST_CASE(agent_allotment_rejects_insufficient_bundle_outputs)
@@ -2901,29 +2977,84 @@ BOOST_AUTO_TEST_CASE(agent_allotment_signing_rejects_policy_denied_spend)
     BOOST_CHECK_EQUAL(util::ErrorString(signed_spend).original, "Agent allotment policy rejected spend: daily-limit-exceeded");
 }
 
+BOOST_AUTO_TEST_CASE(agent_allotment_import_rejects_non_cosign_descriptor)
+{
+    const auto key{GenerateRandomKey()};
+    const auto public_key{HexStr(XOnlyPubKey(key.GetPubKey()))};
+    for (const auto& body : {strprintf("tr(%s)", public_key),
+                            strprintf("tr(%s,multi_a(1,%s,%s))", public_key, public_key,
+                                      HexStr(XOnlyPubKey(AllotmentFixtureKey(2).GetPubKey())))}) {
+        UniValue bundle;
+        BOOST_REQUIRE(bundle.read(AgentAllotmentBundleJson(key)));
+        bundle.pushKV("funding_descriptor", AllotmentDescriptorChecksum(body));
+        UniValue request{bundle.find_value("policy_request")};
+        request.pushKV("funding_descriptor", AllotmentDescriptorChecksum(body));
+        bundle.pushKV("policy_request", request);
+        auto context{agent::ImportAllotmentBundle(bundle.write(), Params().GetChainTypeString(), Params().GenesisBlock().GetHash().ToString())};
+        BOOST_REQUIRE(!context);
+        BOOST_CHECK_EQUAL(util::ErrorString(context).original, "funding_descriptor must be a canonical tr(V,multi_a(2,A,C)) descriptor with distinct public keys");
+    }
+}
+
+BOOST_AUTO_TEST_CASE(agent_allotment_proof_prices_maximum_signed_size)
+{
+    auto consensus{Params().GetConsensus()};
+    consensus.nTxWorkCouplingK = 1;
+    agent::HeaderChain chain{consensus, Params().GenesisBlock()};
+    BOOST_REQUIRE(chain.AcceptHeader(NextHeader(chain, 0, {}, static_cast<uint32_t>(8 * CONGESTION_ONE))).accepted());
+    const auto key{GenerateRandomKey()};
+    auto context{agent::ImportAllotmentBundle(AgentAllotmentBundleJson(key), Params().GetChainTypeString(), Params().GenesisBlock().GetHash().ToString())};
+    BOOST_REQUIRE_MESSAGE(context, util::ErrorString(context).original);
+    auto spend{agent::CreateSignedAllotmentSpend(*context, {
+        .prevout = COutPoint{Txid::FromUint256(ArithToUint256(74)), 0},
+        .prevout_value = COIN, .destination = PKHash(GenerateRandomKey().GetPubKey()),
+        .spend_amount = COIN / 4, .prove = true, .anchor = &chain.Tip()}, consensus)};
+    BOOST_REQUIRE_MESSAGE(spend, util::ErrorString(spend).original);
+    CheckAgentHalf(*spend, key);
+    const auto maximum{MaximumAllotmentTransaction(*spend)};
+    const auto target{GetTxPowTarget(consensus, &chain.Tip(), maximum)};
+    const auto half_target{GetTxPowTarget(consensus, &chain.Tip(), spend->transaction)};
+    BOOST_REQUIRE_GT(GetSerializeSize(TX_WITH_WITNESS(maximum)), GetSerializeSize(TX_WITH_WITNESS(spend->transaction)));
+    BOOST_REQUIRE(UintToArith256(half_target) > UintToArith256(target));
+    BOOST_CHECK(spend->proof_target == target);
+    BOOST_CHECK(CheckTxProofOfWork(spend->transaction, target, chain.Tip().GetBlockHash(), consensus));
+    BOOST_CHECK(spend->psqt.tx->nCycle == spend->transaction.nCycle);
+    BOOST_CHECK_EQUAL(spend->psqt.tx->nPowNonce, spend->transaction.nPowNonce);
+    BOOST_CHECK_EQUAL(spend->psqt.tx->nAnchorHeight, spend->transaction.nAnchorHeight);
+}
+
 BOOST_AUTO_TEST_CASE(agent_allotment_import_rejects_mismatched_bundle_key)
 {
     const CKey funding_key{GenerateRandomKey()};
     std::string bundle{AgentAllotmentBundleJson(funding_key)};
 
     const CKey wrong_key{GenerateRandomKey()};
-    const std::string funding_secret{EncodeSecret(funding_key)};
-    const size_t secret_pos{bundle.find(funding_secret)};
+    const std::string agent_secret{EncodeSecret(funding_key)};
+    const size_t secret_pos{bundle.find(agent_secret)};
     BOOST_REQUIRE_NE(secret_pos, std::string::npos);
-    bundle.replace(secret_pos, funding_secret.size(), EncodeSecret(wrong_key));
+    bundle.replace(secret_pos, agent_secret.size(), EncodeSecret(wrong_key));
 
     auto context{agent::ImportAllotmentBundle(
         bundle,
         Params().GetChainTypeString(),
         Params().GenesisBlock().GetHash().ToString())};
     BOOST_CHECK(!context);
-    BOOST_CHECK_EQUAL(util::ErrorString(context).original, "funding_secret_wif does not match the bundle funding address");
+    BOOST_CHECK_EQUAL(util::ErrorString(context).original, "agent_secret_wif does not match the descriptor agent key");
+    for (const auto& other_role_key : {AllotmentFixtureKey(1), AllotmentFixtureKey(2)}) {
+        UniValue wrong_role;
+        BOOST_REQUIRE(wrong_role.read(AgentAllotmentBundleJson(funding_key)));
+        wrong_role.pushKV("agent_secret_wif", EncodeSecret(other_role_key));
+        auto imported{agent::ImportAllotmentBundle(wrong_role.write(), Params().GetChainTypeString(), Params().GenesisBlock().GetHash().ToString())};
+        BOOST_REQUIRE(!imported);
+        BOOST_CHECK_EQUAL(util::ErrorString(imported).original, "agent_secret_wif does not match the descriptor agent key");
+    }
+
 }
 
 BOOST_AUTO_TEST_CASE(apply_payment_receipts_drops_spent_bundle_outputs)
 {
     const CKey funding_key{GenerateRandomKey()};
-    const std::string funding_address{EncodeDestination(WitnessV0KeyHash(funding_key.GetPubKey()))};
+    const std::string funding_address{AgentAllotmentAddress(funding_key)};
     const agent::AllotmentFundingOutputArtifact original{
         .txid = Txid::FromUint256(ArithToUint256(51)).ToString(),
         .vout = 0,

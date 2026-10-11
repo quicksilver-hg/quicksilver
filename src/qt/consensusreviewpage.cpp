@@ -4,46 +4,18 @@
 
 #include <qt/consensusreviewpage.h>
 
+#include <qt/benchpanel.h>
 #include <qt/guiconstants.h>
-#include <qt/platformstyle.h>
-#include <qt/quicksilverstyle.h>
 
-#include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
-#include <QIcon>
 #include <QLabel>
 #include <QPushButton>
-#include <QSize>
 #include <QStyle>
 #include <QVariant>
 #include <QVBoxLayout>
 
 namespace {
-QFrame* MakeCostRow(const QString& object_name, const QString& label, const QString& value, QWidget* parent)
-{
-    auto* row = new QFrame(parent);
-    row->setObjectName(object_name);
-    row->setProperty("class", QStringLiteral("consensusCostRow"));
-
-    auto* layout = new QVBoxLayout(row);
-    layout->setContentsMargins(14, 12, 14, 12);
-    layout->setSpacing(5);
-
-    auto* label_widget = new QLabel(label, row);
-    label_widget->setObjectName(object_name + QStringLiteral("Label"));
-    label_widget->setProperty("class", QStringLiteral("hudHeading"));
-    layout->addWidget(label_widget);
-
-    auto* value_widget = new QLabel(value, row);
-    value_widget->setObjectName(object_name + QStringLiteral("Value"));
-    value_widget->setProperty("class", QStringLiteral("sectionValue"));
-    value_widget->setWordWrap(true);
-    layout->addWidget(value_widget);
-
-    return row;
-}
-
 void SetActionClass(QPushButton* button, const QString& class_name)
 {
     if (button->property("class").toString() == class_name) return;
@@ -53,7 +25,7 @@ void SetActionClass(QPushButton* button, const QString& class_name)
 }
 } // namespace
 
-ConsensusReviewPage::ConsensusReviewPage(const PlatformStyle* platform_style, uint64_t blockchain_size_gb, uint64_t chain_state_size_gb, QWidget* parent)
+ConsensusReviewPage::ConsensusReviewPage(uint64_t blockchain_size_gb, uint64_t chain_state_size_gb, QWidget* parent)
     : QWidget(parent),
       m_blockchain_size_gb(blockchain_size_gb),
       m_chain_state_size_gb(chain_state_size_gb)
@@ -62,88 +34,60 @@ ConsensusReviewPage::ConsensusReviewPage(const PlatformStyle* platform_style, ui
     setProperty("class", QStringLiteral("quicksilverPage"));
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(28, 28, 28, 28);
-    root->setSpacing(18);
+    root->setContentsMargins(14, 14, 14, 14);
+    root->setSpacing(14);
 
-    auto* header = new QFrame(this);
-    header->setObjectName(QStringLiteral("consensusReviewHeader"));
-    auto* header_layout = new QHBoxLayout(header);
-    header_layout->setContentsMargins(0, 0, 0, 0);
-    header_layout->setSpacing(14);
-
-    auto* mark = new QLabel(header);
-    mark->setObjectName(QStringLiteral("consensusReviewMark"));
-    mark->setPixmap(platform_style->ColorIcon(QStringLiteral(":/icons/connect_4"), QuicksilverStyle::Color(QuicksilverStyle::Token::Teal)).pixmap(QSize(34, 34)));
-    mark->setAlignment(Qt::AlignCenter);
-    mark->setFixedSize(QSize(46, 46));
-    header_layout->addWidget(mark);
-
-    auto* title_block = new QVBoxLayout();
-    title_block->setContentsMargins(0, 0, 0, 0);
-    title_block->setSpacing(4);
-    m_title = new QLabel(tr("Consensus is optional"), header);
+    // What consensus costs, as one panel of label/value rows under the
+    // statement of where this desktop stands.
+    const BenchPanel::Parts review = BenchPanel::Make(QStringLiteral("consensusReviewHeader"), tr("Consensus"), this);
+    m_title = new QLabel(review.frame);
     m_title->setObjectName(QStringLiteral("consensusReviewTitle"));
-    m_title->setProperty("class", QStringLiteral("pageTitle"));
-    title_block->addWidget(m_title);
-
-    m_intro = new QLabel(tr("Run independent verification only when the storage and background activity are an intentional choice. The vault works without it."), header);
+    m_title->setProperty("class", QStringLiteral("benchValue"));
+    review.body->addWidget(m_title);
+    m_intro = new QLabel(review.frame);
     m_intro->setObjectName(QStringLiteral("consensusReviewIntro"));
-    m_intro->setProperty("class", QStringLiteral("muted"));
+    m_intro->setProperty("class", QStringLiteral("benchNote"));
     m_intro->setWordWrap(true);
-    title_block->addWidget(m_intro);
-    header_layout->addLayout(title_block, 1);
-    root->addWidget(header);
+    review.body->addWidget(m_intro);
+    auto* rows_host = new QWidget(review.frame);
+    QGridLayout* rows = BenchPanel::MakeRows(rows_host);
+    const auto add_cost = [&](const char* name, const QString& key, const QString& value) {
+        QLabel* label = BenchPanel::AddRow(rows, key, QString::fromLatin1(name) + QStringLiteral("Value"), rows_host);
+        label->setText(value);
+        label->setWordWrap(true);
+    };
+    add_cost("consensusStorageCost", tr("Storage"), tr("Default pruning keeps a %1 GB recent-block window while chain state grows by about %2 GB per year. Keeping full history grows total storage by about %3 GB per year instead.")
+                                                      .arg(DEFAULT_PRUNE_TARGET_GB)
+                                                      .arg(m_chain_state_size_gb)
+                                                      .arg(m_blockchain_size_gb + m_chain_state_size_gb));
+    add_cost("consensusBackgroundCost", tr("Background work"), tr("Keeps a verifying process online and syncs with peers."));
+    add_cost("consensusVaultCost", tr("Vault requirement"), tr("Not required for holding, requesting, or transferring quicksilver."));
+    review.body->addWidget(rows_host);
+    root->addWidget(review.frame);
 
-    auto* cost_grid = new QGridLayout();
-    cost_grid->setContentsMargins(0, 0, 0, 0);
-    cost_grid->setHorizontalSpacing(12);
-    cost_grid->setVerticalSpacing(12);
-    cost_grid->addWidget(MakeCostRow(QStringLiteral("consensusStorageCost"), tr("Storage"), tr("Default pruning keeps a %1 GB recent-block window while chain state grows by about %2 GB per year. Keeping full history grows total storage by about %3 GB per year instead.")
-                                             .arg(DEFAULT_PRUNE_TARGET_GB)
-                                             .arg(m_chain_state_size_gb)
-                                             .arg(m_blockchain_size_gb + m_chain_state_size_gb), this), 0, 0);
-    cost_grid->addWidget(MakeCostRow(QStringLiteral("consensusBackgroundCost"), tr("Background work"), tr("Keeps a verifying process online and syncs with peers."), this), 0, 1);
-    cost_grid->addWidget(MakeCostRow(QStringLiteral("consensusVaultCost"), tr("Vault requirement"), tr("Not required for holding, requesting, or transferring quicksilver."), this), 0, 2);
-    cost_grid->setColumnStretch(0, 1);
-    cost_grid->setColumnStretch(1, 1);
-    cost_grid->setColumnStretch(2, 1);
-    root->addLayout(cost_grid);
-
-    auto* choice_panel = new QFrame(this);
-    choice_panel->setObjectName(QStringLiteral("consensusChoicePanel"));
-    auto* choice_layout = new QVBoxLayout(choice_panel);
-    choice_layout->setContentsMargins(18, 16, 18, 16);
-    choice_layout->setSpacing(9);
-
-    auto* choice_title = new QLabel(tr("Choose without pressure"), choice_panel);
-    choice_title->setObjectName(QStringLiteral("consensusChoiceTitle"));
-    choice_title->setProperty("class", QStringLiteral("hudHeading"));
-    choice_layout->addWidget(choice_title);
-
-    m_choice_copy = new QLabel(tr("Independent verification is valuable, but most vault-only users should decline until they specifically want to run consensus."), choice_panel);
+    const BenchPanel::Parts choice = BenchPanel::Make(QStringLiteral("consensusChoicePanel"), tr("Choose without pressure"), this);
+    m_choice_copy = new QLabel(choice.frame);
     m_choice_copy->setObjectName(QStringLiteral("consensusChoiceCopy"));
-    m_choice_copy->setProperty("class", QStringLiteral("muted"));
+    m_choice_copy->setProperty("class", QStringLiteral("benchNote"));
     m_choice_copy->setWordWrap(true);
-    choice_layout->addWidget(m_choice_copy);
+    choice.body->addWidget(m_choice_copy);
 
     auto* button_row = new QHBoxLayout();
     button_row->setContentsMargins(0, 4, 0, 0);
     button_row->setSpacing(10);
-    m_decline_button = new QPushButton(tr("Decline for now"), choice_panel);
+    m_decline_button = new QPushButton(choice.frame);
     m_decline_button->setObjectName(QStringLiteral("consensusDeclineButton"));
-    m_decline_button->setProperty("class", QStringLiteral("primaryActionButton"));
     connect(m_decline_button, &QPushButton::clicked, this, &ConsensusReviewPage::declined);
     button_row->addWidget(m_decline_button);
 
-    m_continue_button = new QPushButton(tr("Enable consensus"), choice_panel);
+    m_continue_button = new QPushButton(choice.frame);
     m_continue_button->setObjectName(QStringLiteral("consensusContinueButton"));
-    m_continue_button->setProperty("class", QStringLiteral("secondaryActionButton"));
     connect(m_continue_button, &QPushButton::clicked, this, &ConsensusReviewPage::continueRequested);
     button_row->addWidget(m_continue_button);
     button_row->addStretch();
-    choice_layout->addLayout(button_row);
+    choice.body->addLayout(button_row);
 
-    root->addWidget(choice_panel);
+    root->addWidget(choice.frame);
     root->addStretch();
     setConsensusEnabled(false);
 }

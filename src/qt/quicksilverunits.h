@@ -75,6 +75,8 @@ public:
     static QString formatWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy);
     //! Format an inline amount with privacy masking, without column padding.
     static QString formatInlineWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy);
+    //! The same inline amount and privacy mask, without the unit, for a figure whose unit is shown beside it.
+    static QString formatInlineValueWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy);
     //! Parse string to coin amount
     static bool parse(Unit unit, const QString& value, CAmount* val_out);
     //! Gets title for amount column including current display unit if optionsModel reference available */

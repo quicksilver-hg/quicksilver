@@ -211,8 +211,8 @@ void PaymentServer::handleURIOrFile(const QString& s)
                 if (!IsValidDestination(dest)) {
                     if (uri.hasQueryItem("r")) {  // payment request
                         Q_EMIT message(tr("URI handling"),
-                            tr("Cannot process payment request because BIP70 is not supported.\n"
-                               "Request a BIP21 compatible URI."),
+                            tr("This kind of payment request is not supported.\n"
+                               "Ask for a quicksilver: URI that names the address directly."),
                             CClientUIInterface::ICON_WARNING);
                     }
                     Q_EMIT message(tr("URI handling"), QString::fromStdString(error_msg),
@@ -233,8 +233,8 @@ void PaymentServer::handleURIOrFile(const QString& s)
     if (QFile::exists(s)) // payment request file
     {
         Q_EMIT message(tr("Payment request file handling"),
-            tr("Cannot process payment request because BIP70 is not supported.\n"
-               "Request a BIP21 compatible URI."),
+            tr("This kind of payment request is not supported.\n"
+               "Ask for a quicksilver: URI that names the address directly."),
             CClientUIInterface::ICON_WARNING);
     }
 }

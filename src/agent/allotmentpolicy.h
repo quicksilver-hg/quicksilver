@@ -39,12 +39,11 @@ struct AllotmentPolicyArtifact {
     std::string chain;
     std::string genesis_hash;
     std::string funding_address;
+    std::string funding_descriptor;
     AllotmentPolicy policy;
     CAmount funding_available{0};
     int64_t risk_accepted_time{0};
     int64_t request_created_time{0};
-    std::string policy_status;
-    bool backend_created{false};
 };
 
 struct AllotmentFundingOutputArtifact {
@@ -57,8 +56,8 @@ struct AllotmentPolicyBundleArtifact {
     AllotmentPolicyArtifact policy_request;
     std::string policy_request_json;
     std::string funding_address;
-    std::string funding_secret;
-    std::string policy_enforcement;
+    std::string agent_secret;
+    std::string funding_descriptor;
     std::vector<AllotmentFundingOutputArtifact> funding_outputs;
 };
 

@@ -168,6 +168,8 @@ public:
     bool ReadBackupRecorded(bool& recorded);
     bool WriteAgentAllotmentRecords(const std::vector<AgentAllotmentRecord>& records);
     bool ReadAgentAllotmentRecords(std::vector<AgentAllotmentRecord>& records);
+    //! True when the records key is present, including when its value cannot be deserialized.
+    bool HasAgentAllotmentRecords();
 
     bool WriteOrderPosNext(int64_t nOrderPosNext);
 

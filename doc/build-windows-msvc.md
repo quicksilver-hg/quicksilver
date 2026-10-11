@@ -71,7 +71,12 @@ download on a mismatch. It extracts into `build\tor\` and prints where
 
 `tor.exe` in this bundle is self-contained — the archive ships no DLLs beside
 it — so copy that one file next to `quicksilver.exe`, or run the desktop
-with `-bundledtorpath=<path to tor.exe>`. The bundle's pluggable transports and
+with `-bundledtorpath=<path to tor.exe>`. The installer (`--target deploy`)
+needs it too: it ships `tor.exe` beside `quicksilver.exe`, takes it from
+`build\tor\tor\tor.exe` (set `QUICKSILVER_BUNDLED_TOR_EXE` to use another
+path), and refuses to build if it is missing or does not match the pinned
+SHA-256 in `cmake/module/Maintenance.cmake`. Run this step before configuring
+the build that makes the installer. The bundle's pluggable transports and
 geoip data are not used: Quicksilver configures no bridges and no country
 selection.
 

@@ -398,11 +398,6 @@ RULES = [
         re.compile(r"^src/qt/forms/optionsdialog\.ui$"),
     ),
     Rule(
-        "delegated coins-are-yours copy",
-        re.compile(r"These coins are still yours"),
-        re.compile(r"^src/qt/forms/overviewpage\.ui$"),
-    ),
-    Rule(
         "BIP70 merchant-instruction copy",
         re.compile(r"merchant instructions to switch vaults"),
         re.compile(r"^src/qt/paymentserver\.cpp$"),
@@ -418,6 +413,7 @@ RULES = [
         re.compile(r'(?:pushKV\(|Type::OBJ, )\s*"segwit"|[\[\'"]segwit[\'"](?:\s*\]|\s*:)|assert [\'"]segwit[\'"] not in|"segwit":'),
         re.compile(r"^(src/rpc/rawtransaction\.cpp|test/functional/rpc_decodescript\.py|test/functional/data/rpc_decodescript\.json)$"),
     ),
+    Rule("shared-key allotment product copy", re.compile(r"Fund and review shared-key agent allotments", re.IGNORECASE), QT),
     Rule("agent-wallet product copy", re.compile(r"agent wallets?", re.IGNORECASE)),
     # The agent's funded container is an allotment. It was called a wallet, then
     # briefly a vault -- which collided with the steward's own vault, the exact
@@ -447,6 +443,7 @@ RULES = [
     # Upstream's name. 3349761d renamed it to WorkFrac; a re-import under the
     # old spelling is the likely way back.
     Rule("dead fee-cluster FeeFrac", re.compile(r"\bFeeFrac\b")),
+    Rule("upstream proposal number in desktop copy", re.compile(r"\bBIP ?(?:21|70)\b"), QT),
 ]
 
 ALLOWED = {
@@ -657,6 +654,9 @@ def self_test() -> int:
         ("src/vault/rpc/transactions.cpp", '           {RPCResult::Type::STR_HEX, "replaced_by_txid", /*optional=*/true, "Only if \'category\' is \'send\'. The txid if this tx was replaced."},', "dead vault RBF replacement surface"),
         ("contrib/completions/bash/quicksilver-cli.bash", "            getblock|getblockheader|getrelaypoolancestors|getrelaypooldescendants|getrawtransaction|gettransaction|listreceivedbyaddress)", "boolean verbosity completion"),
         ("src/qt/optionsmodel.cpp", '    } else if (settings.contains("UseEmbeddedMonospacedFont")) {', "legacy Qt font-migration key"),
+        ("src/qt/utilitydialog.cpp", '                         "You can optionally specify a payment [URI], in e.g. the BIP21 URI format.\\n\\n"', "upstream proposal number in desktop copy"),
+        ("src/qt/paymentserver.cpp", '                            tr("Cannot process payment request because BIP70 is not supported.\\n"', "upstream proposal number in desktop copy"),
+        ("doc/bips.md", "| [BIP 21](https://github.com/bitcoin/bips/blob/master/bip-0021.mediawiki) | URI handling is retained |", None),
         ("src/qt/optionsmodel.h", "    void checkAndMigrate();", "empty Qt settings-version stamp"),
         ("src/qt/optionsmodel.cpp", '    static const char strSettingsVersionKey[] = "nSettingsVersion";', "empty Qt settings-version stamp"),
         ("src/test/ipc_test.h", "void IpcPipeTest();", "removed multiprocess IPC test harness"),
@@ -697,7 +697,6 @@ def self_test() -> int:
         ("src/qt/forms/optionsdialog.ui", "             <string>Whether to show coin control features or not.</string>", "coin-control product copy"),
         ("src/qt/forms/optionsdialog.ui", "             <string>Enable coin &amp;control features</string>", "coin-control product copy"),
         ("src/qt/forms/optionsdialog.ui", "               <string>Full path to a %1 compatible script (e.g. C:\\Downloads\\hwi.exe or /Users/you/Downloads/hwi.py). Beware: malware can steal your coins!</string>", "malware steal coins copy"),
-        ("src/qt/forms/overviewpage.ui", "               <string>Balance handed to an agent. These coins are still yours, but only the agent can spend them until you sweep them back.</string>", "delegated coins-are-yours copy"),
         ("src/qt/paymentserver.cpp", "                               \"Due to widespread security flaws in BIP70 it's strongly recommended that any merchant instructions to switch vaults be ignored.\\n\"", "BIP70 merchant-instruction copy"),
         ("contrib/linearize/example-linearize.cfg", "max_height=313000", "bitcoin-era linearize height"),
         ("contrib/linearize/linearize-hashes.py", "        settings['max_height'] = 313000", "bitcoin-era linearize height"),
@@ -711,7 +710,8 @@ def self_test() -> int:
         ("src/rpc/rawtransaction.cpp", '            r.pushKV("witness", std::move(sr));', None),
         ("src/qt/quicksilvergui.cpp", '    agentAllotmentAction->setStatusTip(tr("Fund and review shared-key agent wallets"));', "agent-wallet product copy"),
         ("src/qt/quicksilvergui.cpp", '    agentAllotmentAction->setStatusTip(tr("Fund and review shared-key agent vaults"));', "agent-vault product copy"),
-        ("src/qt/quicksilvergui.cpp", '    agentAllotmentAction->setStatusTip(tr("Fund and review shared-key agent allotments"));', None),
+        ("src/qt/quicksilvergui.cpp", '    agentAllotmentAction->setStatusTip(tr("Fund and review shared-key agent allotments"));', "shared-key allotment product copy"),
+        ("src/qt/quicksilvergui.cpp", '    agentAllotmentAction->setStatusTip(tr("Fund and review co-signed agent allotments"));', None),
         ("src/vault/rpc/coins.cpp", '                {"minimumAmount", UniValueType()},', "camelCase fund option"),
         ("src/rpc/client.cpp", '    { "listunspent", 4, "minimumAmount"},', "camelCase fund option"),
         ("src/vault/rpc/coins.cpp", '        if (options.exists("minimumAmount")) {', None),

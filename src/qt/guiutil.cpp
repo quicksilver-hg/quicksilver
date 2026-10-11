@@ -45,7 +45,6 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFontDatabase>
-#include <QFontDialog>
 #include <QFontMetrics>
 #include <QInputDialog>
 #include <QGuiApplication>
@@ -131,15 +130,28 @@ static std::string DummyAddress(const CChainParams &params)
     return {};
 }
 
-void setupAddressWidget(QValidatedLineEdit *widget, QWidget *parent)
+// A key-hash (Base58) address on this chain whose checksum fails, for fields that
+// accept only that form, such as message signing.
+static std::string DummyKeyHashAddress(const CChainParams& params)
+{
+    std::vector<unsigned char> data{params.Base58Prefix(CChainParams::PUBKEY_ADDRESS)};
+    data.insert(data.end(), 20, 0x35);
+    data.insert(data.end(), 4, 0x00);
+    const std::string addr{EncodeBase58(data)};
+
+    if (Assume(!IsValidDestinationString(addr))) return addr;
+    return {};
+}
+
+void setupAddressWidget(QValidatedLineEdit *widget, QWidget *parent, AddressExample example)
 {
     parent->setFocusProxy(widget);
 
     widget->setFont(fixedPitchFont());
     // We don't want translators to use own addresses in translations
     // and this is the only place, where this address is supplied.
-    widget->setPlaceholderText(QObject::tr("Enter a Quicksilver address (e.g. %1)").arg(
-        QString::fromStdString(DummyAddress(Params()))));
+    const std::string dummy{example == AddressExample::KeyHash ? DummyKeyHashAddress(Params()) : DummyAddress(Params())};
+    widget->setPlaceholderText(QObject::tr("Enter a Quicksilver address (e.g. %1)").arg(QString::fromStdString(dummy)));
     widget->setValidator(new QuicksilverAddressEntryValidator(parent));
     widget->setCheckValidator(new QuicksilverAddressCheckValidator(parent));
 }
@@ -355,21 +367,6 @@ void getOpenFileName(QWidget *parent, const QString &caption, const QString &dir
     dialog->setFileMode(QFileDialog::ExistingFile);
     dialog->setObjectName(QStringLiteral("openFileDialog"));
     PresentFileDialog(dialog, /*append_suffix=*/false, std::move(done));
-}
-
-void getFont(QWidget *parent, const QFont &initial, std::function<void(const QFont& font, bool ok)> done)
-{
-    auto* dialog = new QFontDialog(initial, parent);
-    dialog->setOption(QFontDialog::DontUseNativeDialog);
-    dialog->setObjectName(QStringLiteral("fontDialog"));
-    QObject::connect(dialog, &QFontDialog::finished, dialog, [dialog, done = std::move(done)](int result) {
-        const bool ok = result == QDialog::Accepted;
-        const QFont font = dialog->currentFont();
-        QTimer::singleShot(0, [done, font, ok]() {
-            if (done) done(font, ok);
-        });
-    });
-    ShowModalDialogAsynchronously(dialog);
 }
 
 void getText(QWidget *parent, const QString &title, const QString &label,

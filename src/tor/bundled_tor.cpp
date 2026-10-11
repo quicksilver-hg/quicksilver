@@ -3,9 +3,11 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #include <tor/bundled_tor.h>
 
+#include <common/args.h>
 #include <logging.h>
 #include <sync.h>
 #include <tinyformat.h>
+#include <torcontrol.h>
 #include <util/fs_helpers.h>
 #include <util/process/contained_child.h>
 #include <util/readwritefile.h>
@@ -162,7 +164,9 @@ bool IsUsableExecutable(const fs::path& p)
 #endif
 }
 
-std::optional<fs::path> LocateTor(const fs::path& override_path)
+} // namespace
+
+std::optional<fs::path> LocateBundledTor(const fs::path& override_path)
 {
 #ifdef WIN32
     constexpr char kPathSeparator{';'};
@@ -175,7 +179,20 @@ std::optional<fs::path> LocateTor(const fs::path& override_path)
     return FindTorBinary(override_path, SelfExecutableDir(), path_env ? path_env : "",
                          kPathSeparator, kBinaryName, IsUsableExecutable);
 }
-} // namespace
+
+bool BundledTorWouldStart(const ArgsManager& args)
+{
+    return args.GetBoolArg("-bundledtor", DEFAULT_BUNDLED_TOR) &&
+           args.GetBoolArg("-listenonion", DEFAULT_LISTEN_ONION);
+}
+
+bilingual_str MissingTorMessage()
+{
+    return _("Bundled Tor is enabled but no usable 'tor' executable was found. "
+             "Install Tor (see doc/tor.md), place it beside the Quicksilver "
+             "executable, or set -bundledtorpath=<path>. To use a Tor you start "
+             "and configure yourself, set -bundledtor=0.");
+}
 
 util::Result<std::string> StartBundledTor(const fs::path& datadir, const fs::path& override_path)
     EXCLUSIVE_LOCKS_REQUIRED(!g_bundled_tor_mutex)
@@ -202,13 +219,8 @@ util::Result<std::string> StartBundledTor(const fs::path& datadir, const fs::pat
         }
     }
 
-    const std::optional<fs::path> tor_binary = LocateTor(override_path);
-    if (!tor_binary) {
-        return util::Error{_("Bundled Tor is enabled but no usable 'tor' executable was found. "
-                             "Install Tor (see doc/tor.md), place it beside the Quicksilver "
-                             "executable, or set -bundledtorpath=<path>. To use a Tor you start "
-                             "and configure yourself, set -bundledtor=0.")};
-    }
+    const std::optional<fs::path> tor_binary = LocateBundledTor(override_path);
+    if (!tor_binary) return util::Error{MissingTorMessage()};
 
     // TryCreateDirectories answers "did I create it", not "is it there": it
     // returns FALSE for a directory that already existed. Treating that as a

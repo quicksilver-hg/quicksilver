@@ -21,7 +21,12 @@ class SendCoinsRecipient;
 class VaultModel;
 class VaultView;
 
+namespace interfaces {
+struct MiningStatus;
+}
+
 QT_BEGIN_NAMESPACE
+class QDateTime;
 class QLabel;
 class QPushButton;
 QT_END_NAMESPACE
@@ -42,6 +47,13 @@ public:
     ~VaultFrame();
 
     void setClientModel(ClientModel *clientModel);
+    //! Forward one miner status from the mining model. The status strip listens;
+    //! the mine page keeps its own connection and is not updated here.
+    void setMiningStatus(const interfaces::MiningStatus& status);
+    //! Block tip for the Home Node panel. A negative height means it is not known yet.
+    void setChainTip(int height, const QDateTime& block_time);
+    //! Whether the node has caught up, and how far (0..1), for the Home node panel.
+    void setSyncState(bool synced, double progress);
     void setVaultRuntimeAvailable(bool available);
 
     bool addView(VaultView* vaultView);
@@ -51,8 +63,10 @@ public:
 
     bool handlePaymentRequest(const SendCoinsRecipient& recipient);
 
-    void showOutOfSyncWarning(bool fShow);
     void markConsensusInitializationFailed();
+    //! Consensus was refused before starting: no Tor. Unlike a failed start this
+    //! needs no restart, so opting in again after placing Tor is enough.
+    void markConsensusTorMissing();
 
     QSize sizeHint() const override { return m_size_hint; }
 
@@ -75,6 +89,9 @@ Q_SIGNALS:
     void consensusStateChanged(bool enabled);
     void networkRestartRequested(const QString& chain_token);
     void privacyRequested(bool privacy);
+    //! Home asked for the Ledger page.
+    void ledgerRequested();
+    void miningStatusUpdated(const interfaces::MiningStatus& status);
 
 private:
     PageStack* vaultStack;
@@ -92,14 +109,13 @@ private:
     QMap<VaultModel*, VaultView*> mapVaultViews;
     bool m_consensus_enabled{false};
     bool m_consensus_start_failed{false};
+    bool m_consensus_tor_missing{false};
     bool m_privacy{false};
     bool m_vault_runtime_available{false};
 
-    bool bOutOfSync{false};
-
     const PlatformStyle *platformStyle;
 
-    const QSize m_size_hint;
+    QSize m_size_hint;
 
     void updateLaunchSummary();
     void connectLaunchSummarySignals(VaultModel* vault_model);
@@ -133,9 +149,7 @@ public:
 public Q_SLOTS:
     /** Switch to the desktop launch page */
     void gotoLaunchPage();
-    /** Switch to overview (home) page */
-    void gotoOverviewPage();
-    /** Switch to the active vault, or to vault creation/opening if none exists */
+    /** Switch to Home, or to vault creation/opening if no vault is open */
     void gotoVaultPage();
     /** Switch to history (transactions) page */
     void gotoHistoryPage();

@@ -64,7 +64,9 @@ namespace GUIUtil
     QFont fixedPitchFont(bool use_embedded_font = false);
 
     // Set up widget for address
-    void setupAddressWidget(QValidatedLineEdit *widget, QWidget *parent);
+    //! Which address form a field's placeholder shows as its example.
+    enum class AddressExample { Default, KeyHash };
+    void setupAddressWidget(QValidatedLineEdit *widget, QWidget *parent, AddressExample example = AddressExample::Default);
 
     /**
      * Connects an additional shortcut to a QAbstractButton. Works around the
@@ -139,9 +141,6 @@ namespace GUIUtil
     void getOpenFileName(QWidget *parent, const QString &caption, const QString &dir,
         const QString &filter,
         std::function<void(const QString& filename)> done);
-
-    /** Show a font picker asynchronously. `done` runs on a queued turn. */
-    void getFont(QWidget *parent, const QFont &initial, std::function<void(const QFont& font, bool ok)> done);
 
     /** Show a single-line text prompt asynchronously. `done` runs on a queued turn. */
     void getText(QWidget *parent, const QString &title, const QString &label,

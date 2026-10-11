@@ -97,20 +97,26 @@ public:
     //! Record whether this vault has a completed backup.
     virtual bool setBackupRecorded(bool recorded) = 0;
 
-    //! Record an accepted shared-key agent setup intent and reserve its funding address in the vault.
+    //! Create a co-signed agent allotment and its taproot funding output.
     virtual util::Result<vault::AgentAllotmentRecord> recordAgentAllotmentSetup(const std::string& label, CAmount funding_limit, CAmount daily_limit) = 0;
 
-    //! Return accepted shared-key agent setup records stored in the vault.
+    //! Return co-signed agent allotment records stored in the vault.
     virtual std::vector<vault::AgentAllotmentRecord> listAgentAllotmentRecords() = 0;
 
-    //! Build the JSON handoff request for an accepted shared-key agent setup.
+    //! Build the JSON policy request for a co-signed agent allotment.
     virtual std::string agentAllotmentPolicyRequest(const vault::AgentAllotmentRecord& record, CAmount funding_available) = 0;
 
-    //! Parse and validate an Agent Allotment Gateway policy handoff request without enforcing it.
+    //! Parse and validate an agent allotment policy request.
     virtual util::Result<vault::AgentAllotmentPolicyRequestMetadata> validateAgentAllotmentPolicyRequest(const std::string& request_json) = 0;
 
-    //! Export a validated Agent Allotment Gateway policy bundle with the reserved funding key.
+    //! Export a co-sign bundle: the public descriptor, the agent's key, and the funding outputs.
     virtual util::Result<vault::AgentAllotmentPolicyBundle> agentAllotmentPolicyBundle(const std::string& request_json) = 0;
+
+    //! Verify and co-sign the agent's proved request, then commit it.
+    virtual util::Result<CTransactionRef> cosignAgentAllotmentSpend(const std::string& psqt_base64) = 0;
+
+    //! Stop co-signing new requests for this allotment.
+    virtual bool stopAgentAllotment(const std::string& id) = 0;
 
     //! Get vault name.
     virtual std::string getVaultName() = 0;

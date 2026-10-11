@@ -10,6 +10,7 @@
 #include <crypto/cuckatoo/cuckatoo.h>
 #include <consensus/amount.h>
 #include <primitives/transaction.h>
+#include <psqt.h>
 #include <script/signingprovider.h>
 #include <uint256.h>
 #include <util/result.h>
@@ -35,7 +36,7 @@ namespace agent {
 //! because a transfer is one bounded solve the sender chose and waits out. An agent spend
 //! is not: it starts on the agent's schedule, on a machine whose owner may be doing
 //! something else, and the grind is long enough to be felt. So this refuses that graph
-//! unless the operator has opted in (-allowcputxpow, or the desktop checkbox that sets it).
+//! unless the operator has opted in (-allowcputxpow).
 //! The refusal is not about capability -- the CPU can solve the graph -- it is about
 //! consent to spend someone's machine while they are using it.
 constexpr bool AllowsAllotmentCpuFallback(uint8_t edgebits, bool allow_cpu_txpow)
@@ -91,6 +92,9 @@ struct AllotmentSpendInput {
 
 struct AllotmentSignedSpend {
     CTransaction transaction;
+    PartiallySignedQuicksilverTransaction psqt{};
+    //! Actual target passed to the grinder, for inspection of witness pricing.
+    uint256 proof_target{};
     AllotmentPolicyCheck policy_check;
     CAmount change_amount{0};
     CAmount input_amount{0};

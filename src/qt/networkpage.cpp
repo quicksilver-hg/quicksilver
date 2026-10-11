@@ -10,18 +10,20 @@
 #include <netaddress.h>
 #include <netbase.h>
 #include <protocol.h>
+#include <qt/benchpanel.h>
 #include <qt/guiutil.h>
 #include <streams.h>
+#include <tor/bundled_tor.h>
 #include <util/chaintype.h>
 #include <util/fs.h>
 
-#include <QFormLayout>
 #include <QFrame>
-#include <QGroupBox>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSizePolicy>
 #include <QString>
 #include <QVariant>
 #include <QVBoxLayout>
@@ -44,15 +46,6 @@ struct DeveloperNetworkContext {
     QString formal_name;
     QString purpose;
 };
-
-QLabel* MakeValueLabel(const QString& object_name)
-{
-    auto* label = new QLabel(QStringLiteral("Not connected"));
-    label->setObjectName(object_name);
-    label->setProperty("class", QStringLiteral("sectionValue"));
-    label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    return label;
-}
 
 //! True when every fixed seed this network ships is an onion address, so nothing
 //! can be dialled at all without a Tor proxy.
@@ -127,63 +120,68 @@ QString DeveloperNetworkPurpose(ChainType chain)
     assert(false);
 }
 
-QFrame* MakeNetworkContextCard(const DeveloperNetworkContext& context, ChainType active_chain, NetworkPage* owner, QWidget* parent)
+QWidget* MakeNetworkContextCard(const DeveloperNetworkContext& context, ChainType active_chain, NetworkPage* owner, QWidget* parent)
 {
-    auto* card = new QFrame(parent);
+    // One row of the Networks panel: the network, whether this window uses
+    // it, and the command; its purpose, token and data directory under it.
+    auto* card = new QWidget(parent);
     card->setObjectName(QString::fromLatin1(context.object_name));
-    card->setProperty("class", QStringLiteral("networkContextCard"));
+    card->setProperty("class", QStringLiteral("networkContextRow"));
 
-    auto* layout = new QVBoxLayout(card);
-    layout->setContentsMargins(14, 12, 14, 12);
-    layout->setSpacing(7);
-
-    auto* top_row = new QHBoxLayout();
-    top_row->setContentsMargins(0, 0, 0, 0);
-    top_row->setSpacing(10);
+    auto* layout = new QGridLayout(card);
+    layout->setContentsMargins(0, 6, 0, 6);
+    layout->setHorizontalSpacing(12);
+    layout->setVerticalSpacing(3);
+    layout->setColumnStretch(0, 1);
 
     auto* name = new QLabel(context.formal_name, card);
     name->setObjectName(card->objectName() + QStringLiteral("Name"));
     name->setProperty("class", QStringLiteral("sectionValue"));
-    name->setWordWrap(true);
-    top_row->addWidget(name, 1);
+    layout->addWidget(name, 0, 0);
 
+    // One state/action column: "Current" on this window's network, the
+    // Restart command on the others, at the same right edge.
     const bool active = context.chain == active_chain;
-    auto* state = new QLabel(active ? Tr("Current") : Tr("Restart to use"), card);
-    state->setObjectName(card->objectName() + QStringLiteral("State"));
-    state->setProperty("class", QStringLiteral("launchCapabilityState"));
-    top_row->addWidget(state);
-    layout->addLayout(top_row);
+    if (active) {
+        auto* state = new QLabel(Tr("Current"), card);
+        state->setObjectName(card->objectName() + QStringLiteral("State"));
+        state->setProperty("class", QStringLiteral("benchValue"));
+        state->setProperty("benchTone", QStringLiteral("good"));
+        layout->addWidget(state, 0, 2, 3, 1, Qt::AlignRight | Qt::AlignVCenter);
+    } else {
+        auto* action = new QPushButton(Tr("Restart"), card);
+        action->setObjectName(card->objectName() + QStringLiteral("Button"));
+        action->setProperty("class", QStringLiteral("benchQuiet"));
+        action->setToolTip(Tr("Restart Quicksilver with this network context."));
+        QObject::connect(action, &QPushButton::clicked, owner, [owner, token = ChainToken(context.chain)] {
+            Q_EMIT owner->restartRequested(token);
+        });
+        layout->addWidget(action, 0, 2, 3, 1, Qt::AlignRight | Qt::AlignVCenter);
+    }
 
+    auto* details = new QHBoxLayout;
+    details->setSpacing(14);
     auto* purpose = new QLabel(context.purpose, card);
     purpose->setObjectName(card->objectName() + QStringLiteral("Purpose"));
-    purpose->setProperty("class", QStringLiteral("muted"));
-    purpose->setWordWrap(true);
-    layout->addWidget(purpose);
+    purpose->setProperty("class", QStringLiteral("benchNote"));
+    details->addWidget(purpose);
 
     auto* token = new QLabel(Tr("Token: %1").arg(ChainToken(context.chain)), card);
     token->setObjectName(card->objectName() + QStringLiteral("Token"));
-    token->setProperty("class", QStringLiteral("muted"));
+    token->setProperty("class", QStringLiteral("benchNote"));
     token->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    layout->addWidget(token);
+    details->addWidget(token);
 
     auto* datadir = new QLabel(Tr("Datadir: %1").arg(DeveloperDataDir(context.chain)), card);
     datadir->setObjectName(card->objectName() + QStringLiteral("Datadir"));
-    datadir->setProperty("class", QStringLiteral("muted"));
+    datadir->setProperty("class", QStringLiteral("benchNote"));
     datadir->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    // Paths are long; this line wraps rather than widen the page.
     datadir->setWordWrap(true);
-    layout->addWidget(datadir);
-
-    auto* action = new QPushButton(active ? Tr("Current network") : Tr("Restart"), card);
-    action->setObjectName(card->objectName() + QStringLiteral("Button"));
-    action->setProperty("class", QStringLiteral("networkContextAction"));
-    action->setEnabled(!active);
-    action->setToolTip(active
-            ? Tr("This window is already using this network.")
-            : Tr("Restart Quicksilver with this network context."));
-    QObject::connect(action, &QPushButton::clicked, owner, [owner, token = ChainToken(context.chain)] {
-        Q_EMIT owner->restartRequested(token);
-    });
-    layout->addWidget(action, 0, Qt::AlignRight);
+    datadir->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    details->addStretch(1);
+    layout->addLayout(details, 1, 0, 1, 2);
+    layout->addWidget(datadir, 2, 0, 1, 2);
 
     return card;
 }
@@ -196,28 +194,20 @@ NetworkPage::NetworkPage(QWidget* parent)
     setProperty("class", QStringLiteral("quicksilverPage"));
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 20, 20, 20);
+    root->setContentsMargins(14, 14, 14, 14);
     root->setSpacing(14);
-
-    auto* title = new QLabel(tr("Network"), this);
-    title->setObjectName(QStringLiteral("networkTitle"));
-    title->setProperty("class", QStringLiteral("pageTitle"));
-    root->addWidget(title);
 
     m_intro = new QLabel(this);
     m_intro->setObjectName(QStringLiteral("networkIntro"));
-    m_intro->setProperty("class", QStringLiteral("muted"));
+    m_intro->setProperty("class", QStringLiteral("benchNote"));
     m_intro->setWordWrap(true);
-    root->addWidget(m_intro);
 
     buildDeveloperNetworkSection(root);
 
-    m_tor_setup_panel = new QGroupBox(tr("Tor setup"), this);
-    QGroupBox* tor_group = m_tor_setup_panel;
-    tor_group->setObjectName(QStringLiteral("torSetupPanel"));
-    auto* tor_layout = new QVBoxLayout(tor_group);
-    tor_layout->setContentsMargins(12, 16, 12, 12);
-    tor_layout->setSpacing(8);
+    const BenchPanel::Parts tor = BenchPanel::Make(QStringLiteral("torSetupPanel"), tr("Tor setup"), this);
+    m_tor_setup_panel = tor.frame;
+    QFrame* tor_group = m_tor_setup_panel;
+    QVBoxLayout* tor_layout = tor.body;
 
     // Platform-conditional, and it has to be: /etc/tor/torrc, Debian packaging and Unix
     // service groups do not exist on Windows, so the Linux text was not merely unhelpful
@@ -231,7 +221,7 @@ NetworkPage::NetworkPage(QWidget* parent)
 #endif
         tor_group);
     m_tor_setup_warning->setObjectName(QStringLiteral("torSetupWarning"));
-    m_tor_setup_warning->setProperty("class", QStringLiteral("muted"));
+    m_tor_setup_warning->setProperty("class", QStringLiteral("benchNote"));
     m_tor_setup_warning->setWordWrap(true);
     tor_layout->addWidget(m_tor_setup_warning);
 
@@ -239,15 +229,15 @@ NetworkPage::NetworkPage(QWidget* parent)
 #ifdef Q_OS_WIN
         tr("1. Install the Tor Expert Bundle and run tor.exe under the same Windows account as Quicksilver, so the authentication cookie is readable.\n"
            "2. In that Tor's torrc (the Expert Bundle keeps one at Data\\Tor\\torrc inside the folder you unpacked) enable ControlPort 9051 and CookieAuthentication 1; then restart tor.exe.\n"
-           "3. In Controls > Options > Network enable the separate Tor SOCKS5 proxy at 127.0.0.1:9050 (the -onion setting), then restart Quicksilver. Tor Browser can be used instead, but its proxy is on 127.0.0.1:9150. See doc/tor.md for exact checks."),
+           "3. In Settings > Options > Network enable the separate Tor SOCKS5 proxy at 127.0.0.1:9050 (the -onion setting), then restart Quicksilver. Tor Browser can be used instead, but its proxy is on 127.0.0.1:9150. See doc/tor.md for exact checks."),
 #else
         tr("1. In /etc/tor/torrc enable ControlPort 9051, CookieAuthentication 1, and CookieAuthFileGroupReadable 1; then restart Tor.\n"
-           "2. In Controls > Options > Network enable the separate Tor SOCKS5 proxy at 127.0.0.1:9050 (the -onion setting), then restart Quicksilver.\n"
+           "2. In Settings > Options > Network enable the separate Tor SOCKS5 proxy at 127.0.0.1:9050 (the -onion setting), then restart Quicksilver.\n"
            "3. If cookie authentication is denied, give the Quicksilver user read access through the Tor service group. See doc/tor.md for exact checks."),
 #endif
         tor_group);
     m_tor_setup_steps->setObjectName(QStringLiteral("torSetupSteps"));
-    m_tor_setup_steps->setProperty("class", QStringLiteral("sectionValue"));
+    m_tor_setup_steps->setProperty("class", QStringLiteral("benchNote"));
     m_tor_setup_steps->setWordWrap(true);
     m_tor_setup_steps->setTextInteractionFlags(Qt::TextSelectableByMouse);
     tor_layout->addWidget(m_tor_setup_steps);
@@ -255,27 +245,28 @@ NetworkPage::NetworkPage(QWidget* parent)
     // -onion or -proxy, and claiming ownership of someone else's Tor would be a new lie
     // in place of the one this removes.
     m_tor_setup_working = new QLabel(
-        tr("A Tor proxy is configured and carrying onion addresses, so none of the manual setup below is needed. On the desktop this is normally the Tor that Quicksilver starts and supervises itself."),
+        tr("A Tor proxy is configured and carrying onion addresses. No manual setup is needed. On the desktop this is normally the Tor that Quicksilver starts and supervises itself."),
         tor_group);
     m_tor_setup_working->setObjectName(QStringLiteral("torSetupWorking"));
-    m_tor_setup_working->setProperty("class", QStringLiteral("sectionValue"));
+    m_tor_setup_working->setProperty("class", QStringLiteral("benchNote"));
     m_tor_setup_working->setWordWrap(true);
     tor_layout->addWidget(m_tor_setup_working);
     root->addWidget(tor_group);
     applyTorSetupAdvice(OnionProxyConfigured());
 
-    auto* group = new QGroupBox(tr("Node connectivity"), this);
-    auto* group_layout = new QVBoxLayout(group);
-    group_layout->setContentsMargins(12, 16, 12, 12);
-    group_layout->setSpacing(8);
-    auto* form = new QFormLayout();
-    m_status_value = MakeValueLabel(QStringLiteral("networkStatusValue"));
-    m_peers_value = MakeValueLabel(QStringLiteral("peerCountValue"));
-    m_sync_value = MakeValueLabel(QStringLiteral("syncStatusValue"));
-    form->addRow(tr("Status"), m_status_value);
-    form->addRow(tr("Peers"), m_peers_value);
-    form->addRow(tr("Sync"), m_sync_value);
-    group_layout->addLayout(form);
+    const BenchPanel::Parts connectivity = BenchPanel::Make(QStringLiteral("networkConnectivityPanel"), tr("Node connectivity"), this);
+    QFrame* group = connectivity.frame;
+    QVBoxLayout* group_layout = connectivity.body;
+    // Whether independent verification is running is this panel's subject:
+    // the sentence heads it rather than floating above the page.
+    m_intro->setParent(group);
+    group_layout->addWidget(m_intro);
+    auto* rows_host = new QWidget(group);
+    QGridLayout* rows = BenchPanel::MakeRows(rows_host);
+    m_status_value = BenchPanel::AddRow(rows, tr("Status"), QStringLiteral("networkStatusValue"), rows_host);
+    m_peers_value = BenchPanel::AddRow(rows, tr("Peers"), QStringLiteral("peerCountValue"), rows_host);
+    m_sync_value = BenchPanel::AddRow(rows, tr("Sync"), QStringLiteral("syncStatusValue"), rows_host);
+    group_layout->addWidget(rows_host);
 
     // "Peers: 0" is a reading, not an explanation, and the two states behind it are
     // not alike: a node that started ten seconds ago has no peers either. This says
@@ -295,18 +286,16 @@ NetworkPage::NetworkPage(QWidget* parent)
 
 void NetworkPage::buildAddPeerSection(QVBoxLayout* root)
 {
-    auto* group = new QGroupBox(tr("Connect to a peer"), this);
-    group->setObjectName(QStringLiteral("addPeerPanel"));
-    auto* layout = new QVBoxLayout(group);
-    layout->setContentsMargins(12, 16, 12, 12);
-    layout->setSpacing(8);
+    const BenchPanel::Parts panel = BenchPanel::Make(QStringLiteral("addPeerPanel"), tr("Connect to a peer"), this);
+    QFrame* group = panel.frame;
+    QVBoxLayout* layout = panel.body;
 
     // doc/bootstrapping.md has documented -addnode as the fallback since the seed
     // design was written, and it was reachable only by editing a config file or
     // typing an RPC. That is not a fallback a desktop user has.
     auto* copy = new QLabel(tr("If you were given a peer address, name it here. It is retried until it answers, and once connected this node learns other peers from it. This is the same as the -addnode setting."), group);
     copy->setObjectName(QStringLiteral("addPeerCopy"));
-    copy->setProperty("class", QStringLiteral("muted"));
+    copy->setProperty("class", QStringLiteral("benchNote"));
     copy->setWordWrap(true);
     layout->addWidget(copy);
 
@@ -318,14 +307,14 @@ void NetworkPage::buildAddPeerSection(QVBoxLayout* root)
     m_add_peer_edit->setPlaceholderText(tr("host:%1, or an address ending in .onion").arg(static_cast<int>(Params().GetDefaultPort())));
     m_add_peer_button = new QPushButton(tr("Add peer"), group);
     m_add_peer_button->setObjectName(QStringLiteral("addPeerButton"));
-    m_add_peer_button->setProperty("class", QStringLiteral("secondaryActionButton"));
+    m_add_peer_button->setProperty("class", QStringLiteral("benchQuiet"));
     row->addWidget(m_add_peer_edit, 1);
     row->addWidget(m_add_peer_button);
     layout->addLayout(row);
 
     m_add_peer_result = new QLabel(group);
     m_add_peer_result->setObjectName(QStringLiteral("addPeerResult"));
-    m_add_peer_result->setProperty("class", QStringLiteral("muted"));
+    m_add_peer_result->setProperty("class", QStringLiteral("benchNote"));
     m_add_peer_result->setWordWrap(true);
     layout->addWidget(m_add_peer_result);
 
@@ -401,25 +390,17 @@ void NetworkPage::buildDeveloperNetworkSection(QVBoxLayout* root)
     m_developer_banner->setWordWrap(true);
     m_developer_banner->setVisible(active_chain != ChainType::MAIN);
     m_developer_banner->setText(tr("Developer network active: this window is not using the live ledger. The live vault is unaffected by this context."));
-    root->addWidget(m_developer_banner);
 
-    auto* group = new QGroupBox(tr("Developer network context"), this);
-    group->setObjectName(QStringLiteral("developerNetworkContext"));
-    auto* layout = new QVBoxLayout(group);
-    layout->setContentsMargins(12, 16, 12, 12);
-    layout->setSpacing(10);
-
-    m_current_network_value = new QLabel(
-        tr("%1 (%2)").arg(DeveloperNetworkLabel(active_chain), ChainToken(active_chain)),
-        group);
-    m_current_network_value->setObjectName(QStringLiteral("developerNetworkCurrentValue"));
-    m_current_network_value->setProperty("class", QStringLiteral("sectionValue"));
-    m_current_network_value->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    layout->addWidget(m_current_network_value);
+    const BenchPanel::Parts panel = BenchPanel::Make(QStringLiteral("developerNetworkContext"), tr("Networks"), this);
+    QFrame* group = panel.frame;
+    QVBoxLayout* layout = panel.body;
+    // The banner says which network this window uses: it heads the Networks panel.
+    m_developer_banner->setParent(group);
+    layout->addWidget(m_developer_banner);
 
     auto* restart_copy = new QLabel(tr("Network selection binds chain parameters, ports, and datadir at startup. Switch by restarting the application with the desired -chain token."), group);
     restart_copy->setObjectName(QStringLiteral("developerNetworkRestartCopy"));
-    restart_copy->setProperty("class", QStringLiteral("muted"));
+    restart_copy->setProperty("class", QStringLiteral("benchNote"));
     restart_copy->setWordWrap(true);
     layout->addWidget(restart_copy);
 
@@ -430,6 +411,10 @@ void NetworkPage::buildDeveloperNetworkSection(QVBoxLayout* root)
     };
 
     for (const auto& context : contexts) {
+        auto* rule = new QFrame(group);
+        rule->setObjectName(QStringLiteral("benchRule"));
+        rule->setFixedHeight(1);
+        layout->addWidget(rule);
         layout->addWidget(MakeNetworkContextCard(context, active_chain, this, group));
     }
 
@@ -449,6 +434,21 @@ void NetworkPage::showInitializing()
 void NetworkPage::showStartFailed()
 {
     m_intro->setText(tr("Consensus did not start. The saved opt-in was cleared; restart after fixing node settings to try again."));
+    m_status_value->setText(tr("Startup failed"));
+    m_peers_value->setText(tr("Unavailable"));
+    m_sync_value->setText(tr("Not running"));
+    m_bootstrap_diagnosis->setVisible(false);
+    setNodeControlsEnabled(false);
+}
+
+void NetworkPage::showTorMissing()
+{
+    // The node's own sentence names the remedies; this adds which of them take
+    // effect without a restart (the settings and PATH are read at launch).
+    m_intro->setText(tr("Consensus did not start. %1 A tor placed beside the Quicksilver executable is found when "
+                        "you enable consensus again; a change to PATH or quicksilver.conf needs a restart of "
+                        "Quicksilver first. Your vault is unaffected.")
+                         .arg(QString::fromStdString(tor::MissingTorMessage().translated)));
     m_status_value->setText(tr("Startup failed"));
     m_peers_value->setText(tr("Unavailable"));
     m_sync_value->setText(tr("Not running"));

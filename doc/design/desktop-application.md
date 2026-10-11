@@ -29,7 +29,7 @@
 > solver startup before describing it as ready. The Qt English translation source
 > catalogs have been regenerated for the launch,
 > consensus, network, mining, backup, send, and agent desktop strings. The Qt
-> vault now has an Agents section with shared-key risk disclosure, limit inputs,
+> vault now has an Agents section with co-signed allotment disclosure, limit inputs,
 > vault-backed queued setup records, a funding handoff that prefills the
 > transfer screen with the setup address and remaining requested amount, and
 > derived funding confirmation from spendable outputs at the reserved address
@@ -66,50 +66,34 @@
 > confirmation depths refresh against that thin tip. Header state deliberately
 > does not enable transaction creation by itself: node-free spend-policy inputs
 > and desktop-vault UTXO discovery remain part of the unfinished node-free core.
-> Agent setup acceptance and
-> requested guardrails are now recorded in the vault database with a reserved
-> vault funding address and explicit pending policy status. The desktop can
-> confirm when that address is funded and copy a JSON Agent Allotment Gateway bundle
-> containing the policy request, reserved funding key, and current spendable
-> outputs for funded setups.
-> The command-line agent can now decode that bundle, verify that the funding key
-> matches the funding address, check a proposed spend against the daily
-> guardrail, and create a signed/proved transaction from bundle funding outputs
-> or persisted/in-band payment receipts unless explicit UTXO metadata is
-> supplied, and it rotates stored receipts by replacing spent outputs with
-> post-spend change receipts. The desktop can now paste and locally review a
-> returned signed spend from raw transaction hex or `quicksilver-agent` output,
-> then submit it through the active consensus node. The command-line agent now
-> keeps output-level receipt activity for imports, spent outputs, and change
-> outputs. Rich payment request metadata is preserved by the command-line
-> receipt store, the command-line agent can scan a local receipt inbox, the
-> desktop can locally review payment receipt artifacts, save valid receipts into
-> that local inbox, save current setup funding receipts into the same inbox, scan
-> it in-process, and show the durable spendable-output count and total. The
-> shared scanner treats spent activity as authoritative, so retained inbox files
-> cannot resurrect consumed UTXOs. External-host workflows can still copy the
-> matching `scanreceipts` command. Reviewed signed spends can save the
-> agent's returned change receipt into that inbox, copy relay-ready payloads, or
-> copy a peer-specific `sendtxpeer` command for node-free transport handoff. The
-> desktop can also save a pasted agent bundle locally and copy a runnable
-> `signbundle` command for the requested destination and amount.
-> The command-line agent can now store
-> configured relay peers and relay a reviewed signed transaction to either an
-> explicit peer or the stored peer set, and the desktop can directly import
-> local-node addrman entries into that agent relay store. The command-line agent
-> can also import `getnodeaddresses` output, import address-gossip payloads, or
-> ask configured cooperative peers for more peers. It can refresh the thin header
-> store from configured peers, and the desktop can copy the matching
-> `syncheaderspeer` command. The desktop can also invoke the same bundle-output
-> signing path in-process, merge persisted agent receipts, rotate spent/change
-> receipt-store entries, load the resulting relay payloads into signed-spend
-> review, and relay the reviewed spend on a background worker to the typed relay
-> peer, stored peers, or active network fixed seeds. The GUI stays responsive
-> while every selected peer is attempted and reports partial failures when at
-> least one peer accepts the transaction. The agent's live network commands now
-> also fall back to the active
-> network's fixed onion seed when neither an explicit nor stored peer exists;
-> `-proxy` or `-onion` provides the required SOCKS5 path.
+> Creating an agent allotment imports a co-signed taproot descriptor,
+> `tr(V,multi_a(2,A,C))`, into the vault: V reclaims alone, and a spend by the
+> agent needs both A and C. The vault database records the acceptance, the
+> requested guardrails and the allotment's funding address. The desktop can
+> confirm when that address is funded and copy a co-sign bundle holding the
+> policy request, the agent's key A, the public descriptor, and the current
+> spendable outputs. The command-line agent decodes that bundle, verifies that A
+> is the descriptor's agent key, checks a proposed spend against the daily
+> guardrail, and signs and proves its half of the spend from bundle funding
+> outputs or persisted/in-band payment receipts unless explicit UTXO metadata is
+> supplied. It rotates stored receipts by replacing spent outputs with
+> post-spend change receipts and keeps output-level receipt activity for
+> imports, spent outputs, and change outputs. The desktop reviews the pasted
+> request, co-signs it with C, and broadcasts it through its own consensus node;
+> Stop makes it refuse every later request. Rich payment request metadata is
+> preserved by the command-line receipt store, the command-line agent can scan a
+> local receipt inbox, and the desktop can locally review payment receipt
+> artifacts, save valid receipts into that local inbox, save current setup
+> funding receipts into the same inbox, scan it in-process, and show the durable
+> spendable-output count and total. The shared scanner treats spent activity as
+> authoritative, so retained inbox files cannot resurrect consumed UTXOs.
+> External-host workflows can still copy the matching `scanreceipts` command.
+> The command-line agent stores configured relay peers, imports
+> `getnodeaddresses` output and address-gossip payloads, asks configured
+> cooperative peers for more peers, and refreshes its thin header store from
+> them. Its live network commands fall back to the active network's fixed
+> onion seed when neither an explicit nor stored peer exists; `-proxy` or
+> `-onion` provides the required SOCKS5 path.
 > Recorded agent setups can also copy a `scantxoutset` recovery
 > pipeline that imports recovered outputs into the agent receipt store.
 > Persisted-consensus startup now leaves startup vault ownership to
@@ -346,112 +330,58 @@ before send preparation.
 Agents are a section of the vault rather than a separate mode, because they are
 funded from it.
 
-Creating one presents the shared-key risk in full — both the dishonest agent and
-the compromised host, in that order of increasing severity — and records the
-user's acceptance. The word *guarantee* appears once, negated. Limits are captured
-as inputs but described as a guardrail, so nothing on screen implies enforcement
-the protocol does not provide. The confirming control restates the risk rather
-than reading "Create". See [agent-client.md](agent-client.md) for the model.
+Creating one explains the model before anything is recorded: the agent holds one
+key and this vault holds the other, so the agent cannot spend without this
+vault's signature; Stop makes the vault refuse every later request, though a
+request it has already signed and broadcast still confirms; and spending limits
+are the agent's own check, which the vault does not enforce. The word *guarantee*
+appears once, negated. Limits are captured as inputs but described as a
+guardrail, so nothing on screen implies enforcement the vault or the protocol
+does not provide. The acceptance checkbox restates that every spend needs the
+vault's co-signature and that the vault must be backed up again, because the
+allotment's keys are new and no earlier backup holds them. See
+[agent-client.md](agent-client.md) for the model.
 
-Current Qt status: the vault contains an Agents section with the shared-key risk
-copy, funding and daily guardrail inputs, and the acceptance checkbox. Once the
-form is complete, the confirming control records the user's acceptance,
-requested guardrails, and a reserved vault funding address in the vault database
-and lists the queued setup in the vault UI. Each queued setup can now hand off to
-the normal transfer screen with its reserved address and remaining requested
-funding amount prefilled, and the agent page plus launch summary now derive
-funding confirmation from spendable outputs at that reserved address. A partially
-funded setup offers only the shortfall; a fully funded setup shows completion and
-does not offer another funding transfer. Agent setup records now carry an
-explicit policy status and the setup list shows "Policy pending" separately from
-funding state, so a funded setup is not mistaken for an enforced agent allotment.
-Funding confirmation now fails closed to zero when pre-consensus header state is
-not available for output enumeration. Once the reserved address has the
-requested funding, the row can copy a JSON Agent Allotment Gateway bundle from the
-vault/model boundary containing the setup id, funding address, requested
-guardrails, current funding evidence, chain token, genesis hash, request creation
-time, current spendable funding outputs, and the reserved funding private key for
-the agent gateway handoff. The desktop page can paste the inner policy-request
-artifact back through the vault/model boundary to review validated metadata or
-show validation failures, including malformed, cross-chain, unknown-setup, and
-stale-metadata requests,
-with distinct ready, valid, and error feedback states. The command-line agent can
-now import the bundle into an in-memory signing context, enforce the guardrail
-for a requested spend, select the bundle's spendable outputs when explicit UTXO
-arguments are not supplied, merge in-band payment receipts for post-handoff
-funding outputs, build change back to the agent funding address, prove the
-transaction, sign it, and print raw transaction hex plus relay-ready `tx` and
-`inv` payloads. The command-line agent can also import/list persisted payment
-receipts, consume those stored outputs on later spends, and replace spent stored
-receipts with post-spend change receipts. Stored and in-band receipt artifacts
-can carry optional `payment_id`, `label`, `memo`, and `payer` metadata, and the
-agent preserves that metadata in the receipt list and output-activity record.
-The command-line agent can also scan a local JSON receipt inbox and import only
-new receipts, so operators can repeat the discovery handoff without rebuilding a
-command line for each artifact. The desktop page uses the same genesis-bound
-scanner on page entry, explicit refresh, local receipt writes, and a visible-page
-poll. It displays the durable spendable-output count and total, and the shared
-import path refuses to re-add an output already recorded as spent. The desktop
-page can paste a payment receipt
-artifact, validate it against the active chain metadata, display its funding
-output plus optional metadata, save and import it through the same local scan
+Current Qt status: the Agents page has the explanation above, funding and daily
+guardrail inputs, and the acceptance checkbox. Once the form is complete,
+"Create agent allotment" asks to unlock an encrypted vault, imports the
+allotment's descriptor, records the user's acceptance, requested guardrails and
+funding address in the vault database, and clears the vault's backup-recorded
+state. Each allotment's row shows its funding state and either "Co-signed by
+this vault" or "Stopped". An active allotment can hand off to the normal transfer
+screen with its funding address and remaining requested amount prefilled; a
+partially funded allotment offers only the shortfall, a fully funded one shows
+completion, and a stopped one offers no funding at all. Funding confirmation
+fails closed to zero when pre-consensus header state is not available for output
+enumeration. Once the address has the requested funding, the row can copy the
+co-sign bundle, save the current funding outputs as receipts into the local
+agent inbox, and copy a `quicksilver-cli scantxoutset start ["addr(...)"] |
+quicksilver-agent ... importrecovery` command for recovering spendable outputs at
+the funding address through a full node. **Stop** asks for confirmation and then
+permanently stops the allotment.
+
+The page can paste the inner policy-request artifact back through the
+vault/model boundary to review validated metadata or show validation failures,
+including malformed, cross-chain, unknown-setup, and stale-metadata requests,
+with distinct ready, valid, and error feedback states. It can paste a payment
+receipt artifact, validate it against the active chain metadata, display its
+funding output plus optional metadata, save and import it through the local scan
 inbox, and copy the matching `quicksilver-agent ... scanreceipts` command for an
-external agent host. A funded setup row can
-also write payment receipts for its current spendable funding outputs into that
-inbox, giving the agent a direct receipt-store import path for desktop-funded
-setups without requiring the full key bundle for receipt discovery. The desktop
-page can also paste an agent bundle, destination, spend amount, and optional
-already-spent amount to sign the requested spend locally through the same
-bundle-output signing core. The local path supplies the full node's connected
-anchor, including its congestion state, so the proof uses the same target as
-consensus. It merges persisted payment receipts and rotates the
-local receipt store with spent-output and change-output activity. The generated
-result is loaded into signed-spend review, and any generated change receipt is
-also saved into the local agent inbox. It can still save that bundle under the
-local agent datadir and copy a runnable
-`quicksilver-agent ... signbundle` command for an external agent host. The
-thin header store carries the congestion multiplier, so `-prove=1` works at
-any header the agent has synced; `-prove=0` is offline-test-only. It can then
-paste the agent's
-command output or raw transaction hex, decode the returned signed spend, show
-its transaction id, input count, output count, and output total, copy relay-ready
-`tx`/`inv` payloads for an external node-free transport, or copy a runnable
-`quicksilver-agent -peer=<host[:port]> sendtxpeer` command for manual
-configured-peer relay. The desktop can also run that relay on a background
-worker directly from the reviewed signed-spend panel, using the typed relay peer
-when present, stored peers when the peer field is empty, or the active network's
-fixed seeds when the store is empty. Relay controls remain guarded while the
-worker runs, and completion reports full success, partial peer failure, or total
-failure without blocking the GUI. If the agent output includes a
-`change_paymentreceipt`, the review saves that receipt into the local agent
-inbox so the next receipt scan can pick up the rotated change output. The
-command-line agent also has `addpeer`, `removepeer`, and `listpeers` commands
-for a persistent configured relay peer set, so
-`sendtxpeer` can relay through stored peers when no explicit `-peer` is supplied.
-The same desktop relay peer field can copy `addpeer` and `discoverpeers` command
-handoffs, and `discoverpeers` can also run against the stored peer set when no
-explicit peer is supplied. It can directly import the active desktop node's
-addrman entries into the local agent relay store, and can still copy a
-`quicksilver-cli getnodeaddresses | quicksilver-agent ... importnodeaddresses`
-pipeline for an external agent host. It can also copy `syncheaderspeer` handoffs
-for the explicit relay peer or the stored peer set, so the command-line agent can
-refresh its thin header store without pasted `headers` payloads when configured
-peers are available. The vault-first desktop consumes that same validated store
-on a changed-file poll and lets a live consensus chain take authority when one
-is attached.
-It can still submit the reviewed transaction through the active consensus node
-when that path is available. Each recorded setup can also copy a
-`quicksilver-cli scantxoutset start ["addr(...)"] | quicksilver-agent ...
-importrecovery` command for recovering spendable outputs at the reserved funding
-address through a full node and importing them into the agent receipt store. The
-command-line agent can list output-level receipt activity for imported, spent,
-recovered, and change outputs, so a rotated-away receipt no longer disappears
-from the local record. Its live discovery, header-sync, and transaction-relay
-commands fall back to the active network's fixed onion seed when the local peer
-store is empty; a configured `-proxy` or `-onion` SOCKS5 endpoint supplies the
-Tor path. The remaining discovery gap is network-native payment discovery.
+external agent host. The page uses the same genesis-bound scanner as the
+command-line agent and refuses to re-add an output already recorded as spent.
+
+The **Agent spend request** panel takes the agent's `psqt=` request. **Review**
+decodes it and shows the allotment, the input total, each output's address and
+amount, the change back to the allotment, and the anchor's age out of the
+maximum. **Co-sign and broadcast** is enabled only after a successful Review of
+the text still in the box, and only while the consensus node is running. It asks
+to unlock an encrypted vault, has the vault check and co-sign the request, and
+shows the broadcast txid or the vault's refusal verbatim. **Refuse** clears the
+request without signing anything. The desktop does not sign or prove as the
+agent, and it does not relay through agent peers.
+
 Authenticated orchestration of a separate or remote agent remains outside v1;
-that workflow continues to use saved artifacts and copied commands.
+that workflow continues to use saved artifacts and pasted requests.
 
 ## Visual treatment
 

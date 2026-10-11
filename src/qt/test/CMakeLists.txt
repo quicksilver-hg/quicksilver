@@ -36,7 +36,6 @@ if(ENABLE_VAULT)
   target_sources(test_quicksilver-qt
     PRIVATE
       addressbooktests.cpp
-      vaultsummarytests.cpp
       vaulttests.cpp
       ../../vault/test/vault_test_fixture.cpp
   )
@@ -59,6 +58,14 @@ if(WIN32 AND VCPKG_TARGET_TRIPLET)
   # the "minimal" platform plugin unusable due to internal Qt bugs.
   set_tests_properties(test_quicksilver-qt PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=windows"
+  )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT qt_lib_type STREQUAL "STATIC_LIBRARY")
+  # "minimal" has no fonts, so every check that a view fits at its design
+  # size skips. "offscreen" lays text out with the system's real fonts, as
+  # the "windows" platform does above. A static Qt links only the plugins
+  # import_plugins() names, so static builds stay on "minimal".
+  set_tests_properties(test_quicksilver-qt PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
   )
 endif()
 

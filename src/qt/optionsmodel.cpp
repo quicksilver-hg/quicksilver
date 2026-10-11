@@ -157,37 +157,6 @@ struct ProxySetting {
 static ProxySetting ParseProxyString(const std::string& proxy);
 static std::string ProxyString(bool is_set, QString ip, QString port);
 
-static const QLatin1String fontchoice_str_embedded{"embedded"};
-static const QLatin1String fontchoice_str_best_system{"best_system"};
-static const QString fontchoice_str_custom_prefix{QStringLiteral("custom, ")};
-
-QString OptionsModel::FontChoiceToString(const OptionsModel::FontChoice& f)
-{
-    if (std::holds_alternative<FontChoiceAbstract>(f)) {
-        if (f == UseBestSystemFont) {
-            return fontchoice_str_best_system;
-        } else {
-            return fontchoice_str_embedded;
-        }
-    }
-    return fontchoice_str_custom_prefix + std::get<QFont>(f).toString();
-}
-
-OptionsModel::FontChoice OptionsModel::FontChoiceFromString(const QString& s)
-{
-    if (s == fontchoice_str_best_system) {
-        return FontChoiceAbstract::BestSystemFont;
-    } else if (s == fontchoice_str_embedded) {
-        return FontChoiceAbstract::EmbeddedFont;
-    } else if (s.startsWith(fontchoice_str_custom_prefix)) {
-        QFont f;
-        f.fromString(s.mid(fontchoice_str_custom_prefix.size()));
-        return f;
-    } else {
-        return FontChoiceAbstract::EmbeddedFont;  // default
-    }
-}
-
 OptionsModel::OptionsModel(interfaces::Node& node, QObject *parent) :
     QAbstractListModel(parent), m_node{node}
 {
@@ -271,12 +240,6 @@ bool OptionsModel::Init(bilingual_str& error)
     // Main
     if (!settings.contains("strDataDir"))
         settings.setValue("strDataDir", GUIUtil::getDefaultDataDirectory());
-
-    // Display
-    if (settings.contains("FontForMoney")) {
-        m_font_money = FontChoiceFromString(settings.value("FontForMoney").toString());
-    }
-    Q_EMIT fontForMoneyChanged(getFontForMoney());
 
     m_mask_values = settings.value("mask_values", false).toBool();
 
@@ -478,8 +441,6 @@ QVariant OptionsModel::getOption(OptionID option, const std::string& suffix) con
         return strThirdPartyTxUrls;
     case Language:
         return QString::fromStdString(SettingToString(setting(), ""));
-    case FontForMoney:
-        return QVariant::fromValue(m_font_money);
     case CoinControlFeatures:
         return fCoinControlFeatures;
     case EnablePSQTControls:
@@ -496,10 +457,6 @@ QVariant OptionsModel::getOption(OptionID option, const std::string& suffix) con
         return QString::fromStdString(SettingToString(setting(), ""));
     case AllowCpuBlockMining:
         return SettingToBool(setting(), false);
-    case AllowCpuAgentTxPow:
-        // Qt-only. The command-line agent has its own -allowcputxpow and cannot
-        // see this; a node arg would publish a string the node never reads.
-        return settings.value("allow_cpu_agent_txpow", false).toBool();
     case ShowCpuFallbackWarning:
         return settings.value("show_cpu_fallback_warning", true).toBool();
     case ThreadsScriptVerif:
@@ -513,23 +470,6 @@ QVariant OptionsModel::getOption(OptionID option, const std::string& suffix) con
     default:
         return QVariant();
     }
-}
-
-QFont OptionsModel::getFontForChoice(const FontChoice& fc)
-{
-    QFont f;
-    if (std::holds_alternative<FontChoiceAbstract>(fc)) {
-        f = GUIUtil::fixedPitchFont(fc != UseBestSystemFont);
-        f.setWeight(QFont::Bold);
-    } else {
-        f = std::get<QFont>(fc);
-    }
-    return f;
-}
-
-QFont OptionsModel::getFontForMoney() const
-{
-    return getFontForChoice(m_font_money);
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
@@ -655,15 +595,6 @@ bool OptionsModel::setOption(OptionID option, const QVariant& value, const std::
             setRestartRequired(true);
         }
         break;
-    case FontForMoney:
-    {
-        const auto& new_font = value.value<FontChoice>();
-        if (m_font_money == new_font) break;
-        settings.setValue("FontForMoney", FontChoiceToString(new_font));
-        m_font_money = new_font;
-        Q_EMIT fontForMoneyChanged(getFontForMoney());
-        break;
-    }
     case CoinControlFeatures:
         fCoinControlFeatures = value.toBool();
         settings.setValue("fCoinControlFeatures", fCoinControlFeatures);
@@ -712,10 +643,6 @@ bool OptionsModel::setOption(OptionID option, const QVariant& value, const std::
         if (changed()) {
             update(value.toBool());
         }
-        break;
-    case AllowCpuAgentTxPow:
-        // Not restart-required. Each desktop agent spend reads it when it starts.
-        settings.setValue("allow_cpu_agent_txpow", value.toBool());
         break;
     case ShowCpuFallbackWarning:
         settings.setValue("show_cpu_fallback_warning", value.toBool());

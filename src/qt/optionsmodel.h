@@ -14,7 +14,6 @@
 #include <QFont>
 
 #include <assert.h>
-#include <variant>
 
 struct bilingual_str;
 namespace interfaces {
@@ -62,7 +61,6 @@ public:
         DisplayUnit,            // QuicksilverUnit
         ThirdPartyTxUrls,       // QString
         Language,               // QString
-        FontForMoney,           // FontChoice
         CoinControlFeatures,    // bool
         ThreadsScriptVerif,     // int
         Prune,                  // bool
@@ -70,7 +68,6 @@ public:
         DatabaseCache,          // int
         GpuSolverPath,          // QString
         AllowCpuBlockMining,    // bool
-        AllowCpuAgentTxPow,     // bool
         ShowCpuFallbackWarning, // bool
         ExternalSignerPath,     // QString
         SpendZeroConfChange,    // bool
@@ -80,14 +77,6 @@ public:
         MaskValues,             // bool
         OptionIDRowCount,
     };
-
-    enum class FontChoiceAbstract {
-        EmbeddedFont,
-        BestSystemFont,
-    };
-    typedef std::variant<FontChoiceAbstract, QFont> FontChoice;
-    static inline const FontChoice UseBestSystemFont{FontChoiceAbstract::BestSystemFont};
-    static QFont getFontForChoice(const FontChoice& fc);
 
     bool Init(bilingual_str& error);
     void Reset();
@@ -106,7 +95,6 @@ public:
     bool getMinimizeOnClose() const { return fMinimizeOnClose; }
     QuicksilverUnit getDisplayUnit() const { return m_display_quicksilver_unit; }
     QString getThirdPartyTxUrls() const { return strThirdPartyTxUrls; }
-    QFont getFontForMoney() const;
     bool getCoinControlFeatures() const { return fCoinControlFeatures; }
     bool getEnablePSQTControls() const { return m_enable_psqt_controls; }
     const QString& getOverriddenByCommandLine() { return strOverriddenByCommandLine; }
@@ -132,7 +120,6 @@ private:
     QString language;
     QuicksilverUnit m_display_quicksilver_unit;
     QString strThirdPartyTxUrls;
-    FontChoice m_font_money{FontChoiceAbstract::EmbeddedFont};
     bool fCoinControlFeatures;
     bool m_enable_psqt_controls;
     bool m_mask_values;
@@ -140,8 +127,6 @@ private:
     /* settings that were overridden by command-line */
     QString strOverriddenByCommandLine;
 
-    static QString FontChoiceToString(const OptionsModel::FontChoice&);
-    static FontChoice FontChoiceFromString(const QString&);
 
     // Add option to list of GUI options overridden through command line/config file
     void addOverriddenOption(const std::string &option);
@@ -150,9 +135,7 @@ Q_SIGNALS:
     void displayUnitChanged(QuicksilverUnit unit);
     void coinControlFeaturesChanged(bool);
     void showTrayIconChanged(bool);
-    void fontForMoneyChanged(const QFont&);
 };
 
-Q_DECLARE_METATYPE(OptionsModel::FontChoice)
 
 #endif // QUICKSILVER_QT_OPTIONSMODEL_H
