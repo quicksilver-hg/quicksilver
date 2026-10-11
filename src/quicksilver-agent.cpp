@@ -2498,6 +2498,10 @@ MAIN_FUNCTION
 #endif
 
     SetupEnvironment();
+    if (!SetupNetworking()) {
+        tfm::format(std::cerr, "Error: Initializing networking failed\n");
+        return EXIT_FAILURE;
+    }
 
     try {
         const int ret{AppInitAgent(args, argc, argv)};
