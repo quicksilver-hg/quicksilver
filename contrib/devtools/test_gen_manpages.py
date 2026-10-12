@@ -5,6 +5,7 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -18,15 +19,18 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(GEN_MANPAGES)
 
 
-def page_text(name, title_version, name_version, body_version, see_also):
+def page_text(name, title_version, name_version, body_version, see_also, zmq=True):
     escaped_body_version = body_version.replace("-", r"\-")
+    options = ""
+    if zmq and name == GEN_MANPAGES.ZMQ_BINARY:
+        options = ".SH OPTIONS\n\\fB\\-zmqpubhashblock=\\fR<address>\n"
     return f"""\\." generated
 .TH {name.upper()} "1" "September 2026" "{name} {title_version}" "User Commands"
 .SH NAME
 {name} \\- manual page for {name} {name_version}
 .SH DESCRIPTION
 {name} version {escaped_body_version}
-.SH "SEE ALSO"
+{options}.SH "SEE ALSO"
 {see_also}
 """
 
@@ -74,6 +78,31 @@ class GenManpagesTest(unittest.TestCase):
                 encoding="utf8",
             )
             self.assertFalse(GEN_MANPAGES.check_consistency(mandir))
+
+    def test_consistency_rejects_daemon_page_without_zmq(self):
+        names = [Path(path).name for path in GEN_MANPAGES.BINARIES]
+        see_also = ", ".join(f"{name}(1)" for name in names)
+        with tempfile.TemporaryDirectory() as directory:
+            mandir = Path(directory)
+            for name in names:
+                (mandir / f"{name}.1").write_text(
+                    page_text(name, "v0.1.2", "v0.1.2", "v0.1.2", see_also, zmq=False),
+                    encoding="utf8",
+                )
+            self.assertFalse(GEN_MANPAGES.check_consistency(mandir))
+
+    def test_require_zmq_build_reads_daemon_help(self):
+        with tempfile.TemporaryDirectory() as directory:
+            daemon = Path(directory) / GEN_MANPAGES.ZMQ_BINARY
+            versions = [(daemon, "v0.1.2", [])]
+
+            daemon.write_text("#!/bin/sh\necho '  -zmqpubhashblock=<address>'\n")
+            os.chmod(daemon, 0o755)
+            GEN_MANPAGES.require_zmq_build(versions)
+
+            daemon.write_text("#!/bin/sh\necho '  -server'\n")
+            with self.assertRaisesRegex(RuntimeError, "-DWITH_ZMQ=ON"):
+                GEN_MANPAGES.require_zmq_build(versions)
 
 
 if __name__ == "__main__":

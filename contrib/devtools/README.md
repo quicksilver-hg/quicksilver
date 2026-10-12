@@ -183,6 +183,12 @@ For example:
 BUILDDIR=$PWD/my-build-dir contrib/devtools/gen-manpages.py
 ```
 
+The pages describe a build configured with `-DWITH_ZMQ=ON`, the configuration
+every functional-testing CI job uses, because
+`test/functional/feature_generated_docs.py` compares each page with its
+binary's `--help` exactly. The script refuses a daemon built without ZMQ, and
+`--check` fails a daemon page that lacks the ZMQ options.
+
 For a release, follow the ordered procedure in
 [`contrib/release/README.md`](../release/README.md). `--release-version vX.Y.Z`
 is the pre-tag generation mode: it requires every binary to report `vX.Y.Z`

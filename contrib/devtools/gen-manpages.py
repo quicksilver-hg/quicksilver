@@ -24,6 +24,13 @@ BINARIES = [
     "bin/quicksilver-agent",
 ]
 
+# doc/man describes the build every functional-testing CI job makes, which
+# enables ZMQ. test/functional/feature_generated_docs.py compares each page with
+# its binary's --help exactly, so pages generated from a build without ZMQ fail
+# it on every such job (F-462).
+ZMQ_BINARY = "quicksilver-daemon"
+ZMQ_OPTION = "-zmqpubhashblock="
+
 VERSION_RE = re.compile(r"v\d+\.\d+\.\d+(?:rc\d+)?(?:-[0-9a-f]{12})?")
 
 
@@ -97,6 +104,28 @@ def read_binary_versions(builddir, skip_missing):
             "in that directory, or set another build path using BUILDDIR."
         )
     return versions
+
+
+def help_lists_zmq(help_text):
+    return ZMQ_OPTION in help_text
+
+
+def page_lists_zmq(page_text):
+    return ZMQ_OPTION.replace("-", r"\-") in page_text
+
+
+def require_zmq_build(versions):
+    """Refuse binaries from a build configured without -DWITH_ZMQ=ON."""
+    for abspath, _, _ in versions:
+        if abspath.name != ZMQ_BINARY:
+            continue
+        result = run([str(abspath), "--help"], stdout=subprocess.PIPE)
+        if not help_lists_zmq(result.stdout):
+            raise RuntimeError(
+                f"{abspath} does not list {ZMQ_OPTION}: the build was configured "
+                "without -DWITH_ZMQ=ON. doc/man describes a ZMQ build; reconfigure "
+                "with -DWITH_ZMQ=ON, rebuild, then run this script again."
+            )
 
 
 def release_binary_version(release_version, git, topdir):
@@ -220,7 +249,14 @@ def check_consistency(mandir):
         if len(present) == len(versions) and len(set(present)) == 1:
             versions_by_page[page] = present[0]
 
-        lines = page.read_text(encoding="utf8").splitlines()
+        text = page.read_text(encoding="utf8")
+        if binary_name == ZMQ_BINARY and not page_lists_zmq(text):
+            errors.append(
+                f"{page}: does not document {ZMQ_OPTION}; it was generated from a "
+                "build without -DWITH_ZMQ=ON"
+            )
+
+        lines = text.splitlines()
         see_also = section_line(lines, '.SH "SEE ALSO"')
         if see_also != expected_see_also:
             errors.append(
@@ -346,6 +382,7 @@ def main(argv=None):
                 )
 
         versions = read_binary_versions(builddir, args.skip_missing_binaries)
+        require_zmq_build(versions)
         if args.release_version:
             expected_binary = release_binary_version(args.release_version, git, topdir)
             mismatches = [

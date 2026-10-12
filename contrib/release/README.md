@@ -7,8 +7,12 @@ order; do not package before the final verification succeeds:
 
 1. Bump the version in `CMakeLists.txt`, set `CLIENT_VERSION_IS_RELEASE` to
    `true`, and commit that change.
-2. From the clean commit, configure and build every program in
-   `contrib/devtools/gen-manpages.py`'s `BINARIES` list.
+2. From the clean commit, configure a fresh build directory with
+   `-DWITH_ZMQ=ON -DBUILD_GUI=ON -DBUILD_TX=ON -DBUILD_VAULT_TOOL=ON` and build
+   every program in `contrib/devtools/gen-manpages.py`'s `BINARIES` list. The pages describe that configuration:
+   `test/functional/feature_generated_docs.py` compares each page with its
+   binary's `--help` exactly, and every CI job that runs it enables ZMQ.
+   `gen-manpages.py` refuses a daemon built without ZMQ.
 3. Run `contrib/devtools/gen-manpages.py --release-version vX.Y.Z`. Release
    candidates use `vX.Y.ZrcN`. The value
    must match `CMakeLists.txt`, and the binaries must identify the current
@@ -22,7 +26,8 @@ order; do not package before the final verification succeeds:
    shared ancestry with it. See `doc/source-publication.md`.
 7. Place the signed `vX.Y.Z` tag on the public commit, in the publication
    clone. Do not tag the development checkout.
-8. In a clean clone of that public tag, configure and rebuild every program,
+8. In a clean clone of that public tag, configure as in step 2 and rebuild
+   every program,
    confirm each `--version` reports exactly the tag, then run
    `contrib/devtools/gen-manpages.py --verify`. This regenerates into a
    disposable directory and diffs every page against the committed copy.
