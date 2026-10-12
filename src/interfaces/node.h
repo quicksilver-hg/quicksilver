@@ -256,9 +256,6 @@ public:
     //! Snapshot of the mining role + session mint telemetry.
     virtual MiningStatus miningStatus() = 0;
 
-    //! Is loading blocks.
-    virtual bool isLoadingBlocks() = 0;
-
     //! Set network active.
     virtual void setNetworkActive(bool active) = 0;
 

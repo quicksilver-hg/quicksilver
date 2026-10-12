@@ -33,7 +33,6 @@
 #include <qt/desktoplaunchpage.h>
 #include <qt/minemintpage.h>
 #include <qt/miningmodel.h>
-#include <qt/modaloverlay.h>
 #include <qt/networkpage.h>
 #include <qt/networkstyle.h>
 #include <qt/quicksilvergui.h>
@@ -4537,11 +4536,9 @@ void VaultTests::captureBenchPageScreenshots()
     };
 
     QuicksilverGUI bare(m_node, platform_style.get(), network_style.data());
-    if (ModalOverlay* overlay = bare.findChild<ModalOverlay*>()) {
-        const QDateTime stamp = QDateTime::currentDateTime();
-        overlay->setKnownBestHeight(1, stamp, false);
-        bare.setNumBlocks(1, stamp, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
-    }
+    const QDateTime stamp = QDateTime::currentDateTime();
+    bare.setKnownBestHeight(1, /*presync=*/false);
+    bare.setNumBlocks(1, stamp, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
     QVERIFY2(save_page(bare, "homeBootstrapAction", QStringLiteral("home-none.png")), qPrintable(unstyled));
     QVERIFY2(save_page(bare, "sendCoinsAction", QStringLiteral("transfer-none.png")), qPrintable(unstyled));
     QVERIFY2(save_page(bare, "receiveCoinsAction", QStringLiteral("request.png")), qPrintable(unstyled));

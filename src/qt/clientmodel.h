@@ -34,12 +34,6 @@ QT_BEGIN_NAMESPACE
 class QTimer;
 QT_END_NAMESPACE
 
-enum class BlockSource {
-    NONE,
-    DISK,
-    NETWORK,
-};
-
 enum class SyncType {
     HEADER_PRESYNC,
     HEADER_SYNC,
@@ -77,8 +71,6 @@ public:
     int getHeaderTipHeight() const;
     int64_t getHeaderTipTime() const;
 
-    //! Returns the block source of the current importing/syncing state
-    BlockSource getBlockSource() const;
     //! Return warnings to be displayed in status bar
     QString getStatusBarWarnings() const;
 

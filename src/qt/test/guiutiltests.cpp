@@ -9,12 +9,10 @@
 #include <QRegularExpression>
 #include <QString>
 
-//! Phase 6 S3. formatNiceTimeOffset() feeds the status-bar tooltip
-//! (quicksilvergui.cpp) and the sync overlay's "time left" (modaloverlay.cpp), so
-//! whatever it returns is read by every user on every start-up. It used to compose
-//! that text with Qt's "%n unit(s)" numerus idiom, which only a translation
+//! formatNiceTimeOffset() feeds the Home Node card's last-block age. It used to
+//! compose that text with Qt's "%n unit(s)" numerus idiom, which only a translation
 //! catalogue resolves -- and this application installs none of its own (see
-//! initTranslations() in qt/quicksilver.cpp). The tooltip therefore read
+//! initTranslations() in qt/quicksilver.cpp). The age therefore read
 //! "3 minute(s)" for everyone, in every locale.
 void GUIUtilTests::timeOffsetReadsGrammaticallyWithNoCatalogue()
 {

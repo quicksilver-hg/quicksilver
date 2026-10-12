@@ -916,11 +916,6 @@ void ClickableLabel::mouseReleaseEvent(QMouseEvent *event)
     Q_EMIT clicked(event->pos());
 }
 
-void ClickableProgressBar::mouseReleaseEvent(QMouseEvent *event)
-{
-    Q_EMIT clicked(event->pos());
-}
-
 bool ItemDelegate::eventFilter(QObject *object, QEvent *event)
 {
     if (event->type() == QEvent::KeyPress) {

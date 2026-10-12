@@ -360,7 +360,6 @@ public:
         if (!m_context->mining_service) return interfaces::MiningStatus{};
         return node::BuildMiningStatus(*m_context->mining_service, chainman());
     }
-    bool isLoadingBlocks() override { return chainman().m_blockman.LoadingBlocks(); }
     void setNetworkActive(bool active) override
     {
         if (m_context->connman) {

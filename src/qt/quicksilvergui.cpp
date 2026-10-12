@@ -13,7 +13,6 @@
 #include <qt/guiconstants.h>
 #include <qt/guiutil.h>
 #include <qt/minemintpage.h>
-#include <qt/modaloverlay.h>
 #include <qt/networkstyle.h>
 #include <qt/notificator.h>
 #include <qt/openuridialog.h>
@@ -35,7 +34,6 @@
 #include <qt/macdockiconhandler.h>
 #endif
 
-#include <chainparams.h>
 #include <common/system.h>
 #include <gpu/detection_service.h>
 #include <interfaces/handler.h>
@@ -174,8 +172,6 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
         Q_EMIT consoleShown(rpcConsole);
     }
 
-    modalOverlay = new ModalOverlay(enableVault, enableVault ? static_cast<QWidget*>(vaultFrame) : this->centralWidget());
-
     // Accept D&D of URIs
     setAcceptDrops(true);
 
@@ -232,21 +228,9 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
     labelVaultHDStatusIcon = new GUIUtil::ThemedLabel(platformStyle);
     labelProxyIcon = new GUIUtil::ClickableLabel(platformStyle);
     connectionsControl = new GUIUtil::ClickableLabel(platformStyle);
-    labelBlocksIcon = new GUIUtil::ClickableLabel(platformStyle);
     labelVaultEncryptionIcon->hide();
     labelVaultHDStatusIcon->hide();
 
-    // The app style is Fusion, and the progress chunk comes from the token sheet.
-    // A platform stylesheet here used to paint an inherited orange gradient.
-    progressBarLabel = new QLabel();
-    progressBarLabel->setVisible(false);
-    progressBar = new GUIUtil::ProgressBar();
-    progressBar->setAlignment(Qt::AlignCenter);
-    progressBar->setVisible(false);
-
-    strip_layout->addWidget(labelBlocksIcon);
-    strip_layout->addWidget(progressBarLabel);
-    strip_layout->addWidget(progressBar);
     strip_layout->addWidget(connectionsControl);
     strip_layout->addWidget(labelProxyIcon);
     if (enableVault) {
@@ -277,8 +261,6 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
         openOptionsDialogWithTab(OptionsDialog::TAB_NETWORK);
     });
 
-    connect(labelBlocksIcon, &GUIUtil::ClickableLabel::clicked, this, &QuicksilverGUI::showModalOverlay);
-    connect(progressBar, &GUIUtil::ClickableProgressBar::clicked, this, &QuicksilverGUI::showModalOverlay);
 
 #ifdef Q_OS_MACOS
     m_app_nap_inhibitor = new CAppNapInhibitor;
@@ -394,7 +376,6 @@ QIcon RailIcon(const PlatformStyle* style, const QString& file)
 void QuicksilverGUI::createActions()
 {
     QActionGroup *tabGroup = new QActionGroup(this);
-    connect(modalOverlay, &ModalOverlay::triggered, tabGroup, &QActionGroup::setEnabled);
 
     overviewAction = new QAction(RailIcon(platformStyle, QStringLiteral(":/icons/overview")), tr("&Home"), this);
     overviewAction->setObjectName(QStringLiteral("homeBootstrapAction"));
@@ -1020,18 +1001,33 @@ void QuicksilverGUI::refreshTicker()
 #endif
 }
 
+void QuicksilverGUI::setKnownBestHeight(int height, bool presync)
+{
+    if (!presync && height > m_best_header_height) m_best_header_height = height;
+}
+
+QString QuicksilverGUI::syncStateWord(int blocks, int peers, bool behind_known_headers)
+{
+    if (blocks < 0) return tr("Connecting");
+    // A node that has heard from no peer cannot know it is in sync.
+    if (peers == 0) return tr("Waiting for peers");
+    return behind_known_headers ? tr("Catching up") : tr("Synchronized");
+}
+
 void QuicksilverGUI::refreshStatusStrip()
 {
     if (!m_status_sync) return;
 
-    if (m_reported_blocks < 0) {
-        m_status_sync->setText(tr("Connecting"));
-    } else if (m_reported_synced) {
-        m_status_sync->setText(tr("Synchronized"));
+    m_status_sync->setText(syncStateWord(m_reported_blocks, m_reported_peers, !m_reported_synced));
+    if (m_reported_blocks >= 0 && m_reported_peers != 0 && !m_reported_synced) {
+        const int blocks_behind = m_best_header_height - m_reported_blocks;
+        m_status_sync->setToolTip(blocks_behind == 1
+                                     ? tr("1 block behind the newest block heard from peers.")
+                                     : tr("%1 blocks behind the newest block heard from peers.").arg(blocks_behind));
     } else {
-        m_status_sync->setText(tr("Catching up"));
+        m_status_sync->setToolTip(QString());
     }
-    const char* tone = (m_reported_blocks >= 0 && m_reported_synced) ? "good" : "plain";
+    const char* tone = (m_reported_blocks >= 0 && m_reported_peers != 0 && m_reported_synced) ? "good" : "plain";
     for (QLabel* label : {m_status_dot, m_status_sync}) {
         label->setProperty("benchTone", tone);
         label->style()->unpolish(label);
@@ -1115,7 +1111,7 @@ void QuicksilverGUI::setClientModel(ClientModel *_clientModel, interfaces::Block
         connect(_clientModel, &ClientModel::numConnectionsChanged, this, &QuicksilverGUI::setNumConnections);
         connect(_clientModel, &ClientModel::networkActiveChanged, this, &QuicksilverGUI::setNetworkActive);
 
-        modalOverlay->setKnownBestHeight(tip_info->header_height, QDateTime::fromSecsSinceEpoch(tip_info->header_time), /*presync=*/false);
+        setKnownBestHeight(tip_info->header_height, /*presync=*/false);
         setNumBlocks(tip_info->block_height, QDateTime::fromSecsSinceEpoch(tip_info->block_time), tip_info->verification_progress, SyncType::BLOCK_SYNC, SynchronizationState::INIT_DOWNLOAD);
         connect(_clientModel, &ClientModel::numBlocksChanged, this, &QuicksilverGUI::setNumBlocks);
 
@@ -1721,22 +1717,6 @@ void QuicksilverGUI::setNetworkActive(bool network_active)
         [this, new_state = !network_active] { m_node.setNetworkActive(new_state); });
 }
 
-void QuicksilverGUI::updateHeadersSyncProgressLabel()
-{
-    int64_t headersTipTime = clientModel->getHeaderTipTime();
-    int headersTipHeight = clientModel->getHeaderTipHeight();
-    int estHeadersLeft = (GetTime() - headersTipTime) / Params().GetConsensus().nPowTargetSpacing;
-    if (estHeadersLeft > HEADER_HEIGHT_DELTA_SYNC)
-        progressBarLabel->setText(tr("Syncing Headers (%1%)…").arg(QString::number(100.0 / (headersTipHeight+estHeadersLeft)*headersTipHeight, 'f', 1)));
-}
-
-void QuicksilverGUI::updateHeadersPresyncProgressLabel(int64_t height, const QDateTime& blockDate)
-{
-    int estHeadersLeft = blockDate.secsTo(QDateTime::currentDateTime()) / Params().GetConsensus().nPowTargetSpacing;
-    if (estHeadersLeft > HEADER_HEIGHT_DELTA_SYNC)
-        progressBarLabel->setText(tr("Pre-syncing Headers (%1%)…").arg(QString::number(100.0 / (height+estHeadersLeft)*height, 'f', 1)));
-}
-
 void QuicksilverGUI::openOptionsDialogWithTab(OptionsDialog::Tab tab)
 {
     if (!clientModel || !clientModel->getOptionsModel())
@@ -1761,113 +1741,22 @@ void QuicksilverGUI::setNumBlocks(int count, const QDateTime& blockDate, double 
     }
 #endif
 
-    if (modalOverlay)
-    {
-        if (synctype != SyncType::BLOCK_SYNC)
-            modalOverlay->setKnownBestHeight(count, blockDate, synctype == SyncType::HEADER_PRESYNC);
-        else
-            modalOverlay->tipUpdate(count, blockDate, nVerificationProgress);
+    if (synctype != SyncType::BLOCK_SYNC) {
+        setKnownBestHeight(count, synctype == SyncType::HEADER_PRESYNC);
     }
-    if (!clientModel)
-        return;
+    if (!clientModel) return;
 
-    m_reported_blocks = count;
+    // Header notifications name known work, not the connected block tip.
+    if (synctype == SyncType::BLOCK_SYNC) m_reported_blocks = count;
 
-    // Prevent orphan statusbar messages (e.g. hover Quit in main menu, wait until chain-sync starts -> garbled text)
+    // Prevent orphan statusbar messages when chain-sync starts.
     statusBar()->clearMessage();
 
-    // Acquire current block source
-    BlockSource blockSource{clientModel->getBlockSource()};
-    switch (blockSource) {
-        case BlockSource::NETWORK:
-            if (synctype == SyncType::HEADER_PRESYNC) {
-                updateHeadersPresyncProgressLabel(count, blockDate);
-                refreshStatusStrip();
-                return;
-            } else if (synctype == SyncType::HEADER_SYNC) {
-                updateHeadersSyncProgressLabel();
-                refreshStatusStrip();
-                return;
-            }
-            progressBarLabel->setText(tr("Synchronizing with network…"));
-            updateHeadersSyncProgressLabel();
-            break;
-        case BlockSource::DISK:
-            if (synctype != SyncType::BLOCK_SYNC) {
-                progressBarLabel->setText(tr("Indexing blocks on disk…"));
-            } else {
-                progressBarLabel->setText(tr("Processing blocks on disk…"));
-            }
-            break;
-        case BlockSource::NONE:
-            if (synctype != SyncType::BLOCK_SYNC) {
-                refreshStatusStrip();
-                return;
-            }
-            progressBarLabel->setText(tr("Connecting to peers…"));
-            break;
+    // Change the reported state with the connected tip, alongside the Node card.
+    // "Catching up" means known work left to validate, not an old tip.
+    if (synctype == SyncType::BLOCK_SYNC) {
+        m_reported_synced = !isBehindKnownHeaders(m_reported_blocks);
     }
-
-    QString tooltip;
-
-    QDateTime currentDate = QDateTime::currentDateTime();
-    qint64 secs = blockDate.secsTo(currentDate);
-
-    tooltip = count == 1 ? tr("Processed 1 block of transaction history.")
-                         : tr("Processed %1 blocks of transaction history.").arg(count);
-
-    // Set icon state: spinning if catching up, tick otherwise.
-    // "Catching up" is having known work left to validate, not an old tip. See
-    // ModalOverlay::isBehindKnownHeaders.
-    const bool catching_up{modalOverlay && modalOverlay->isBehindKnownHeaders(count)};
-    m_reported_synced = !catching_up;
-    if (!catching_up) {
-        tooltip = tr("Up to date") + QString(".<br>") + tooltip;
-        labelBlocksIcon->setThemedPixmap(QStringLiteral(":/icons/synced"), STATUSBAR_ICONSIZE, STATUSBAR_ICONSIZE);
-
-#ifdef ENABLE_VAULT
-        if (vaultFrame) modalOverlay->showHide(true, true);
-#endif // ENABLE_VAULT
-
-        progressBarLabel->setVisible(false);
-        progressBar->setVisible(false);
-    }
-    else
-    {
-        QString timeBehindText = GUIUtil::formatNiceTimeOffset(secs);
-
-        progressBarLabel->setVisible(true);
-        progressBar->setFormat(tr("%1 behind").arg(timeBehindText));
-        progressBar->setMaximum(1000000000);
-        progressBar->setValue(nVerificationProgress * 1000000000.0 + 0.5);
-        progressBar->setVisible(true);
-
-        tooltip = tr("Catching up…") + QString("<br>") + tooltip;
-        if(count != prevBlocks)
-        {
-            labelBlocksIcon->setThemedPixmap(
-                QString(":/animation/spinner-%1").arg(spinnerFrame, 3, 10, QChar('0')),
-                STATUSBAR_ICONSIZE, STATUSBAR_ICONSIZE);
-            spinnerFrame = (spinnerFrame + 1) % SPINNER_FRAMES;
-        }
-        prevBlocks = count;
-
-#ifdef ENABLE_VAULT
-        if (vaultFrame) modalOverlay->showHide();
-#endif // ENABLE_VAULT
-
-        tooltip += QString("<br>");
-        tooltip += tr("Last received block was generated %1 ago.").arg(timeBehindText);
-        tooltip += QString("<br>");
-        tooltip += tr("Transactions after this will not yet be visible.");
-    }
-
-    // Don't word-wrap this (fixed-width) tooltip
-    tooltip = QString("<nobr>") + tooltip + QString("</nobr>");
-
-    labelBlocksIcon->setToolTip(tooltip);
-    progressBarLabel->setToolTip(tooltip);
-    progressBar->setToolTip(tooltip);
 #ifdef ENABLE_VAULT
     if (vaultFrame && synctype == SyncType::BLOCK_SYNC) {
         vaultFrame->setChainTip(count, blockDate);
@@ -2090,10 +1979,9 @@ bool QuicksilverGUI::eventFilter(QObject *object, QEvent *event)
     {
         // The status strip is persistent. QMainWindow would show a tip as a
         // status bar message, which hides the strip, so the tip goes to the
-        // strip's own tip label instead; none while sync progress is showing.
+        // strip's own tip label instead.
         if (m_status_tip && object == this) {
-            const bool busy = progressBarLabel->isVisible() || progressBar->isVisible();
-            m_status_tip->setText(busy ? QString() : static_cast<QStatusTipEvent*>(event)->tip());
+            m_status_tip->setText(static_cast<QStatusTipEvent*>(event)->tip());
         }
         return true;
     }
@@ -2249,12 +2137,6 @@ void QuicksilverGUI::showProgress(const QString &title, int nProgress)
     } else if (progressDialog) {
         progressDialog->setValue(nProgress);
     }
-}
-
-void QuicksilverGUI::showModalOverlay()
-{
-    if (modalOverlay && (progressBar->isVisible() || modalOverlay->isLayerVisible()))
-        modalOverlay->toggleVisibility();
 }
 
 static bool ThreadSafeMessageBox(QuicksilverGUI* gui, const bilingual_str& message, const std::string& caption, unsigned int style)

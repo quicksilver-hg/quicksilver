@@ -40,7 +40,6 @@ class VaultController;
 class VaultFrame;
 class VaultModel;
 class HelpMessageDialog;
-class ModalOverlay;
 enum class SynchronizationState;
 
 namespace interfaces {
@@ -54,14 +53,12 @@ QT_BEGIN_NAMESPACE
 class QAction;
 class QComboBox;
 class QDateTime;
-class QProgressBar;
 class QPushButton;
 class QProgressDialog;
 QT_END_NAMESPACE
 
 namespace GUIUtil {
 class ClickableLabel;
-class ClickableProgressBar;
 }
 
 /**
@@ -116,6 +113,11 @@ public:
 
     bool isPrivacyModeActivated() const;
 
+    static QString syncStateWord(int blocks, int peers, bool behind_known_headers);
+    void setKnownBestHeight(int height, bool presync);
+    bool isBehindKnownHeaders(int tip_height) const { return m_best_header_height > tip_height; }
+    bool isReportedSynchronized() const { return m_reported_synced; }
+
 protected:
     void changeEvent(QEvent *e) override;
     void closeEvent(QCloseEvent *event) override;
@@ -139,9 +141,6 @@ private:
     GUIUtil::ThemedLabel* labelVaultHDStatusIcon = nullptr;
     GUIUtil::ClickableLabel* labelProxyIcon = nullptr;
     GUIUtil::ClickableLabel* connectionsControl = nullptr;
-    GUIUtil::ClickableLabel* labelBlocksIcon = nullptr;
-    QLabel* progressBarLabel = nullptr;
-    GUIUtil::ClickableProgressBar* progressBar = nullptr;
     QProgressDialog* progressDialog = nullptr;
 
     QMenuBar* appMenuBar = nullptr;
@@ -206,6 +205,8 @@ private:
     int m_reported_blocks{-1};
     int m_reported_peers{-1};
     bool m_reported_synced{false};
+    // The newest block heard from peers (best known header), never lowered.
+    int m_best_header_height{0};
     bool m_have_mining_status{false};
     QString m_mining_status_word;
     QMetaObject::Connection m_ticker_balance_connection{};
@@ -216,17 +217,12 @@ private:
     Notificator* notificator = nullptr;
     RPCConsole* rpcConsole = nullptr;
     HelpMessageDialog* helpMessageDialog = nullptr;
-    ModalOverlay* modalOverlay = nullptr;
 
     QMenu* m_network_context_menu = new QMenu(this);
 
 #ifdef Q_OS_MACOS
     CAppNapInhibitor* m_app_nap_inhibitor = nullptr;
 #endif
-
-    /** Keep track of previous number of blocks, to detect progress */
-    int prevBlocks = 0;
-    int spinnerFrame = 0;
 
     const PlatformStyle *platformStyle;
     const NetworkStyle* const m_network_style;
@@ -268,9 +264,6 @@ private:
     void updateNetworkState();
     /** Confirm a requested network-context restart before handing it to the application. */
     void confirmNetworkRestart(const QString& chain_token);
-
-    void updateHeadersSyncProgressLabel();
-    void updateHeadersPresyncProgressLabel(int64_t height, const QDateTime& blockDate);
 
     /** Open the OptionsDialog on the specified tab index */
     void openOptionsDialogWithTab(OptionsDialog::Tab tab);
@@ -390,8 +383,6 @@ public Q_SLOTS:
 
     /** Show progress dialog e.g. for verifychain */
     void showProgress(const QString &title, int nProgress);
-
-    void showModalOverlay();
 };
 
 class UnitDisplayStatusBarControl : public QLabel

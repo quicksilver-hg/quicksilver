@@ -160,13 +160,6 @@ uint256 ClientModel::getBestBlockHash()
     return m_cached_tip_blocks;
 }
 
-BlockSource ClientModel::getBlockSource() const
-{
-    if (m_node.isLoadingBlocks()) return BlockSource::DISK;
-    if (getNumConnections() > 0) return BlockSource::NETWORK;
-    return BlockSource::NONE;
-}
-
 QString ClientModel::getStatusBarWarnings() const
 {
     return QString::fromStdString(m_node.getWarnings().translated);

@@ -20,7 +20,6 @@
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QObject>
-#include <QProgressBar>
 #include <QString>
 #include <QTableView>
 
@@ -271,21 +270,6 @@ namespace GUIUtil
     protected:
         void mouseReleaseEvent(QMouseEvent *event) override;
     };
-
-    class ClickableProgressBar : public QProgressBar
-    {
-        Q_OBJECT
-
-    Q_SIGNALS:
-        /** Emitted when the progressbar is clicked. The relative mouse coordinates of the click are
-         * passed to the signal.
-         */
-        void clicked(const QPoint& point);
-    protected:
-        void mouseReleaseEvent(QMouseEvent *event) override;
-    };
-
-    typedef ClickableProgressBar ProgressBar;
 
     class ItemDelegate : public QItemDelegate
     {

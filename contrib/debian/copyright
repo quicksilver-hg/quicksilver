@@ -29,7 +29,6 @@ Files: src/qt/res/icons/add.png
        src/qt/res/icons/receive.png
        src/qt/res/icons/remove.png
        src/qt/res/icons/send.png
-       src/qt/res/icons/synced.png
        src/qt/res/icons/transaction*.png
        src/qt/res/icons/tx_output.png
        src/qt/res/icons/warning.png
@@ -91,17 +90,6 @@ Copyright: 2026, The Quicksilver developers
 License: Expat
 Comment: Original artwork (the Quicksilver GUI heads-up-display glyph set).
          See contrib/devtools/gen-qt-hud-icons.py for regeneration.
-
-Files: src/qt/res/animation/spinner-*.png
-       src/qt/res/src/spinner.svg
-Copyright: 2026, The Quicksilver developers
-License: Expat
-Comment: Original artwork (the Quicksilver sync spinner: a 270-degree arc led
-         by a head dot). spinner.svg is frame 0 and the reviewable source; the
-         36 PNG frames are rotations of it about the canvas centre. Regenerate
-         with contrib/devtools/gen-qt-spinner.py. This replaces the upstream
-         spinner inherited from Bitcoin Core, whose own provenance upstream
-         never recorded and which therefore fell through to Files: *.
 
 Files: src/qt/res/icons/proxy.png
        src/qt/res/src/proxy.svg

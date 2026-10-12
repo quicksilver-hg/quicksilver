@@ -247,9 +247,11 @@ unknown".
 
 This is the same rule the node itself already applies before it will mine
 (`node::MiningShouldWaitForSync`), which compares chain work rather than clocks.
-The desktop's reading of it is `ModalOverlay::isBehindKnownHeaders`, comparing
-the best known header height against the connected tip; the overlay already
-tracked both. `MAX_BLOCK_TIME_GAP` had no other caller and is gone.
+The desktop's reading of it is `QuicksilverGUI::isBehindKnownHeaders`, comparing
+the best known header height (the newest block heard from peers) against the
+connected tip. A node that has heard from no peer is shown as waiting for peers,
+not as synchronized, because with no peer no header can be known.
+`MAX_BLOCK_TIME_GAP` had no other caller and is gone.
 
 The first screen's prose follows from the same fact. It no longer promises to
 "download and process the full block chain": on launch day there is nothing to

@@ -14,7 +14,6 @@
 #include <logging.h>
 #include <node/interface_ui.h>
 #include <qt/clientmodel.h>
-#include <qt/modaloverlay.h>
 #include <qt/quicksilver.h>
 #include <qt/quicksilvergui.h>
 #include <qt/quicksilverstyle.h>
@@ -213,8 +212,8 @@ void TestAssayBenchChrome(QuicksilverGUI* window)
     QVERIFY(peers);
     QVERIFY(mining);
     QVERIFY(vault);
-    // The sync progress bar lives in the strip (Home's node panel has its own).
-    QVERIFY(strip->findChild<QProgressBar*>());
+    // One sync indicator: the strip's own word. Home's Node card holds the progress bar.
+    QVERIFY(window->statusBar()->findChildren<QProgressBar*>().isEmpty());
 
     const QString peers_before = peers->text();
     window->setNumConnections(999);
@@ -231,28 +230,25 @@ void TestAssayBenchChrome(QuicksilverGUI* window)
     QCOMPARE(mining->text(), mining_state.isEmpty() ? QStringLiteral("Mining locked") : QStringLiteral("Mining %1").arg(mining_state.toLower()));
     if (!frame->currentVaultModel()) QCOMPARE(vault->text(), QStringLiteral("No vault open"));
 
-    ModalOverlay* overlay = window->findChild<ModalOverlay*>();
-    QVERIFY(overlay);
     const QDateTime stamp = QDateTime::currentDateTime();
     // Known header height only moves upward. Catch the tip up to a fresh height,
-    // then name a taller header, then catch up again so the overlay ends hidden.
-    overlay->setKnownBestHeight(700, stamp, /*presync=*/false);
+    // then name a taller header, then catch up again.
+    window->setKnownBestHeight(700, /*presync=*/false);
     window->setNumBlocks(700, stamp, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
-    QCOMPARE(sync->text(), QStringLiteral("Synchronized"));
-    QCOMPARE(height->text(), QStringLiteral("Height 700"));
-    QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("good"));
-    QVERIFY(!overlay->isLayerVisible());
-
-    overlay->setKnownBestHeight(740, stamp, /*presync=*/false);
-    window->setNumBlocks(700, stamp, 0.5, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
-    QCOMPARE(sync->text(), QStringLiteral("Catching up"));
+    QCOMPARE(sync->text(), QStringLiteral("Waiting for peers"));
+    QVERIFY(!window->isBehindKnownHeaders(700));
     QCOMPARE(height->text(), QStringLiteral("Height 700"));
     QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("plain"));
-    QVERIFY(overlay->isLayerVisible());
+
+    window->setKnownBestHeight(740, /*presync=*/false);
+    window->setNumBlocks(700, stamp, 0.5, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QVERIFY(window->isBehindKnownHeaders(700));
+    QCOMPARE(height->text(), QStringLiteral("Height 700"));
+    QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("plain"));
 
     window->setNumBlocks(740, stamp, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
-    QCOMPARE(sync->text(), QStringLiteral("Synchronized"));
-    QVERIFY(!overlay->isLayerVisible());
+    QCOMPARE(sync->text(), QStringLiteral("Waiting for peers"));
+    QVERIFY(!window->isBehindKnownHeaders(740));
 }
 
 //! The mining field follows a miner status change on its own.
@@ -784,35 +780,90 @@ void TestNetworkRestartConfirmation(QuicksilverGUI& window, QWidget& network_pag
     QVERIFY(informative_text.contains(QStringLiteral("datadir")));
 }
 
-//! The sync warning must follow known work, not the clock.
+//! Sync state follows known work, not the clock.
 //!
 //! The first node on a new chain sits on a genesis block whose timestamp is the
 //! launch stamp, which can be days old before anybody downloads the software.
-//! The inherited rule -- a tip older than MAX_BLOCK_TIME_GAP means you are behind
-//! -- was written for the chain this one forked from, running since 2009, and it
-//! produces the wrong answer here: it warns the one operator on the chain that their balance
-//! might be wrong, over a table reading 100% complete. `count` at the tip with
-//! no better header known means there is nothing to catch up on, whatever the
-//! stamp says. The second half drives the other direction so the fix cannot be
-//! "never warn".
-void TestSyncWarningFollowsKnownHeaders(QuicksilverGUI* window)
+//! A tip older than ninety minutes does not imply known work to catch up on:
+//! the tip with no better header known has nothing left to connect, whatever
+//! the stamp says. The second half drives a known header ahead so the fix
+//! cannot become "never behind".
+void TestSyncStateFollowsKnownHeaders(QuicksilverGUI* window)
 {
-    ModalOverlay* overlay = window->findChild<ModalOverlay*>();
-    QVERIFY(overlay);
-    QVERIFY(!overlay->isLayerVisible());
-
     const QDateTime launch_stamp{QDateTime::currentDateTime().addDays(-2)};
     window->setNumBlocks(0, launch_stamp, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
-    QVERIFY(!overlay->isLayerVisible());
+    QVERIFY(!window->isBehindKnownHeaders(0));
 
     // A header chain better than the tip is exactly the condition the node's own
-    // MiningShouldWaitForSync waits on, and it must still raise the overlay.
-    overlay->setKnownBestHeight(500, QDateTime::currentDateTime(), /*presync=*/false);
+    // MiningShouldWaitForSync waits on, and it must still mean known work ahead.
+    window->setKnownBestHeight(500, /*presync=*/false);
     window->setNumBlocks(0, launch_stamp, 0.5, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
-    QVERIFY(overlay->isLayerVisible());
+    QVERIFY(window->isBehindKnownHeaders(0));
 
     window->setNumBlocks(500, QDateTime::currentDateTime(), 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
-    QVERIFY(!overlay->isLayerVisible());
+    QVERIFY(!window->isBehindKnownHeaders(500));
+
+    window->setKnownBestHeight(900, /*presync=*/true);
+    QVERIFY(!window->isBehindKnownHeaders(500));
+    window->setKnownBestHeight(100, /*presync=*/false);
+    QVERIFY(window->isBehindKnownHeaders(400));
+
+    // Header events must reach the tracker without becoming the connected tip.
+    QLabel* height = window->statusBar()->findChild<QLabel*>(QStringLiteral("benchStatusHeight"));
+    QVERIFY(height);
+    const QDateTime stamp = QDateTime::currentDateTime();
+    window->setNumBlocks(600, stamp, 0.5, SyncType::HEADER_SYNC, SynchronizationState::POST_INIT);
+    QVERIFY(window->isBehindKnownHeaders(500));
+    QCOMPARE(height->text(), QStringLiteral("Height 500"));
+    window->setNumBlocks(900, stamp, 0.5, SyncType::HEADER_PRESYNC, SynchronizationState::POST_INIT);
+    QVERIFY(!window->isBehindKnownHeaders(600));
+    QCOMPARE(height->text(), QStringLiteral("Height 500"));
+    window->setNumBlocks(100, stamp, 0.5, SyncType::HEADER_SYNC, SynchronizationState::POST_INIT);
+    QVERIFY(window->isBehindKnownHeaders(500));
+    window->setNumBlocks(600, stamp, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QVERIFY(!window->isBehindKnownHeaders(600));
+    QVERIFY(window->isReportedSynchronized());
+
+    // A new header must not flicker the reported state before a block connects.
+    window->setNumBlocks(601, stamp, 1.0, SyncType::HEADER_SYNC, SynchronizationState::POST_INIT);
+    QVERIFY(window->isBehindKnownHeaders(600));
+    QVERIFY(window->isReportedSynchronized());
+    window->setNumBlocks(600, stamp, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QVERIFY(!window->isReportedSynchronized());
+    window->setNumBlocks(601, stamp, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QVERIFY(!window->isBehindKnownHeaders(601));
+    QVERIFY(window->isReportedSynchronized());
+}
+
+//! Sync wording follows reported peers and known work, including before a peer count arrives.
+void TestSyncStateWords()
+{
+    QCOMPARE(QuicksilverGUI::syncStateWord(-1, 3, false), QStringLiteral("Connecting"));
+    QCOMPARE(QuicksilverGUI::syncStateWord(700, 0, false), QStringLiteral("Waiting for peers"));
+    QCOMPARE(QuicksilverGUI::syncStateWord(700, 0, true), QStringLiteral("Waiting for peers"));
+    QCOMPARE(QuicksilverGUI::syncStateWord(700, 3, true), QStringLiteral("Catching up"));
+    QCOMPARE(QuicksilverGUI::syncStateWord(700, 3, false), QStringLiteral("Synchronized"));
+    QCOMPARE(QuicksilverGUI::syncStateWord(700, -1, false), QStringLiteral("Synchronized"));
+}
+
+//! A node that has heard from no peer cannot know it is in sync.
+//!
+//! "Catching up" is decided by known work (a header ahead of the tip), not by
+//! the tip's age. With no peer nothing can be known, so the absence of a
+//! known header ahead says nothing, and the strip must say so instead of
+//! calling the node synchronized.
+void TestStripWithoutPeersIsNotSynchronized(QuicksilverGUI* window)
+{
+    QLabel* sync = window->statusBar()->findChild<QLabel*>(QStringLiteral("benchStatusSync"));
+    QLabel* peers = window->statusBar()->findChild<QLabel*>(QStringLiteral("benchStatusPeers"));
+    QVERIFY(sync);
+    QVERIFY(peers);
+    QCOMPARE(peers->text(), QStringLiteral("0 peers")); // zero reported; "No peers" is the not-yet-reported -1 case
+
+    const QDateTime stale{QDateTime::currentDateTime().addSecs(-36 * 60 * 60)};
+    window->setNumBlocks(8000, stale, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QCOMPARE(sync->text(), QStringLiteral("Waiting for peers"));
+    QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("plain"));
 }
 
 void TestLazyConsensusActivation(interfaces::Node& node, const NetworkStyle* network_style)
@@ -1093,7 +1144,9 @@ void AppTests::guiTests(QuicksilverGUI* window)
     TestPrimaryNavigation(window);
     TestHudMenuBar(window);
     TestModernShell(window);
-    TestSyncWarningFollowsKnownHeaders(window);
+    TestSyncStateFollowsKnownHeaders(window);
+    TestStripWithoutPeersIsNotSynchronized(window);
+    TestSyncStateWords();
     TestAssayBenchChrome(window);
     TestAssayBenchChromeLayout(window);
     TestStatusStripFollowsMiningStatus(window);
