@@ -24,6 +24,7 @@
 
 #include <stdint.h>
 
+#include <QCoreApplication>
 #include <QDebug>
 #include <QMetaObject>
 #include <QThread>
@@ -233,6 +234,30 @@ void ClientModel::TipChanged(SynchronizationState sync_state, interfaces::BlockT
     nLastUpdateNotification = now;
 }
 
+ClientModel::SyncState ClientModel::syncState(int blocks, int peers, int answered, bool behind_known_headers)
+{
+    if (blocks < 0) return SyncState::Connecting;
+    // A node that has heard from no peer cannot know it is in sync.
+    if (peers == 0) return SyncState::WaitingForPeers;
+    if (peers > 0 && answered == 0) return SyncState::Connecting;
+    return behind_known_headers ? SyncState::CatchingUp : SyncState::Synchronized;
+}
+
+QString ClientModel::syncStateText(SyncState state)
+{
+    switch (state) {
+    case SyncState::Connecting:
+        return QCoreApplication::translate("QuicksilverGUI", "Connecting");
+    case SyncState::WaitingForPeers:
+        return QCoreApplication::translate("QuicksilverGUI", "Waiting for peers");
+    case SyncState::CatchingUp:
+        return QCoreApplication::translate("QuicksilverGUI", "Catching up");
+    case SyncState::Synchronized:
+        return QCoreApplication::translate("QuicksilverGUI", "Synchronized");
+    }
+    assert(false);
+}
+
 void ClientModel::subscribeToCoreSignals()
 {
     m_event_handlers.emplace_back(m_node.handleShowProgress(
@@ -242,6 +267,10 @@ void ClientModel::subscribeToCoreSignals()
     m_event_handlers.emplace_back(m_node.handleNotifyNumConnectionsChanged(
         [this](int new_num_connections) {
             Q_EMIT numConnectionsChanged(new_num_connections);
+        }));
+    m_event_handlers.emplace_back(m_node.handleNotifyHeadersAnsweredPeersChanged(
+        [this](int count) {
+            Q_EMIT headersAnsweredPeersChanged(count);
         }));
     m_event_handlers.emplace_back(m_node.handleNotifyNetworkActiveChanged(
         [this](bool network_active) {

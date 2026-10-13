@@ -113,7 +113,6 @@ public:
 
     bool isPrivacyModeActivated() const;
 
-    static QString syncStateWord(int blocks, int peers, bool behind_known_headers);
     void setKnownBestHeight(int height, bool presync);
     bool isBehindKnownHeaders(int tip_height) const { return m_best_header_height > tip_height; }
     bool isReportedSynchronized() const { return m_reported_synced; }
@@ -204,6 +203,7 @@ private:
     QLabel* m_status_vault{nullptr};
     int m_reported_blocks{-1};
     int m_reported_peers{-1};
+    int m_reported_answered{-1};
     bool m_reported_synced{false};
     // The newest block heard from peers (best known header), never lowered.
     int m_best_header_height{0};
@@ -281,10 +281,11 @@ Q_SIGNALS:
 public Q_SLOTS:
     /** Set number of connections shown in the UI */
     void setNumConnections(int count);
+    void setHeadersAnsweredPeers(int count);
     /** Set network state shown in the UI */
     void setNetworkActive(bool network_active);
     /** Set number of blocks and last block date shown in the UI */
-    void setNumBlocks(int count, const QDateTime& blockDate, double nVerificationProgress, SyncType synctype, SynchronizationState sync_state);
+    void setNumBlocks(int count, const QDateTime& blockDate, double, SyncType synctype, SynchronizationState sync_state);
     /** Launch the vault creation modal (no-op if vault is not compiled) **/
     void createVault();
     /** Open the existing-vault picker (no-op if vault is not compiled) **/

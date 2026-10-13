@@ -112,6 +112,11 @@ namespace GUIUtil
      * Loads the font from the file specified by file_name, aborts if it fails.
      */
     void LoadFont(const QString& file_name);
+    //! Bundled face for U+1F713, and its family name. Empty until LoadUnitGlyph.
+    void LoadUnitGlyph();
+    QString UnitGlyphFamily();
+    //! Keep font's resolved family, and use the bundled face for the cinnabar sign.
+    QFont WithUnitGlyph(const QFont& font);
 
     /**
      * Determine default data directory for operating system.

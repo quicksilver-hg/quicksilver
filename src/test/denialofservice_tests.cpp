@@ -10,6 +10,8 @@
 #include <common/args.h>
 #include <net.h>
 #include <net_processing.h>
+#include <node/interface_ui.h>
+#include <primitives/block.h>
 #include <pubkey.h>
 #include <script/sign.h>
 #include <script/signingprovider.h>
@@ -22,9 +24,13 @@
 #include <validation.h>
 
 #include <array>
+#include <future>
+#include <mutex>
+#include <thread>
 #include <stdint.h>
 
 #include <boost/test/unit_test.hpp>
+#include <boost/signals2/connection.hpp>
 
 static CService ip(uint32_t i)
 {
@@ -34,6 +40,135 @@ static CService ip(uint32_t i)
 }
 
 BOOST_FIXTURE_TEST_SUITE(denialofservice_tests, TestingSetup)
+
+
+BOOST_AUTO_TEST_CASE(headers_answered_peer_count)
+{
+    LOCK(NetEventsInterface::g_msgproc_mutex);
+    auto& connman = static_cast<ConnmanTestMsg&>(*m_node.connman);
+    auto& peerman = *m_node.peerman;
+    std::vector<int> notifications;
+    boost::signals2::scoped_connection connection{uiInterface.NotifyHeadersAnsweredPeersChanged_connect(
+        [&](int count) { notifications.push_back(count); })};
+    BOOST_CHECK_EQUAL(peerman.GetHeadersAnsweredPeers(), 0);
+    BOOST_CHECK(notifications.empty());
+
+    CNode peer{0, nullptr, CAddress{ip(0xa0b0c001), NODE_NONE}, 0, 0, CAddress{}, "",
+               ConnectionType::OUTBOUND_FULL_RELAY, false};
+    connman.Handshake(peer, true, ServiceFlags(NODE_NETWORK | NODE_WITNESS),
+                      ServiceFlags(NODE_NETWORK | NODE_WITNESS), PROTOCOL_VERSION, true);
+    BOOST_CHECK_EQUAL(peerman.GetHeadersAnsweredPeers(), 0);
+    BOOST_CHECK(notifications.empty());
+
+    DataStream empty_headers;
+    WriteCompactSize(empty_headers, 0);
+    peerman.ProcessMessage(peer, NetMsgType::HEADERS, empty_headers, GetTime<std::chrono::microseconds>(), std::atomic<bool>{false});
+    BOOST_CHECK_EQUAL(peerman.GetHeadersAnsweredPeers(), 1);
+    BOOST_REQUIRE_EQUAL(notifications.size(), 1);
+    BOOST_CHECK_EQUAL(notifications.back(), 1);
+
+    DataStream repeated_headers;
+    WriteCompactSize(repeated_headers, 0);
+    peerman.ProcessMessage(peer, NetMsgType::HEADERS, repeated_headers, GetTime<std::chrono::microseconds>(), std::atomic<bool>{false});
+    BOOST_CHECK_EQUAL(peerman.GetHeadersAnsweredPeers(), 1);
+    BOOST_CHECK_EQUAL(notifications.size(), 1);
+
+    peerman.FinalizeNode(peer);
+    BOOST_CHECK_EQUAL(peerman.GetHeadersAnsweredPeers(), 0);
+    BOOST_REQUIRE_EQUAL(notifications.size(), 2);
+    BOOST_CHECK_EQUAL(notifications.back(), 0);
+}
+
+BOOST_AUTO_TEST_CASE(headers_answered_notifications_are_serialized)
+{
+    auto& connman = static_cast<ConnmanTestMsg&>(*m_node.connman);
+    auto& peerman = *m_node.peerman;
+    CNode first_peer{0, nullptr, CAddress{ip(0xa0b0c001), NODE_NONE}, 0, 0, CAddress{}, "",
+                     ConnectionType::OUTBOUND_FULL_RELAY, false};
+    CNode second_peer{1, nullptr, CAddress{ip(0xa0b0c002), NODE_NONE}, 0, 0, CAddress{}, "",
+                      ConnectionType::OUTBOUND_FULL_RELAY, false};
+    const auto answer_headers = [&](CNode& peer) {
+        LOCK(NetEventsInterface::g_msgproc_mutex);
+        DataStream headers;
+        WriteCompactSize(headers, 0);
+        peerman.ProcessMessage(peer, NetMsgType::HEADERS, headers, GetTime<std::chrono::microseconds>(), std::atomic<bool>{false});
+    };
+    {
+        LOCK(NetEventsInterface::g_msgproc_mutex);
+        for (auto* peer : {&first_peer, &second_peer}) {
+            connman.Handshake(*peer, true, ServiceFlags(NODE_NETWORK | NODE_WITNESS),
+                              ServiceFlags(NODE_NETWORK | NODE_WITNESS), PROTOCOL_VERSION, true);
+        }
+    }
+    answer_headers(first_peer);
+
+    std::promise<void> disconnected_callback;
+    auto disconnected = disconnected_callback.get_future();
+    std::promise<void> release_callback;
+    auto release = release_callback.get_future();
+    std::atomic<bool> callback_count_matches{true};
+    std::mutex notifications_mutex;
+    std::vector<int> notifications;
+    boost::signals2::scoped_connection connection{uiInterface.NotifyHeadersAnsweredPeersChanged_connect(
+        [&](int count) {
+            // Reading the count in a callback must remain possible while publication is serialized.
+            if (peerman.GetHeadersAnsweredPeers() != count) callback_count_matches = false;
+            if (count == 0) {
+                disconnected_callback.set_value();
+                release.wait();
+            }
+            std::lock_guard lock{notifications_mutex};
+            notifications.push_back(count);
+        })};
+    std::thread disconnect_thread{[&] { peerman.FinalizeNode(first_peer); }};
+    disconnected.wait();
+    std::promise<void> answer_started;
+    auto started = answer_started.get_future();
+    auto answer = std::async(std::launch::async, [&] {
+        answer_started.set_value();
+        answer_headers(second_peer);
+    });
+    started.wait();
+    // A second peer cannot publish while the preceding disconnect callback is still running.
+    const auto answer_status = answer.wait_for(100ms);
+    release_callback.set_value();
+    disconnect_thread.join();
+    answer.get();
+    BOOST_CHECK(callback_count_matches);
+    BOOST_CHECK(answer_status == std::future_status::timeout);
+    BOOST_CHECK_EQUAL(peerman.GetHeadersAnsweredPeers(), 1);
+    const std::vector<int> expected{0, 1};
+    BOOST_CHECK_EQUAL_COLLECTIONS(notifications.begin(), notifications.end(), expected.begin(), expected.end());
+    connection.disconnect();
+    peerman.FinalizeNode(second_peer);
+}
+
+BOOST_FIXTURE_TEST_CASE(headers_answered_after_header_tip, TestChain100Setup)
+{
+    LOCK(NetEventsInterface::g_msgproc_mutex);
+    auto& connman = static_cast<ConnmanTestMsg&>(*m_node.connman);
+    auto& peerman = *m_node.peerman;
+    const auto block = CreateBlock({}, CScript{} << OP_TRUE, m_node.chainman->ActiveChainstate());
+    std::vector<std::string> notifications;
+    boost::signals2::scoped_connection tip_connection{uiInterface.NotifyHeaderTip_connect(
+        [&](auto, int64_t, int64_t, bool) { notifications.push_back("tip"); })};
+    boost::signals2::scoped_connection answered_connection{uiInterface.NotifyHeadersAnsweredPeersChanged_connect(
+        [&](int count) { if (count == 1) notifications.push_back("answered"); })};
+
+    CNode peer{0, nullptr, CAddress{ip(0xa0b0c001), NODE_NONE}, 0, 0, CAddress{}, "",
+               ConnectionType::OUTBOUND_FULL_RELAY, false};
+    connman.Handshake(peer, true, ServiceFlags(NODE_NETWORK | NODE_WITNESS),
+                      ServiceFlags(NODE_NETWORK | NODE_WITNESS), PROTOCOL_VERSION, true);
+    DataStream headers;
+    WriteCompactSize(headers, 1);
+    headers << block.GetBlockHeader();
+    WriteCompactSize(headers, 0);
+    peerman.ProcessMessage(peer, NetMsgType::HEADERS, headers, GetTime<std::chrono::microseconds>(), std::atomic<bool>{false});
+    BOOST_CHECK_EQUAL(peerman.GetHeadersAnsweredPeers(), 1);
+    const std::vector<std::string> expected{"tip", "answered"};
+    BOOST_CHECK_EQUAL_COLLECTIONS(notifications.begin(), notifications.end(), expected.begin(), expected.end());
+    peerman.FinalizeNode(peer);
+}
 
 // Test eviction of an outbound peer whose chain never advances
 // Mock a node connection, and use mocktime to simulate a peer

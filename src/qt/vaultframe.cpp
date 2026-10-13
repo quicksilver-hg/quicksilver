@@ -211,9 +211,14 @@ void VaultFrame::setMiningStatus(const interfaces::MiningStatus& status)
     Q_EMIT miningStatusUpdated(status);
 }
 
-void VaultFrame::setSyncState(bool synced, double progress)
+void VaultFrame::setSyncState(ClientModel::SyncState sync_state, double progress, int peers, int blocks, int answered, bool behind_known_headers)
 {
-    if (m_launch_page) m_launch_page->setSyncState(synced, progress);
+    m_sync_state = sync_state;
+    m_sync_progress = progress;
+    m_sync_peers = peers;
+    setPeerCount(peers);
+    if (m_launch_page) m_launch_page->setSyncState(blocks, answered, behind_known_headers, progress);
+    refreshNetworkPage();
 }
 
 void VaultFrame::setVaultRuntimeAvailable(bool available)
@@ -243,6 +248,7 @@ bool VaultFrame::addView(VaultView* vaultView)
     vaultStack->addWidget(vaultView);
     mapVaultViews[vaultView->getVaultModel()] = vaultView;
     connectLaunchSummarySignals(vaultView->getVaultModel());
+    refreshNetworkPage();
     if (!m_current_vault_view) {
         m_current_vault_view = vaultView;
     }
@@ -698,9 +704,10 @@ void VaultFrame::refreshNetworkPage()
         return;
     }
 
-    const int peers = clientModel->getNumConnections(CONNECTIONS_ALL);
-    const double progress = clientModel->node().getVerificationProgress();
-    m_network_page->updateStatus(peers, progress, !clientModel->node().isInitialBlockDownload());
+    const int peers = m_sync_peers < 0 ? clientModel->getNumConnections(CONNECTIONS_ALL) : m_sync_peers;
+    for (auto* page : findChildren<NetworkPage*>()) {
+        page->updateStatus(peers, m_sync_state, m_sync_progress);
+    }
     setPeerCount(peers);
 }
 

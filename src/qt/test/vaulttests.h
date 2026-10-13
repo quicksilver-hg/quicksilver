@@ -51,6 +51,7 @@ private Q_SLOTS:
     void mineMintPageRendersStatus();
     void minePageSeparatesDraftPayoutAndHealthNote();
     void aboutDialogWrapsAtWords();
+    void aboutDialogLinksSourceOnce();
     void mineMintPageNamesAnArmedMinerWithNoPermittedSolver();
     void mineMintPageRefusesToPresentIsolatedMiningAsSuccess();
     void mineMintPageShowsARawScriptPayout();
@@ -86,6 +87,7 @@ private Q_SLOTS:
     void transferPageShowsItsFormAndTransmitButtonTogether();
     void transferCoinControlQuantityAndBytesUseSeparateRows();
     void coinControlDialogQuantityAndBytesUseSeparateRows();
+    void copyAmountActionsCopyTheBareNumber();
     void transferSolverTextNamesRealMenuAndSetting();
     void transferPrecheckRefusesOverBalanceBeforeUnlock();
     void transferPrecheckRefusesDuplicateBeforeUnlock();

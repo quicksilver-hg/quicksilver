@@ -120,22 +120,23 @@ void MaturityTests::reportedAmountUsesInlineFormatting()
 {
     const MaturingSummary summary{1, 4'971'254'564, 99};
     QCOMPARE(FormatMaturingHint(summary, QuicksilverUnit::HG, QuicksilverUnits::SeparatorStyle::ALWAYS, false, 300),
-             QString::fromUtf8("next 49.71254564 Hg in about 5 minutes \u00b7 all in about 8 hours"));
+             QString::fromUtf8("next 49.71254564Hg in about 5 minutes \u00b7 all in about 8 hours"));
 }
 
 void MaturityTests::inlineThousandsKeepTheirSeparator()
 {
     const MaturingSummary summary{1, 12'345 * COIN, 99};
     QCOMPARE(FormatMaturingHint(summary, QuicksilverUnit::HG, QuicksilverUnits::SeparatorStyle::ALWAYS, false, 300),
-             QString::fromUtf8("next 12\u2009345.00000000 Hg in about 5 minutes \u00b7 all in about 8 hours"));
+             QString::fromUtf8("next 12,345.00000000Hg in about 5 minutes \u00b7 all in about 8 hours"));
 }
 
 void MaturityTests::inlinePrivacyHasNoPadding()
 {
     const MaturingSummary summary{1, 4'971'254'564, 99};
     QCOMPARE(FormatMaturingHint(summary, QuicksilverUnit::HG, QuicksilverUnits::SeparatorStyle::ALWAYS, true, 300),
-             QString::fromUtf8("next #.######## Hg in about 5 minutes \u00b7 all in about 8 hours"));
+             QString::fromUtf8("next #.########Hg in about 5 minutes \u00b7 all in about 8 hours"));
+    const char32_t sign = 0x1F713;
     QCOMPARE(QuicksilverUnits::formatInlineWithPrivacy(QuicksilverUnit::HGS, summary.soonest_amount,
                                                      QuicksilverUnits::SeparatorStyle::ALWAYS, true),
-             QString("# HgS"));
+             QStringLiteral("#") + QString::fromUcs4(&sign, 1));
 }

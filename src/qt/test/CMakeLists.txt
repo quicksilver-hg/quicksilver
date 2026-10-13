@@ -16,6 +16,7 @@ add_executable(test_quicksilver-qt
   storagecoststests.cpp
   test_main.cpp
   uritests.cpp
+  unitstests.cpp
   util.cpp
   ../../init/quicksilver.cpp
 )

@@ -798,6 +798,7 @@ int GuiMain(int argc, char* argv[])
     QuicksilverApplication app;
     app.setRestartCommandLine(argc, argv);
     GUIUtil::LoadFont(QStringLiteral(":/fonts/monospace"));
+    GUIUtil::LoadUnitGlyph();
 
     /// 2. Parse command-line options. We do this after qt in order to show an error if there are problems parsing these
     // Command-line options take precedence:

@@ -216,7 +216,8 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
     m_status_dot->setObjectName(QStringLiteral("benchStatusDot"));
     strip_layout->addWidget(m_status_dot);
     strip_layout->addSpacing(-8);
-    m_status_sync = add_status(QStringLiteral("benchStatusSync"), tr("Connecting"));
+    m_status_sync = add_status(QStringLiteral("benchStatusSync"),
+                               ClientModel::syncStateText(ClientModel::SyncState::Connecting));
     m_status_height = add_status(QStringLiteral("benchStatusHeight"), tr("Height unavailable"));
     m_status_peers = add_status(QStringLiteral("benchStatusPeers"), tr("No peers"));
     m_status_mining = add_status(QStringLiteral("benchStatusMining"), tr("Mining locked"));
@@ -224,10 +225,10 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
 
     unitDisplayControl = new UnitDisplayStatusBarControl(platformStyle);
     unitDisplayControl->setParent(m_bench_status_strip);
-    labelVaultEncryptionIcon = new GUIUtil::ThemedLabel(platformStyle);
-    labelVaultHDStatusIcon = new GUIUtil::ThemedLabel(platformStyle);
-    labelProxyIcon = new GUIUtil::ClickableLabel(platformStyle);
-    connectionsControl = new GUIUtil::ClickableLabel(platformStyle);
+    labelVaultEncryptionIcon = new GUIUtil::ThemedLabel(platformStyle, m_bench_status_strip);
+    labelVaultHDStatusIcon = new GUIUtil::ThemedLabel(platformStyle, m_bench_status_strip);
+    labelProxyIcon = new GUIUtil::ClickableLabel(platformStyle, m_bench_status_strip);
+    connectionsControl = new GUIUtil::ClickableLabel(platformStyle, m_bench_status_strip);
     labelVaultEncryptionIcon->hide();
     labelVaultHDStatusIcon->hide();
 
@@ -977,7 +978,7 @@ void QuicksilverGUI::refreshTicker()
     }
 
     const interfaces::VaultBalances balances = model->getCachedBalance();
-    const QuicksilverUnit unit = model->getOptionsModel() ? model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HG;
+    const QuicksilverUnit unit = model->getOptionsModel() ? model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HGS;
     const bool privacy = isPrivacyModeActivated();
     const auto paint = [&](QLabel* label, CAmount amount) {
         label->setText(QuicksilverUnits::formatInlineValueWithPrivacy(unit, amount, QuicksilverUnits::SeparatorStyle::ALWAYS, privacy));
@@ -987,8 +988,8 @@ void QuicksilverGUI::refreshTicker()
     paint(m_ticker_maturing, balances.immature_balance);
     paint(m_ticker_delegated, balances.delegated_balance);
     paint(m_ticker_total, balances.balance + balances.unconfirmed_balance + balances.immature_balance + balances.delegated_balance);
-    // The symbol keeps its spelling, Hg, even beside upper-case captions.
-    const QString unit_name = QuicksilverUnits::shortName(unit);
+    // The figure's unit is the display suffix. Names and column titles keep the code.
+    const QString unit_name = QuicksilverUnits::displaySuffix(unit);
     for (QLabel* unit_label : m_ticker_figures->findChildren<QLabel*>(QStringLiteral("benchTickerUnit"))) {
         unit_label->setText(unit_name);
     }
@@ -1006,20 +1007,25 @@ void QuicksilverGUI::setKnownBestHeight(int height, bool presync)
     if (!presync && height > m_best_header_height) m_best_header_height = height;
 }
 
-QString QuicksilverGUI::syncStateWord(int blocks, int peers, bool behind_known_headers)
-{
-    if (blocks < 0) return tr("Connecting");
-    // A node that has heard from no peer cannot know it is in sync.
-    if (peers == 0) return tr("Waiting for peers");
-    return behind_known_headers ? tr("Catching up") : tr("Synchronized");
-}
 
 void QuicksilverGUI::refreshStatusStrip()
 {
     if (!m_status_sync) return;
 
-    m_status_sync->setText(syncStateWord(m_reported_blocks, m_reported_peers, !m_reported_synced));
-    if (m_reported_blocks >= 0 && m_reported_peers != 0 && !m_reported_synced) {
+    const ClientModel::SyncState sync_state = ClientModel::syncState(m_reported_blocks, m_reported_peers, m_reported_answered, !m_reported_synced);
+    const bool synchronized = sync_state == ClientModel::SyncState::Synchronized;
+    const bool catching_up = sync_state == ClientModel::SyncState::CatchingUp;
+    double progress = 0.0;
+    if (synchronized) {
+        progress = 1.0;
+    } else if (catching_up && m_best_header_height > 0) {
+        progress = static_cast<double>(m_reported_blocks) / m_best_header_height;
+    }
+#ifdef ENABLE_VAULT
+    if (vaultFrame) vaultFrame->setSyncState(sync_state, progress, m_reported_peers, m_reported_blocks, m_reported_answered, !m_reported_synced);
+#endif
+    m_status_sync->setText(ClientModel::syncStateText(sync_state));
+    if (catching_up) {
         const int blocks_behind = m_best_header_height - m_reported_blocks;
         m_status_sync->setToolTip(blocks_behind == 1
                                      ? tr("1 block behind the newest block heard from peers.")
@@ -1027,7 +1033,7 @@ void QuicksilverGUI::refreshStatusStrip()
     } else {
         m_status_sync->setToolTip(QString());
     }
-    const char* tone = (m_reported_blocks >= 0 && m_reported_peers != 0 && m_reported_synced) ? "good" : "plain";
+    const char* tone = synchronized ? "good" : "plain";
     for (QLabel* label : {m_status_dot, m_status_sync}) {
         label->setProperty("benchTone", tone);
         label->style()->unpolish(label);
@@ -1103,13 +1109,16 @@ void QuicksilverGUI::setClientModel(ClientModel *_clientModel, interfaces::Block
         // while the client has not yet fully loaded
         createTrayIconMenu();
 
-        // Keep up to date with client
+        // Subscribe before the initial snapshot so a first answer cannot fall in between.
+        connect(_clientModel, &ClientModel::numConnectionsChanged, this, &QuicksilverGUI::setNumConnections);
+        connect(_clientModel, &ClientModel::headersAnsweredPeersChanged, this, &QuicksilverGUI::setHeadersAnsweredPeers);
+        connect(_clientModel, &ClientModel::networkActiveChanged, this, &QuicksilverGUI::setNetworkActive);
+        m_reported_peers = _clientModel->getNumConnections();
+        m_reported_answered = m_node.getHeadersAnsweredPeers();
         setNetworkActive(m_node.getNetworkActive());
         connect(connectionsControl, &GUIUtil::ClickableLabel::clicked, [this] {
             GUIUtil::PopupMenu(m_network_context_menu, QCursor::pos());
         });
-        connect(_clientModel, &ClientModel::numConnectionsChanged, this, &QuicksilverGUI::setNumConnections);
-        connect(_clientModel, &ClientModel::networkActiveChanged, this, &QuicksilverGUI::setNetworkActive);
 
         setKnownBestHeight(tip_info->header_height, /*presync=*/false);
         setNumBlocks(tip_info->block_height, QDateTime::fromSecsSinceEpoch(tip_info->block_time), tip_info->verification_progress, SyncType::BLOCK_SYNC, SynchronizationState::INIT_DOWNLOAD);
@@ -1653,8 +1662,7 @@ void QuicksilverGUI::gotoLoadPSQT(bool from_clipboard)
 void QuicksilverGUI::updateNetworkState()
 {
     if (!clientModel) return;
-    int count = clientModel->getNumConnections();
-    m_reported_peers = count;
+    const int count = m_reported_peers;
     QString icon;
     switch(count)
     {
@@ -1694,7 +1702,19 @@ void QuicksilverGUI::updateNetworkState()
 
 void QuicksilverGUI::setNumConnections(int count)
 {
+    m_reported_peers = count;
     updateNetworkState();
+}
+
+void QuicksilverGUI::setHeadersAnsweredPeers(int count)
+{
+    const int previous = m_reported_answered;
+    m_reported_answered = count;
+    // The first answer can reveal work before a connected block notification.
+    if (previous <= 0 && count > 0) {
+        m_reported_synced = !isBehindKnownHeaders(m_reported_blocks);
+    }
+    refreshStatusStrip();
 }
 
 void QuicksilverGUI::setNetworkActive(bool network_active)
@@ -1730,7 +1750,7 @@ void QuicksilverGUI::openOptionsDialogWithTab(OptionsDialog::Tab tab)
     GUIUtil::ShowModalDialogAsynchronously(dlg);
 }
 
-void QuicksilverGUI::setNumBlocks(int count, const QDateTime& blockDate, double nVerificationProgress, SyncType synctype, SynchronizationState sync_state)
+void QuicksilverGUI::setNumBlocks(int count, const QDateTime& blockDate, double, SyncType synctype, SynchronizationState sync_state)
 {
 // Disabling macOS App Nap on initial sync, disk and reindex operations.
 #ifdef Q_OS_MACOS
@@ -1760,7 +1780,6 @@ void QuicksilverGUI::setNumBlocks(int count, const QDateTime& blockDate, double 
 #ifdef ENABLE_VAULT
     if (vaultFrame && synctype == SyncType::BLOCK_SYNC) {
         vaultFrame->setChainTip(count, blockDate);
-        vaultFrame->setSyncState(m_reported_synced, nVerificationProgress);
     }
 #endif
     refreshStatusStrip();

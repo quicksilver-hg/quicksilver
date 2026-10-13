@@ -6,10 +6,11 @@
 #ifndef QUICKSILVER_QT_VAULTFRAME_H
 #define QUICKSILVER_QT_VAULTFRAME_H
 
+#include <qt/clientmodel.h>
+
 #include <QFrame>
 #include <QMap>
 
-class ClientModel;
 class ConsensusReviewPage;
 class DesktopLaunchPage;
 class MineMintPage;
@@ -52,8 +53,8 @@ public:
     void setMiningStatus(const interfaces::MiningStatus& status);
     //! Block tip for the Home Node panel. A negative height means it is not known yet.
     void setChainTip(int height, const QDateTime& block_time);
-    //! Whether the node has caught up, and how far (0..1), for the Home node panel.
-    void setSyncState(bool synced, double progress);
+    //! GUI sync snapshot for the Home Node panel and every Network page.
+    void setSyncState(ClientModel::SyncState sync_state, double progress, int peers, int blocks, int answered, bool behind_known_headers);
     void setVaultRuntimeAvailable(bool available);
 
     bool addView(VaultView* vaultView);
@@ -107,6 +108,9 @@ private:
     VaultView* m_current_vault_view{nullptr};
     ClientModel* clientModel{nullptr};
     QMap<VaultModel*, VaultView*> mapVaultViews;
+    ClientModel::SyncState m_sync_state{ClientModel::SyncState::Connecting};
+    double m_sync_progress{0.0};
+    int m_sync_peers{-1};
     bool m_consensus_enabled{false};
     bool m_consensus_start_failed{false};
     bool m_consensus_tor_missing{false};

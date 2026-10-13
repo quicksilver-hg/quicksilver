@@ -25,6 +25,7 @@ private Q_SLOTS:
     void legacyDisplayUnitSettingIsIgnored();
     void displayUnitsAreFocused();
     void displayUnitSerializationIsCompact();
+    void newInstallShowsCinnabarAndKeepsAStoredUnit();
     void languageRowIsHiddenWhileNoCatalogueShips();
     void hiddenLanguageRowLeavesStoredValueAlone();
     void languageRowListsShippedCatalogues();

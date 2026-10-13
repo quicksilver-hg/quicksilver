@@ -5,6 +5,8 @@
 #ifndef QUICKSILVER_QT_NETWORKPAGE_H
 #define QUICKSILVER_QT_NETWORKPAGE_H
 
+#include <qt/clientmodel.h>
+
 #include <QWidget>
 
 class QFrame;
@@ -38,7 +40,8 @@ public:
     void showStartFailed();
     //! Consensus was not started because no Tor executable was found.
     void showTorMissing();
-    void updateStatus(int peers, double verification_progress, bool synced);
+    void updateStatus(int peers, ClientModel::SyncState sync_state, double progress);
+    void setPeerCount(int peers);
     //! Outcome of the last manual peer addition, reported by the container that owns
     //! the node handle.
     void setAddPeerResult(const QString& message);

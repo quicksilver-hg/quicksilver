@@ -96,16 +96,11 @@ std::string CopyrightHolders(const std::string& strPrefix)
 
 std::string LicenseInfo()
 {
-    const std::string URL_SOURCE_CODE = "<" + std::string{CLIENT_URL} + ">";
-
     return CopyrightHolders(std::string{_("Copyright (C)")} + " ") + "\n" +
            "\n" +
-           strprintf(_("Please contribute if you find %s useful. "
-                       "Visit %s for further information about the software."),
+           strprintf(_("%s is open source. Source code, contribution guidelines, and further information are at %s."),
                      CLIENT_NAME, "<" CLIENT_URL ">")
                .translated +
-           "\n" +
-           strprintf(_("The source code is available from %s."), URL_SOURCE_CODE).translated +
            "\n" +
            "\n" +
            _("This is experimental software.") + "\n" +

@@ -251,6 +251,12 @@ The desktop's reading of it is `QuicksilverGUI::isBehindKnownHeaders`, comparing
 the best known header height (the newest block heard from peers) against the
 connected tip. A node that has heard from no peer is shown as waiting for peers,
 not as synchronized, because with no peer no header can be known.
+A connected peer that has not answered a headers request says nothing about
+known work. The desktop reads Connecting until at least one connected peer
+answers, including an empty headers response. It then compares the connected
+height against the best known header height: Catching up shows that height
+fraction, and Synchronized shows complete progress even for an old tip.
+
 `MAX_BLOCK_TIME_GAP` had no other caller and is gone.
 
 The first screen's prose follows from the same fact. It no longer promises to
@@ -452,6 +458,17 @@ package is not treated as readiness: it names the normally disabled control port
 cookie authentication, the distinct 9050 SOCKS and 9051 control roles, and the
 `-onion` or separate-proxy setting required for outbound onion peers. Detailed
 permission checks remain in [tor.md](../tor.md).
+
+## Amounts
+
+| where | number | unit |
+|---|---|---|
+| Display: labels, tickers, ledger cells, transfer review, transaction details, notifications | thousands grouped with commas, from four digits | `Hg` immediately after the value; the cinnabar sign immediately after the value, in the accent colour where the widget can colour part of the text |
+| Names: unit menu, amount-field selector, column titles, transfer amount key | — | the codes `Hg` and `HgS` |
+| Input: amount fields, paste, payment-link amount | `.` is the only decimal point. Commas are accepted only as thousands separators in whole groups of three. Payment-link amounts take no separators. The comma key types a comma; it is never a decimal point. | — |
+| Copy and export | no separators | no unit; a CSV header names the code |
+
+Grouping is fixed, so a shared amount reads the same on every machine. A new install shows cinnabar. A stored quicksilver or cinnabar choice is kept, and an unreadable stored choice shows cinnabar. The cinnabar sign is drawn from a bundled one-glyph face, so a system font cannot substitute a different drawing. Copy and export stay separator-free and unit-free so a pasted value parses as a number.
 
 ## What ships
 

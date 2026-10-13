@@ -195,6 +195,10 @@ public:
     {
         return m_context->connman ? m_context->connman->GetNodeCount(flags) : 0;
     }
+    int getHeadersAnsweredPeers() override
+    {
+        return m_context->peerman ? m_context->peerman->GetHeadersAnsweredPeers() : 0;
+    }
     bool getNodesStats(NodesStats& stats) override
     {
         stats.clear();
@@ -415,6 +419,10 @@ public:
     std::unique_ptr<Handler> handleNotifyNumConnectionsChanged(NotifyNumConnectionsChangedFn fn) override
     {
         return MakeSignalHandler(::uiInterface.NotifyNumConnectionsChanged_connect(fn));
+    }
+    std::unique_ptr<Handler> handleNotifyHeadersAnsweredPeersChanged(NotifyHeadersAnsweredPeersChangedFn fn) override
+    {
+        return MakeSignalHandler(::uiInterface.NotifyHeadersAnsweredPeersChanged_connect(fn));
     }
     std::unique_ptr<Handler> handleNotifyNetworkActiveChanged(NotifyNetworkActiveChangedFn fn) override
     {

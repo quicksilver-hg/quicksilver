@@ -17,6 +17,7 @@
 #include <qt/test/quicksilverstyletests.h>
 #include <qt/test/rpcnestedtests.h>
 #include <qt/test/storagecoststests.h>
+#include <qt/test/unitstests.h>
 #include <qt/test/uritests.h>
 #include <test/util/setup_common.h>
 #include <util/chaintype.h>
@@ -124,6 +125,7 @@ int main(int argc, char* argv[])
             {&StorageCostsTests::staticMetaObject, [&] { return std::make_unique<StorageCostsTests>(); }},
             {&AppTests::staticMetaObject, [&] { return std::make_unique<AppTests>(app); }},
             {&OptionTests::staticMetaObject, [&] { return std::make_unique<OptionTests>(app.node()); }},
+            {&UnitsTests::staticMetaObject, [&] { return std::make_unique<UnitsTests>(); }},
             {&URITests::staticMetaObject, [&] { return std::make_unique<URITests>(); }},
             {&RPCNestedTests::staticMetaObject, [&] { return std::make_unique<RPCNestedTests>(app.node()); }},
 #ifdef ENABLE_VAULT

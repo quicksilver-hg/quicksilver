@@ -59,8 +59,8 @@ public:
     void setVaultModel(VaultModel* model);
     //! Block tip for the Node panel. A negative height means the tip is not known yet.
     void setChainTip(int height, const QDateTime& block_time);
-    //! Whether the node has caught up, and how far it is (0..1).
-    void setSyncState(bool synced, double progress);
+    //! Shared sync inputs and GUI-computed progress (0..1) for the Node panel.
+    void setSyncState(int blocks, int answered, bool behind_known_headers, double progress);
     //! The miner's status. Until the first report the Mining panel says only whether
     //! mining is available.
     void setMiningStatus(const interfaces::MiningStatus& status);
@@ -144,8 +144,10 @@ private:
     bool m_vault_runtime_available{false};
     bool m_consensus_enabled{false};
     bool m_consensus_failed{false};
-    bool m_synced{false};
     bool m_have_sync{false};
+    int m_sync_blocks{-1};
+    int m_sync_answered{-1};
+    bool m_sync_behind_known_headers{false};
     bool m_have_mining_status{false};
     bool m_mining_active{false};
     QString m_mining_word;

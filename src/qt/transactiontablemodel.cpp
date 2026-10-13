@@ -400,7 +400,7 @@ QString TransactionTableModel::signedAmount(QuicksilverUnit unit, qint64 net, bo
 {
     const CAmount magnitude = net < 0 ? -net : net;
     const QString value = QuicksilverUnits::formatInlineValueWithPrivacy(unit, magnitude, QuicksilverUnits::SeparatorStyle::ALWAYS, privacy);
-    return (net < 0 ? QStringLiteral("− ") : QStringLiteral("+ ")) + value;
+    return (net < 0 ? QStringLiteral("− ") : QStringLiteral("+ ")) + value + QuicksilverUnits::displaySuffix(unit);
 }
 
 QString TransactionTableModel::formatTxType(const TransactionRecord *wtx) const

@@ -250,7 +250,7 @@ void SendCoinsEntry::setIndex(int index)
 
 void SendCoinsEntry::updateDisplayUnit()
 {
-    const QuicksilverUnit unit = model && model->getOptionsModel() ? model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HG;
+    const QuicksilverUnit unit = model && model->getOptionsModel() ? model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HGS;
     if (model && model->getOptionsModel()) {
         ui->payAmount->setDisplayUnit(unit);
     }

@@ -25,10 +25,29 @@
 #include <QDialogButtonBox>
 #include <QFlags>
 #include <QIcon>
+#include <QLabel>
 #include <QSettings>
 #include <QTreeWidget>
 
 using vault::CCoinControl;
+
+namespace {
+QuicksilverUnit CopyDisplayUnit(VaultModel* model)
+{
+    if (model && model->getOptionsModel()) return model->getOptionsModel()->getDisplayUnit();
+    return QuicksilverUnit::HGS;
+}
+
+void CopyBareAmount(VaultModel* model, CAmount amount)
+{
+    GUIUtil::setClipboard(QuicksilverUnits::format(CopyDisplayUnit(model), amount, false, QuicksilverUnits::SeparatorStyle::NEVER));
+}
+
+void StoreRawAmount(QLabel* label, CAmount amount)
+{
+    if (label) label->setProperty(CoinControlDialog::kRawAmountProperty, static_cast<qlonglong>(amount));
+}
+} // namespace
 
 QList<CAmount> CoinControlDialog::payAmounts;
 
@@ -188,10 +207,17 @@ void CoinControlDialog::showMenu(const QPoint &point)
     }
 }
 
+void CoinControlDialog::copyContextAmountForTesting(QTreeWidgetItem* item)
+{
+    contextMenuItem = item;
+    copyAmount();
+}
+
 // context menu action: copy amount
 void CoinControlDialog::copyAmount()
 {
-    GUIUtil::setClipboard(QuicksilverUnits::removeSpaces(contextMenuItem->text(COLUMN_AMOUNT)));
+    const CAmount amount = static_cast<CAmount>(contextMenuItem->data(COLUMN_AMOUNT, Qt::UserRole).toLongLong());
+    CopyBareAmount(model, amount);
 }
 
 // context menu action: copy label
@@ -254,7 +280,8 @@ void CoinControlDialog::clipboardQuantity()
 // copy label "Amount" to clipboard
 void CoinControlDialog::clipboardAmount()
 {
-    GUIUtil::setClipboard(ui->labelCoinControlAmount->text().left(ui->labelCoinControlAmount->text().indexOf(" ")));
+    const CAmount amount = static_cast<CAmount>(ui->labelCoinControlAmount->property(kRawAmountProperty).toLongLong());
+    CopyBareAmount(model, amount);
 }
 
 // copy label "Bytes" to clipboard
@@ -266,7 +293,8 @@ void CoinControlDialog::clipboardBytes()
 // copy label "Change" to clipboard
 void CoinControlDialog::clipboardChange()
 {
-    GUIUtil::setClipboard(ui->labelCoinControlChange->text().left(ui->labelCoinControlChange->text().indexOf(" ")).replace(ASYMP_UTF8, ""));
+    const CAmount amount = static_cast<CAmount>(ui->labelCoinControlChange->property(kRawAmountProperty).toLongLong());
+    CopyBareAmount(model, amount);
 }
 
 // treeview: sort
@@ -446,7 +474,7 @@ void CoinControlDialog::updateLabels(CCoinControl& m_coin_control, VaultModel *m
     }
 
     // actually update labels
-    QuicksilverUnit nDisplayUnit = QuicksilverUnit::HG;
+    QuicksilverUnit nDisplayUnit = QuicksilverUnit::HGS;
     if (model && model->getOptionsModel())
         nDisplayUnit = model->getOptionsModel()->getDisplayUnit();
 
@@ -462,8 +490,10 @@ void CoinControlDialog::updateLabels(CCoinControl& m_coin_control, VaultModel *m
     // stats
     l1->setText(QString::number(nQuantity));                                 // Quantity
     l2->setText(QuicksilverUnits::formatWithUnit(nDisplayUnit, nAmount));        // Amount
+    StoreRawAmount(l2, nAmount);
     l5->setText(((nBytes > 0) ? ASYMP_UTF8 : "") + QString::number(nBytes));        // Bytes
     l8->setText(QuicksilverUnits::formatWithUnit(nDisplayUnit, nChange));        // Change
+    StoreRawAmount(l8, nChange);
     dialog->findChild<QLabel *>("labelCoinControlBytesText")    ->setToolTip(l5->toolTip());
     dialog->findChild<QLabel *>("labelCoinControlChangeText")   ->setToolTip(l8->toolTip());
 

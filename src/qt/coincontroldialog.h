@@ -48,6 +48,12 @@ public:
     explicit CoinControlDialog(vault::CCoinControl& coin_control, VaultModel* model, const PlatformStyle *platformStyle, QWidget *parent = nullptr);
     ~CoinControlDialog();
 
+    //! Base-unit amount stored on an amount label, so copy does not parse the label text.
+    static constexpr char kRawAmountProperty[] = "rawAmount";
+
+    //! Points the amount-copy action at one row and runs it. Production uses the context menu.
+    void copyContextAmountForTesting(QTreeWidgetItem* item);
+
     // static because also called from sendcoinsdialog
     static void updateLabels(vault::CCoinControl& m_coin_control, VaultModel*, QDialog*);
 

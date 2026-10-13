@@ -168,8 +168,7 @@ void VaultView::setClientModel(ClientModel *_clientModel)
     if (_clientModel) {
         auto refresh_network = [this]{
             const int peers = clientModel->getNumConnections(CONNECTIONS_ALL);
-            const double progress = clientModel->node().getVerificationProgress();
-            networkPage->updateStatus(peers, progress, !clientModel->node().isInitialBlockDownload());
+            networkPage->setPeerCount(peers);
             mineMintPage->setPeerCount(peers);
         };
         connect(clientModel, &ClientModel::numBlocksChanged, this,

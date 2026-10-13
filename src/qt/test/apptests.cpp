@@ -19,14 +19,20 @@
 #include <qt/quicksilverstyle.h>
 #include <qt/networkstyle.h>
 #include <qt/platformstyle.h>
+#include <qt/optionsmodel.h>
 #include <qt/rpcconsole.h>
 #ifdef ENABLE_VAULT
+#include <interfaces/vault.h>
 #include <qt/vaultcontroller.h>
 #include <qt/vaultframe.h>
+#include <qt/vaultmodel.h>
+#include <qt/vaultview.h>
+#include <vault/vaultutil.h>
 #endif
 #include <qt/test/util.h>
 #include <test/util/setup_common.h>
 #include <tor/bundled_tor.h>
+#include <univalue.h>
 #include <util/fs.h>
 #include <util/translation.h>
 #include <validation.h>
@@ -42,6 +48,8 @@
 #include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
+#include <QCoreApplication>
+#include <QEvent>
 #include <QFrame>
 #include <QImage>
 #include <QLabel>
@@ -50,28 +58,66 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QProgressBar>
+#include <QPointer>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScopedPointer>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSet>
 #include <QSettings>
 #include <QStatusBar>
 #include <QStatusTipEvent>
 #include <QSignalSpy>
 #include <QString>
+#include <QStringList>
 #include <QStackedWidget>
 #include <QTest>
 #include <QTextEdit>
 #include <QToolBar>
 #include <QToolButton>
+#include <QTranslator>
 #include <QTimer>
 #include <QtGlobal>
 #include <QtTest/QtTestWidgets>
 #include <QtTest/QtTestGui>
 
 namespace {
+class SyncStateTranslator final : public QTranslator
+{
+public:
+    QString translate(const char* context, const char* source_text, const char*, int) const override
+    {
+        const QString source{QString::fromUtf8(source_text)};
+        const bool sync_state = source == QStringLiteral("Connecting") ||
+            source == QStringLiteral("Waiting for peers") ||
+            source == QStringLiteral("Catching up") ||
+            source == QStringLiteral("Synchronized");
+        if (sync_state && qstrcmp(context, "QuicksilverGUI") != 0) {
+            return QStringLiteral("{%1}").arg(source);
+        }
+        return QStringLiteral("[%1]").arg(source);
+    }
+};
+
+class TranslatorGuard
+{
+public:
+    explicit TranslatorGuard(QTranslator& translator) : m_translator{translator}
+    {
+        QCoreApplication::installTranslator(&m_translator);
+    }
+
+    ~TranslatorGuard()
+    {
+        QCoreApplication::removeTranslator(&m_translator);
+    }
+
+private:
+    QTranslator& m_translator;
+};
+
 class MessageBoxWorkerGuard
 {
 public:
@@ -215,10 +261,10 @@ void TestAssayBenchChrome(QuicksilverGUI* window)
     // One sync indicator: the strip's own word. Home's Node card holds the progress bar.
     QVERIFY(window->statusBar()->findChildren<QProgressBar*>().isEmpty());
 
-    const QString peers_before = peers->text();
     window->setNumConnections(999);
-    QCOMPARE(peers->text(), peers_before);
-    QVERIFY(!peers->text().contains(QStringLiteral("999")));
+    QCOMPARE(peers->text(), QStringLiteral("999 peers"));
+    QVERIFY(peers->text().contains(QStringLiteral("999")));
+    window->setNumConnections(0);
 
     QString mining_state;
     if (QLabel* live = window->findChild<QLabel*>(QStringLiteral("miningStatusValue"))) {
@@ -838,12 +884,62 @@ void TestSyncStateFollowsKnownHeaders(QuicksilverGUI* window)
 //! Sync wording follows reported peers and known work, including before a peer count arrives.
 void TestSyncStateWords()
 {
-    QCOMPARE(QuicksilverGUI::syncStateWord(-1, 3, false), QStringLiteral("Connecting"));
-    QCOMPARE(QuicksilverGUI::syncStateWord(700, 0, false), QStringLiteral("Waiting for peers"));
-    QCOMPARE(QuicksilverGUI::syncStateWord(700, 0, true), QStringLiteral("Waiting for peers"));
-    QCOMPARE(QuicksilverGUI::syncStateWord(700, 3, true), QStringLiteral("Catching up"));
-    QCOMPARE(QuicksilverGUI::syncStateWord(700, 3, false), QStringLiteral("Synchronized"));
-    QCOMPARE(QuicksilverGUI::syncStateWord(700, -1, false), QStringLiteral("Synchronized"));
+    using SyncState = ClientModel::SyncState;
+    QCOMPARE(ClientModel::syncState(-1, 3, 3, false), SyncState::Connecting);
+    QCOMPARE(ClientModel::syncState(700, 0, 0, false), SyncState::WaitingForPeers);
+    QCOMPARE(ClientModel::syncState(700, 0, 0, true), SyncState::WaitingForPeers);
+    QCOMPARE(ClientModel::syncState(700, 3, 3, true), SyncState::CatchingUp);
+    QCOMPARE(ClientModel::syncState(700, 3, 3, false), SyncState::Synchronized);
+    QCOMPARE(ClientModel::syncState(700, -1, -1, false), SyncState::Synchronized);
+    QCOMPARE(ClientModel::syncState(700, 3, 0, false), SyncState::Connecting);
+    QCOMPARE(ClientModel::syncState(700, 3, 0, true), SyncState::Connecting);
+    QCOMPARE(ClientModel::syncState(700, 3, -1, false), SyncState::Synchronized);
+}
+
+//! Decisions use the sync value even when each display context translates the words differently.
+void TestTranslatedSyncStateUsesValue(interfaces::Node& node, OptionsModel* options_model, const NetworkStyle* network_style)
+{
+    QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate(QuicksilverGUI::DEFAULT_UIPLATFORM.c_str()));
+    ClientModel client_model(node, options_model);
+    QuicksilverGUI window(node, platform_style.data(), network_style);
+    struct DetachClient {
+        QuicksilverGUI& window;
+        ~DetachClient() { window.setClientModel(nullptr); }
+    } detach{window};
+    const QDateTime stale = QDateTime::currentDateTime().addSecs(-9 * 60 * 60);
+    interfaces::BlockAndHeaderTipInfo tip{1000, stale.toSecsSinceEpoch(), 1000, stale.toSecsSinceEpoch(), 1.0};
+    window.setClientModel(&client_model, &tip);
+
+    SyncStateTranslator translator;
+    const TranslatorGuard guard{translator};
+
+    auto* sync = window.findChild<QLabel*>(QStringLiteral("benchStatusSync"));
+    auto* node_state = window.findChild<QLabel*>(QStringLiteral("homeNodeState"));
+    auto* progress = window.findChild<QProgressBar*>(QStringLiteral("homeNodeSync"));
+    auto* network_sync = window.findChild<QLabel*>(QStringLiteral("syncStatusValue"));
+    QVERIFY(sync && node_state && progress && network_sync);
+
+    window.setNumConnections(1);
+    window.setHeadersAnsweredPeers(1);
+    window.setNumBlocks(1000, stale, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QCOMPARE(sync->text(), QStringLiteral("[Synchronized]"));
+    QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("good"));
+    QCOMPARE(progress->value(), 1000);
+    QCOMPARE(node_state->property("benchTone").toString(), QStringLiteral("good"));
+
+    window.setNumBlocks(1000, stale, 1.0, SyncType::HEADER_SYNC, SynchronizationState::POST_INIT);
+    window.setNumBlocks(987, stale, 0.5, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QCOMPARE(sync->text(), QStringLiteral("[Catching up]"));
+    QCOMPARE(progress->value(), 987);
+    QCOMPARE(network_sync->text(), QStringLiteral("[[Catching up] 98.7%]"));
+
+    window.setNumConnections(0);
+    QCOMPARE(node_state->text(), QStringLiteral("[No peers]"));
+    QCOMPARE(node_state->property("benchTone").toString(), QStringLiteral("plain"));
+
+    window.setNumConnections(1);
+    window.setNumBlocks(1000, stale, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QCOMPARE(node_state->property("benchTone").toString(), QStringLiteral("good"));
 }
 
 //! A node that has heard from no peer cannot know it is in sync.
@@ -864,6 +960,247 @@ void TestStripWithoutPeersIsNotSynchronized(QuicksilverGUI* window)
     window->setNumBlocks(8000, stale, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
     QCOMPARE(sync->text(), QStringLiteral("Waiting for peers"));
     QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("plain"));
+}
+
+//! An answered empty headers response establishes sync even when the tip is old.
+void TestAnsweredPeerWithNoHeadersAheadIsSynchronized(QuicksilverGUI* window)
+{
+    auto* sync = window->findChild<QLabel*>(QStringLiteral("benchStatusSync"));
+    auto* node_state = window->findChild<QLabel*>(QStringLiteral("homeNodeState"));
+    auto* progress = window->findChild<QProgressBar*>(QStringLiteral("homeNodeSync"));
+    auto* network_sync = window->findChild<QLabel*>(QStringLiteral("syncStatusValue"));
+    QVERIFY(sync && node_state && progress && network_sync);
+    window->setNumConnections(1);
+    window->setHeadersAnsweredPeers(0);
+    window->setNumBlocks(8294, QDateTime::currentDateTime().addSecs(-9 * 60 * 60), 0.01,
+                         SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    window->setHeadersAnsweredPeers(1);
+    QCOMPARE(sync->text(), QStringLiteral("Synchronized"));
+    QCOMPARE(node_state->text(), QStringLiteral("Synchronized"));
+    QCOMPARE(network_sync->text(), QStringLiteral("Synchronized"));
+    QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("good"));
+    QCOMPARE(progress->value(), 1000);
+}
+
+//! A real connection-count notification cannot substitute for a headers answer.
+void TestConnectedPeerWithoutHeadersAnswerIsConnecting(QuicksilverGUI* window)
+{
+    window->setNumBlocks(8294, QDateTime::currentDateTime(), 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    window->setHeadersAnsweredPeers(0);
+    window->setNumConnections(1);
+    auto* sync = window->findChild<QLabel*>(QStringLiteral("benchStatusSync"));
+    QVERIFY(sync);
+    QCOMPARE(sync->text(), QStringLiteral("Connecting"));
+}
+
+//! The first answer may reveal work without a connected-block event.
+void TestFirstHeadersAnswerReevaluatesKnownWork(QuicksilverGUI* window)
+{
+    const QDateTime stale = QDateTime::currentDateTime().addSecs(-9 * 60 * 60);
+    window->setNumConnections(1);
+    window->setHeadersAnsweredPeers(0);
+    window->setNumBlocks(8404, stale, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    window->setNumBlocks(8405, stale, 1.0, SyncType::HEADER_SYNC, SynchronizationState::POST_INIT);
+    window->setHeadersAnsweredPeers(1);
+    QVERIFY(!window->isReportedSynchronized());
+    window->setNumBlocks(8404, stale, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+}
+
+//! Progress is connected height divided by known best height, regardless of the legacy estimate.
+void TestSyncProgressUsesHeight(QuicksilverGUI* window)
+{
+    window->setNumConnections(1);
+    window->setHeadersAnsweredPeers(1);
+    window->setKnownBestHeight(8404, false);
+    window->setNumBlocks(8294, QDateTime::currentDateTime(), 0.01, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    auto* progress = window->findChild<QProgressBar*>(QStringLiteral("homeNodeSync"));
+    QVERIFY(progress);
+    QCOMPARE(progress->value(), 987);
+}
+
+//! The network row receives the same state word and height-based percentage.
+void TestNetworkSyncUsesSharedState(QuicksilverGUI* window)
+{
+    window->setNumConnections(1);
+    window->setHeadersAnsweredPeers(1);
+    window->setKnownBestHeight(8404, false);
+    window->setNumBlocks(8294, QDateTime::currentDateTime(), 0.01, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    auto* sync = window->findChild<QLabel*>(QStringLiteral("syncStatusValue"));
+    QVERIFY(sync);
+    QCOMPARE(sync->text(), QStringLiteral("Catching up 98.7%"));
+}
+
+#ifdef ENABLE_VAULT
+//! A vault opened after sync seeding receives the existing snapshot and later changes.
+void TestLateVaultNetworkSyncUsesSharedState(QuicksilverGUI* window, interfaces::Node& node)
+{
+    window->setNumConnections(1);
+    window->setHeadersAnsweredPeers(1);
+    window->setKnownBestHeight(8405, false);
+    window->setNumBlocks(8294, QDateTime::currentDateTime(), 0.01, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    auto* controller = window->getVaultController();
+    QVERIFY(controller);
+    std::vector<bilingual_str> warnings;
+    auto vault = node.vaultLoader().createVault("desktop-sync-state", SecureString{},
+        vault::VAULT_FLAG_DESCRIPTORS | vault::VAULT_FLAG_BLANK_VAULT, warnings);
+    QVERIFY(vault);
+    auto* model = controller->getOrCreateVault(std::move(*vault));
+    QVERIFY(model);
+    struct UnloadVault {
+        QPointer<VaultModel> model;
+        ~UnloadVault()
+        {
+            if (model) model->vault().remove();
+            QCoreApplication::processEvents();
+        }
+    } unload{model};
+    auto* frame = window->findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    VaultView* view = nullptr;
+    for (auto* candidate : frame->findChildren<VaultView*>()) {
+        if (candidate->getVaultModel() == model) view = candidate;
+    }
+    QVERIFY(view);
+    auto* sync = view->findChild<QLabel*>(QStringLiteral("syncStatusValue"));
+    QVERIFY(sync);
+    QCOMPARE(sync->text(), QStringLiteral("Catching up 98.7%"));
+    window->setHeadersAnsweredPeers(0);
+    QCOMPARE(sync->text(), QStringLiteral("Connecting"));
+    window->setHeadersAnsweredPeers(1);
+    window->setNumBlocks(8405, QDateTime::currentDateTime(), 0.01, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QCOMPARE(sync->text(), QStringLiteral("Synchronized"));
+}
+
+#endif
+
+//! A stale genesis tip is complete after a peer answers with no better header.
+void TestStaleGenesisAnsweredPeerIsSynchronized(interfaces::Node& node, OptionsModel* options_model, const NetworkStyle* network_style)
+{
+    QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate(QuicksilverGUI::DEFAULT_UIPLATFORM.c_str()));
+    ClientModel client_model(node, options_model);
+    QuicksilverGUI window(node, platform_style.data(), network_style);
+    struct DetachClient {
+        QuicksilverGUI& window;
+        ~DetachClient() { window.setClientModel(nullptr); }
+    } detach{window};
+    const QDateTime stale = QDateTime::currentDateTime().addSecs(-9 * 60 * 60);
+    interfaces::BlockAndHeaderTipInfo tip{0, stale.toSecsSinceEpoch(), 0, stale.toSecsSinceEpoch(), 0.01};
+    window.setClientModel(&client_model, &tip);
+    auto* sync = window.findChild<QLabel*>(QStringLiteral("benchStatusSync"));
+    auto* state = window.findChild<QLabel*>(QStringLiteral("homeNodeState"));
+    auto* progress = window.findChild<QProgressBar*>(QStringLiteral("homeNodeSync"));
+    auto* network_sync = window.findChild<QLabel*>(QStringLiteral("syncStatusValue"));
+    QVERIFY(sync && state && progress && network_sync);
+    window.setNumConnections(1);
+    window.setHeadersAnsweredPeers(0);
+    QCOMPARE(sync->text(), QStringLiteral("Connecting"));
+    QCOMPARE(state->text(), QStringLiteral("Connecting"));
+    QCOMPARE(network_sync->text(), QStringLiteral("Connecting"));
+    QCOMPARE(progress->value(), 0);
+    window.setHeadersAnsweredPeers(1);
+    QCOMPARE(sync->text(), QStringLiteral("Synchronized"));
+    QCOMPARE(state->text(), QStringLiteral("Synchronized"));
+    QCOMPARE(network_sync->text(), QStringLiteral("Synchronized"));
+    QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("good"));
+    QCOMPARE(progress->value(), 1000);
+}
+
+//! The live node-only GUI consumes sync notifications without any vault surfaces.
+void TestDisabledVaultStripSyncState(interfaces::Node& node, OptionsModel* options_model, const NetworkStyle* network_style)
+{
+    struct RestoreDisableVault {
+        std::optional<common::SettingsValue> previous;
+        RestoreDisableVault()
+        {
+            gArgs.LockSettings([this](const auto& settings) {
+                const auto it = settings.forced_settings.find("disablevault");
+                if (it != settings.forced_settings.end()) previous = it->second;
+            });
+            gArgs.ForceSetArg("-disablevault", "1");
+        }
+        ~RestoreDisableVault()
+        {
+            gArgs.LockSettings([this](auto& settings) {
+                if (previous) settings.forced_settings["disablevault"] = *previous;
+                else settings.forced_settings.erase("disablevault");
+            });
+        }
+    } restore_disable_vault;
+    QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate(QuicksilverGUI::DEFAULT_UIPLATFORM.c_str()));
+    ClientModel client_model(node, options_model);
+    QuicksilverGUI window(node, platform_style.data(), network_style);
+    struct DetachClient {
+        QuicksilverGUI& window;
+        ~DetachClient() { window.setClientModel(nullptr); }
+    } detach{window};
+    const QDateTime stale = QDateTime::currentDateTime().addSecs(-9 * 60 * 60);
+    interfaces::BlockAndHeaderTipInfo tip{8294, stale.toSecsSinceEpoch(), 8294, stale.toSecsSinceEpoch(), 0.01};
+    window.setClientModel(&client_model, &tip);
+    QVERIFY(!window.enableVault);
+    QVERIFY(!window.findChild<QWidget*>(QStringLiteral("vaultFrame")));
+    QVERIFY(!window.findChild<QWidget*>(QStringLiteral("desktopLaunchPage")));
+    QVERIFY(!window.findChild<QLabel*>(QStringLiteral("homeNodeState")));
+    QVERIFY(!window.findChild<QWidget*>(QStringLiteral("networkPage")));
+    auto* sync = window.findChild<QLabel*>(QStringLiteral("benchStatusSync"));
+    QVERIFY(sync);
+    window.setNumConnections(1);
+    window.setHeadersAnsweredPeers(0);
+    QCOMPARE(sync->text(), QStringLiteral("Connecting"));
+    QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("plain"));
+    window.setNumBlocks(8404, stale, 1.0, SyncType::HEADER_SYNC, SynchronizationState::POST_INIT);
+    window.setHeadersAnsweredPeers(1);
+    QCOMPARE(sync->text(), QStringLiteral("Catching up"));
+    QVERIFY(sync->toolTip().contains(QStringLiteral("110 blocks behind")));
+    window.setNumBlocks(8404, stale, 0.01, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QCOMPARE(sync->text(), QStringLiteral("Synchronized"));
+    QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("good"));
+}
+
+//! Connecting to a peer alone says nothing about that peer's chain.
+void TestFirstPeerBeforeHeadersIsNotSynchronized(QuicksilverGUI* window)
+{
+    auto* sync = window->findChild<QLabel*>(QStringLiteral("benchStatusSync"));
+    auto* node_state = window->findChild<QLabel*>(QStringLiteral("homeNodeState"));
+    auto* progress = window->findChild<QProgressBar*>(QStringLiteral("homeNodeSync"));
+    auto* network_sync = window->findChild<QLabel*>(QStringLiteral("syncStatusValue"));
+    QVERIFY(sync && node_state && progress && network_sync);
+    const QDateTime stale = QDateTime::currentDateTime().addSecs(-9 * 60 * 60);
+    window->setNumConnections(0);
+    window->setHeadersAnsweredPeers(0);
+    window->setNumBlocks(8294, stale, 1.0, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QCOMPARE(sync->text(), QStringLiteral("Waiting for peers"));
+    QCOMPARE(node_state->text(), QStringLiteral("No peers"));
+    QCOMPARE(network_sync->text(), QStringLiteral("Waiting for peers"));
+    QCOMPARE(progress->value(), 0);
+
+    window->setNumConnections(1);
+    QCOMPARE(sync->text(), QStringLiteral("Connecting"));
+    QCOMPARE(node_state->text(), QStringLiteral("Connecting"));
+    QCOMPARE(network_sync->text(), QStringLiteral("Connecting"));
+    QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("plain"));
+    QCOMPARE(node_state->property("benchTone").toString(), QStringLiteral("plain"));
+    QCOMPARE(progress->value(), 0);
+
+    window->setNumBlocks(8404, stale, 1.0, SyncType::HEADER_SYNC, SynchronizationState::POST_INIT);
+    window->setHeadersAnsweredPeers(1);
+    QCOMPARE(sync->text(), QStringLiteral("Catching up"));
+    QCOMPARE(node_state->text(), QStringLiteral("Catching up"));
+    QVERIFY(sync->toolTip().contains(QStringLiteral("110 blocks behind")));
+    QVERIFY(progress->value() > 0 && progress->value() < 1000);
+    QCOMPARE(network_sync->text(), QStringLiteral("Catching up 98.7%"));
+
+    window->setNumBlocks(8404, stale, 0.01, SyncType::BLOCK_SYNC, SynchronizationState::POST_INIT);
+    QCOMPARE(sync->text(), QStringLiteral("Synchronized"));
+    QCOMPARE(node_state->text(), QStringLiteral("Synchronized"));
+    QCOMPARE(network_sync->text(), QStringLiteral("Synchronized"));
+    QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("good"));
+    QCOMPARE(progress->value(), 1000);
+
+    window->setHeadersAnsweredPeers(0);
+    QCOMPARE(sync->text(), QStringLiteral("Connecting"));
+    QCOMPARE(node_state->text(), QStringLiteral("Connecting"));
+    QCOMPARE(network_sync->text(), QStringLiteral("Connecting"));
+    QCOMPARE(progress->value(), 0);
 }
 
 void TestLazyConsensusActivation(interfaces::Node& node, const NetworkStyle* network_style)
@@ -1151,6 +1488,38 @@ void AppTests::guiTests(QuicksilverGUI* window)
     TestAssayBenchChromeLayout(window);
     TestStatusStripFollowsMiningStatus(window);
     TestAssayBenchHome(window);
+    TestAnsweredPeerWithNoHeadersAheadIsSynchronized(window);
+    TestConnectedPeerWithoutHeadersAnswerIsConnecting(window);
+    TestFirstPeerBeforeHeadersIsNotSynchronized(window);
+    // Restore the connected tip for the independent first-answer scenario.
+    TestFirstHeadersAnswerReevaluatesKnownWork(window);
+    TestSyncProgressUsesHeight(window);
+    TestNetworkSyncUsesSharedState(window);
+#ifdef ENABLE_VAULT
+    TestLateVaultNetworkSyncUsesSharedState(window, m_app.node());
+#endif
+    window->setNumConnections(0);
+    window->setHeadersAnsweredPeers(-1);
+    auto* options_model = m_app.findChild<OptionsModel*>();
+    QVERIFY(options_model);
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    TestTranslatedSyncStateUsesValue(m_app.node(), options_model, network_style.data());
+    TestStaleGenesisAnsweredPeerIsSynchronized(m_app.node(), options_model, network_style.data());
+    const QWidgetList widgets_before_list{QApplication::allWidgets()};
+    const QSet<QWidget*> widgets_before{widgets_before_list.cbegin(), widgets_before_list.cend()};
+    TestDisabledVaultStripSyncState(m_app.node(), options_model, network_style.data());
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    const QWidgetList widgets_after{QApplication::allWidgets()};
+    QStringList extra_widgets;
+    for (QWidget* widget : widgets_after) {
+        if (!widgets_before.contains(widget)) {
+            extra_widgets.push_back(QStringLiteral("%1 objectName=\"%2\"")
+                                        .arg(QString::fromLatin1(widget->metaObject()->className()), widget->objectName()));
+        }
+    }
+    QVERIFY2(extra_widgets.isEmpty(),
+             qPrintable(QStringLiteral("widgets survived disabled-vault window destruction:\n%1")
+                            .arg(extra_widgets.join(QLatin1Char('\n')))));
     shutdownIsNotParkedBehindAModalDialog(window);
     ExpectModalWithoutNestedEventLoop("QMessageBox", [&] {
         window->message(QString(), QStringLiteral("client modal boom"), CClientUIInterface::MSG_ERROR);

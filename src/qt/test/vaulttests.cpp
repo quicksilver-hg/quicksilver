@@ -1206,7 +1206,8 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
 
             QCOMPARE(uri.count("amount=0.00000001"), 2);
             QCOMPARE(receiveRequestDialog->QObject::findChild<QLabel*>("amount_tag")->text(), QString("Amount:"));
-            QCOMPARE(receiveRequestDialog->QObject::findChild<QLabel*>("amount_content")->text(), QString::fromStdString("0.00000001 " + CURRENCY_UNIT));
+            QCOMPARE(vaultModel.getOptionsModel()->getDisplayUnit(), QuicksilverUnit::HGS);
+            QCOMPARE(receiveRequestDialog->QObject::findChild<QLabel*>("amount_content")->text(), QString::fromUtf8("1\xF0\x9F\x9C\x93"));
 
             QCOMPARE(uri.count("label=TEST_LABEL_1"), 2);
             QCOMPARE(receiveRequestDialog->QObject::findChild<QLabel*>("label_tag")->text(), QString("Label:"));
@@ -1808,14 +1809,17 @@ void VaultTests::benchTickerMatchesVaultBalances()
         QCOMPARE(window.findChild<QLabel*>(QStringLiteral("benchTickerTotal"))->text(),
                  format_amount(balances.balance + balances.unconfirmed_balance + balances.immature_balance + balances.delegated_balance, privacy));
         QCOMPARE(window.findChild<QWidget*>(QStringLiteral("benchTickerDelegatedBox"))->isHidden(), balances.delegated_balance == 0);
-        const QString unit = QuicksilverUnits::shortName(model.getOptionsModel()->getDisplayUnit());
+        const QString code = QuicksilverUnits::shortName(model.getOptionsModel()->getDisplayUnit());
+        const QString suffix = QuicksilverUnits::displaySuffix(model.getOptionsModel()->getDisplayUnit());
         const QList<QLabel*> units = window.findChild<QWidget*>(QStringLiteral("benchTickerFigures"))->findChildren<QLabel*>(QStringLiteral("benchTickerUnit"));
         QCOMPARE(units.size(), 5);
-        // The symbol is spelled Hg everywhere, the ticker included (F-442 owner walk).
-        QCOMPARE(unit, QStringLiteral("Hg"));
-        for (const QLabel* label : units) QCOMPARE(label->text(), unit);
+        // The code stays HgS. The ticker label is the sign.
+        QCOMPARE(code, QStringLiteral("HgS"));
+        QCOMPARE(suffix, QuicksilverUnits::displaySuffix(QuicksilverUnit::HGS));
+        for (const QLabel* label : units) QCOMPARE(label->text(), suffix);
     };
 
+    QVERIFY(model.getOptionsModel()->setOption(OptionsModel::DisplayUnit, QVariant::fromValue(QuicksilverUnit::HGS)));
     const interfaces::VaultBalances initial = model.getCachedBalance();
     QCOMPARE(initial.balance, 50 * COIN);
     QCOMPARE(initial.unconfirmed_balance, 2 * COIN);
@@ -2603,7 +2607,7 @@ void VaultTests::homeLaysOutLedgerBesideInstruments()
     launch->setConsensusEnabled(true);
     launch->setPeerCount(8);
     launch->setChainTip(105, QDateTime::currentDateTime());
-    launch->setSyncState(true, 1.0);
+    launch->setSyncState(/*blocks=*/105, /*answered=*/8, /*behind_known_headers=*/false, /*progress=*/1.0);
     check("consensus on");
     if (QTest::currentTestFailed()) return;
     launch->setPeerCount(0);
@@ -2825,6 +2829,17 @@ void VaultTests::aboutDialogWrapsAtWords()
             QVERIFY2(start == 0 || !content.at(start - 1).isLetter() || !content.at(start).isLetter(), qPrintable(content));
         }
     }
+}
+
+void VaultTests::aboutDialogLinksSourceOnce()
+{
+    HelpMessageDialog dialog(nullptr, /*about=*/true);
+    auto* text = dialog.findChild<QTextBrowser*>(QStringLiteral("aboutMessage"));
+    QVERIFY(text);
+    const QString html = text->toHtml();
+    QCOMPARE(html.count(QStringLiteral("<a href=\"https://github.com/quicksilver-hg/quicksilver\">")), 1);
+    QVERIFY(html.contains(QStringLiteral("Quicksilver is open source. Source code, contribution guidelines, and further information are at")));
+    QVERIFY(!html.contains(QStringLiteral("Please contribute")));
 }
 
 void VaultTests::mineMintPageRendersStatus()
@@ -3233,7 +3248,7 @@ void VaultTests::networkPageDiagnosesBootstrapAndAddsPeers()
     QVERIFY(!diagnosis->isVisibleTo(&page));
     QVERIFY(!peer_button->isEnabled());
 
-    page.updateStatus(/*peers=*/0, /*verification_progress=*/1.0, /*synced=*/true);
+    page.updateStatus(/*peers=*/0, ClientModel::SyncState::Synchronized, /*progress=*/1.0);
     QVERIFY(diagnosis->isVisibleTo(&page));
     // Sandbox ships no fixed seeds at all, which is a different obstacle from the one
     // main and publictest have, and it must not be described as a Tor problem.
@@ -3242,7 +3257,7 @@ void VaultTests::networkPageDiagnosesBootstrapAndAddsPeers()
     QVERIFY(peer_button->isEnabled());
 
     // A peer retires the diagnosis: zero is the only count that needs explaining.
-    page.updateStatus(2, 1.0, true);
+    page.updateStatus(2, ClientModel::SyncState::Synchronized, 1.0);
     QVERIFY(!diagnosis->isVisibleTo(&page));
 
     QSignalSpy add_spy(&page, &NetworkPage::addPeerRequested);
@@ -3714,14 +3729,14 @@ void VaultTests::networkPageFormatsStatus()
     QCOMPARE(page.findChild<QLabel*>("peerCountValue")->text(), QString("Unavailable"));
     QCOMPARE(page.findChild<QLabel*>("syncStatusValue")->text(), QString("Not running"));
 
-    page.updateStatus(0, 0.5, false);
+    page.updateStatus(0, ClientModel::SyncState::CatchingUp, 0.5);
     QCOMPARE(page.findChild<QLabel*>("networkStatusValue")->text(), QString("Offline"));
     QCOMPARE(page.findChild<QLabel*>("peerCountValue")->text(), QString("0"));
 
-    page.updateStatus(8, 1.0, true);
+    page.updateStatus(8, ClientModel::SyncState::Synchronized, 1.0);
     QCOMPARE(page.findChild<QLabel*>("networkStatusValue")->text(), QString("Online"));
     QCOMPARE(page.findChild<QLabel*>("peerCountValue")->text(), QString("8"));
-    QCOMPARE(page.findChild<QLabel*>("syncStatusValue")->text(), QString("Synced"));
+    QCOMPARE(page.findChild<QLabel*>("syncStatusValue")->text(), QString("Synchronized"));
 }
 
 void VaultTests::consensusCancelDoesNotShowStarting()
@@ -4841,6 +4856,69 @@ void VaultTests::coinControlDialogQuantityAndBytesUseSeparateRows()
     }
 
     if (!quantityAndBytesUseSeparateRows(dialog.get(), messages)) return;
+}
+
+//! Each copy action reads the stored amount, not the label. The label is a
+//! different number on purpose, so a cut-at-the-space or a comma strip still fails.
+void VaultTests::copyAmountActionsCopyTheBareNumber()
+{
+    CoinControlFormSetup setup(m_node);
+    if (!setup.ok) return;
+    QVERIFY(setup.options.setOption(OptionsModel::DisplayUnit, QVariant::fromValue(QuicksilverUnit::HG)));
+
+    const CAmount one_thousand = 1234 * COIN;
+    const CAmount one_thousand_one = 1235 * COIN;
+    const CAmount row_amount = 12345 * COIN + COIN / 4;
+    const CAmount change_amount = 50 * COIN + COIN / 2;
+    const QString misleading = QStringLiteral("9,999.99999999 Hg");
+    QStringList failures;
+
+    const auto check = [&](const char* name, const QString& expected) {
+        const QString actual = QApplication::clipboard()->text();
+        if (actual != expected) {
+            failures << QStringLiteral("%1: clipboard \"%2\", expected \"%3\"").arg(QString::fromLatin1(name), actual, expected);
+        }
+    };
+
+    vault::CCoinControl coin_control;
+    CoinControlDialog dialog(coin_control, setup.model.get(), setup.style.get());
+    auto* amount = dialog.findChild<QLabel*>(QStringLiteral("labelCoinControlAmount"));
+    auto* change = dialog.findChild<QLabel*>(QStringLiteral("labelCoinControlChange"));
+    QVERIFY(amount);
+    QVERIFY(change);
+
+    amount->setText(misleading);
+    amount->setProperty(CoinControlDialog::kRawAmountProperty, static_cast<qlonglong>(one_thousand));
+    change->setText(misleading);
+    change->setProperty(CoinControlDialog::kRawAmountProperty, static_cast<qlonglong>(one_thousand_one));
+    QVERIFY(QMetaObject::invokeMethod(&dialog, "clipboardAmount"));
+    check("coin control amount", QStringLiteral("1234.00000000"));
+    QVERIFY(QMetaObject::invokeMethod(&dialog, "clipboardChange"));
+    check("coin control change", QStringLiteral("1235.00000000"));
+
+    auto* row = new QTreeWidgetItem();
+    row->setText(1, QStringLiteral("9,999.99999999"));
+    row->setData(1, Qt::UserRole, QVariant(static_cast<qlonglong>(row_amount)));
+    dialog.copyContextAmountForTesting(row);
+    check("coin control row", QStringLiteral("12345.25000000"));
+    delete row;
+
+    SendCoinsDialog transfer(setup.style.get());
+    transfer.setModel(setup.model.get());
+    auto* transfer_amount = transfer.findChild<QLabel*>(QStringLiteral("labelCoinControlAmount"));
+    auto* transfer_change = transfer.findChild<QLabel*>(QStringLiteral("labelCoinControlChange"));
+    QVERIFY(transfer_amount);
+    QVERIFY(transfer_change);
+    transfer_amount->setText(misleading);
+    transfer_amount->setProperty(CoinControlDialog::kRawAmountProperty, static_cast<qlonglong>(one_thousand));
+    transfer_change->setText(misleading);
+    transfer_change->setProperty(CoinControlDialog::kRawAmountProperty, static_cast<qlonglong>(change_amount));
+    QVERIFY(QMetaObject::invokeMethod(&transfer, "coinControlClipboardAmount"));
+    check("transfer amount", QStringLiteral("1234.00000000"));
+    QVERIFY(QMetaObject::invokeMethod(&transfer, "coinControlClipboardChange"));
+    check("transfer change", QStringLiteral("50.50000000"));
+
+    QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
 }
 
 //! Transfer: a recipients panel of two-line rows with the inputs line under

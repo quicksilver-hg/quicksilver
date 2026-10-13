@@ -4,14 +4,21 @@
 
 #include <qt/ledgerrows.h>
 
+#include <qt/guiutil.h>
 #include <qt/quicksilverstyle.h>
 #include <qt/transactionrecord.h>
 #include <qt/transactiontablemodel.h>
 
+#include <QAbstractItemView>
+#include <QApplication>
 #include <QCoreApplication>
 #include <QDate>
 #include <QDateTime>
 #include <QFontDatabase>
+#include <QStyledItemDelegate>
+#include <QStyle>
+#include <QTextFormat>
+#include <QTextLayout>
 #include <QHash>
 #include <QLocale>
 #include <QPainter>
@@ -23,6 +30,67 @@ using QuicksilverStyle::Token;
 
 namespace {
 QString tr(const char* text) { return QCoreApplication::translate("LedgerRows", text); }
+
+class AmountSuffixDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
+    {
+        QStyleOptionViewItem opt = option;
+        initStyleOption(&opt, index);
+        const QString text = opt.text;
+        const QString sign = QuicksilverUnits::displaySuffix(QuicksilverUnit::HGS);
+        const int at = text.lastIndexOf(sign);
+        if (at < 0) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+        opt.text.clear();
+        QStyle* style = opt.widget ? opt.widget->style() : QApplication::style();
+        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
+
+        const QRect text_rect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, opt.widget);
+        const QColor body = opt.palette.color(opt.state & QStyle::State_Selected ? QPalette::HighlightedText : QPalette::Text);
+        QTextCharFormat plain;
+        plain.setForeground(body);
+        QTextCharFormat accent;
+        accent.setForeground(Color(Token::Cinnabar));
+        QTextLayout layout(text, opt.font);
+        QVector<QTextLayout::FormatRange> ranges(2);
+        ranges[0].start = 0;
+        ranges[0].length = at;
+        ranges[0].format = plain;
+        ranges[1].start = at;
+        ranges[1].length = text.size() - at;
+        ranges[1].format = accent;
+        layout.setFormats(ranges);
+        layout.beginLayout();
+        QTextLine line = layout.createLine();
+        line.setLineWidth(text_rect.width());
+        layout.endLayout();
+        qreal x = text_rect.left();
+        const qreal used = line.naturalTextWidth();
+        if (opt.displayAlignment & Qt::AlignRight) x = text_rect.right() - used + 1;
+        else if (opt.displayAlignment & Qt::AlignHCenter) x = text_rect.left() + (text_rect.width() - used) / 2.0;
+        const qreal y = text_rect.top() + (text_rect.height() - line.height()) / 2.0;
+        painter->save();
+        painter->setClipRect(opt.rect);
+        layout.draw(painter, QPointF(x, y));
+        painter->restore();
+    }
+};
+
+} // namespace
+
+void ColorCinnabarAmountSuffix(QAbstractItemView* view)
+{
+    if (!view) return;
+    view->setItemDelegateForColumn(TransactionTableModel::Amount, new AmountSuffixDelegate(view));
+}
+
+namespace {
 
 int Status(const QModelIndex& index) { return index.data(TransactionTableModel::StatusRole).toInt(); }
 
@@ -142,7 +210,9 @@ QVariant LedgerRows::data(const QModelIndex& index, int role) const
             return Color(Token::Silver);
         }
     }
-    if (role == Qt::FontRole && column == TransactionTableModel::Amount) return QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    if (role == Qt::FontRole && column == TransactionTableModel::Amount) {
+        return GUIUtil::WithUnitGlyph(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    }
     if (role == Qt::TextAlignmentRole) {
         return QVariant(column == TransactionTableModel::Amount ? (Qt::AlignRight | Qt::AlignVCenter) : (Qt::AlignLeft | Qt::AlignVCenter));
     }

@@ -50,5 +50,6 @@
     </qresource>
     <qresource prefix="/fonts">
         <file alias="monospace">res/fonts/RobotoMono-Bold.ttf</file>
+        <file alias="unitglyph">res/fonts/cinnabar_glyph.ttf</file>
     </qresource>
 </RCC>

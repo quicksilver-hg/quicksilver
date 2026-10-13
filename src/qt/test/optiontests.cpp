@@ -17,6 +17,8 @@
 #include <qt/test/util.h>
 #include <test/util/setup_common.h>
 
+#include <QByteArray>
+#include <QDataStream>
 #include <QSettings>
 #include <QAbstractButton>
 #include <QApplication>
@@ -33,6 +35,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSpinBox>
+#include <QStringList>
 #include <QTest>
 #include <QTabWidget>
 #include <QTabBar>
@@ -113,8 +116,8 @@ void OptionTests::legacyDisplayUnitSettingIsIgnored()
         QVERIFY(options.Init(error));
 
         // The foreign key seeds nothing: the unit is the default.
-        QCOMPARE(options.getDisplayUnit(), QuicksilverUnit::HG);
-        QCOMPARE(settings.value(current_key).value<QuicksilverUnit>(), QuicksilverUnit::HG);
+        QCOMPARE(options.getDisplayUnit(), QuicksilverUnit::HGS);
+        QCOMPARE(settings.value(current_key).value<QuicksilverUnit>(), QuicksilverUnit::HGS);
         // And it is left alone rather than consumed - it is not ours to erase.
         QVERIFY(settings.contains(foreign_key));
 
@@ -157,6 +160,70 @@ void OptionTests::displayUnitSerializationIsCompact()
 
         settings.remove(current_key);
     }
+}
+
+void OptionTests::newInstallShowsCinnabarAndKeepsAStoredUnit()
+{
+    const QString key{QStringLiteral("DisplayQuicksilverUnit")};
+    struct Case {
+        const char* name;
+        bool present;
+        QVariant stored;
+        QuicksilverUnit expected;
+    };
+    const Case cases[]{
+        {"fresh", false, {}, QuicksilverUnit::HGS},
+        {"stored Hg", true, QVariant::fromValue(qint8{0}), QuicksilverUnit::HG},
+        {"stored HgS", true, QVariant::fromValue(qint8{1}), QuicksilverUnit::HGS},
+        {"unreadable number", true, QVariant::fromValue(qint8{9}), QuicksilverUnit::HGS},
+        {"unreadable text", true, QVariant(QStringLiteral("not-a-unit")), QuicksilverUnit::HGS},
+    };
+
+    QSettings settings;
+    QStringList failures;
+    for (const Case& item : cases) {
+        if (item.present) {
+            settings.setValue(key, item.stored);
+        } else {
+            settings.remove(key);
+        }
+        settings.sync();
+
+        OptionsModel options{m_node};
+        bilingual_str error;
+        if (!options.Init(error)) {
+            failures << QStringLiteral("%1: init failed").arg(QLatin1String(item.name));
+            continue;
+        }
+        const auto got = static_cast<int>(options.getDisplayUnit());
+        const auto stored = static_cast<int>(settings.value(key).value<QuicksilverUnit>());
+        const auto expected = static_cast<int>(item.expected);
+        if (got != expected || stored != expected) {
+            failures << QStringLiteral("%1: unit %2, stored %3, expected %4")
+                            .arg(QLatin1String(item.name))
+                            .arg(got)
+                            .arg(stored)
+                            .arg(expected);
+        }
+    }
+
+    // An unknown stored code is not a unit this install recognizes.
+    QByteArray bytes;
+    {
+        QDataStream out(&bytes, QIODevice::WriteOnly);
+        out << qint8{7};
+    }
+    QuicksilverUnit streamed{QuicksilverUnit::HG};
+    {
+        QDataStream in(bytes);
+        in >> streamed;
+    }
+    if (streamed != QuicksilverUnit::HGS) {
+        failures << QStringLiteral("unknown code: %1").arg(static_cast<int>(streamed));
+    }
+
+    settings.remove(key);
+    QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
 }
 
 void OptionTests::languageRowIsHiddenWhileNoCatalogueShips()

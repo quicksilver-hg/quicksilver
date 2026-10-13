@@ -8,6 +8,7 @@
 #include <interfaces/node.h>
 #include <interfaces/vault.h>
 #include <qt/benchpanel.h>
+#include <qt/clientmodel.h>
 #include <qt/guiconstants.h>
 #include <qt/guiutil.h>
 #include <qt/ledgerrows.h>
@@ -185,6 +186,7 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     m_ledger_table->setObjectName(QStringLiteral("homeLedgerTable"));
     m_ledger_table->setProperty("class", QStringLiteral("benchTable"));
     m_ledger_table->setModel(m_ledger_rows);
+    ColorCinnabarAmountSuffix(m_ledger_table);
     for (const auto& signal : {&QAbstractItemModel::rowsInserted, &QAbstractItemModel::rowsRemoved}) {
         connect(m_ledger_rows, signal, this, &DesktopLaunchPage::fitLedgerColumns);
     }
@@ -467,7 +469,7 @@ void DesktopLaunchPage::setVaultModel(VaultModel* model)
             }
         }
     }
-    const QuicksilverUnit unit = model && model->getOptionsModel() ? model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HG;
+    const QuicksilverUnit unit = model && model->getOptionsModel() ? model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HGS;
     m_ledger_rows->setDisplay(unit, m_privacy);
     m_ledger_table->setVisible(model != nullptr);
     m_ledger_open_full->setVisible(model != nullptr);
@@ -532,10 +534,12 @@ void DesktopLaunchPage::setChainTip(int height, const QDateTime& block_time)
     m_node_last_block->setText(tr("%1 ago").arg(GUIUtil::formatNiceTimeOffset(age)));
 }
 
-void DesktopLaunchPage::setSyncState(bool synced, double progress)
+void DesktopLaunchPage::setSyncState(int blocks, int answered, bool behind_known_headers, double progress)
 {
     m_have_sync = true;
-    m_synced = synced;
+    m_sync_blocks = blocks;
+    m_sync_answered = answered;
+    m_sync_behind_known_headers = behind_known_headers;
     m_node_sync->setValue(static_cast<int>(qBound(0.0, progress, 1.0) * 1000.0 + 0.5));
     renderConsensusCards();
 }
@@ -606,16 +610,15 @@ void DesktopLaunchPage::renderConsensusCards()
     SetTone(m_consensus_summary, "warn");
     m_consensus_button->setText(enabled ? tr("View status") : tr("Review cost"));
 
-    QString node_state = none;
-    if (m_peers == 0) {
-        node_state = tr("No peers");
-    } else if (m_have_sync) {
-        node_state = m_synced ? tr("Synchronized") : tr("Catching up");
-    } else {
-        node_state = tr("Connecting");
-    }
+    // Before the first sync snapshot, peer-only callers retain the launch fallback.
+    const ClientModel::SyncState sync_state = m_have_sync
+        ? ClientModel::syncState(m_sync_blocks, m_peers, m_sync_answered, m_sync_behind_known_headers)
+        : (m_peers == 0 ? ClientModel::SyncState::WaitingForPeers : ClientModel::SyncState::Connecting);
+    const QString node_state = sync_state == ClientModel::SyncState::WaitingForPeers
+        ? tr("No peers")
+        : ClientModel::syncStateText(sync_state);
     m_node_state->setText(node_state);
-    SetTone(m_node_state, m_have_sync && m_synced && m_peers != 0 ? "good" : "plain");
+    SetTone(m_node_state, sync_state == ClientModel::SyncState::Synchronized ? "good" : "plain");
 
     // Once the miner reports, the row uses the strip's Idle / Active / Halted.
     m_mining_state->setText(!enabled ? tr("Locked") : (m_have_mining_status ? m_mining_word : tr("Available")));
@@ -644,7 +647,7 @@ void DesktopLaunchPage::renderConsensusCards()
 void DesktopLaunchPage::setPrivacy(bool privacy)
 {
     m_privacy = privacy;
-    const QuicksilverUnit unit = m_ledger_model && m_ledger_model->getOptionsModel() ? m_ledger_model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HG;
+    const QuicksilverUnit unit = m_ledger_model && m_ledger_model->getOptionsModel() ? m_ledger_model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HGS;
     m_ledger_rows->setDisplay(unit, m_privacy);
     if (m_has_vault) renderVaultRows();
 }
@@ -664,7 +667,7 @@ void DesktopLaunchPage::renderMaturing()
         }
     }
     const qsmaturity::MaturingSummary summary{qsmaturity::SummarizeMaturing(maturing)};
-    const QuicksilverUnit unit = m_ledger_model && m_ledger_model->getOptionsModel() ? m_ledger_model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HG;
+    const QuicksilverUnit unit = m_ledger_model && m_ledger_model->getOptionsModel() ? m_ledger_model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HGS;
     const QString hint = qsmaturity::FormatMaturingHint(summary, unit, QuicksilverUnits::SeparatorStyle::ALWAYS, m_privacy,
                                                         Params().GetConsensus().nPowTargetSpacing);
     m_vault_maturing->setText(hint.isEmpty() ? QString() : tr("Maturing: %1").arg(hint));

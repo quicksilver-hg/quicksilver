@@ -22,6 +22,7 @@
 #include <netbase.h>
 #include <netmessagemaker.h>
 #include <node/blockstorage.h>
+#include <node/interface_ui.h>
 #include <node/timeoffsets.h>
 #include <node/txdownloadman.h>
 #include <node/warnings.h>
@@ -241,6 +242,9 @@ struct Peer {
 
     /** Whether this peer relays txs via wtxid */
     std::atomic<bool> m_wtxid_relay{false};
+
+    /** Whether a headers-processing call has completed for this peer. */
+    std::atomic<bool> m_has_answered_headers{false};
     struct TxRelay {
         mutable RecursiveMutex m_tx_inventory_mutex;
         /** A filter of all the (w)txids that the peer has announced to
@@ -463,10 +467,10 @@ public:
 
     /** Implement NetEventsInterface */
     void InitializeNode(const CNode& node, ServiceFlags our_services) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_tx_download_mutex);
-    void FinalizeNode(const CNode& node) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_headers_presync_mutex, !m_tx_download_mutex);
+    void FinalizeNode(const CNode& node) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_headers_presync_mutex, !m_tx_download_mutex, !m_headers_answered_mutex);
     bool HasAllDesirableServiceFlags(ServiceFlags services) const override;
     bool ProcessMessages(CNode* pfrom, std::atomic<bool>& interrupt) override
-        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, !m_headers_presync_mutex, g_msgproc_mutex, !m_tx_download_mutex);
+        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, !m_headers_presync_mutex, g_msgproc_mutex, !m_tx_download_mutex, !cs_main, !m_headers_answered_mutex);
     bool SendMessages(CNode* pto) override
         EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, g_msgproc_mutex, !m_tx_download_mutex);
 
@@ -477,6 +481,7 @@ public:
         EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
     bool GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) const override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
     std::vector<TxOrphanage::OrphanTxBase> GetOrphanTransactions() override EXCLUSIVE_LOCKS_REQUIRED(!m_tx_download_mutex);
+    int GetHeadersAnsweredPeers() const override { return m_headers_answered_peers.load(); }
     PeerManagerInfo GetInfo() const override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
     void SendPings() override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
     void RelayTransaction(const uint256& txid, const uint256& wtxid) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex);
@@ -488,7 +493,7 @@ public:
     void UnitTestMisbehaving(NodeId peer_id) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex) { Misbehaving(*Assert(GetPeerRef(peer_id)), ""); };
     void ProcessMessage(CNode& pfrom, const std::string& msg_type, DataStream& vRecv,
                         const std::chrono::microseconds time_received, const std::atomic<bool>& interruptMsgProc) override
-        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, !m_headers_presync_mutex, g_msgproc_mutex, !m_tx_download_mutex);
+        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, !m_headers_presync_mutex, g_msgproc_mutex, !m_tx_download_mutex, !cs_main, !m_headers_answered_mutex);
     void UpdateLastBlockAnnounceTime(NodeId node, int64_t time_in_seconds) override;
     ServiceFlags GetDesirableServiceFlags(ServiceFlags services) const override;
 
@@ -591,6 +596,10 @@ private:
                                std::vector<CBlockHeader>&& headers,
                                bool via_compact_block)
         EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_headers_presync_mutex, g_msgproc_mutex);
+    /** Record the first completed headers-processing call for a peer. */
+    void RecordHeadersAnswered(Peer& peer) EXCLUSIVE_LOCKS_REQUIRED(!cs_main, !m_headers_answered_mutex);
+    void UpdateHeadersAnsweredPeers(int change) EXCLUSIVE_LOCKS_REQUIRED(!cs_main, m_headers_answered_mutex);
+
     /** Various helpers for headers processing, invoked by ProcessHeadersMessage() */
     /** Return true if headers are continuous and have valid proof-of-work (DoS points assigned on failure) */
     bool CheckHeadersPoW(const std::vector<CBlockHeader>& headers, const Consensus::Params& consensusParams, Peer& peer);
@@ -767,6 +776,11 @@ private:
 
     /** Number of peers with wtxid relay. */
     std::atomic<int> m_wtxid_relay_peers{0};
+
+    /** Serialize count changes and their notifications so listeners receive them in order. */
+    Mutex m_headers_answered_mutex;
+    /** Number of connected peers that have completed headers processing. */
+    std::atomic<int> m_headers_answered_peers{0};
 
     /** Number of outbound peers with m_chain_sync.m_protect. */
     int m_outbound_peers_with_protect_from_disconnect GUARDED_BY(cs_main) = 0;
@@ -1486,6 +1500,7 @@ void PeerManagerImpl::ReattemptInitialBroadcast(CScheduler& scheduler)
 void PeerManagerImpl::FinalizeNode(const CNode& node)
 {
     NodeId nodeid = node.GetId();
+    bool has_answered_headers{false};
     {
     LOCK(cs_main);
     {
@@ -1498,6 +1513,7 @@ void PeerManagerImpl::FinalizeNode(const CNode& node)
         assert(peer != nullptr);
         m_wtxid_relay_peers -= peer->m_wtxid_relay;
         assert(m_wtxid_relay_peers >= 0);
+        has_answered_headers = peer->m_has_answered_headers;
     }
     CNodeState *state = State(nodeid);
     assert(state != nullptr);
@@ -1538,6 +1554,10 @@ void PeerManagerImpl::FinalizeNode(const CNode& node)
         WITH_LOCK(m_tx_download_mutex, m_txdownloadman.CheckIsEmpty());
     }
     } // cs_main
+    if (has_answered_headers) {
+        LOCK(m_headers_answered_mutex);
+        UpdateHeadersAnsweredPeers(-1);
+    }
     if (node.fSuccessfullyConnected &&
         !node.IsBlockOnlyConn() && !node.IsInboundConn()) {
         // Only change visible addrman state for full outbound peers.  We don't
@@ -2687,6 +2707,23 @@ void PeerManagerImpl::UpdatePeerStateForReceivedHeaders(CNode& pfrom, Peer& peer
             nodestate->m_chain_sync.m_protect = true;
             ++m_outbound_peers_with_protect_from_disconnect;
         }
+    }
+}
+
+void PeerManagerImpl::UpdateHeadersAnsweredPeers(int change)
+{
+    AssertLockNotHeld(cs_main);
+    AssertLockHeld(m_headers_answered_mutex);
+    const int count{m_headers_answered_peers.fetch_add(change) + change};
+    assert(count >= 0);
+    uiInterface.NotifyHeadersAnsweredPeersChanged(count);
+}
+
+void PeerManagerImpl::RecordHeadersAnswered(Peer& peer)
+{
+    LOCK(m_headers_answered_mutex);
+    if (!peer.m_has_answered_headers.exchange(true)) {
+        UpdateHeadersAnsweredPeers(1);
     }
 }
 
@@ -4254,7 +4291,9 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
             // the peer if the header turns out to be for an invalid block.
             // Note that if a peer tries to build on an invalid chain, that
             // will be detected and the peer will be disconnected/discouraged.
-            return ProcessHeadersMessage(pfrom, *peer, {cmpctblock.header}, /*via_compact_block=*/true);
+            ProcessHeadersMessage(pfrom, *peer, {cmpctblock.header}, /*via_compact_block=*/true);
+            RecordHeadersAnswered(*peer);
+            return;
         }
 
         if (fBlockReconstructed) {
@@ -4323,6 +4362,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         }
 
         ProcessHeadersMessage(pfrom, *peer, std::move(headers), /*via_compact_block=*/false);
+        RecordHeadersAnswered(*peer);
 
         // Check if the headers presync progress needs to be reported to validation.
         // This needs to be done without holding the m_headers_presync_mutex lock.

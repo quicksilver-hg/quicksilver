@@ -5,8 +5,11 @@
 
 #include <qt/quicksilverunits.h>
 
+#include <qt/quicksilverstyle.h>
+
 #include <consensus/amount.h>
 
+#include <QRegularExpression>
 #include <QStringList>
 
 #include <cassert>
@@ -45,6 +48,18 @@ QString QuicksilverUnits::shortName(Unit unit)
     assert(false);
 }
 
+QString QuicksilverUnits::displaySuffix(Unit unit)
+{
+    switch (unit) {
+    case Unit::HG: return QStringLiteral("Hg");
+    case Unit::HGS: {
+        const char32_t sign = 0x1F713;
+        return QString::fromUcs4(&sign, 1);
+    }
+    } // no default case, so the compiler can warn about missing cases
+    assert(false);
+}
+
 QString QuicksilverUnits::description(Unit unit)
 {
     switch (unit) {
@@ -72,6 +87,42 @@ int QuicksilverUnits::decimals(Unit unit)
     assert(false);
 }
 
+namespace {
+//! Commas between significant digits. Padding is applied afterwards, so a
+//! comma never lands in the spaces that trimmed() is expected to drop.
+QString GroupDigits(QString digits)
+{
+    const int q_size = digits.size();
+    for (int i = 3; i < q_size; i += 3) {
+        digits.insert(q_size - i, QLatin1Char(','));
+    }
+    return digits;
+}
+
+int GroupedWidth(int digits)
+{
+    if (digits <= 0) return 0;
+    return digits + (digits - 1) / 3;
+}
+
+//! Space, the thin space, and the no-break space. None of these is a decimal mark.
+QString StripAmountSpaces(QString text)
+{
+    text.remove(QLatin1Char(' '));
+    text.remove(QChar(0x2009));
+    text.remove(QChar(0x00A0));
+    return text;
+}
+
+//! Spaces, then grouping commas. Callers check the commas before this runs.
+QString StripAmountSeparators(QString text)
+{
+    text = StripAmountSpaces(text);
+    text.remove(QLatin1Char(','));
+    return text;
+}
+} // namespace
+
 QString QuicksilverUnits::format(Unit unit, const CAmount& nIn, bool fPlus, SeparatorStyle separators, bool justify)
 {
     // Note: not using straight sprintf here because we do NOT want
@@ -81,18 +132,16 @@ QString QuicksilverUnits::format(Unit unit, const CAmount& nIn, bool fPlus, Sepa
     int num_decimals = decimals(unit);
     qint64 n_abs = (n > 0 ? n : -n);
     qint64 quotient = n_abs / coin;
+    const bool group = separators != SeparatorStyle::NEVER;
     QString quotient_str = QString::number(quotient);
-    if (justify) {
-        quotient_str = quotient_str.rightJustified(MAX_DIGITS_HG - num_decimals, ' ');
+    if (group) {
+        quotient_str = GroupDigits(quotient_str);
     }
-
-    // Use SI-style thin space separators as these are locale independent and can't be
-    // confused with the decimal marker.
-    QChar thin_sp(THIN_SP_CP);
-    int q_size = quotient_str.size();
-    if (separators == SeparatorStyle::ALWAYS || (separators == SeparatorStyle::STANDARD && q_size > 4))
-        for (int i = 3; i < q_size; i += 3)
-            quotient_str.insert(q_size - i, thin_sp);
+    if (justify) {
+        const int digits = MAX_DIGITS_HG - num_decimals;
+        const int width = group ? GroupedWidth(digits) : digits;
+        quotient_str = quotient_str.rightJustified(width, QLatin1Char(' '));
+    }
 
     if (n < 0)
         quotient_str.insert(0, '-');
@@ -110,23 +159,23 @@ QString QuicksilverUnits::format(Unit unit, const CAmount& nIn, bool fPlus, Sepa
 
 
 // NOTE: Using formatWithUnit in an HTML context risks wrapping
-// quantities at the thousands separator. More subtly, it also results
-// in a standard space rather than a thin space, due to a bug in Qt's
-// XML whitespace canonicalisation
-//
-// Please take care to use formatHtmlWithUnit instead, when
-// appropriate.
+// quantities at a thousands comma. formatHtmlWithUnit keeps the amount
+// on one line.
 
 QString QuicksilverUnits::formatWithUnit(Unit unit, const CAmount& amount, bool plussign, SeparatorStyle separators)
 {
-    return format(unit, amount, plussign, separators) + QString(" ") + shortName(unit);
+    return format(unit, amount, plussign, separators) + displaySuffix(unit);
 }
 
 QString QuicksilverUnits::formatHtmlWithUnit(Unit unit, const CAmount& amount, bool plussign, SeparatorStyle separators)
 {
-    QString str(formatWithUnit(unit, amount, plussign, separators));
-    str.replace(QChar(THIN_SP_CP), QString(THIN_SP_HTML));
-    return QString("<span style='white-space: nowrap;'>%1</span>").arg(str);
+    const QString amount_text = format(unit, amount, plussign, separators).toHtmlEscaped();
+    QString suffix = displaySuffix(unit).toHtmlEscaped();
+    if (unit == Unit::HGS) {
+        const QString color = QuicksilverStyle::Color(QuicksilverStyle::Token::Cinnabar).name();
+        suffix = QStringLiteral("<span style='color:%1;'>%2</span>").arg(color, suffix);
+    }
+    return QStringLiteral("<span style='white-space: nowrap;'>%1%2</span>").arg(amount_text, suffix);
 }
 
 QString QuicksilverUnits::formatWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy)
@@ -138,7 +187,7 @@ QString QuicksilverUnits::formatWithPrivacy(Unit unit, const CAmount& amount, Se
     } else {
         value = format(unit, amount, false, separators, true);
     }
-    return value + QString(" ") + shortName(unit);
+    return value + displaySuffix(unit);
 }
 
 QString QuicksilverUnits::formatInlineValueWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy)
@@ -152,7 +201,7 @@ QString QuicksilverUnits::formatInlineValueWithPrivacy(Unit unit, const CAmount&
 QString QuicksilverUnits::formatInlineWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy)
 {
     // Keep the stacked labels' formatting and privacy mask, but remove the
-    // column padding (including thin spaces inserted into it by ALWAYS).
+    // column padding. Grouping commas sit between digits, so they survive.
     return formatWithPrivacy(unit, amount, separators, privacy).trimmed();
 }
 
@@ -163,8 +212,31 @@ bool QuicksilverUnits::parse(Unit unit, const QString& value, CAmount* val_out)
     }
     int num_decimals = decimals(unit);
 
-    // Ignore spaces and thin spaces when parsing
-    QStringList parts = removeSpaces(value).split(".");
+    // A comma after the decimal point is not a group separator. `40.000,5`
+    // is refused rather than read as forty or as forty thousand.
+    const int dot = value.indexOf(QLatin1Char('.'));
+    if (dot >= 0 && value.indexOf(QLatin1Char(','), dot + 1) >= 0) {
+        return false;
+    }
+
+    // Spaces are ignored, including a space inside a group (`1, 000`).
+    // A comma is a thousands separator only when the whole part is groups
+    // of three. `1,5` and `1,2,3` are refused rather than read as 15 and 123.
+    const QString spaced = StripAmountSpaces(value);
+    const int spaced_dot = spaced.indexOf(QLatin1Char('.'));
+    const QString grouped = spaced_dot < 0 ? spaced : spaced.left(spaced_dot);
+    if (grouped.contains(QLatin1Char(','))) {
+        static const QRegularExpression groups(QStringLiteral("^[0-9]{1,3}(,[0-9]{3})+$"));
+        if (!groups.match(grouped).hasMatch()) {
+            return false;
+        }
+    }
+
+    const QString cleaned = StripAmountSeparators(spaced);
+    if (cleaned.isEmpty()) {
+        return false;
+    }
+    QStringList parts = cleaned.split(QLatin1Char('.'));
 
     if(parts.size() > 2)
     {
@@ -247,7 +319,7 @@ QuicksilverUnit FromQint8(qint8 num)
     switch (num) {
     case 0: return QuicksilverUnit::HG;
     case 1: return QuicksilverUnit::HGS;
-    default: return QuicksilverUnit::HG;
+    default: return QuicksilverUnit::HGS;
     }
 }
 } // namespace

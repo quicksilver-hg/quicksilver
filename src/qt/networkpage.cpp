@@ -456,14 +456,20 @@ void NetworkPage::showTorMissing()
     setNodeControlsEnabled(false);
 }
 
-void NetworkPage::updateStatus(int peers, double verification_progress, bool synced)
+void NetworkPage::updateStatus(int peers, ClientModel::SyncState sync_state, double progress)
+{
+    setPeerCount(peers);
+    const QString sync_text = ClientModel::syncStateText(sync_state);
+    m_sync_value->setText(sync_state == ClientModel::SyncState::CatchingUp
+        ? tr("%1 %2%").arg(sync_text, QString::number(progress * 100.0, 'f', 1))
+        : sync_text);
+}
+
+void NetworkPage::setPeerCount(int peers)
 {
     m_intro->setText(tr("Independent verification is running on this desktop."));
     m_status_value->setText(peers > 0 ? tr("Online") : tr("Offline"));
     m_peers_value->setText(QString::number(peers));
-    m_sync_value->setText(synced
-        ? tr("Synced")
-        : tr("Syncing %1%").arg(QString::number(verification_progress * 100.0, 'f', 1)));
     // Read every poll, not once at construction: the bundled Tor took 7 s to bootstrap on
     // the L1-6 walk box, so the proxy does not exist yet when this page is built.
     applyTorSetupAdvice(OnionProxyConfigured());

@@ -26,6 +26,7 @@ contrib/devtools/clang-thread-safety.py
 contrib/devtools/export-public-source.sh
 contrib/devtools/gen-brand-icons.sh
 contrib/devtools/gen-qt-hud-icons.py
+contrib/devtools/gen-unit-glyph-font.sh
 contrib/devtools/publish-source.sh
 contrib/genesis/derive-genesis.py
 contrib/release/build-debs.sh
@@ -136,6 +137,8 @@ src/qt/test/quicksilverstyletests.h
 src/qt/test/solverprobestub.cpp
 src/qt/test/storagecoststests.cpp
 src/qt/test/storagecoststests.h
+src/qt/test/unitstests.cpp
+src/qt/test/unitstests.h
 src/qt/thinvaultheadersource.cpp
 src/qt/thinvaultheadersource.h
 src/quicksilver-agent.cpp

@@ -97,6 +97,9 @@ public:
 
     virtual std::vector<TxOrphanage::OrphanTxBase> GetOrphanTransactions() = 0;
 
+    /** Number of connected peers whose headers processing has completed. */
+    virtual int GetHeadersAnsweredPeers() const = 0;
+
     /** Get peer manager info. */
     virtual PeerManagerInfo GetInfo() const = 0;
 

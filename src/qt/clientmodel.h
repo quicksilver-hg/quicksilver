@@ -52,8 +52,18 @@ class ClientModel : public QObject
     Q_OBJECT
 
 public:
+    enum class SyncState {
+        Connecting,
+        WaitingForPeers,
+        CatchingUp,
+        Synchronized,
+    };
+
     explicit ClientModel(interfaces::Node& node, OptionsModel *optionsModel, QObject *parent = nullptr);
     ~ClientModel();
+
+    static SyncState syncState(int blocks, int peers, int answered, bool behind_known_headers);
+    static QString syncStateText(SyncState state);
 
     void stop();
 
@@ -107,6 +117,7 @@ private:
 
 Q_SIGNALS:
     void numConnectionsChanged(int count);
+    void headersAnsweredPeersChanged(int count);
     void numBlocksChanged(int count, const QDateTime& blockDate, double nVerificationProgress, SyncType header, SynchronizationState sync_state);
     void relaypoolSizeChanged(long count, size_t relaypoolSizeInBytes, size_t relaypoolMaxSizeInBytes);
     void networkActiveChanged(bool networkActive);

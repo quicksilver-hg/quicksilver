@@ -1234,7 +1234,9 @@ void SendCoinsDialog::coinControlClipboardQuantity()
 // Coin Control: copy label "Amount" to clipboard
 void SendCoinsDialog::coinControlClipboardAmount()
 {
-    GUIUtil::setClipboard(ui->labelCoinControlAmount->text().left(ui->labelCoinControlAmount->text().indexOf(" ")));
+    const auto unit = model && model->getOptionsModel() ? model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HGS;
+    const CAmount amount = static_cast<CAmount>(ui->labelCoinControlAmount->property(CoinControlDialog::kRawAmountProperty).toLongLong());
+    GUIUtil::setClipboard(QuicksilverUnits::format(unit, amount, false, QuicksilverUnits::SeparatorStyle::NEVER));
 }
 
 // Coin Control: copy label "Bytes" to clipboard
@@ -1246,7 +1248,9 @@ void SendCoinsDialog::coinControlClipboardBytes()
 // Coin Control: copy label "Change" to clipboard
 void SendCoinsDialog::coinControlClipboardChange()
 {
-    GUIUtil::setClipboard(ui->labelCoinControlChange->text().left(ui->labelCoinControlChange->text().indexOf(" ")).replace(ASYMP_UTF8, ""));
+    const auto unit = model && model->getOptionsModel() ? model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HGS;
+    const CAmount amount = static_cast<CAmount>(ui->labelCoinControlChange->property(CoinControlDialog::kRawAmountProperty).toLongLong());
+    GUIUtil::setClipboard(QuicksilverUnits::format(unit, amount, false, QuicksilverUnits::SeparatorStyle::NEVER));
 }
 
 // Coin Control: settings menu - coin control enabled/disabled by user

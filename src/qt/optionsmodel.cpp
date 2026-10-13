@@ -46,7 +46,7 @@ static QuicksilverUnit NormalizeDisplayUnit(QuicksilverUnit unit)
     case QuicksilverUnit::HGS:
         return unit;
     }
-    return QuicksilverUnit::HG;
+    return QuicksilverUnit::HGS;
 }
 
 static bool UnitFromStoredNumber(int value, QuicksilverUnit& unit)
@@ -75,17 +75,19 @@ static QuicksilverUnit DisplayUnitFromSetting(const QVariant& value)
 {
     bool ok{false};
     const int stored_number{value.toInt(&ok)};
-    QuicksilverUnit unit{QuicksilverUnit::HG};
+    QuicksilverUnit unit{QuicksilverUnit::HGS};
     if (ok && UnitFromStoredNumber(stored_number, unit)) {
         return NormalizeDisplayUnit(unit);
     }
     if (UnitFromStoredName(value.toString(), unit)) {
         return NormalizeDisplayUnit(unit);
     }
-    if (value.canConvert<QuicksilverUnit>()) {
+    // canConvert is true for plain text and then yields the zero enumerator.
+    // Only a value already stored as this unit is that unit.
+    if (value.userType() == qMetaTypeId<QuicksilverUnit>()) {
         return NormalizeDisplayUnit(value.value<QuicksilverUnit>());
     }
-    return QuicksilverUnit::HG;
+    return QuicksilverUnit::HGS;
 }
 
 /** Map GUI option ID to node setting name. */
@@ -198,7 +200,7 @@ bool OptionsModel::Init(bilingual_str& error)
     // Display
     const QString current_display_unit_key{CurrentDisplayUnitKey()};
     if (!settings.contains(current_display_unit_key)) {
-        m_display_quicksilver_unit = QuicksilverUnit::HG;
+        m_display_quicksilver_unit = QuicksilverUnit::HGS;
         settings.setValue(current_display_unit_key, QVariant::fromValue(m_display_quicksilver_unit));
     } else {
         m_display_quicksilver_unit = DisplayUnitFromSetting(settings.value(current_display_unit_key));

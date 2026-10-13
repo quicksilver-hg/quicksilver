@@ -68,6 +68,9 @@ void URITests::uriTests()
     uri.setUrl(QString("quicksilver:%1?amount=1,000.0&label=Quicksilver Example").arg(address));
     QVERIFY(!GUIUtil::parseQuicksilverURI(uri, &rv));
 
+    uri.setUrl(QString("quicksilver:%1?amount=1.000,5&label=Quicksilver Example").arg(address));
+    QVERIFY(!GUIUtil::parseQuicksilverURI(uri, &rv));
+
     // There are two amount specifications. The last value wins.
     uri.setUrl(QString("quicksilver:%1?amount=100&amount=200&label=Quicksilver Example").arg(address));
     QVERIFY(GUIUtil::parseQuicksilverURI(uri, &rv));

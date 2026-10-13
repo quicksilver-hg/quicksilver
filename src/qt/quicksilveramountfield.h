@@ -75,7 +75,7 @@ Q_SIGNALS:
     void valueChanged();
 
 protected:
-    /** Intercept focus-in event and ',' key presses */
+    /** Clear the invalid style when the amount box gains focus. */
     bool eventFilter(QObject *object, QEvent *event) override;
 
 private:

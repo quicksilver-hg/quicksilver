@@ -40,6 +40,7 @@ THIRD_PARTY_FILES = [
     "src/cuckoocache.h",
     "src/test/fuzz/FuzzedDataProvider.h",
     "src/tinyformat.h",
+    "src/qt/res/fonts/cinnabar_glyph.ttf",
     "src/util/subprocess.h",
 ]
 

@@ -179,6 +179,9 @@ public:
     //! Get number of connections.
     virtual size_t getNodeCount(ConnectionDirection flags) = 0;
 
+    //! Get number of peers that have answered headers.
+    virtual int getHeadersAnsweredPeers() = 0;
+
     //! Get stats for connected nodes.
     using NodesStats = std::vector<std::tuple<CNodeStats, bool, CNodeStateStats>>;
     virtual bool getNodesStats(NodesStats& stats) = 0;
@@ -310,6 +313,10 @@ public:
     //! Register handler for number of connections changed messages.
     using NotifyNumConnectionsChangedFn = std::function<void(int new_num_connections)>;
     virtual std::unique_ptr<Handler> handleNotifyNumConnectionsChanged(NotifyNumConnectionsChangedFn fn) = 0;
+
+    //! Register handler for changes in peers that have answered headers.
+    using NotifyHeadersAnsweredPeersChangedFn = std::function<void(int count)>;
+    virtual std::unique_ptr<Handler> handleNotifyHeadersAnsweredPeersChanged(NotifyHeadersAnsweredPeersChangedFn fn) = 0;
 
     //! Register handler for network active messages.
     using NotifyNetworkActiveChangedFn = std::function<void(bool network_active)>;

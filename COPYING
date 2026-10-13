@@ -34,6 +34,10 @@ code under other terms, and those terms govern those files:
   src/leveldb/                 (c) The LevelDB Authors, BSD-3-clause.
   src/crc32c/                  (c) The CRC32C Authors, BSD-3-clause.
   src/tinyformat.h             (c) Chris Foster, Boost Software License 1.0.
+  src/qt/res/fonts/cinnabar_glyph.ttf
+                               Noto Sans Symbols, (c) 2016 Google LLC,
+                               SIL Open Font License 1.1. Subset to U+1F713
+                               and renamed; the source has no Reserved Font Name.
   src/test/fuzz/FuzzedDataProvider.h
                                The LLVM Project, Apache-2.0 with LLVM exception.
 

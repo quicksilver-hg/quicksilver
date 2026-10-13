@@ -45,6 +45,7 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFontDatabase>
+#include <QFontInfo>
 #include <QFontMetrics>
 #include <QInputDialog>
 #include <QGuiApplication>
@@ -103,10 +104,8 @@ QString dateTimeStr(qint64 nTime)
 
 QFont fixedPitchFont(bool use_embedded_font)
 {
-    if (use_embedded_font) {
-        return {"Roboto Mono"};
-    }
-    return QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    const QFont font = use_embedded_font ? QFont(QStringLiteral("Roboto Mono")) : QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    return WithUnitGlyph(font);
 }
 
 // Return a pre-generated dummy bech32m address (P2TR) with invalid checksum.
@@ -200,6 +199,11 @@ bool parseQuicksilverURI(const QUrl &uri, SendCoinsRecipient *out)
         {
             if(!i->second.isEmpty())
             {
+                // Payment-link amounts take no separators. The emitter never
+                // writes a comma, and a comma here is refused before parse.
+                if (i->second.contains(QLatin1Char(','))) {
+                    return false;
+                }
                 if (!QuicksilverUnits::parse(QuicksilverUnit::HG, i->second, &rv.amount)) {
                     return false;
                 }
@@ -299,6 +303,38 @@ void LoadFont(const QString& file_name)
 {
     const int id = QFontDatabase::addApplicationFont(file_name);
     assert(id != -1);
+}
+
+namespace {
+QString g_unit_glyph_family;
+}
+
+void LoadUnitGlyph()
+{
+    const int id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/unitglyph"));
+    assert(id != -1);
+    const QStringList families = QFontDatabase::applicationFontFamilies(id);
+    assert(!families.isEmpty());
+    g_unit_glyph_family = families.front();
+    const QString primary = QFontInfo(QApplication::font()).family();
+    QFont::insertSubstitution(primary, g_unit_glyph_family);
+    QApplication::setFont(WithUnitGlyph(QApplication::font()));
+}
+
+QString UnitGlyphFamily()
+{
+    return g_unit_glyph_family;
+}
+
+QFont WithUnitGlyph(const QFont& font)
+{
+    if (g_unit_glyph_family.isEmpty()) return font;
+    const QString primary = QFontInfo(font).family();
+    QFont out(font);
+    QStringList families{primary};
+    if (!families.contains(g_unit_glyph_family)) families << g_unit_glyph_family;
+    out.setFamilies(families);
+    return out;
 }
 
 QString getDefaultDataDirectory()

@@ -84,6 +84,9 @@ public:
     /** Number of network connections changed. */
     ADD_SIGNALS_DECL_WRAPPER(NotifyNumConnectionsChanged, void, int newNumConnections);
 
+    /** Number of connected peers that have answered headers changed. */
+    ADD_SIGNALS_DECL_WRAPPER(NotifyHeadersAnsweredPeersChanged, void, int count);
+
     /** Network activity state changed. */
     ADD_SIGNALS_DECL_WRAPPER(NotifyNetworkActiveChanged, void, bool networkActive);
 

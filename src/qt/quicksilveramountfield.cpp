@@ -13,7 +13,6 @@
 #include <QApplication>
 #include <QAbstractSpinBox>
 #include <QHBoxLayout>
-#include <QKeyEvent>
 #include <QLineEdit>
 #include <QVariant>
 
@@ -22,6 +21,23 @@
 namespace {
 //! The amount the box is sized to show whole: 99 999 999.99999999.
 constexpr CAmount WIDTH_REFERENCE_AMOUNT{99'999'999 * COIN + 99'999'999};
+
+//! Digits, grouping commas, the three ignored spaces, and at most one dot.
+//! An incomplete group such as `40,0` is still typeable.
+bool AmountTextIsTypeable(const QString& text)
+{
+    int dots = 0;
+    for (const QChar ch : text) {
+        if (ch == QLatin1Char('.')) {
+            if (++dots > 1) return false;
+            continue;
+        }
+        if (ch >= QLatin1Char('0') && ch <= QLatin1Char('9')) continue;
+        if (ch == QLatin1Char(',') || ch == QLatin1Char(' ') || ch == QChar(0x2009) || ch == QChar(0x00A0)) continue;
+        return false;
+    }
+    return true;
+}
 } // namespace
 
 /** QSpinBox that uses fixed-point numbers internally and uses our own
@@ -42,12 +58,16 @@ public:
 
     QValidator::State validate(QString &text, int &pos) const override
     {
-        if(text.isEmpty())
+        Q_UNUSED(pos);
+        if (text.isEmpty())
             return QValidator::Intermediate;
-        bool valid = false;
-        parse(text, &valid);
-        /* Make sure we return Intermediate so that fixup() is called on defocus */
-        return valid ? QValidator::Intermediate : QValidator::Invalid;
+        // Incomplete groups (`40,0`, `40,00`) must not block the keystroke.
+        // Intermediate also lets fixup() run on defocus. A group that does
+        // not parse is left as typed; value() stays invalid and the field
+        // turns red.
+        if (AmountTextIsTypeable(text))
+            return QValidator::Intermediate;
+        return QValidator::Invalid;
     }
 
     void fixup(QString &input) const override
@@ -64,6 +84,7 @@ public:
         }
 
         if (valid) {
+            // Only a parsed amount is rewritten. `1,5` stays as typed.
             val = qBound(m_min_amount, val, m_max_amount);
             input = QuicksilverUnits::format(currentUnit, val, false, QuicksilverUnits::SeparatorStyle::ALWAYS);
             lineEdit()->setText(input);
@@ -156,7 +177,7 @@ public:
     }
 
 private:
-    QuicksilverUnit currentUnit{QuicksilverUnit::HG};
+    QuicksilverUnit currentUnit{QuicksilverUnit::HGS};
     CAmount singleStep{CAmount(100000)}; // cinnabar
     mutable QSize cachedMinimumSizeHint;
     bool m_allow_empty{true};
@@ -183,21 +204,6 @@ private:
     }
 
 protected:
-    bool event(QEvent *event) override
-    {
-        if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)
-        {
-            QKeyEvent *keyEvent = static_cast<QKeyEvent *>(event);
-            if (keyEvent->key() == Qt::Key_Comma)
-            {
-                // Translate a comma into a period
-                QKeyEvent periodKeyEvent(event->type(), Qt::Key_Period, keyEvent->modifiers(), ".", keyEvent->isAutoRepeat(), keyEvent->count());
-                return QAbstractSpinBox::event(&periodKeyEvent);
-            }
-        }
-        return QAbstractSpinBox::event(event);
-    }
-
     StepEnabled stepEnabled() const override
     {
         if (isReadOnly()) // Disable steps when AmountSpinBox is read-only
@@ -346,7 +352,7 @@ void QuicksilverAmountField::unitChanged(int idx)
 void QuicksilverAmountField::setDisplayUnit(QuicksilverUnit new_unit)
 {
     if (!QuicksilverUnits::availableUnits().contains(new_unit)) {
-        new_unit = QuicksilverUnit::HG;
+        new_unit = QuicksilverUnit::HGS;
     }
     unit->setValue(QVariant::fromValue(new_unit));
 }

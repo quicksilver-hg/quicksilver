@@ -13,6 +13,11 @@
 //! a state word instead of the status icon, a friendly date with the state dot,
 //! a plain type word, the label, and a signed amount without the unconfirmed
 //! brackets.
+class QAbstractItemView;
+
+//! Paint an amount cell so the cinnabar sign uses the accent and the value keeps its own colour.
+void ColorCinnabarAmountSuffix(QAbstractItemView* view);
+
 class LedgerRows : public QIdentityProxyModel
 {
 public:
@@ -29,7 +34,7 @@ public:
 
 private:
     const Tooltips m_tooltips;
-    QuicksilverUnit m_unit{QuicksilverUnit::HG};
+    QuicksilverUnit m_unit{QuicksilverUnit::HGS};
     bool m_privacy{false};
 };
 

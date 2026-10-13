@@ -222,6 +222,7 @@ void TransactionView::setModel(VaultModel *_model)
             });
         }
         transactionView->setModel(m_ledger_rows);
+        ColorCinnabarAmountSuffix(transactionView);
         transactionView->sortByColumn(TransactionTableModel::Date, Qt::DescendingOrder);
         transactionView->horizontalHeader()->setSectionResizeMode(TransactionTableModel::ToAddress, QHeaderView::Stretch);
         for (const auto& signal : {&QAbstractItemModel::rowsInserted, &QAbstractItemModel::rowsRemoved}) {
