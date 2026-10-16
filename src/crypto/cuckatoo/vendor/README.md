@@ -17,6 +17,8 @@ Source: <https://github.com/tromp/cuckoo>, licence text reproduced verbatim in
 | `graph.hpp` | cycle-finding graph |
 | `lean.cpp`, `lean.hpp` | CPU lean solver |
 | `lean.cu` | CUDA lean solver |
+| `lean.cl` | OpenCL C 1.2 port of `lean.cu`'s two trimming kernels |
+| `lean_ocl.cpp`, `lean_ocl.hpp` | `lean.cu`'s host flow over OpenCL |
 | `siphash.cuh`, `siphash.hpp`, `siphashxN.h` | SipHash-2-4 keyed edge generator |
 
 `LICENSE.txt` offers two options. **Quicksilver elects the FAIR MINING
@@ -54,6 +56,8 @@ include-path flattening, those 11 CPU-side files match that revision.
 
 The later GPU import (`853e9e2e`) brought `siphash.cuh`, which also matches
 `a69ad1d6`. `lean.cu` does not, and is not pinned to an upstream commit.
+The new `lean.cl`, `lean_ocl.cpp`, and `lean_ocl.hpp` derivatives are likewise
+not pinned to an upstream commit.
 
 ## Local modifications
 
@@ -98,6 +102,11 @@ in-tree and are recorded in the git history:
   behaviour (UBSan: "shift exponent 64"). The existing `if (ffs & 64) break;`
   leaves the loop before the shifted value is read, so the output is
   unchanged.
+- F-469 adds `lean.cl`, `lean_ocl.cpp`, and `lean_ocl.hpp` as Quicksilver
+  derivatives offered under Tromp's same two licence options. Compared with
+  `lean.cu`, shift counts are clamped explicitly, the 1-based ffs is derived
+  from OpenCL `clz`, SipHash keys are kernel arguments, and an overloaded graph
+  is skipped rather than terminating the helper with `exit(0)`.
 
 Include paths were flattened to be path-local when the closure was vendored
 (`c6ec788f`). Do not re-stamp these files with a Quicksilver copyright line;

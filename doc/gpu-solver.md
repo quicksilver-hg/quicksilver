@@ -1,6 +1,8 @@
 # GPU Solver
 
-Quicksilver's external `qsgpusolve` helper accelerates Cuckatoo proof-of-work
+The release packages now include `qsgpusolve-opencl`, which runs on any card with an OpenCL driver. This page is rewritten for it in a later change; the CUDA instructions below still apply to building `qsgpusolve-cuda` yourself.
+
+Quicksilver's external `qsgpusolve-cuda` helper accelerates Cuckatoo proof-of-work
 for transfers and mining. It is not part of consensus validation: every proof
 returned by the helper is checked by the node before use.
 
@@ -16,7 +18,7 @@ of the node or vault build.
 - An agent spend falls back to the built-in CPU solver on `main` or
   `publictest` only when the operator opts in. The command-line agent takes
   `-allowcputxpow`. The desktop stores the same choice as a checkbox under
-  Settings > Options > Main. That checkbox does not reach the command-line
+  Settings > Options > Hardware. That checkbox does not reach the command-line
   agent, which does not read desktop settings, so the sign command the desktop
   copies includes the flag when the checkbox is on. The default is off because
   an agent starts the work on its own schedule, while the computer may be in
@@ -36,7 +38,7 @@ command-line agent does not read desktop settings. It is opt-in for blocks
 because block mining is a continuous race against GPU cards: a CPU can run
 the graph, but an unbounded grind at near-zero odds would look like a broken
 miner. The block opt-in is `-allowcpumining`, and the same switch is the
-checkbox in the desktop's Settings > Options > Main that allows this
+checkbox in the desktop's Settings > Options > Hardware that allows this
 computer's processor to mine blocks.
 
 The measured times are calibration results, not performance guarantees. GPU,
@@ -110,14 +112,14 @@ helper with its own Makefile:
 make -C src/crypto/cuckatoo/gpu GPU_ARCH=sm_61   # replace sm_61 with your card's value
 ```
 
-The output is `src/crypto/cuckatoo/gpu/qsgpusolve`. The default graph size is
+The output is `src/crypto/cuckatoo/gpu/qsgpusolve-cuda`. The default graph size is
 28, which matches `main` and `publictest`. A helper built for another graph size
 is rejected at runtime.
 
 Probe the executable and CUDA device without starting a solve:
 
 ```bash
-src/crypto/cuckatoo/gpu/qsgpusolve 28 00000000 0 0; echo "exit=$?"
+src/crypto/cuckatoo/gpu/qsgpusolve-cuda 28 00000000 0 0; echo "exit=$?"
 ```
 
 **A successful probe prints nothing.** Silence is the success signal, not a
@@ -188,7 +190,7 @@ paths and versions that match the installed Visual Studio and CUDA toolchains:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass `
-  -File .\contrib\windows\build-qsgpusolve-windows.ps1 `
+  -File .\contrib\windows\build-qsgpusolve-cuda-windows.ps1 `
   -VsInstallPath "C:\Program Files\Microsoft Visual Studio\2022\Community" `
   -VcVarsVersion "14.39" `
   -CudaPath "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9" `
@@ -196,7 +198,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 ```
 
 The default output is
-`src\crypto\cuckatoo\gpu\qsgpusolve.exe`. The script's default
+`src\crypto\cuckatoo\gpu\qsgpusolve-cuda.exe`. The script's default
 `-VsInstallPath` is Visual Studio 2022 Community, the same path as the example
 and the one the Windows build guide requires. Omit `-VcVarsVersion` to enter
 the developer shell with Visual Studio's own default toolset. The example
@@ -213,7 +215,7 @@ first cycle, and it is never on a validation path.
 Probe it before configuring Quicksilver:
 
 ```powershell
-.\src\crypto\cuckatoo\gpu\qsgpusolve.exe 28 00000000 0 0
+.\src\crypto\cuckatoo\gpu\qsgpusolve-cuda.exe 28 00000000 0 0
 ```
 
 ### Raise the GPU watchdog before solving
@@ -285,12 +287,12 @@ attached.
 Pass an absolute path at startup:
 
 ```bash
-quicksilver -cuckatoosolver=/absolute/path/to/qsgpusolve
-quicksilver-daemon -cuckatoosolver=/absolute/path/to/qsgpusolve
-quicksilver-agent -cuckatoosolver=/absolute/path/to/qsgpusolve <command>
+quicksilver -cuckatoosolver=/absolute/path/to/qsgpusolve-cuda
+quicksilver-daemon -cuckatoosolver=/absolute/path/to/qsgpusolve-cuda
+quicksilver-agent -cuckatoosolver=/absolute/path/to/qsgpusolve-cuda <command>
 ```
 
-The desktop also exposes the helper path in Settings → Options → Main and probes
+The desktop also exposes the helper path in Settings → Options → Hardware and probes
 the selected executable before reporting acceleration as ready. Restart after
 changing the configured path.
 

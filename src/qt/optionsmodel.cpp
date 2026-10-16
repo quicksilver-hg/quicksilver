@@ -96,6 +96,7 @@ static const char* SettingName(OptionsModel::OptionID option)
     switch (option) {
     case OptionsModel::DatabaseCache: return "dbcache";
     case OptionsModel::GpuSolverPath: return "cuckatoosolver";
+    case OptionsModel::GpuDevices: return "cuckatoodevice";
     case OptionsModel::AllowCpuBlockMining: return "allowcpumining";
     case OptionsModel::ThreadsScriptVerif: return "par";
     case OptionsModel::SpendZeroConfChange: return "spendzeroconfchange";
@@ -222,7 +223,7 @@ bool OptionsModel::Init(bilingual_str& error)
 
     // These are shared with the core or have a command-line parameter
     // and we want command-line parameters to overwrite the GUI settings.
-    for (OptionID option : {DatabaseCache, ThreadsScriptVerif, SpendZeroConfChange, GpuSolverPath, AllowCpuBlockMining, ExternalSignerPath,
+    for (OptionID option : {DatabaseCache, ThreadsScriptVerif, SpendZeroConfChange, GpuSolverPath, GpuDevices, AllowCpuBlockMining, ExternalSignerPath,
                             MapPortNatpmp, Listen, Server, Prune, ProxyUse, ProxyUseTor, Language}) {
         std::string setting = SettingName(option);
         if (node().isSettingIgnored(setting)) addOverriddenOption("-" + setting);
@@ -457,6 +458,16 @@ QVariant OptionsModel::getOption(OptionID option, const std::string& suffix) con
         return qlonglong(SettingToInt(setting(), DEFAULT_DB_CACHE >> 20));
     case GpuSolverPath:
         return QString::fromStdString(SettingToString(setting(), ""));
+    case GpuDevices: {
+        const common::SettingsValue value{setting()};
+        QStringList devices;
+        if (value.isArray()) {
+            for (const auto& entry : value.getValues()) if (entry.isStr()) devices.push_back(QString::fromStdString(entry.get_str()));
+        } else if (value.isStr()) {
+            devices.push_back(QString::fromStdString(value.get_str()));
+        }
+        return devices;
+    }
     case AllowCpuBlockMining:
         return SettingToBool(setting(), false);
     case ShowCpuFallbackWarning:
@@ -636,6 +647,19 @@ bool OptionsModel::setOption(OptionID option, const QVariant& value, const std::
             setRestartRequired(true);
         }
         break;
+    case GpuDevices:
+        if (changed()) {
+            const QStringList devices{value.toStringList()};
+            if (devices.isEmpty()) {
+                update({});
+            } else {
+                UniValue array{UniValue::VARR};
+                for (const QString& device : devices) array.push_back(device.toStdString());
+                update(array);
+            }
+            setRestartRequired(true);
+        }
+        break;
     case AllowCpuBlockMining:
         // Not restart-required. MiningService::Run reads -allowcpumining from
         // the live args once, at the start of each mining thread, and
@@ -671,6 +695,21 @@ bool OptionsModel::setOption(OptionID option, const QVariant& value, const std::
     }
 
     return successful;
+}
+
+QMap<QString, QString> OptionsModel::getGpuDeviceNames() const
+{
+    const QVariantMap stored{QSettings().value(QStringLiteral("gpu_device_names")).toMap()};
+    QMap<QString, QString> names;
+    for (auto it = stored.cbegin(); it != stored.cend(); ++it) names.insert(it.key(), it.value().toString());
+    return names;
+}
+
+void OptionsModel::setGpuDeviceNames(const QMap<QString, QString>& names)
+{
+    QVariantMap stored;
+    for (auto it = names.cbegin(); it != names.cend(); ++it) stored.insert(it.key(), it.value());
+    QSettings().setValue(QStringLiteral("gpu_device_names"), stored);
 }
 
 void OptionsModel::setDisplayUnit(const QVariant& new_unit)

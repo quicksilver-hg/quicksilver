@@ -31,6 +31,7 @@
 #include <qt/coincontroldialog.h>
 #include <qt/addressbookpage.h>
 #include <qt/desktoplaunchpage.h>
+#include <qt/gpusituation.h>
 #include <qt/minemintpage.h>
 #include <qt/miningmodel.h>
 #include <qt/networkpage.h>
@@ -61,6 +62,7 @@
 #include <qt/utilitydialog.h>
 #include <QTextBrowser>
 #include <QTextBlock>
+#include <QTextDocumentFragment>
 #include <QTextLayout>
 #include <rpc/server.h>
 #include <script/solver.h>
@@ -118,6 +120,8 @@
 #include <QSettings>
 #include <QFontInfo>
 #include <QStyleOption>
+#include <QStyleOptionViewItem>
+#include <QTextDocument>
 #include <QSpinBox>
 #include <QSet>
 #include <QSignalSpy>
@@ -144,6 +148,26 @@ using vault::VaultDescriptor;
 using vault::VaultRescanReserver;
 
 namespace {
+QString Listing(const QStringList& lines)
+{
+    static int counter{0};
+    const QString path{QDir::temp().filePath(QStringLiteral("qs_vaulttests_%1_%2.listing").arg(QCoreApplication::applicationPid()).arg(++counter))};
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) qFatal("cannot write %s", qPrintable(path));
+    for (const QString& line : lines) file.write((line + QLatin1Char('\n')).toUtf8());
+    return path;
+}
+
+cuckatoo::GpuDiscovery Discover(const QStringList& lines, const QByteArray& devices_env = {})
+{
+    qputenv("CUCKATOO_GPU_SOLVER", SolverProbeStubPath().toUtf8());
+    qputenv("QS_PROBE_STUB_LISTING", Listing(lines).toUtf8());
+    if (devices_env.isEmpty()) qunsetenv("CUCKATOO_GPU_DEVICES");
+    else qputenv("CUCKATOO_GPU_DEVICES", devices_env);
+    cuckatoo::ResetGpuDiscoveryForTesting();
+    return cuckatoo::DiscoverGpus(19);
+}
+
 class ScopedNodeContext
 {
 public:
@@ -667,6 +691,14 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QVERIFY(mineMintPage->findChild<QPushButton*>(QStringLiteral("startMiningButton"))->isEnabled());
     QVERIFY(!mineMintPage->findChild<QPushButton*>(QStringLiteral("stopMiningButton"))->isEnabled());
     QCOMPARE(mineMintPage->findChild<QLabel*>(QStringLiteral("miningStatusValue"))->text(), QStringLiteral("Idle"));
+    interfaces::MiningStatus minted_status;
+    minted_status.coins_minted_session = 123456789;
+    vaultModel.getOptionsModel()->setDisplayUnit(QVariant::fromValue(QuicksilverUnit::HGS));
+    mineMintPage->setStatus(minted_status);
+    QCOMPARE(mineMintPage->findChild<QLabel*>(QStringLiteral("sessionMintedValue"))->text(), QStringLiteral("123,456,789🜓"));
+    vaultModel.getOptionsModel()->setDisplayUnit(QVariant::fromValue(QuicksilverUnit::HG));
+    QCOMPARE(mineMintPage->findChild<QLabel*>(QStringLiteral("sessionMintedValue"))->text(), QStringLiteral("1.23456789Hg"));
+    vaultModel.getOptionsModel()->setDisplayUnit(QVariant::fromValue(QuicksilverUnit::HGS));
 
     vaultView.gotoNetworkPage();
     NetworkPage* networkPage = qobject_cast<NetworkPage*>(vaultView.currentWidget());
@@ -1794,29 +1826,26 @@ void VaultTests::benchTickerMatchesVaultBalances()
     vault_ptr->block_hash = ArithToUint256(1);
     model.pollBalanceChanged();
 
-    // Each figure is the bare amount; its unit is a separate small label, as in
-    // the Assay Bench ticker. TOTAL is everything the vault holds.
-    const auto format_amount = [&](CAmount amount, bool privacy) {
-        return QuicksilverUnits::formatInlineValueWithPrivacy(
-            model.getOptionsModel()->getDisplayUnit(), amount, QuicksilverUnits::SeparatorStyle::ALWAYS, privacy);
+    // Each figure is one text run: the suffix shares the figure's size and
+    // baseline. TOTAL is everything the vault holds.
+    const auto plain_text = [](const QLabel* label) {
+        return QTextDocumentFragment::fromHtml(label->text()).toPlainText();
     };
-    const auto expect_ticker = [&](bool privacy) {
+    const auto expect_ticker = [&](const QString& spendable, const QString& pending, const QString& maturing,
+                                   const QString& delegated, const QString& total) {
         const interfaces::VaultBalances balances = model.getCachedBalance();
-        QCOMPARE(window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable"))->text(), format_amount(balances.balance, privacy));
-        QCOMPARE(window.findChild<QLabel*>(QStringLiteral("benchTickerPending"))->text(), format_amount(balances.unconfirmed_balance, privacy));
-        QCOMPARE(window.findChild<QLabel*>(QStringLiteral("benchTickerMaturing"))->text(), format_amount(balances.immature_balance, privacy));
-        QCOMPARE(window.findChild<QLabel*>(QStringLiteral("benchTickerDelegated"))->text(), format_amount(balances.delegated_balance, privacy));
-        QCOMPARE(window.findChild<QLabel*>(QStringLiteral("benchTickerTotal"))->text(),
-                 format_amount(balances.balance + balances.unconfirmed_balance + balances.immature_balance + balances.delegated_balance, privacy));
+        QCOMPARE(plain_text(window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable"))), spendable);
+        QCOMPARE(plain_text(window.findChild<QLabel*>(QStringLiteral("benchTickerPending"))), pending);
+        QCOMPARE(plain_text(window.findChild<QLabel*>(QStringLiteral("benchTickerMaturing"))), maturing);
+        QCOMPARE(plain_text(window.findChild<QLabel*>(QStringLiteral("benchTickerDelegated"))), delegated);
+        QCOMPARE(plain_text(window.findChild<QLabel*>(QStringLiteral("benchTickerTotal"))), total);
         QCOMPARE(window.findChild<QWidget*>(QStringLiteral("benchTickerDelegatedBox"))->isHidden(), balances.delegated_balance == 0);
-        const QString code = QuicksilverUnits::shortName(model.getOptionsModel()->getDisplayUnit());
-        const QString suffix = QuicksilverUnits::displaySuffix(model.getOptionsModel()->getDisplayUnit());
-        const QList<QLabel*> units = window.findChild<QWidget*>(QStringLiteral("benchTickerFigures"))->findChildren<QLabel*>(QStringLiteral("benchTickerUnit"));
-        QCOMPARE(units.size(), 5);
-        // The code stays HgS. The ticker label is the sign.
-        QCOMPARE(code, QStringLiteral("HgS"));
-        QCOMPARE(suffix, QuicksilverUnits::displaySuffix(QuicksilverUnit::HGS));
-        for (const QLabel* label : units) QCOMPARE(label->text(), suffix);
+        // One text run per figure: each figure box holds its key and its value, and no other label.
+        for (const char* name : {"benchTickerSpendable", "benchTickerPending", "benchTickerMaturing", "benchTickerDelegated", "benchTickerTotal"}) {
+            const QLabel* value = window.findChild<QLabel*>(QString::fromLatin1(name));
+            QVERIFY(value);
+            QCOMPARE(value->parentWidget()->findChildren<QLabel*>(QString(), Qt::FindDirectChildrenOnly).size(), 2);
+        }
     };
 
     QVERIFY(model.getOptionsModel()->setOption(OptionsModel::DisplayUnit, QVariant::fromValue(QuicksilverUnit::HGS)));
@@ -1825,8 +1854,20 @@ void VaultTests::benchTickerMatchesVaultBalances()
     QCOMPARE(initial.unconfirmed_balance, 2 * COIN);
     QCOMPARE(initial.immature_balance, 3 * COIN);
     QCOMPARE(initial.delegated_balance, 0 * COIN);
-    expect_ticker(false);
+    expect_ticker(QStringLiteral("5,000,000,000🜓"), QStringLiteral("200,000,000🜓"),
+                  QStringLiteral("300,000,000🜓"), QStringLiteral("0🜓"),
+                  QStringLiteral("5,500,000,000🜓"));
     if (QTest::currentTestFailed()) return;
+    const QString spendable_html = window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable"))->text();
+    const QString vermilion_span = QStringLiteral("<span style='color:%1;'>🜓</span>")
+                                      .arg(QuicksilverStyle::Color(QuicksilverStyle::Token::Vermilion).name());
+    QCOMPARE(spendable_html.count(QStringLiteral("color:")), 1);
+    QVERIFY(spendable_html.contains(vermilion_span));
+    QVERIFY(!spendable_html.contains(QStringLiteral("font-size")));
+    QVERIFY(model.getOptionsModel()->setOption(OptionsModel::DisplayUnit, QVariant::fromValue(QuicksilverUnit::HG)));
+    QCOMPARE(plain_text(window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable"))), QStringLiteral("50.00000000Hg"));
+    QVERIFY(!window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable"))->text().contains(QStringLiteral("color:")));
+    QVERIFY(model.getOptionsModel()->setOption(OptionsModel::DisplayUnit, QVariant::fromValue(QuicksilverUnit::HGS)));
     QVERIFY(window.findChild<QLabel*>(QStringLiteral("benchTickerEmpty"))->isHidden());
     QLabel* crumb = window.findChild<QLabel*>(QStringLiteral("benchBreadcrumb"));
     QVERIFY(crumb);
@@ -1848,14 +1889,18 @@ void VaultTests::benchTickerMatchesVaultBalances()
     vault_ptr->balance = 40 * COIN;
     vault_ptr->block_hash = ArithToUint256(2);
     model.pollBalanceChanged();
-    expect_ticker(false);
+    expect_ticker(QStringLiteral("4,000,000,000🜓"), QStringLiteral("200,000,000🜓"),
+                  QStringLiteral("300,000,000🜓"), QStringLiteral("0🜓"),
+                  QStringLiteral("4,500,000,000🜓"));
     if (QTest::currentTestFailed()) return;
     QVERIFY(window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable"))->text() != spendable_before);
 
     vault_ptr->delegated = 7 * COIN;
     vault_ptr->block_hash = uint256{3};
     model.pollBalanceChanged();
-    expect_ticker(false);
+    expect_ticker(QStringLiteral("4,000,000,000🜓"), QStringLiteral("200,000,000🜓"),
+                  QStringLiteral("300,000,000🜓"), QStringLiteral("700,000,000🜓"),
+                  QStringLiteral("5,200,000,000🜓"));
     if (QTest::currentTestFailed()) return;
     QVERIFY(!window.findChild<QWidget*>(QStringLiteral("benchTickerDelegatedBox"))->isHidden());
 
@@ -1870,23 +1915,128 @@ void VaultTests::benchTickerMatchesVaultBalances()
     }
     QVERIFY(mask);
     mask->setChecked(true);
-    expect_ticker(true);
+    expect_ticker(QStringLiteral("#🜓"), QStringLiteral("#🜓"), QStringLiteral("#🜓"),
+                  QStringLiteral("#🜓"), QStringLiteral("#🜓"));
     if (QTest::currentTestFailed()) return;
     QVERIFY(window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable"))->text().contains(QLatin1Char('#')));
     QVERIFY(window.findChild<QLabel*>(QStringLiteral("benchTickerSpendable"))->text() != spendable_before);
     mask->setChecked(false);
-    expect_ticker(false);
+    expect_ticker(QStringLiteral("4,000,000,000🜓"), QStringLiteral("200,000,000🜓"),
+                  QStringLiteral("300,000,000🜓"), QStringLiteral("700,000,000🜓"),
+                  QStringLiteral("5,200,000,000🜓"));
     if (QTest::currentTestFailed()) return;
 
     vault_ptr->delegated = 0;
     vault_ptr->block_hash = uint256{4};
     model.pollBalanceChanged();
-    expect_ticker(false);
+    expect_ticker(QStringLiteral("4,000,000,000🜓"), QStringLiteral("200,000,000🜓"),
+                  QStringLiteral("300,000,000🜓"), QStringLiteral("0🜓"),
+                  QStringLiteral("4,500,000,000🜓"));
 
     QAction* transfer = window.findChild<QAction*>(QStringLiteral("sendCoinsAction"));
     QVERIFY(transfer);
     transfer->setChecked(true);
     QCOMPARE(crumb->text(), model.getDisplayName().toUpper() + QStringLiteral(" / TRANSFER"));
+}
+
+//! F-481: Home's card buttons and both Mine / Mint network links go through
+//! the window navigation slots, so the page, rail, and breadcrumb stay together.
+void VaultTests::homeAndMineLinksFollowRail()
+{
+    QSettings settings;
+    const bool had_consensus_setting = settings.contains(QStringLiteral("Desktop/ConsensusEnabled"));
+    const QVariant previous_consensus_setting = settings.value(QStringLiteral("Desktop/ConsensusEnabled"));
+    struct RestoreConsensusSetting {
+        bool had_value;
+        QVariant value;
+        ~RestoreConsensusSetting()
+        {
+            QSettings settings;
+            if (had_value) settings.setValue(QStringLiteral("Desktop/ConsensusEnabled"), value);
+            else settings.remove(QStringLiteral("Desktop/ConsensusEnabled"));
+        }
+    } restore_consensus_setting{had_consensus_setting, previous_consensus_setting};
+    settings.setValue(QStringLiteral("Desktop/ConsensusEnabled"), true);
+
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    OptionsModel options_model(m_node);
+    bilingual_str error;
+    QVERIFY(options_model.Init(error));
+    VaultModel model(std::make_unique<PollMarkerVault>(), m_node, &options_model, platform_style.get());
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(&model, platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(&model);
+
+    QStackedWidget* frame_stack = frame->findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+    QLabel* breadcrumb = window.findChild<QLabel*>(QStringLiteral("benchBreadcrumb"));
+    QAction* home_action = window.findChild<QAction*>(QStringLiteral("homeBootstrapAction"));
+    QAction* mine_action = window.findChild<QAction*>(QStringLiteral("mineMintAction"));
+    QAction* network_action = window.findChild<QAction*>(QStringLiteral("networkAction"));
+    QVERIFY(frame_stack);
+    QVERIFY(breadcrumb);
+    QVERIFY(home_action);
+    QVERIFY(mine_action);
+    QVERIFY(network_action);
+
+    const QString vault_crumb = model.getDisplayName().toUpper() + QStringLiteral(" / ");
+    const auto expect_page = [&](const QString& page_name, QAction* action, const QString& crumb_page) {
+        QWidget* page = frame_stack->currentWidget();
+        if (page == view) page = view->currentWidget();
+        QCOMPARE(page->objectName(), page_name);
+        QVERIFY(action->isChecked());
+        QCOMPARE(breadcrumb->text(), vault_crumb + crumb_page);
+    };
+    const auto home_button = [&](const char* object_name) {
+        home_action->trigger();
+        QPushButton* button = window.findChild<QPushButton*>(QString::fromLatin1(object_name));
+        QVERIFY(button);
+        button->click();
+    };
+
+    home_button("launchMiningCardButton");
+    expect_page(QStringLiteral("mineMintPage"), mine_action, QStringLiteral("MINE / MINT"));
+
+    home_button("launchConsensusCardButton");
+    expect_page(QStringLiteral("networkPage"), network_action, QStringLiteral("NETWORK"));
+
+    home_button("launchVaultCardButton");
+    expect_page(QStringLiteral("desktopLaunchPage"), home_action, QStringLiteral("HOME"));
+
+    home_button("launchMiningCardButton");
+    QPushButton* vault_mine_network = view->findChild<QPushButton*>(QStringLiteral("mineMintIsolationNetworkButton"));
+    QVERIFY(vault_mine_network);
+    vault_mine_network->click();
+    QVERIFY(frame_stack->currentWidget() != view);
+    expect_page(QStringLiteral("networkPage"), network_action, QStringLiteral("NETWORK"));
+
+    QuicksilverGUI no_vault_window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* no_vault_frame = no_vault_window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QStackedWidget* no_vault_stack = no_vault_window.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+    QAction* no_vault_mine_action = no_vault_window.findChild<QAction*>(QStringLiteral("mineMintAction"));
+    QAction* no_vault_network_action = no_vault_window.findChild<QAction*>(QStringLiteral("networkAction"));
+    QLabel* no_vault_breadcrumb = no_vault_window.findChild<QLabel*>(QStringLiteral("benchBreadcrumb"));
+    QVERIFY(no_vault_frame);
+    QVERIFY(no_vault_stack);
+    QVERIFY(no_vault_mine_action);
+    QVERIFY(no_vault_network_action);
+    QVERIFY(no_vault_breadcrumb);
+    QPushButton* no_vault_mining = no_vault_window.findChild<QPushButton*>(QStringLiteral("launchMiningCardButton"));
+    QVERIFY(no_vault_mining);
+    no_vault_mining->click();
+    QCOMPARE(no_vault_stack->currentWidget()->objectName(), QStringLiteral("mineMintPage"));
+    QVERIFY(no_vault_mine_action->isChecked());
+    QCOMPARE(no_vault_breadcrumb->text(), QStringLiteral("NO VAULT OPEN / MINE / MINT"));
+    QPushButton* no_vault_mine_network = no_vault_stack->currentWidget()->findChild<QPushButton*>(QStringLiteral("mineMintIsolationNetworkButton"));
+    QVERIFY(no_vault_mine_network);
+    no_vault_mine_network->click();
+    QCOMPARE(no_vault_stack->currentWidget()->objectName(), QStringLiteral("networkPage"));
+    QVERIFY(no_vault_network_action->isChecked());
+    QCOMPARE(no_vault_breadcrumb->text(), QStringLiteral("NO VAULT OPEN / NETWORK"));
 }
 
 void VaultTests::homeLedgerListsVaultTransactions()
@@ -2440,10 +2590,10 @@ void VaultTests::homeAndLedgerReadTransactionsAlike()
     // so no label. One reward to the key's P2WPKH address gives a labelled row.
     test.CreateAndProcessBlock({}, GetScriptForDestination(WitnessV0KeyHash(test.coinbaseKey.GetPubKey())));
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
-    const QString payout_label = QStringLiteral("founding-payout-b58");
+    const QString known_label = QStringLiteral("household-budget-02");
     {
         LOCK(vault->cs_vault);
-        vault->SetAddressBook(CTxDestination{WitnessV0KeyHash(test.coinbaseKey.GetPubKey())}, payout_label.toStdString(), vault::AddressPurpose::RECEIVE);
+        vault->SetAddressBook(CTxDestination{WitnessV0KeyHash(test.coinbaseKey.GetPubKey())}, known_label.toStdString(), vault::AddressPurpose::RECEIVE);
     }
 
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
@@ -2502,7 +2652,7 @@ void VaultTests::homeAndLedgerReadTransactionsAlike()
         }
         QVERIFY(!ledger_rows->index(found.first().row(), TransactionTableModel::Date).data(Qt::DecorationRole).isNull());
         if (home_index.data(TransactionTableModel::StatusRole).toInt() == TransactionStatus::Immature) maturing = row;
-        if (home_rows->index(row, TransactionTableModel::ToAddress).data().toString() == payout_label) labelled = true;
+        if (home_rows->index(row, TransactionTableModel::ToAddress).data().toString() == known_label) labelled = true;
     }
     QVERIFY(labelled);
 
@@ -2532,7 +2682,7 @@ void VaultTests::homeAndLedgerReadTransactionsAlike()
     if (real_fonts && design_size) {
         QVERIFY2(home_table->columnWidth(TransactionTableModel::ToAddress) >= label_need,
                  qPrintable(QStringLiteral("Label %1 px of %2").arg(home_table->columnWidth(TransactionTableModel::ToAddress)).arg(label_need)));
-        QVERIFY(home_table->fontMetrics().horizontalAdvance(payout_label) < home_table->columnWidth(TransactionTableModel::ToAddress));
+        QVERIFY(home_table->fontMetrics().horizontalAdvance(known_label) < home_table->columnWidth(TransactionTableModel::ToAddress));
     }
     const int amount_slack = home_table->columnWidth(TransactionTableModel::Amount) - std::max(home_cells->sizeHintForColumn(TransactionTableModel::Amount),
                                                                                                home_table->horizontalHeader()->sectionSizeHint(TransactionTableModel::Amount));
@@ -2849,7 +2999,7 @@ void VaultTests::mineMintPageRendersStatus()
     st.active = true;
     st.address = "hg1qexample";
     st.blocks_found = 3;
-    st.coins_minted_session = 150 * COIN;
+    st.coins_minted_session = 123456789;
     st.attempts_per_second = 0.29;
     st.graphs_attempted = 7;
     st.congestion_multiplier = 1.0;
@@ -2858,7 +3008,11 @@ void VaultTests::mineMintPageRendersStatus()
 
     QCOMPARE(page.findChild<QLabel*>("miningStatusValue")->text(), QString("Active"));
     QCOMPARE(page.findChild<QLabel*>("payoutTargetValue")->text(), QString("hg1qexample"));
-    QCOMPARE(page.findChild<QLabel*>("solverStatusValue")->text(), QString("GPU bridge"));
+    QCOMPARE(page.findChild<QLabel*>("solverStatusValue")->text(), QString("Graphics card"));
+    QVERIFY(std::ranges::any_of(page.findChildren<QLabel*>(), [](const QLabel* label) { return label->text() == /*W-E5*/ QStringLiteral("Mining on"); }));
+    QCOMPARE(page.findChild<QLabel*>("sessionMintedValue")->text(), QStringLiteral("123,456,789🜓"));
+    page.setDisplayUnit(QuicksilverUnit::HG);
+    QCOMPARE(page.findChild<QLabel*>("sessionMintedValue")->text(), QStringLiteral("1.23456789Hg"));
     QCOMPARE(page.findChild<QLabel*>("blocksFoundValue")->text(), QString("3"));
     // S3: the expected text is spelled out here rather than composed by re-invoking the
     // very numerus call the page made. Building the oracle out of the production
@@ -2902,16 +3056,17 @@ void VaultTests::mineMintPageRendersStatus()
     st.active = true;
     st.solver_ok = false;
     st.solver_missing = true;
-    st.last_solver_error = "No GPU solver is configured; set -cuckatoosolver=<path>";
+    st.last_solver_error = "No graphics card is in use; install the quicksilver-gpu package, set -cuckatoodevice, or allow processor mining with -allowcpumining";
     page.setStatus(st);
     QCOMPARE(health->text(),
-             QStringLiteral("No GPU solver is configured. Choose one in Settings > Options > Main."));
+             QStringLiteral("No graphics card is in use. Choose one in Settings > Options > Hardware."));
     QVERIFY(!health->text().contains(QStringLiteral("-cuckatoosolver")));
     // And the control itself, not just its address: this is the only health state
     // the user can act on from this page.
     QPushButton* configure = page.findChild<QPushButton*>("configureSolverButton");
     QVERIFY(configure);
     QVERIFY(configure->isVisibleTo(&page));
+    QCOMPARE(configure->text(), /*W-E4*/ QStringLiteral("Open graphics settings"));
     QSignalSpy solver_settings_spy(&page, &MineMintPage::solverSettingsRequested);
     QVERIFY(solver_settings_spy.isValid());
     configure->click();
@@ -2920,13 +3075,22 @@ void VaultTests::mineMintPageRendersStatus()
     // A solver that ran and failed is a different thing, and its message is the
     // useful one: it names the card, the driver or the log. Keep passing it through.
     st.solver_missing = false;
-    st.last_solver_error = "The GPU solver exited with an error; see the debug log";
+    st.last_solver_error = "The graphics helper exited with an error; see the debug log";
     page.setStatus(st);
     QCOMPARE(health->text(),
-             QStringLiteral("The GPU solver exited with an error; see the debug log"));
+             QStringLiteral("The graphics helper exited with an error; see the debug log"));
     // Nothing on this page fixes a dead card, so the button must go away again
     // rather than offer a setting that is already correct.
     QVERIFY(!configure->isVisibleTo(&page));
+}
+
+void VaultTests::solverConfigurationErrorUsesIdentity()
+{
+    QVERIFY(VaultModel::IsSolverConfigurationError(vault::TxProofNeedsGraphicsCardError()));
+    QVERIFY(!VaultModel::IsSolverConfigurationError(_("Transfer proof-of-work canceled")));
+    QVERIFY(!VaultModel::IsSolverConfigurationError(_("Could not produce per-tx proof-of-work")));
+    QCOMPARE(vault::TxProofNeedsGraphicsCardError().original,
+             std::string{"This transfer could not be proved. Quicksilver charges no fees, so every transfer is paid for with proof-of-work, and this network's work needs a graphics card. Choose one in Settings > Options > Hardware and restart. Nothing was sent and your funds are untouched."});
 }
 
 //! Four inputs, four row sets. The halted input is the one the page used to
@@ -2950,7 +3114,7 @@ void VaultTests::mineMintPageNamesAnArmedMinerWithNoPermittedSolver()
 
     const auto idle = rows(false, false, true, true, false, 0, std::nullopt, nullptr);
     QCOMPARE(idle.block_mining, QStringLiteral("Idle"));
-    QCOMPARE(idle.solver, QStringLiteral("CPU"));
+    QCOMPARE(idle.solver, QStringLiteral("Processor"));
     QCOMPARE(idle.attempts, QStringLiteral("Idle"));
     QCOMPARE(idle.health, QStringLiteral("Not running"));
     QVERIFY(!idle.show_configure_solver);
@@ -2961,17 +3125,17 @@ void VaultTests::mineMintPageNamesAnArmedMinerWithNoPermittedSolver()
 
     const auto warming = rows(true, true, true, true, false, 0, std::nullopt, nullptr);
     QCOMPARE(warming.block_mining, QStringLiteral("Active"));
-    QCOMPARE(warming.solver, QStringLiteral("GPU bridge"));
+    QCOMPARE(warming.solver, QStringLiteral("Graphics card"));
     QCOMPARE(warming.attempts, QStringLiteral("Warming up"));
     QCOMPARE(warming.health, QStringLiteral("Working — no graph finished yet"));
     QVERIFY(!warming.show_configure_solver);
 
     const auto dead = rows(true, true, true, false, false, 4, 0.29,
-                           "The GPU solver exited with an error; see the debug log");
+                           "The graphics helper exited with an error; see the debug log");
     QCOMPARE(dead.block_mining, QStringLiteral("Active"));
-    QCOMPARE(dead.solver, QStringLiteral("GPU bridge"));
+    QCOMPARE(dead.solver, QStringLiteral("Graphics card"));
     QCOMPARE(dead.attempts, QStringLiteral("0.290 (4 graphs attempted)"));
-    QCOMPARE(dead.health, QStringLiteral("The GPU solver exited with an error; see the debug log"));
+    QCOMPARE(dead.health, QStringLiteral("The graphics helper exited with an error; see the debug log"));
     QVERIFY(!dead.show_configure_solver);
 
     // Before the first solve attempt the node has already refused the
@@ -2979,9 +3143,9 @@ void VaultTests::mineMintPageNamesAnArmedMinerWithNoPermittedSolver()
     // that used to say the miner was warming up on the CPU.
     const auto halted = rows(true, false, false, true, false, 0, std::nullopt, nullptr);
     QCOMPARE(halted.block_mining, QStringLiteral("Halted"));
-    QCOMPARE(halted.solver, QStringLiteral("None"));
+    QCOMPARE(halted.solver, QStringLiteral("Nothing"));
     QCOMPARE(halted.attempts, QStringLiteral("Not solving"));
-    QCOMPARE(halted.health, QStringLiteral("No GPU solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Settings > Options > Main."));
+    QCOMPARE(halted.health, QStringLiteral("No graphics card is in use, and processor block mining is off. Choose a card, or allow processor block mining, in Settings > Options > Hardware."));
     QVERIFY(!halted.health.contains(QStringLiteral("-cuckatoosolver")));
     QVERIFY(!halted.health.contains(QStringLiteral("-allowcpumining")));
     QVERIFY(halted.show_configure_solver);
@@ -2990,7 +3154,7 @@ void VaultTests::mineMintPageNamesAnArmedMinerWithNoPermittedSolver()
     // the page must not fall through to the older "choose a solver" sentence
     // or back to Warming up.
     const auto halted_after = rows(true, false, false, false, true, 0, std::nullopt,
-                                   "No GPU solver is configured; set -cuckatoosolver=<path>");
+                                   "No graphics card is in use; install the quicksilver-gpu package, set -cuckatoodevice, or allow processor mining with -allowcpumining");
     QCOMPARE(halted_after.block_mining, halted.block_mining);
     QCOMPARE(halted_after.solver, halted.solver);
     QCOMPARE(halted_after.attempts, halted.attempts);
@@ -3156,35 +3320,35 @@ void VaultTests::mineMintPageNamesAnIdleNodeWithNothingPermitted()
         st.block_solving_possible = possible;
         return MineMintPage::statusTextForTesting(st);
     };
-    const QString sentence = QStringLiteral("No GPU solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Settings > Options > Main.");
+    const QString sentence = QStringLiteral("No graphics card is in use, and processor block mining is off. Choose a card, or allow processor block mining, in Settings > Options > Hardware.");
 
     const auto cpu = rows(false, true);
     QCOMPARE(cpu.block_mining, QStringLiteral("Idle"));
-    QCOMPARE(cpu.solver, QStringLiteral("CPU"));
+    QCOMPARE(cpu.solver, QStringLiteral("Processor"));
     QCOMPARE(cpu.attempts, QStringLiteral("Idle"));
     QCOMPARE(cpu.health, QStringLiteral("Not running"));
     QVERIFY(!cpu.show_configure_solver);
 
     const auto gpu = rows(true, true);
     QCOMPARE(gpu.block_mining, QStringLiteral("Idle"));
-    QCOMPARE(gpu.solver, QStringLiteral("GPU bridge"));
+    QCOMPARE(gpu.solver, QStringLiteral("Graphics card"));
     QCOMPARE(gpu.attempts, QStringLiteral("Idle"));
     QCOMPARE(gpu.health, QStringLiteral("Not running"));
     QVERIFY(!gpu.show_configure_solver);
 
-    // A GPU solver is configured, so the permit bit is not what the row
+    // A graphics helper is configured, so the permit bit is not what the row
     // is allowed to contradict. This input is not one BuildMiningStatus emits
     // while idle; the page must still not call the solver CPU.
     const auto gpu_denied = rows(true, false);
     QCOMPARE(gpu_denied.block_mining, QStringLiteral("Idle"));
-    QCOMPARE(gpu_denied.solver, QStringLiteral("GPU bridge"));
+    QCOMPARE(gpu_denied.solver, QStringLiteral("Graphics card"));
     QCOMPARE(gpu_denied.attempts, QStringLiteral("Idle"));
     QCOMPARE(gpu_denied.health, QStringLiteral("Not running"));
     QVERIFY(!gpu_denied.show_configure_solver);
 
     const auto denied = rows(false, false);
     QCOMPARE(denied.block_mining, QStringLiteral("Idle"));
-    QCOMPARE(denied.solver, QStringLiteral("None"));
+    QCOMPARE(denied.solver, QStringLiteral("Nothing"));
     QCOMPARE(denied.attempts, QStringLiteral("Idle"));
     QCOMPARE(denied.health, sentence);
     QVERIFY(!denied.health.contains(QStringLiteral("-cuckatoosolver")));
@@ -3344,7 +3508,7 @@ void VaultTests::devBuildBannerUsesTheWarningTone()
         QVERIFY2(color == QuicksilverStyle::Color(Token::Warning),
                  qPrintable(QStringLiteral("%1 draws %2, not the warning %3").arg(label->objectName(), color.name(), QuicksilverStyle::Color(Token::Warning).name())));
         QVERIFY(color != QuicksilverStyle::Color(Token::CinnabarSoft));
-        QVERIFY(color != QuicksilverStyle::Color(Token::Cinnabar));
+        QVERIFY(color != QuicksilverStyle::Color(Token::Vermilion));
     }
 }
 
@@ -3650,6 +3814,42 @@ void VaultTests::miningPollStopsWithTheClientModel()
     frame.setClientModel(nullptr);
 }
 
+void VaultTests::networkPageHidesDeveloperNetworksOnMain()
+{
+    // F-477: on the main network the panel describes that network alone; the
+    // developer networks wait behind a checkbox that is not kept between launches.
+    NetworkPage page(ChainType::MAIN);
+    QVERIFY(page.findChild<QLabel*>("developerNetworkBanner")->isHidden());
+    QCOMPARE(page.findChild<QLabel*>("developerNetworkMainCardName")->text(), QString("Quicksilver"));
+    QCOMPARE(page.findChild<QLabel*>("developerNetworkMainCardPurpose")->text(),
+             QString("The live Quicksilver network. Balances, transfers and mining rewards here are real."));
+    QCOMPARE(page.findChild<QLabel*>("developerNetworkMainCardState")->text(), QString("Current"));
+    QVERIFY(!page.findChild<QPushButton*>("developerNetworkMainCardButton"));
+
+    QCheckBox* toggle = page.findChild<QCheckBox*>("developerNetworkToggle");
+    QWidget* developer_list = page.findChild<QWidget*>("developerNetworkList");
+    QVERIFY(toggle);
+    QVERIFY(developer_list);
+    QCOMPARE(toggle->text(), QString("Show developer networks"));
+    QVERIFY(toggle->isEnabled());
+    QVERIFY(!toggle->isChecked());
+    QVERIFY(developer_list->isHidden());
+
+    toggle->click();
+    QVERIFY(!developer_list->isHidden());
+    QCOMPARE(page.findChild<QPushButton*>("developerNetworkPublicTestCardButton")->text(), QString("Switch to Public Test"));
+    QCOMPARE(page.findChild<QPushButton*>("developerNetworkSandboxCardButton")->text(), QString("Switch to Sandbox"));
+    toggle->click();
+    QVERIFY(developer_list->isHidden());
+
+    // The command-line wording is gone from every label on the panel.
+    for (QLabel* label : page.findChild<QFrame*>("developerNetworkContext")->findChildren<QLabel*>()) {
+        QVERIFY2(!label->text().contains(QString("Token")), qPrintable(label->text()));
+        QVERIFY2(!label->text().contains(QString("-chain")), qPrintable(label->text()));
+        QVERIFY2(!label->text().contains(QString("Datadir")), qPrintable(label->text()));
+    }
+}
+
 void VaultTests::networkPageFormatsStatus()
 {
     NetworkPage page;
@@ -3667,7 +3867,7 @@ void VaultTests::networkPageFormatsStatus()
     QVERIFY(!page.findChild<QLabel*>("developerNetworkMainCardState"));
     QPushButton* main_restart = page.findChild<QPushButton*>("developerNetworkMainCardButton");
     QVERIFY(main_restart);
-    QCOMPARE(main_restart->toolTip(), QString("Restart Quicksilver with this network context."));
+    QCOMPARE(main_restart->toolTip(), QString("Close Quicksilver and reopen it on this network."));
     QVERIFY(!page.findChild<QPushButton*>("developerNetworkSandboxCardButton"));
     {
         page.resize(980, 900);
@@ -3679,7 +3879,15 @@ void VaultTests::networkPageFormatsStatus()
         QCOMPARE(current_right, restart_right);
         page.hide();
     }
-    QVERIFY(page.findChild<QLabel*>("developerNetworkMainCardToken")->text().contains(QString("main")));
+    // F-477: no -chain token on the page; the data folder is named in words.
+    QVERIFY(!page.findChild<QLabel*>("developerNetworkMainCardToken"));
+    QVERIFY(page.findChild<QLabel*>("developerNetworkMainCardDatadir")->text().startsWith(QString("Data folder: ")));
+    // Running on the sandbox, the developer networks are shown and cannot be hidden.
+    QCheckBox* developer_toggle = page.findChild<QCheckBox*>("developerNetworkToggle");
+    QVERIFY(developer_toggle);
+    QVERIFY(developer_toggle->isChecked());
+    QVERIFY(!developer_toggle->isEnabled());
+    QVERIFY(!page.findChild<QWidget*>("developerNetworkList")->isHidden());
     QVERIFY(page.findChild<QLabel*>("developerNetworkPublicTestCardDatadir")->text().contains(QString("publictest")));
     QVERIFY(page.findChild<QLabel*>("developerNetworkSandboxCardDatadir")->text().contains(QString("sandbox")));
     QLabel* tor_steps = page.findChild<QLabel*>(QStringLiteral("torSetupSteps"));
@@ -3711,12 +3919,15 @@ void VaultTests::networkPageFormatsStatus()
     QVERIFY(main_restart);
     QVERIFY(publictest_restart);
     QVERIFY(!sandbox_restart);
-    QCOMPARE(main_restart->text(), QString("Restart"));
+    QCOMPARE(main_restart->text(), QString("Switch to main network"));
+    QCOMPARE(publictest_restart->text(), QString("Switch to Public Test"));
     QVERIFY(main_restart->isEnabled());
     QVERIFY(publictest_restart->isEnabled());
     publictest_restart->click();
     QCOMPARE(restart_spy.count(), 1);
-    QCOMPARE(restart_spy.takeFirst().at(0).toString(), QString("publictest"));
+    const QList<QVariant> restart = restart_spy.takeFirst();
+    QCOMPARE(restart.at(0).toString(), QString("publictest"));
+    QCOMPARE(restart.at(1).toString(), QString("Public Test"));
 
     page.showInitializing();
     QCOMPARE(page.findChild<QLabel*>("networkStatusValue")->text(), QString("Starting consensus"));
@@ -4268,120 +4479,124 @@ void VaultTests::sendGenerationGuardDropsStaleResult()
     QVERIFY(!dlg.acceptSolveResult(g0)); // stale worker result is dropped
 }
 
-void VaultTests::sendWorkResourceTextClassifiesGpuSolver()
+void VaultTests::gpuSituationWordingIsExact()
 {
-    const QString sandbox_text = SendCoinsDialog::sendWorkResourceTextForTesting(false, QString());
-    QVERIFY(sandbox_text.contains(QStringLiteral("quick built-in preparation")));
-    QVERIFY(sandbox_text.contains(QStringLiteral("do not need graphics acceleration")));
+    using gpusituation::SendNoteFor;
+    using gpusituation::StartupNoticeFor;
+    const QString rx480{QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")};
+    const QString rx580{QStringLiteral("device backend=opencl id=pci:0000:05:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 580")};
+    const QString p106{QStringLiteral("device backend=opencl id=pci:0000:01:00.0 type=gpu integrated=0 mem=0 status=compile-failed reason=x name=NVIDIA P106-100")};
+    const QString hd{QStringLiteral("device backend=opencl id=pci:0000:00:02.0 type=gpu integrated=1 mem=0 status=ok name=Intel(R) HD Graphics 4600")};
+    const QString timing{QStringLiteral("Preparing a transfer usually takes one to two minutes, but the search is random: some transfers finish in seconds and some run past five minutes. You can stop the work at any time.")};
+    const QString display{QStringLiteral("Your screen may respond slowly while transfers are being prepared.")};
+    const QString fallback{QStringLiteral("Graphics acceleration isn't available, so this computer's processor will prepare transfers. This may take many minutes.")};
 
-    const QString missing_arg_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, QString());
-    QVERIFY(missing_arg_text.contains(QStringLiteral("processor will take over")));
-    QVERIFY(missing_arg_text.contains(QStringLiteral("Settings > Options > Main")));
+    auto discovery = Discover({rx480});
+    QCOMPARE(SendNoteFor(discovery, false).text, /*W-B1*/ QStringLiteral("Graphics acceleration is ready (1 card).") + QLatin1Char(' ') + timing + QLatin1Char(' ') + display);
+    QVERIFY(!SendNoteFor(discovery, false).processor_fallback);
+    QVERIFY(!StartupNoticeFor(discovery, false, {}));
+    discovery = Discover({rx480, rx580});
+    QCOMPARE(SendNoteFor(discovery, false).text, /*W-B1*/ QStringLiteral("Graphics acceleration is ready (2 cards).") + QLatin1Char(' ') + timing + QLatin1Char(' ') + display);
 
-    QTemporaryDir temp_dir;
-    QVERIFY(temp_dir.isValid());
+    discovery = Discover({rx480, p106});
+    QCOMPARE(SendNoteFor(discovery, false).text,
+             /*W-B2*/ QStringLiteral("Using 1 of 2 graphics cards. NVIDIA P106-100 can't be used: its driver couldn't run Quicksilver's graphics code. See Settings.") + QLatin1Char(' ') + timing + QLatin1Char(' ') + display);
 
-    const QString absent_solver_path = temp_dir.filePath(QStringLiteral("missing-solver"));
-    const QString absent_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, absent_solver_path);
-    QVERIFY(absent_solver_text.contains(QStringLiteral("could not be found")));
-    QVERIFY(absent_solver_text.contains(QStringLiteral("Settings > Options > Main")));
+    discovery = Discover({});
+    auto notice = StartupNoticeFor(discovery, false, {});
+    QVERIFY(notice);
+    QCOMPARE(notice->headline, /*W-A3*/ QStringLiteral("No graphics card was found on this computer."));
+    QCOMPARE(notice->informative, /*W-A3*/ QStringLiteral("Quicksilver will prepare transfers on this computer's processor. You can stop the work at any time."));
+    QVERIFY(!notice->offer_settings);
+    QCOMPARE(SendNoteFor(discovery, false).text, fallback);
+    QVERIFY(SendNoteFor(discovery, false).processor_fallback);
 
-    const QString directory_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, temp_dir.path());
-    QVERIFY(directory_solver_text.contains(QStringLiteral("cannot be started")));
+    notice = StartupNoticeFor(Discover({hd}), false, {});
+    QCOMPARE(notice->headline, /*W-A4*/ QStringLiteral("This computer has only built-in graphics."));
+    QCOMPARE(notice->informative, /*W-A4*/ QStringLiteral("By default Quicksilver will use the processor. Built-in graphics may be selected in Settings."));
+    QVERIFY(notice->offer_settings);
 
-    // "Executable" is spelled differently per platform, and QFileInfo::isExecutable()
-    // -- which sendWorkResourceText() classifies on -- reports each platform's own
-    // spelling: POSIX reads the owner-execute bit, Windows reads the file extension
-    // (.exe/.com/.bat/.cmd). So a single fixture toggled by setPermissions() can only
-    // ever be non-executable on Windows. Give each case a name that means what the
-    // case needs on both platforms instead.
-    const QString non_executable_path = temp_dir.filePath(QStringLiteral("qsgpusolve-not-executable"));
-    QFile non_executable_file(non_executable_path);
-    QVERIFY(non_executable_file.open(QIODevice::WriteOnly));
-    non_executable_file.write("#!/bin/sh\nexit 0\n");
-    non_executable_file.close();
-    QVERIFY(non_executable_file.setPermissions(QFile::ReadOwner | QFile::WriteOwner));
-    const QString non_executable_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, non_executable_path);
-    QVERIFY(non_executable_solver_text.contains(QStringLiteral("cannot be started")));
+    notice = StartupNoticeFor(Discover({p106}), false, {});
+    QCOMPARE(notice->headline, /*W-A5*/ QStringLiteral("Quicksilver is unable to use this computer's graphics card."));
+    QCOMPARE(notice->informative, /*W-A5c*/ QStringLiteral("This computer's graphics driver is not compatible with Quicksilver. Updating the driver may fix this."));
+    const QString nodriver{QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=no-driver reason=no-compiler name=AMD Radeon RX 480")};
+    QCOMPARE(StartupNoticeFor(Discover({nodriver}), false, {})->informative,
+             /*W-A5a*/ QStringLiteral("Install your card's OpenCL driver. On Ubuntu, AMD cards use the <i>mesa-opencl-icd</i> package, Intel cards use <i>intel-opencl-icd</i>, and NVIDIA cards use NVIDIA's driver."));
+    // The message box shows its informative text as rich text only when Qt detects
+    // it as such, so the italic package names and command render instead of printing their tags.
+    QVERIFY(Qt::mightBeRichText(StartupNoticeFor(Discover({nodriver}), false, {})->informative));
+    QCOMPARE(StartupNoticeFor(Discover({nodriver}), true, {})->informative, /*W-A5b*/ QStringLiteral("Install the latest driver from your card's maker."));
 
-#ifdef Q_OS_WIN
-    const QString solver_path = temp_dir.filePath(QStringLiteral("qsgpusolve.exe"));
-#else
-    const QString solver_path = temp_dir.filePath(QStringLiteral("qsgpusolve"));
-#endif
-    QFile solver_file(solver_path);
-    QVERIFY(solver_file.open(QIODevice::WriteOnly));
-    solver_file.write("#!/bin/sh\nexit 0\n");
-    solver_file.close();
-    QVERIFY(solver_file.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
-    QVERIFY(QFileInfo(solver_path).isExecutable());
-    const QString executable_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, solver_path);
-    QVERIFY(executable_solver_text.contains(QStringLiteral("GPU solver is configured")));
-    QVERIFY(executable_solver_text.contains(QStringLiteral("will check it before preparation starts")));
+    qputenv("QS_PROBE_STUB_EXIT", "4");
+    notice = StartupNoticeFor(Discover({}), false, {});
+    QCOMPARE(notice->headline, /*W-A5n*/ QStringLiteral("Quicksilver couldn't check this computer's graphics cards, because no OpenCL driver is installed."));
+    QCOMPARE(notice->informative, /*W-A5nL*/ QStringLiteral("If this computer has a graphics card and you'd like Quicksilver to use it, install the card's OpenCL driver: <i>mesa-opencl-icd</i> for AMD, <i>intel-opencl-icd</i> for Intel, or NVIDIA's own driver for NVIDIA."));
+    QVERIFY(Qt::mightBeRichText(notice->informative));
+    QVERIFY(!notice->offer_settings);
+    QCOMPARE(StartupNoticeFor(Discover({}), true, {})->informative, /*W-A5nW*/ QStringLiteral("If this computer has a graphics card and you'd like Quicksilver to use it, install the latest driver from the card's maker."));
+    qunsetenv("QS_PROBE_STUB_EXIT");
 
-    const QString checking_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, solver_path, SendCoinsDialog::GpuSolverProbeStatus::Checking);
-    QVERIFY(checking_solver_text.contains(QStringLiteral("Checking whether graphics acceleration is ready")));
+    notice = StartupNoticeFor(Discover({rx480}, "pci:0000:09:00.0"), false, {{QStringLiteral("pci:0000:09:00.0"), QStringLiteral("NVIDIA P106-100")}});
+    QCOMPARE(notice->headline, /*W-A6*/ QStringLiteral("The graphics card chosen in Settings, NVIDIA P106-100 (slot 09:00.0), wasn't found."));
+    QCOMPARE(notice->informative, /*W-A6*/ QStringLiteral("It may have been removed or moved to another slot. Select a graphics card in Settings."));
 
-    const QString available_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, solver_path, SendCoinsDialog::GpuSolverProbeStatus::Available);
-    QVERIFY(available_solver_text.contains(QStringLiteral("Graphics acceleration is ready")));
-    // F-107: the success branch must state the wait too. It previously said only
-    // that acceleration was ready, immediately before a search whose median is
-    // tens of seconds and whose tail is unbounded -- so the user whose hardware
-    // worked was the one told least about what was coming. Both halves are
-    // pinned: a typical case alone would be wrong about half the time.
-    QVERIFY(available_solver_text.contains(QStringLiteral("one to two minutes")));
-    QVERIFY(available_solver_text.contains(QStringLiteral("past five minutes")));
-    QVERIFY(available_solver_text.contains(QStringLiteral("stop the work at any time")));
+    qunsetenv("CUCKATOO_GPU_SOLVER");
+    cuckatoo::ResetGpuDiscoveryForTesting();
+    const auto none{cuckatoo::DiscoverGpus(19)};
+    QCOMPARE(StartupNoticeFor(none, false, {})->headline, /*W-A7L*/ QStringLiteral("Quicksilver's graphics helper isn't installed."));
+    QCOMPARE(StartupNoticeFor(none, false, {})->informative, /*W-A7L*/ QStringLiteral("Install it with <i>sudo apt install quicksilver-gpu</i>."));
+    QVERIFY(Qt::mightBeRichText(StartupNoticeFor(none, false, {})->informative));
+    QCOMPARE(StartupNoticeFor(none, true, {})->informative, /*W-A7W*/ QStringLiteral("Reinstall Quicksilver."));
 
-    const QString failed_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, solver_path, SendCoinsDialog::GpuSolverProbeStatus::Failed);
-    QVERIFY(failed_solver_text.contains(QStringLiteral("Graphics acceleration did not start")));
+    discovery = Discover({rx480}, "cpu");
+    QCOMPARE(SendNoteFor(discovery, false).text, /*W-B8*/ QStringLiteral("Graphics cards are turned off in Settings, so this computer's processor will prepare transfers. This may take many minutes."));
+    QVERIFY(SendNoteFor(discovery, false).processor_fallback);
+    QVERIFY(!StartupNoticeFor(discovery, false, {}));
 
-    const QString timed_out_solver_text = SendCoinsDialog::sendWorkResourceTextForTesting(true, solver_path, SendCoinsDialog::GpuSolverProbeStatus::TimedOut);
-    QVERIFY(timed_out_solver_text.contains(QStringLiteral("acceleration check timed out")));
+    QCOMPARE(SendNoteFor(std::nullopt, false).text, /*W-B0*/ QStringLiteral("Checking this computer's graphics cards…"));
+    QCOMPARE(SendNoteFor(discovery, true).text, /*W-BS*/ QStringLiteral("Sandbox transfers use quick built-in preparation and do not need graphics acceleration."));
+    qputenv("QS_PROBE_STUB_EXIT", "1");
+    discovery = Discover({rx480});
+    QCOMPARE(SendNoteFor(discovery, false).text, /*W-BT*/ QStringLiteral("Quicksilver was unable to detect a graphics card on this computer, so this computer's processor will prepare transfers. This may take many minutes."));
+    QVERIFY(!StartupNoticeFor(discovery, false, {}));
+    qunsetenv("QS_PROBE_STUB_EXIT");
+}
 
-    // Structural half of F-107. Asserting the one string only pins the branch
-    // that was wrong; this pins the property that was violated -- every terminal
-    // disclosure a sender can act on names a duration. A new branch added without
-    // one fails here rather than silently reinstating the inverted warning.
-    const QList<QString> terminal_texts{
-        missing_arg_text,
-        absent_solver_text,
-        directory_solver_text,
-        non_executable_solver_text,
-        available_solver_text,
-        failed_solver_text,
-        timed_out_solver_text,
-    };
-    for (const QString& text : terminal_texts) {
-        QVERIFY2(text.contains(QStringLiteral("minute")),
-                 qPrintable(QStringLiteral("disclosure states no duration: ") + text));
-    }
+void VaultTests::discoveryRunsOffTheGuiThread()
+{
+    qputenv("QS_PROBE_STUB_SLEEP_MS", "3000");
+    const QString listing{Listing({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")})};
+    qputenv("CUCKATOO_GPU_SOLVER", SolverProbeStubPath().toUtf8());
+    qputenv("QS_PROBE_STUB_LISTING", listing.toUtf8());
+    qunsetenv("CUCKATOO_GPU_DEVICES");
+    cuckatoo::ResetGpuDiscoveryForTesting();
+    QObject receiver;
+    std::optional<cuckatoo::GpuDiscovery> got;
+    QElapsedTimer timer;
+    timer.start();
+    gpusituation::RunDiscovery(19, &receiver, [&](const cuckatoo::GpuDiscovery& result) { got = result; });
+    QVERIFY2(timer.elapsed() < 500, "RunDiscovery blocked its caller");
+    QVERIFY(!got);
+    QTRY_VERIFY_WITH_TIMEOUT(got.has_value(), 30000);
+    QVERIFY(got->situation == cuckatoo::GpuSituation::kReady);
+    qunsetenv("QS_PROBE_STUB_SLEEP_MS");
+}
 
-    // F-453: every case where the processor takes over is a warning, set
-    // apart from the notes; the others are not.
-    using Status = SendCoinsDialog::GpuSolverProbeStatus;
-    // No default argument on the lambda: MSVC cannot name the local alias
-    // in one (C2653).
-    const auto warns = [](bool requires_gpu, const QString& path, Status status) {
-        return SendCoinsDialog::sendWorkNotesForTesting(requires_gpu, path, status).processor_fallback;
-    };
-    QVERIFY(!warns(false, QString(), Status::Unchecked));
-    QVERIFY(warns(true, QString(), Status::Unchecked));
-    QVERIFY(warns(true, absent_solver_path, Status::Unchecked));
-    QVERIFY(warns(true, temp_dir.path(), Status::Unchecked));
-    QVERIFY(warns(true, non_executable_path, Status::Unchecked));
-    QVERIFY(!warns(true, solver_path, Status::Unchecked));
-    QVERIFY(!warns(true, solver_path, Status::Checking));
-    QVERIFY(!warns(true, solver_path, Status::Available));
-    QVERIFY(warns(true, solver_path, Status::Failed));
-    QVERIFY(warns(true, solver_path, Status::TimedOut));
-    // The notes and the warning together say what the one text says.
-    const SendCoinsDialog::SendWorkNotes missing = SendCoinsDialog::sendWorkNotesForTesting(true, QString(), Status::Unchecked);
-    QCOMPARE(missing.intro + QLatin1Char('\n') + missing.acceleration, missing_arg_text);
-    QVERIFY(missing.acceleration.startsWith(QStringLiteral("Graphics acceleration is not configured")));
+void VaultTests::cpuFallbackWarningFollowsDiscovery()
+{
+    QVERIFY(!gpusituation::CardWillWork(std::nullopt));
+    QVERIFY(gpusituation::CardWillWork(Discover({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=X")})));
+    QVERIFY(!gpusituation::CardWillWork(Discover({})));
+    QVERIFY(!SendCoinsDialog::cpuFallbackWarningRequiredForTesting(false, false, true));
+    QVERIFY(!SendCoinsDialog::cpuFallbackWarningRequiredForTesting(true, true, true));
+    QVERIFY(!SendCoinsDialog::cpuFallbackWarningRequiredForTesting(true, false, false));
+    QVERIFY(SendCoinsDialog::cpuFallbackWarningRequiredForTesting(true, false, true));
 
-    // On the page the warning is its own line in the warning tone, under the
-    // notes; a note that is not a warning stays with them.
+    // F-453: when the processor will take over, the acceleration line is its own
+    // line in the warning tone, under the notes, so it is noticed before Review;
+    // a note that is not a warning stays with them.
+    const SendCoinsDialog::SendWorkNotes fallback = SendCoinsDialog::sendWorkNotesForTesting(Discover({}), false);
+    QVERIFY(fallback.processor_fallback);
     std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
     SendCoinsDialog page(platform_style.get());
     QLabel* notes = page.findChild<QLabel*>(QStringLiteral("sendWorkDisclosureLabel"));
@@ -4390,25 +4605,17 @@ void VaultTests::sendWorkResourceTextClassifiesGpuSolver()
     QVERIFY(warning);
     QCOMPARE(warning->property("class").toString(), QStringLiteral("benchNote"));
     QCOMPARE(warning->property("benchTone").toString(), QStringLiteral("warn"));
-    page.showSendWorkNotesForTesting(missing);
+    page.showSendWorkNotesForTesting(fallback);
     QVERIFY(!warning->isHidden());
-    QCOMPARE(warning->text(), missing.acceleration);
-    QCOMPARE(notes->text(), missing.intro);
+    QCOMPARE(warning->text(), fallback.acceleration);
+    QCOMPARE(notes->text(), fallback.intro);
     QVERIFY(notes->parentWidget() == warning->parentWidget());
-    const SendCoinsDialog::SendWorkNotes ready = SendCoinsDialog::sendWorkNotesForTesting(true, solver_path, Status::Available);
+    const SendCoinsDialog::SendWorkNotes ready = SendCoinsDialog::sendWorkNotesForTesting(
+        Discover({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=X")}), false);
+    QVERIFY(!ready.processor_fallback);
     page.showSendWorkNotesForTesting(ready);
     QVERIFY(warning->isHidden());
     QCOMPARE(notes->text(), ready.intro + QLatin1Char('\n') + ready.acceleration);
-}
-
-void VaultTests::cpuFallbackWarningPolicyMatchesNetworkAndPreference()
-{
-    using Status = SendCoinsDialog::GpuSolverProbeStatus;
-    QVERIFY(!SendCoinsDialog::cpuFallbackWarningRequiredForTesting(false, Status::Failed, true));
-    QVERIFY(!SendCoinsDialog::cpuFallbackWarningRequiredForTesting(true, Status::Available, true));
-    QVERIFY(!SendCoinsDialog::cpuFallbackWarningRequiredForTesting(true, Status::Failed, false));
-    QVERIFY(SendCoinsDialog::cpuFallbackWarningRequiredForTesting(true, Status::Unchecked, true));
-    QVERIFY(SendCoinsDialog::cpuFallbackWarningRequiredForTesting(true, Status::TimedOut, true));
 }
 
 void VaultTests::transferSummaryTracksAmountsAgainstSpendable()
@@ -4858,6 +5065,142 @@ void VaultTests::coinControlDialogQuantityAndBytesUseSeparateRows()
     if (!quantityAndBytesUseSeparateRows(dialog.get(), messages)) return;
 }
 
+//! F-486: coin control paints its item-view checks with the same visible
+//! contrast as the dialog's ordinary checks, including a distinct mixed state.
+void VaultTests::coinControlIndicatorsMatchDialogCheckboxes()
+{
+    CoinControlFormSetup setup(m_node);
+    if (!setup.ok) return;
+
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+
+    vault::CCoinControl coin_control;
+    CoinControlDialog dialog(coin_control, setup.model.get(), setup.style.get());
+    auto* tree = dialog.findChild<QTreeWidget*>(QStringLiteral("treeWidget"));
+    auto* list_mode = dialog.findChild<QRadioButton*>(QStringLiteral("radioListMode"));
+    auto* tree_mode = dialog.findChild<QRadioButton*>(QStringLiteral("radioTreeMode"));
+    QVERIFY(tree);
+    QVERIFY(list_mode);
+    QVERIFY(tree_mode);
+    dialog.resize(1000, 620);
+    dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+
+    const auto populate_tree = [&] {
+        tree->clear();
+        tree->setAlternatingRowColors(false);
+        std::array<QTreeWidgetItem*, 3> parents{};
+        const std::array<QString, 3> labels{
+            QStringLiteral("No outputs selected"),
+            QStringLiteral("Some outputs selected"),
+            QStringLiteral("All outputs selected"),
+        };
+        for (int row = 0; row < 3; ++row) {
+            auto* parent = new QTreeWidgetItem(tree);
+            parent->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsUserCheckable | Qt::ItemIsAutoTristate);
+            parent->setText(2, labels[row]);
+            for (int child_index = 0; child_index < 2; ++child_index) {
+                auto* child = new QTreeWidgetItem(parent);
+                child->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+                child->setText(2, QStringLiteral("Output %1").arg(child_index + 1));
+                child->setCheckState(0, row == 2 || (row == 1 && child_index == 0) ? Qt::Checked : Qt::Unchecked);
+            }
+            parent->setExpanded(true);
+            parents[row] = parent;
+        }
+        QCoreApplication::processEvents();
+        return parents;
+    };
+
+    tree_mode->click();
+    QVERIFY(tree_mode->isChecked());
+    tree->setEnabled(true);
+    const auto parents = populate_tree();
+    QCOMPARE(parents[0]->checkState(0), Qt::Unchecked);
+    QCOMPARE(parents[1]->checkState(0), Qt::PartiallyChecked);
+    QCOMPARE(parents[2]->checkState(0), Qt::Checked);
+
+    QCheckBox reference;
+    reference.setTristate(true);
+    reference.resize(84, tree->sizeHintForRow(0));
+    reference.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&reference));
+
+    const auto tree_indicator = [&](QTreeWidgetItem* item) {
+        QStyleOptionViewItem option;
+        option.initFrom(tree->viewport());
+        option.rect = tree->visualItemRect(item);
+        option.features = QStyleOptionViewItem::HasCheckIndicator;
+        option.checkState = item->checkState(0);
+        const QRect rect = tree->style()->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &option, tree->viewport()).adjusted(-1, -1, 1, 1);
+        return tree->viewport()->grab(rect).toImage();
+    };
+    const auto reference_indicator = [&](Qt::CheckState state) {
+        reference.setCheckState(state);
+        QCoreApplication::processEvents();
+        QStyleOptionButton option;
+        option.initFrom(&reference);
+        const QRect rect = reference.style()->subElementRect(QStyle::SE_CheckBoxIndicator, &option, &reference);
+        return reference.grab(rect).toImage();
+    };
+    const auto pixel_contrast = [](const QImage& image) {
+        int best{0};
+        for (int y1 = 0; y1 < image.height(); ++y1) {
+            for (int x1 = 0; x1 < image.width(); ++x1) {
+                const QColor first = image.pixelColor(x1, y1);
+                for (int y2 = 0; y2 < image.height(); ++y2) {
+                    for (int x2 = 0; x2 < image.width(); ++x2) {
+                        const QColor second = image.pixelColor(x2, y2);
+                        best = std::max(best, std::abs(first.red() - second.red()) +
+                                                  std::abs(first.green() - second.green()) +
+                                                  std::abs(first.blue() - second.blue()));
+                    }
+                }
+            }
+        }
+        return best;
+    };
+
+    std::array<QImage, 3> rendered{};
+    const std::array<Qt::CheckState, 3> states{Qt::Unchecked, Qt::PartiallyChecked, Qt::Checked};
+    for (size_t i = 0; i < states.size(); ++i) {
+        rendered[i] = tree_indicator(parents[i]);
+        const QImage expected = reference_indicator(states[i]);
+        const int actual_contrast = pixel_contrast(rendered[i]);
+        const int expected_contrast = pixel_contrast(expected);
+        QVERIFY2(actual_contrast >= expected_contrast,
+                 qPrintable(QStringLiteral("state %1: coin-control indicator contrast %2 vs dialog checkbox %3")
+                                .arg(static_cast<int>(states[i]))
+                                .arg(actual_contrast)
+                                .arg(expected_contrast)));
+    }
+    QVERIFY2(rendered[1] != rendered[2], "partial and checked indicators render the same glyph pixels");
+
+    const QString screenshot_dir = qEnvironmentVariable("QS_F486_SCREENSHOTS");
+    if (!screenshot_dir.isEmpty()) {
+        QVERIFY(QDir().mkpath(screenshot_dir));
+        list_mode->click();
+        QVERIFY(list_mode->isChecked());
+        tree->clear();
+        tree->setAlternatingRowColors(true);
+        for (int row = 0; row < 3; ++row) {
+            auto* item = new QTreeWidgetItem(tree);
+            item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+            item->setCheckState(0, row == 1 ? Qt::Checked : Qt::Unchecked);
+            item->setText(1, QStringLiteral("%1.00000000 Hg").arg(row + 1));
+            item->setText(2, QStringLiteral("List output %1").arg(row + 1));
+        }
+        QCoreApplication::processEvents();
+        QVERIFY(dialog.grab().save(QDir(screenshot_dir).filePath(QStringLiteral("input-selection-list.png"))));
+
+        tree_mode->click();
+        QVERIFY(tree_mode->isChecked());
+        populate_tree();
+        QVERIFY(dialog.grab().save(QDir(screenshot_dir).filePath(QStringLiteral("input-selection-tree.png"))));
+    }
+}
+
 //! Each copy action reads the stored amount, not the label. The label is a
 //! different number on purpose, so a cut-at-the-space or a comma strip still fails.
 void VaultTests::copyAmountActionsCopyTheBareNumber()
@@ -5158,7 +5501,7 @@ void VaultTests::transferKeepsTheAddressReadableAndReviewInReach()
     QCOMPARE(label->mapTo(&window, QPoint(label->width(), 0)).x(), remove->mapTo(&window, QPoint(remove->width(), 0)).x());
     // Label's content is its text: a label filled in from the address book
     // shows whole too.
-    const QString known_label = QStringLiteral("founding-payout-b58");
+    const QString known_label = QStringLiteral("household-budget-02");
     label->setText(known_label);
     QCoreApplication::processEvents();
     QStyleOptionFrame label_option;
@@ -5202,6 +5545,68 @@ void VaultTests::transferKeepsTheAddressReadableAndReviewInReach()
     QVERIFY(clear);
     QCOMPARE(review->height(), add->height());
     QCOMPARE(clear->height(), add->height());
+}
+
+//! F-493: the label's paint room holds an address-book label even when the
+//! font is wider than the one the row was first laid out with. The check is
+//! the same sum as transferKeepsTheAddressReadableAndReviewInReach.
+void VaultTests::transferLabelFieldHoldsAReferenceLabel()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    MiniGUI mini_gui(m_node, platform_style.get());
+    mini_gui.initModelForVault(m_node, vault, platform_style.get());
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(mini_gui.vaultModel.get(), platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(mini_gui.vaultModel.get());
+    window.resize(1200, 800);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QAction* transfer = window.findChild<QAction*>(QStringLiteral("sendCoinsAction"));
+    QVERIFY(transfer);
+    transfer->trigger();
+    QCoreApplication::processEvents();
+    SendCoinsDialog* page = view->findChild<SendCoinsDialog*>();
+    QVERIFY(page);
+    QTRY_VERIFY(page->isVisible());
+
+    // Letter spacing widens the reference and leaves the pixel constants
+    // (index, Max, spacing) where they are. The bench sheet matches QLineEdit,
+    // and Qt then does not carry a parent font down to that field, so the
+    // wide face is set on the field itself. That is the FontChange the
+    // minimum has to follow.
+    QLineEdit* label = page->findChild<QLineEdit*>(QStringLiteral("addAsLabel"));
+    QVERIFY(label);
+    QFont wide = label->font();
+    wide.setLetterSpacing(QFont::AbsoluteSpacing, 4);
+    page->setFont(wide);
+    label->setFont(wide);
+    if (page->layout()) page->layout()->activate();
+    QCoreApplication::processEvents();
+    const QString known_label = QStringLiteral("household-budget-02");
+    label->setText(known_label);
+    QCoreApplication::processEvents();
+    QStyleOptionFrame label_option;
+    label_option.initFrom(label);
+    label_option.rect = label->rect();
+    label_option.lineWidth = label->style()->pixelMetric(QStyle::PM_DefaultFrameWidth, &label_option, label);
+    const int label_room = label->style()->subElementRect(QStyle::SE_LineEditContents, &label_option, label).width() - 2 * 2 - 1;
+    const int text_width = label->fontMetrics().horizontalAdvance(known_label);
+    QVERIFY2(text_width <= label_room,
+             qPrintable(QStringLiteral("label field has %1 px of room for a %2 px label").arg(label_room).arg(text_width)));
 }
 
 //! Request, Ledger, Agents, Mine / Mint and Network follow the Bench page
@@ -5265,36 +5670,50 @@ void VaultTests::transferSolverTextNamesRealMenuAndSetting()
     std::unique_ptr<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
     QuicksilverGUI window(m_node, platform_style.get(), network_style.get());
     QStringList menus;
-    for (QAction* action : window.menuBar()->actions()) {
-        menus << QString(action->text()).remove(QLatin1Char('&'));
-    }
+    for (QAction* action : window.menuBar()->actions()) menus << QString(action->text()).remove(QLatin1Char('&'));
     QVERIFY(menus.contains(QStringLiteral("Settings")));
 
-    QTemporaryDir dir;
-    QVERIFY(dir.isValid());
-#ifdef Q_OS_WIN
-    const QString solver_path = dir.filePath(QStringLiteral("solver.exe"));
-#else
-    const QString solver_path = dir.filePath(QStringLiteral("solver"));
-#endif
-    QFile solver(solver_path);
-    QVERIFY(solver.open(QIODevice::WriteOnly));
-    solver.close();
-    QVERIFY(solver.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
-    QVERIFY(QFileInfo(solver_path).isExecutable());
-
-    QStringList texts{
-        SendCoinsDialog::sendWorkResourceTextForTesting(false, QString()),
-        SendCoinsDialog::sendWorkResourceTextForTesting(true, QString()),
-        SendCoinsDialog::sendWorkResourceTextForTesting(true, dir.filePath(QStringLiteral("absent"))),
-        SendCoinsDialog::sendWorkResourceTextForTesting(true, dir.path()),
+    const QString rx480{QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")};
+    const QString p106{QStringLiteral("device backend=opencl id=pci:0000:01:00.0 type=gpu integrated=0 mem=0 status=compile-failed reason=x name=NVIDIA P106-100")};
+    const QString hd{QStringLiteral("device backend=opencl id=pci:0000:00:02.0 type=gpu integrated=1 mem=0 status=ok name=Intel(R) HD Graphics 4600")};
+    QStringList texts;
+    const auto add = [&texts](const cuckatoo::GpuDiscovery& discovery) {
+        texts << gpusituation::SendNoteFor(discovery, false).text;
+        for (bool windows : {false, true}) {
+            if (const auto notice = gpusituation::StartupNoticeFor(discovery, windows, {{QStringLiteral("pci:0000:09:00.0"), QStringLiteral("NVIDIA P106-100")}})) {
+                texts << notice->headline << notice->informative;
+            }
+        }
     };
-    using Status = SendCoinsDialog::GpuSolverProbeStatus;
-    for (const auto status : {Status::Unchecked, Status::Checking, Status::Available, Status::Failed, Status::TimedOut}) {
-        texts << SendCoinsDialog::sendWorkResourceTextForTesting(true, solver_path, status);
-    }
-    texts << SendCoinsDialog::startupAccelerationTextForTesting(true)
-          << SendCoinsDialog::startupAccelerationTextForTesting(false);
+    add(Discover({rx480}));
+    add(Discover({rx480, p106}));
+    add(Discover({}));
+    add(Discover({hd}));
+    add(Discover({p106}));
+    add(Discover({rx480}, "pci:0000:09:00.0"));
+    add(Discover({rx480}, "cpu"));
+    qputenv("QS_PROBE_STUB_EXIT", "4");
+    add(Discover({}));
+    qunsetenv("QS_PROBE_STUB_EXIT");
+    qunsetenv("CUCKATOO_GPU_SOLVER");
+    cuckatoo::ResetGpuDiscoveryForTesting();
+    add(cuckatoo::DiscoverGpus(19));
+    texts << gpusituation::SendNoteFor(std::nullopt, false).text
+          << gpusituation::SendNoteFor(Discover({rx480}), true).text;
+    qputenv("QS_PROBE_STUB_EXIT", "1");
+    add(Discover({rx480}));
+    qunsetenv("QS_PROBE_STUB_EXIT");
+
+    interfaces::MiningStatus mining;
+    mining.active = true;
+    mining.block_solving_possible = false;
+    texts << MineMintPage::statusTextForTesting(mining).health;
+    mining.block_solving_possible = true;
+    mining.solver_missing = true;
+    mining.solver_ok = false;
+    texts << MineMintPage::statusTextForTesting(mining).health;
+    texts << QString::fromStdString(vault::TxProofNeedsGraphicsCardError().original);
+
     const QRegularExpression path(QStringLiteral("([A-Za-z]+) (?:>|→) [A-Za-z]+ (?:>|→) [A-Za-z]+"));
     int paths = 0;
     for (const QString& text : texts) {
@@ -5302,14 +5721,13 @@ void VaultTests::transferSolverTextNamesRealMenuAndSetting()
         while (matches.hasNext()) {
             const auto match = matches.next();
             QVERIFY2(menus.contains(match.captured(1)), qPrintable(text));
-            QCOMPARE(match.captured(0), QStringLiteral("Settings > Options > Main"));
+            QCOMPARE(match.captured(0), QStringLiteral("Settings > Options > Hardware"));
             ++paths;
         }
         QVERIFY2(!text.contains(QStringLiteral("transfer helper")), qPrintable(text));
-        // The menu was renamed from Controls to Settings (owner ruling 2026-10-10).
         QVERIFY2(!text.contains(QStringLiteral("Controls")), qPrintable(text));
     }
-    QCOMPARE(paths, 5);
+    QCOMPARE(paths, 3);
 }
 
 namespace {

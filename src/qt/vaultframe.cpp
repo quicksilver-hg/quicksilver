@@ -61,10 +61,10 @@ VaultFrame::VaultFrame(const PlatformStyle* _platformStyle, QWidget* parent)
     vaultFrameLayout->addWidget(vaultStack);
 
     m_launch_page = new DesktopLaunchPage(platformStyle, Params().AssumedBlockchainSize(), Params().AssumedChainStateSize(), vaultStack);
-    connect(m_launch_page, &DesktopLaunchPage::vaultRequested, this, &VaultFrame::gotoVaultPage);
+    connect(m_launch_page, &DesktopLaunchPage::vaultRequested, this, &VaultFrame::vaultRequested);
     connect(m_launch_page, &DesktopLaunchPage::backupRequested, this, &VaultFrame::backupVault);
-    connect(m_launch_page, &DesktopLaunchPage::consensusRequested, this, &VaultFrame::gotoNetworkPage);
-    connect(m_launch_page, &DesktopLaunchPage::miningRequested, this, &VaultFrame::gotoMineMintPage);
+    connect(m_launch_page, &DesktopLaunchPage::consensusRequested, this, &VaultFrame::networkRequested);
+    connect(m_launch_page, &DesktopLaunchPage::miningRequested, this, &VaultFrame::miningRequested);
     connect(m_launch_page, &DesktopLaunchPage::privacyRequested, this, &VaultFrame::privacyRequested);
     connect(m_launch_page, &DesktopLaunchPage::ledgerRequested, this, &VaultFrame::ledgerRequested);
     vaultStack->addWidget(m_launch_page);
@@ -86,7 +86,7 @@ VaultFrame::VaultFrame(const PlatformStyle* _platformStyle, QWidget* parent)
 
     m_mining_page = new MineMintPage(vaultStack);
     m_mining_page->setAddressHelperAvailable(false);
-    connect(m_mining_page, &MineMintPage::networkHelpRequested, this, &VaultFrame::gotoNetworkPage);
+    connect(m_mining_page, &MineMintPage::networkHelpRequested, this, &VaultFrame::networkRequested);
     vaultStack->addWidget(m_mining_page);
 
     m_no_vault_page = new QWidget(vaultStack);
@@ -243,6 +243,7 @@ bool VaultFrame::addView(VaultView* vaultView)
     if (mapVaultViews.count(vaultView->getVaultModel()) > 0) return false;
 
     connect(vaultView, &VaultView::miningStatusUpdated, this, &VaultFrame::setMiningStatus);
+    connect(vaultView, &VaultView::networkRequested, this, &VaultFrame::networkRequested);
     if (clientModel) vaultView->setClientModel(clientModel);
 
     vaultStack->addWidget(vaultView);

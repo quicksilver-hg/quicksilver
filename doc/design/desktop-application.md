@@ -23,10 +23,9 @@
 > an active proof-of-work progress panel with elapsed time while the desktop
 > prepares/proves the transfer, then reports the completed graph-attempt count
 > once the proof is ready for review. The send screen now also distinguishes
-> fast sandbox proof-of-work from the live/public CPU fallback, recommends a
-> configured GPU solver for practical transfer times, checks that a configured
-> solver path resolves to an executable file, and asynchronously probes executable
-> solver startup before describing it as ready. The Qt English translation source
+> fast sandbox proof-of-work from the live/public processor fallback, and says
+> which graphics cards will prepare the transfer, from the graphics helper's own
+> listing of this computer's cards. The Qt English translation source
 > catalogs have been regenerated for the launch,
 > consensus, network, mining, backup, send, and agent desktop strings. The Qt
 > vault now has an Agents section with co-signed allotment disclosure, limit inputs,
@@ -300,9 +299,9 @@ that accepts it, never after.
   a fee, so the screen shows work being done and counts it in graphs solved,
   making the delay legible as progress rather than as a hang. Nothing is deducted:
   the full amount arrives. The screen states that live and public-test transfers
-  are practical with the external GPU solver and may take many minutes on the
-  desktop's CPU fallback. The command-line agent uses that solver on those
-  networks unless `-allowcputxpow` is set. The flag is off by default because an
+  are practical on a graphics card and may take many minutes on this computer's
+  processor. The command-line agent uses a graphics card on those networks
+  unless `-allowcputxpow` is set. The flag is off by default because an
   agent can start the work while the computer is in use. See [delegation.md](delegation.md).
 - **Consensus** costs about 26 GB per year pruned, which is the default, or 154 GB
   per year to keep full history. Both figures are shown, because a user who is
@@ -315,16 +314,29 @@ that accepts it, never after.
 Burying either would be the same dishonesty as concealing a fee.
 
 Current Qt status: the transfer form now states the proof-of-work cost above the
-send controls, distinguishes sandbox proof-of-work from live/public CPU fallback
-and `-cuckatoosolver=<path>` acceleration, shows an active proof-of-work panel with
-elapsed time while the async prepare/prove worker runs, forwards GPU solver
-heartbeats into live graph-attempt updates when the external solver reports
+send controls, distinguishes sandbox proof-of-work from live/public graphics-card
+and processor preparation, shows an active proof-of-work panel with
+elapsed time while the async prepare/prove worker runs, forwards graphics-helper
+heartbeats into live graph-attempt updates when the helper reports
 them, reports the completed graph-attempt count from the solved proof nonce, and
-repeats the disclosure in the confirmation dialog. The GPU-solver disclosure now
-distinguishes an absent startup argument, a configured path that is missing, a
-configured path that is not executable, an executable file awaiting probe, an
-active startup probe, a passed startup probe, a failed startup probe, and a probe
-timeout. CPU fallback now emits the same latest-nonce progress callbacks from its
+repeats the disclosure in the confirmation dialog. The graphics disclosure is
+read from the helper's listing of this computer's cards. It says whether the listing is still running,
+how many cards are ready, which cards can't be used and why (no OpenCL driver,
+a driver that can't run the graphics code, or a chosen card that wasn't found),
+that no card is in use or that cards are turned off in Settings, or that the
+listing failed; in each processor case it says the work may take many minutes.
+
+Settings > Options > Hardware has a Graphics cards section. Automatic uses every
+graphics card except built-in graphics; Choose cards ticks cards by the id the
+helper lists, and ticking built-in graphics asks for confirmation first; Don't
+use graphics cards stores `cpu`. The choice is stored as the `-cuckatoodevice`
+list. Below it, Custom
+graphics helper (advanced) takes a helper the user built, such as a CUDA or ROCm
+build, and stores it as `-cuckatoosolver`; the dialog checks that the file
+exists and is executable, then runs its `--list-devices` before reporting it
+loaded. Both settings take effect after a restart.
+
+CPU fallback emits the same latest-nonce progress callbacks from its
 in-process attempt loop, so sandbox CPU proof-of-work also moves the
 graph-attempt text before completion. Before any proof work starts, transfer
 preparation now fails closed when the vault cannot create transactions from live
@@ -464,7 +476,8 @@ permission checks remain in [tor.md](../tor.md).
 | where | number | unit |
 |---|---|---|
 | Display: labels, tickers, ledger cells, transfer review, transaction details, notifications | thousands grouped with commas, from four digits | `Hg` immediately after the value; the cinnabar sign immediately after the value, in the accent colour where the widget can colour part of the text |
-| Names: unit menu, amount-field selector, column titles, transfer amount key | — | the codes `Hg` and `HgS` |
+| Names: unit choices | — | `Hg` and `HgS (🜓)` |
+| Names: unit button, column titles, transfer amount key | — | the codes `Hg` and `HgS` |
 | Input: amount fields, paste, payment-link amount | `.` is the only decimal point. Commas are accepted only as thousands separators in whole groups of three. Payment-link amounts take no separators. The comma key types a comma; it is never a decimal point. | — |
 | Copy and export | no separators | no unit; a CSV header names the code |
 

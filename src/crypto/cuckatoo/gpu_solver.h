@@ -8,6 +8,7 @@
 #define QUICKSILVER_CRYPTO_CUCKATOO_GPU_SOLVER_H
 
 #include <crypto/cuckatoo/cuckatoo.h>
+#include <crypto/cuckatoo/gpu_devices.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -48,10 +49,11 @@ bool SolverMissing(GpuSolveStatus status, bool cpu_fallback);
  * startup; runtime status must use this same source or it can advertise a
  * solver that no solve attempt can actually start.
  */
-std::optional<std::string> GpuSolverPath();
+bool GpuHelperConfigured(uint8_t edgebits);
+std::string DescribeDiscovery(const GpuDiscovery& discovery);
 
 //! If CUCKATOO_GPU_SOLVER is set, runs it as
-//!   <path> <edgebits> <hex(prepow)> <start_nonce> <max_attempts>
+//!   <path> --device <id> <edgebits> <hex(prepow)> <start_nonce> <max_attempts>
 //! and parses "nonce="/"cycle=". The external binary grinds the nonce into
 //! buf[len-4..len-1] (LE) itself, matching the CPU solver. Returns true and
 //! fills out/out_nonce on a parsed cycle; false if the env is unset/empty, the

@@ -88,8 +88,14 @@ Q_SIGNALS:
     void message(const QString& title, const QString& message, unsigned int style);
     void currentVaultSet();
     void consensusStateChanged(bool enabled);
-    void networkRestartRequested(const QString& chain_token);
+    void networkRestartRequested(const QString& chain_token, const QString& network_name);
     void privacyRequested(bool privacy);
+    //! Home asked for the vault page.
+    void vaultRequested();
+    //! A child page asked for the network page.
+    void networkRequested();
+    //! Home asked for the Mine / Mint page.
+    void miningRequested();
     //! Home asked for the Ledger page.
     void ledgerRequested();
     void miningStatusUpdated(const interfaces::MiningStatus& status);

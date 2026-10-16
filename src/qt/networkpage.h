@@ -6,6 +6,7 @@
 #define QUICKSILVER_QT_NETWORKPAGE_H
 
 #include <qt/clientmodel.h>
+#include <util/chaintype.h>
 
 #include <QWidget>
 
@@ -20,7 +21,14 @@ class NetworkPage : public QWidget
     Q_OBJECT
 
 public:
+    //! The page for the network this process runs on.
     explicit NetworkPage(QWidget* parent = nullptr);
+    //! The page as it reads on active_chain; public so the tests can build the
+    //! main-network page from a binary that runs on the sandbox.
+    explicit NetworkPage(ChainType active_chain, QWidget* parent = nullptr);
+
+    //! What a switch command names: "Switch to Public Test", "Switch to main network".
+    static QString switchTargetName(ChainType chain);
 
     //! Why a node with zero peers has nothing to dial. Zero peers is not by itself
     //! a fault -- a node that has just started has none either -- so the page has to
@@ -52,13 +60,14 @@ public:
     void applyTorSetupAdvice(bool onion_proxy_configured);
 
 Q_SIGNALS:
-    void restartRequested(const QString& chain_token);
+    //! network_name is what the confirmation calls it: "Public Test", "main network".
+    void restartRequested(const QString& chain_token, const QString& network_name);
     //! A peer address typed by the user, for the container to hand to the node. The
     //! page holds no node handle, so it cannot add the peer itself.
     void addPeerRequested(const QString& address);
 
 private:
-    void buildDeveloperNetworkSection(QVBoxLayout* root);
+    void buildDeveloperNetworkSection(QVBoxLayout* root, ChainType active_chain);
     void buildAddPeerSection(QVBoxLayout* root);
     void setNodeControlsEnabled(bool enabled);
     void refreshBootstrapDiagnosis(int peers);

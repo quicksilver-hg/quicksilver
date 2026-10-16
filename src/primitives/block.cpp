@@ -27,7 +27,7 @@ std::array<unsigned char, CBlockHeader::PREPOW_SIZE> CBlockHeader::PrePowBytes()
     // bytes. Every solver entry point grinds the tail of this buffer in place
     // (solve_19/solve_28 via mutate_nonce, Solve28Bytes, dispatch.cpp's key
     // reconstruction, the bench KeyedPrepow helpers, and the external CUDA solver
-    // in gpu/qsgpusolve.cu). Moving nNonce off the tail would silently make every
+    // in gpu/qsgpusolve-cuda.cu). Moving nNonce off the tail would silently make every
     // one of them grind the congestion field instead.
     DataStream ds;
     ds << nVersion << hashPrevBlock << hashMerkleRoot << nTime << nBits << nCongestion << nNonce;

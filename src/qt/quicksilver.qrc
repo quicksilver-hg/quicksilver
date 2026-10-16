@@ -42,6 +42,7 @@
         <file alias="spin_up_off">res/icons/spin_up_off.png</file>
         <file alias="spin_down_off">res/icons/spin_down_off.png</file>
         <file alias="check_tick">res/icons/check_tick.png</file>
+        <file alias="check_partial">res/icons/check_partial.png</file>
         <file alias="transaction_abandoned">res/icons/transaction_abandoned.png</file>
         <file alias="hd_enabled">res/icons/hd_enabled.png</file>
         <file alias="hd_disabled">res/icons/hd_disabled.png</file>

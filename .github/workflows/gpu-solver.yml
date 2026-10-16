@@ -2,9 +2,11 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or https://opensource.org/license/mit/.
 
-# Compiles the standalone GPU helper (qsgpusolve and qsgpucalibrate).
+# Compiles the standalone CUDA helper (qsgpusolve-cuda and qsgpucalibrate).
+# This workflow also runs the OpenCL helper on PoCL.
 # This is its own workflow, not a job in ci.yml: slice DH owns ci.yml in
-# this batch (F-422, F-419). Hosted runners have no GPU, so this only compiles.
+# this batch (F-422, F-419). Hosted runners have no GPU, so the CUDA job
+# only compiles.
 
 name: GPU solver
 on:
@@ -24,7 +26,7 @@ concurrency:
 
 jobs:
   gpu-solver:
-    name: 'compile qsgpusolve and qsgpucalibrate'
+    name: 'compile qsgpusolve-cuda and qsgpucalibrate'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -48,4 +50,51 @@ jobs:
           fi
           echo "/usr/local/cuda-12.9/bin" >> "$GITHUB_PATH"
       - name: Compile the helper
-        run: make -C src/crypto/cuckatoo/gpu qsgpusolve qsgpucalibrate GPU_ARCH=sm_61
+        run: make -C src/crypto/cuckatoo/gpu qsgpusolve-cuda qsgpucalibrate GPU_ARCH=sm_61
+
+  opencl-pocl:
+    name: 'qsgpusolve-opencl on PoCL (Tier 2)'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install build dependencies and PoCL
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential cmake pkgconf libevent-dev libboost-dev libsqlite3-dev \
+            ocl-icd-libopencl1 pocl-opencl-icd clinfo
+      - name: Build the helper and the unit tests
+        run: |
+          set -euo pipefail
+          cmake -B build -DBUILD_GUI=OFF -DBUILD_DAEMON=ON -DBUILD_TESTS=ON -DWITH_ZMQ=OFF
+          cmake --build build --target qsgpusolve-opencl qsgpusolve-opencl-e19 test_quicksilver -j"$(nproc)"
+      - name: List devices and pick the PoCL CPU device
+        run: |
+          set -euo pipefail
+          clinfo -l
+          build/bin/qsgpusolve-opencl --list-devices | tee listing.txt
+          id=$(awk '/ type=cpu / && / status=ok / { for (i = 1; i <= NF; ++i) if ($i ~ /^id=/) { sub(/^id=/, "", $i); print $i; exit } }' listing.txt)
+          if [ -z "$id" ]; then echo "no healthy PoCL device listed" >&2; exit 1; fi
+          echo "QS_OPENCL_TEST_DEVICE=$id" >> "$GITHUB_ENV"
+      - name: Parity and contract tests (must run, not skip)
+        run: |
+          set -euo pipefail
+          build/bin/test_quicksilver --log_level=test_suite \
+            --run_test=opencl_api_tests,opencl_devices_tests,opencl_helper_tests,opencl_parity_tests,gpu_devices_tests \
+            2>&1 | tee tests.log
+          if grep -q "QS_OPENCL_TEST_DEVICE unset" tests.log; then
+            echo "the parity gate skipped; it must run here" >&2
+            exit 1
+          fi
+      - name: No OpenCL loader means exit 4, cleanly
+        run: |
+          set -euo pipefail
+          ldd build/bin/qsgpusolve-opencl
+          set +e
+          docker run --rm -v "$PWD/build/bin:/h:ro" ubuntu:24.04 /h/qsgpusolve-opencl --list-devices
+          rc=$?
+          set -e
+          echo "rc=$rc"
+          test "$rc" -eq 4

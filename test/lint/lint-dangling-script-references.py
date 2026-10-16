@@ -70,6 +70,12 @@ ALLOWED_MISSING = {
     # case. The script is gone precisely because that rule wants it gone.
     (Path("test/lint/lint-quicksilver-dead-surface-residue.py"), "test/functional/feature_presegwit_node_upgrade.py"),
     (SELF_PATH, "test/functional/feature_presegwit_node_upgrade.py"),
+    # The solver-filename lint has to name the fleet harness so a checkout
+    # that carries it is exempt. That harness is gitignored and is not in
+    # this tree; it is retired in F-469 phase 4. This file quotes the same
+    # path in the allowlist entry below.
+    (SELF_PATH, "test/testrun/harness/scenarios.py"),
+    (Path("test/lint/lint-cuckatoo-solver-filenames.py"), "test/testrun/harness/scenarios.py"),
 }
 
 

@@ -8,6 +8,7 @@
 #include <consensus/merkle.h>
 #include <consensus/params.h>
 #include <crypto/cuckatoo/cuckatoo.h>
+#include <crypto/cuckatoo/gpu_solver.h>
 #include <logging.h>
 #include <pow.h>
 #include <primitives/block.h>
@@ -123,10 +124,11 @@ bool SolveBlockPoW(ChainstateManager& chainman, CBlock& block, uint64_t& max_tri
                        discarded_cycles, cparams.nEdgeBits);
             warned_discarded = discarded_cycles;
         }
-        if (!warned_no_device && gpu_status == cuckatoo::GpuSolveStatus::kNoCudaDevice) {
+        if (!warned_no_device && gpu_status == cuckatoo::GpuSolveStatus::kNoGpuDevice) {
             warned_no_device = true;
+            LogInfo(HgLog::FORGE, "%s\n", cuckatoo::DescribeDiscovery(cuckatoo::DiscoverGpus(cparams.nEdgeBits)));
             LogWarning(HgLog::FORGE,
-                       "stalled reason=no-cuda-device edgebits=%d fix=install-cuda-driver-or--allowcpumining\n",
+                       "stalled reason=no-gpu-device edgebits=%d fix=check-opencl-driver-with-clinfo-or-set--cuckatoodevice-or--allowcpumining\n",
                        cparams.nEdgeBits);
         }
         // A mid-solve fault is not a slow grind, and unlike a missing device it

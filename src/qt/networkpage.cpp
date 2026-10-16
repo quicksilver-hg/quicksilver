@@ -17,6 +17,7 @@
 #include <util/chaintype.h>
 #include <util/fs.h>
 
+#include <QCheckBox>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -98,7 +99,8 @@ QString DeveloperNetworkLabel(ChainType chain)
 {
     switch (chain) {
     case ChainType::MAIN:
-        return Tr("Quicksilver Distributed Ledger System");
+        // The default path names no "kind" of network: see doc/design/network-naming.md.
+        return Tr("Quicksilver");
     case ChainType::PUBLIC_TEST:
         return Tr("Quicksilver Public Test Network");
     case ChainType::SANDBOX:
@@ -111,11 +113,11 @@ QString DeveloperNetworkPurpose(ChainType chain)
 {
     switch (chain) {
     case ChainType::MAIN:
-        return Tr("Live vault balances and production verification.");
+        return Tr("The live Quicksilver network. Balances, transfers and mining rewards here are real.");
     case ChainType::PUBLIC_TEST:
-        return Tr("Shared public rehearsal network for development.");
+        return Tr("A shared network for trying new releases before they reach the main network. Coins here have no value.");
     case ChainType::SANDBOX:
-        return Tr("Private local network for tests, tools, and demonstrations.");
+        return Tr("A private network on this computer only, for tests, tools and demonstrations. Blocks can be solved instantly; nothing is shared with other peers.");
     }
     assert(false);
 }
@@ -123,7 +125,7 @@ QString DeveloperNetworkPurpose(ChainType chain)
 QWidget* MakeNetworkContextCard(const DeveloperNetworkContext& context, ChainType active_chain, NetworkPage* owner, QWidget* parent)
 {
     // One row of the Networks panel: the network, whether this window uses
-    // it, and the command; its purpose, token and data directory under it.
+    // it, and the command; its purpose and data folder under it.
     auto* card = new QWidget(parent);
     card->setObjectName(QString::fromLatin1(context.object_name));
     card->setProperty("class", QStringLiteral("networkContextRow"));
@@ -140,7 +142,7 @@ QWidget* MakeNetworkContextCard(const DeveloperNetworkContext& context, ChainTyp
     layout->addWidget(name, 0, 0);
 
     // One state/action column: "Current" on this window's network, the
-    // Restart command on the others, at the same right edge.
+    // switch command on the others, at the same right edge.
     const bool active = context.chain == active_chain;
     if (active) {
         auto* state = new QLabel(Tr("Current"), card);
@@ -149,45 +151,55 @@ QWidget* MakeNetworkContextCard(const DeveloperNetworkContext& context, ChainTyp
         state->setProperty("benchTone", QStringLiteral("good"));
         layout->addWidget(state, 0, 2, 3, 1, Qt::AlignRight | Qt::AlignVCenter);
     } else {
-        auto* action = new QPushButton(Tr("Restart"), card);
+        auto* action = new QPushButton(Tr("Switch to %1").arg(NetworkPage::switchTargetName(context.chain)), card);
         action->setObjectName(card->objectName() + QStringLiteral("Button"));
         action->setProperty("class", QStringLiteral("benchQuiet"));
-        action->setToolTip(Tr("Restart Quicksilver with this network context."));
-        QObject::connect(action, &QPushButton::clicked, owner, [owner, token = ChainToken(context.chain)] {
-            Q_EMIT owner->restartRequested(token);
+        action->setToolTip(Tr("Close Quicksilver and reopen it on this network."));
+        QObject::connect(action, &QPushButton::clicked, owner, [owner, token = ChainToken(context.chain), name = NetworkPage::switchTargetName(context.chain)] {
+            Q_EMIT owner->restartRequested(token, name);
         });
         layout->addWidget(action, 0, 2, 3, 1, Qt::AlignRight | Qt::AlignVCenter);
     }
 
-    auto* details = new QHBoxLayout;
-    details->setSpacing(14);
     auto* purpose = new QLabel(context.purpose, card);
     purpose->setObjectName(card->objectName() + QStringLiteral("Purpose"));
     purpose->setProperty("class", QStringLiteral("benchNote"));
-    details->addWidget(purpose);
+    purpose->setWordWrap(true);
+    purpose->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 
-    auto* token = new QLabel(Tr("Token: %1").arg(ChainToken(context.chain)), card);
-    token->setObjectName(card->objectName() + QStringLiteral("Token"));
-    token->setProperty("class", QStringLiteral("benchNote"));
-    token->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    details->addWidget(token);
-
-    auto* datadir = new QLabel(Tr("Datadir: %1").arg(DeveloperDataDir(context.chain)), card);
+    auto* datadir = new QLabel(Tr("Data folder: %1").arg(DeveloperDataDir(context.chain)), card);
     datadir->setObjectName(card->objectName() + QStringLiteral("Datadir"));
     datadir->setProperty("class", QStringLiteral("benchNote"));
     datadir->setTextInteractionFlags(Qt::TextSelectableByMouse);
     // Paths are long; this line wraps rather than widen the page.
     datadir->setWordWrap(true);
     datadir->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    details->addStretch(1);
-    layout->addLayout(details, 1, 0, 1, 2);
+    layout->addWidget(purpose, 1, 0, 1, 2);
     layout->addWidget(datadir, 2, 0, 1, 2);
 
     return card;
 }
 } // namespace
 
+QString NetworkPage::switchTargetName(ChainType chain)
+{
+    switch (chain) {
+    case ChainType::MAIN:
+        return Tr("main network");
+    case ChainType::PUBLIC_TEST:
+        return Tr("Public Test");
+    case ChainType::SANDBOX:
+        return Tr("Sandbox");
+    }
+    assert(false);
+}
+
 NetworkPage::NetworkPage(QWidget* parent)
+    : NetworkPage(Params().GetChainType(), parent)
+{
+}
+
+NetworkPage::NetworkPage(ChainType active_chain, QWidget* parent)
     : QWidget(parent)
 {
     setObjectName(QStringLiteral("networkPage"));
@@ -202,7 +214,7 @@ NetworkPage::NetworkPage(QWidget* parent)
     m_intro->setProperty("class", QStringLiteral("benchNote"));
     m_intro->setWordWrap(true);
 
-    buildDeveloperNetworkSection(root);
+    buildDeveloperNetworkSection(root, active_chain);
 
     const BenchPanel::Parts tor = BenchPanel::Make(QStringLiteral("torSetupPanel"), tr("Tor setup"), this);
     m_tor_setup_panel = tor.frame;
@@ -380,10 +392,8 @@ void NetworkPage::applyTorSetupAdvice(bool onion_proxy_configured)
     m_tor_setup_working->setVisible(onion_proxy_configured);
 }
 
-void NetworkPage::buildDeveloperNetworkSection(QVBoxLayout* root)
+void NetworkPage::buildDeveloperNetworkSection(QVBoxLayout* root, ChainType active_chain)
 {
-    const ChainType active_chain = Params().GetChainType();
-
     m_developer_banner = new QLabel(this);
     m_developer_banner->setObjectName(QStringLiteral("developerNetworkBanner"));
     m_developer_banner->setProperty("class", QStringLiteral("developerNetworkBanner"));
@@ -398,25 +408,39 @@ void NetworkPage::buildDeveloperNetworkSection(QVBoxLayout* root)
     m_developer_banner->setParent(group);
     layout->addWidget(m_developer_banner);
 
-    auto* restart_copy = new QLabel(tr("Network selection binds chain parameters, ports, and datadir at startup. Switch by restarting the application with the desired -chain token."), group);
-    restart_copy->setObjectName(QStringLiteral("developerNetworkRestartCopy"));
-    restart_copy->setProperty("class", QStringLiteral("benchNote"));
-    restart_copy->setWordWrap(true);
-    layout->addWidget(restart_copy);
-
-    const DeveloperNetworkContext contexts[] = {
-        {ChainType::MAIN, "developerNetworkMainCard", DeveloperNetworkLabel(ChainType::MAIN), DeveloperNetworkPurpose(ChainType::MAIN)},
-        {ChainType::PUBLIC_TEST, "developerNetworkPublicTestCard", DeveloperNetworkLabel(ChainType::PUBLIC_TEST), DeveloperNetworkPurpose(ChainType::PUBLIC_TEST)},
-        {ChainType::SANDBOX, "developerNetworkSandboxCard", DeveloperNetworkLabel(ChainType::SANDBOX), DeveloperNetworkPurpose(ChainType::SANDBOX)},
+    const auto add_row = [&](QVBoxLayout* into, QWidget* host, ChainType chain, const char* object_name, bool rule_above) {
+        if (rule_above) {
+            auto* rule = new QFrame(host);
+            rule->setObjectName(QStringLiteral("benchRule"));
+            rule->setFixedHeight(1);
+            into->addWidget(rule);
+        }
+        const DeveloperNetworkContext context{chain, object_name, DeveloperNetworkLabel(chain), DeveloperNetworkPurpose(chain)};
+        into->addWidget(MakeNetworkContextCard(context, active_chain, this, host));
     };
+    add_row(layout, group, ChainType::MAIN, "developerNetworkMainCard", false);
 
-    for (const auto& context : contexts) {
-        auto* rule = new QFrame(group);
-        rule->setObjectName(QStringLiteral("benchRule"));
-        rule->setFixedHeight(1);
-        layout->addWidget(rule);
-        layout->addWidget(MakeNetworkContextCard(context, active_chain, this, group));
-    }
+    // The developer networks are for building and testing Quicksilver, so they
+    // stay out of the way until asked for. The choice is not kept between
+    // launches, and while this window runs one of them it cannot be hidden.
+    const bool on_developer_network = active_chain != ChainType::MAIN;
+    auto* toggle = new QCheckBox(tr("Show developer networks"), group);
+    toggle->setObjectName(QStringLiteral("developerNetworkToggle"));
+    toggle->setChecked(on_developer_network);
+    toggle->setEnabled(!on_developer_network);
+    if (on_developer_network) toggle->setToolTip(tr("Shown while Quicksilver runs on a developer network."));
+    layout->addWidget(toggle);
+
+    auto* developer_list = new QWidget(group);
+    developer_list->setObjectName(QStringLiteral("developerNetworkList"));
+    auto* developer_layout = new QVBoxLayout(developer_list);
+    developer_layout->setContentsMargins(0, 0, 0, 0);
+    developer_layout->setSpacing(layout->spacing());
+    add_row(developer_layout, developer_list, ChainType::PUBLIC_TEST, "developerNetworkPublicTestCard", true);
+    add_row(developer_layout, developer_list, ChainType::SANDBOX, "developerNetworkSandboxCard", true);
+    developer_list->setVisible(toggle->isChecked());
+    connect(toggle, &QCheckBox::toggled, developer_list, &QWidget::setVisible);
+    layout->addWidget(developer_list);
 
     root->addWidget(group);
 }

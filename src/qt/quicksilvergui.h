@@ -263,7 +263,7 @@ private:
     /** Update UI with latest network info from model. */
     void updateNetworkState();
     /** Confirm a requested network-context restart before handing it to the application. */
-    void confirmNetworkRestart(const QString& chain_token);
+    void confirmNetworkRestart(const QString& chain_token, const QString& network_name);
 
     /** Open the OptionsDialog on the specified tab index */
     void openOptionsDialogWithTab(OptionsDialog::Tab tab);
@@ -337,6 +337,8 @@ public Q_SLOTS:
 #ifdef ENABLE_VAULT
     /** Switch to Home */
     void gotoHomePage();
+    /** Switch to Home, or to vault creation/opening if no vault is open */
+    void gotoVaultPage();
     /** Switch to history (transactions) page */
     void gotoHistoryPage();
     /** Switch to agent allotments page */

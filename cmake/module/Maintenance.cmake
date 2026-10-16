@@ -54,6 +54,7 @@ function(add_windows_deploy_target)
     quicksilver-agent
     quicksilver-tx
     quicksilver-vault
+    qsgpusolve-opencl
   )
 
   # `--target deploy` against a configuration that never defined it fails with
@@ -143,7 +144,7 @@ function(add_windows_deploy_target)
   # the fact.
   message(STATUS "Windows installer: `deploy` target defined, using makensis at ${MAKENSIS_EXECUTABLE}.")
 
-  # setup.nsi.in takes all six binaries out of release/, so whatever stages
+  # setup.nsi.in takes all seven binaries out of release/, so whatever stages
   # them has to populate that directory; only the staging step differs by
   # toolchain. Each binary is named on its own line rather than looped over,
   # because test/lint/lint-desktop-packaging.py reads these genexes to check
@@ -158,6 +159,7 @@ function(add_windows_deploy_target)
       COMMAND ${CMAKE_STRIP} $<TARGET_FILE:quicksilver-agent> -o ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-agent>
       COMMAND ${CMAKE_STRIP} $<TARGET_FILE:quicksilver-tx> -o ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-tx>
       COMMAND ${CMAKE_STRIP} $<TARGET_FILE:quicksilver-vault> -o ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-vault>
+      COMMAND ${CMAKE_STRIP} $<TARGET_FILE:qsgpusolve-opencl> -o ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:qsgpusolve-opencl>
     )
   else()
     # MSVC keeps debug info in a separate .pdb, so a Release .exe has nothing to
@@ -171,6 +173,7 @@ function(add_windows_deploy_target)
       COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:quicksilver-agent> ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-agent>
       COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:quicksilver-tx> ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-tx>
       COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:quicksilver-vault> ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:quicksilver-vault>
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:qsgpusolve-opencl> ${PROJECT_BINARY_DIR}/release/$<TARGET_FILE_NAME:qsgpusolve-opencl>
     )
   endif()
 
@@ -187,7 +190,7 @@ function(add_windows_deploy_target)
     # Without the binaries and the script here, an existing installer counts as
     # up to date and a rebuilt binary never reaches release/ or the installer.
     DEPENDS
-      quicksilver quicksilver-daemon quicksilver-cli quicksilver-agent quicksilver-tx quicksilver-vault
+      quicksilver quicksilver-daemon quicksilver-cli quicksilver-agent quicksilver-tx quicksilver-vault qsgpusolve-opencl
       ${PROJECT_BINARY_DIR}/quicksilver-win64-setup.nsi
       ${QUICKSILVER_BUNDLED_TOR_EXE} ${PROJECT_SOURCE_DIR}/share/tor/LICENSE-tor.txt
     VERBATIM

@@ -99,6 +99,7 @@ option(BUILD_DAEMON "Build quicksilver-daemon executable." ON)
 option(BUILD_GUI "Build quicksilver executable." OFF)
 option(BUILD_CLI "Build quicksilver-cli executable." ON)
 option(BUILD_AGENT "Build quicksilver-agent executable." ON)
+option(BUILD_GPU_HELPER "Build qsgpusolve-opencl, the bundled graphics helper." ON)
 
 option(BUILD_TESTS "Build test_quicksilver executable." ON)
 option(BUILD_TX "Build quicksilver-tx executable." ${BUILD_TESTS})
@@ -606,6 +607,13 @@ endif()
 add_subdirectory(test)
 add_subdirectory(doc)
 
+# The graphics helper is only built when something that runs it is. Set here,
+# not in src/crypto/cuckatoo, so the configure summary below can read it.
+set(QS_BUILD_GPU_HELPER OFF)
+if(BUILD_GPU_HELPER AND (BUILD_GUI OR BUILD_DAEMON OR BUILD_AGENT))
+  set(QS_BUILD_GPU_HELPER ON)
+endif()
+
 add_subdirectory(src)
 
 include(cmake/tests.cmake)
@@ -624,6 +632,7 @@ message("  quicksilver-daemon ...................... ${BUILD_DAEMON}")
 message("  quicksilver (GUI) ....................... ${BUILD_GUI}")
 message("  quicksilver-cli ......................... ${BUILD_CLI}")
 message("  quicksilver-agent ....................... ${BUILD_AGENT}")
+message("  qsgpusolve-opencl ....................... ${QS_BUILD_GPU_HELPER}")
 message("  quicksilver-tx .......................... ${BUILD_TX}")
 message("  quicksilver-vault ....................... ${BUILD_VAULT_TOOL}")
 message("  quicksilver-chainstate (experimental) ... ${BUILD_UTIL_CHAINSTATE}")

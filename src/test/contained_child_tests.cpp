@@ -41,12 +41,12 @@ BOOST_AUTO_TEST_CASE(windows_command_line_quotes_what_the_child_must_unquote)
 
     // Nothing to quote: no quotes added, because a quoted path is not what an
     // operator sees in their own logs.
-    BOOST_CHECK_EQUAL(WindowsCommandLine({"qsgpusolve.exe", "28"}), "qsgpusolve.exe 28");
+    BOOST_CHECK_EQUAL(WindowsCommandLine({"qsgpusolve-opencl.exe", "28"}), "qsgpusolve-opencl.exe 28");
 
     // The ordinary Windows case, and the reason `cmd.exe /S /C` needed its own
     // comment before: a program path with a space in it.
-    BOOST_CHECK_EQUAL(WindowsCommandLine({"C:\\Program Files\\qs\\qsgpusolve.exe", "28"}),
-                      "\"C:\\Program Files\\qs\\qsgpusolve.exe\" 28");
+    BOOST_CHECK_EQUAL(WindowsCommandLine({"C:\\Program Files\\qs\\qsgpusolve-opencl.exe", "28"}),
+                      "\"C:\\Program Files\\qs\\qsgpusolve-opencl.exe\" 28");
 
     // A trailing backslash inside a quoted argument must be doubled, or it
     // escapes the closing quote and swallows the argument that follows.

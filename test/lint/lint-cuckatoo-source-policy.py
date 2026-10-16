@@ -95,8 +95,9 @@ def check_tree(repo_root: Path) -> list[str]:
         "solve_28.cpp": '"vendor/lean.cpp"',
         "verify_19.cpp": '"vendor/cuckatoo.h"',
         "verify_28.cpp": '"vendor/cuckatoo.h"',
-        "gpu/qsgpusolve.cu": '"../vendor/lean.cu"',
-        # Calibration-only CUDA twin of qsgpusolve: times every graph instead of
+        "gpu/qsgpusolve-cuda.cu": '"../vendor/lean.cu"',
+        "gpu/qsgpusolve-opencl.cpp": '"../vendor/lean_ocl.hpp"',
+        # Calibration-only CUDA twin of qsgpusolve-cuda: times every graph instead of
         # stopping at the first cycle. Built only by gpu/Makefile (nvcc), never by
         # CMake, so it cannot reach a node binary; see gpu/qsgpucalibrate.cu.
         "gpu/qsgpucalibrate.cu": '"../vendor/lean.cu"',
@@ -109,6 +110,7 @@ def check_tree(repo_root: Path) -> list[str]:
         '"vendor/lean.cpp"',
         '"vendor/lean.cu"',
         '"../vendor/lean.cu"',
+        '"../vendor/lean_ocl.hpp"',
         '"vendor/cuckatoo.h"',
         '"siphashxN.h"',
         "<siphashxN.h>",
@@ -120,6 +122,11 @@ def check_tree(repo_root: Path) -> list[str]:
             for token in guarded_vendor_tokens:
                 if token in line and token != allowed:
                     violations.append(f"{rel(path, repo_root)}:{line_number}: disallowed direct include {token}")
+
+    for name in ("lean.cl", "lean_ocl.cpp", "lean_ocl.hpp"):
+        derivative = cuckatoo / "vendor" / name
+        if derivative.is_file() and "Quicksilver developers" in read(derivative):
+            violations.append(f"{rel(derivative, repo_root)}: vendored derivative must not carry a Quicksilver copyright")
 
     siphash_path = cuckatoo / "vendor/siphashxN.h"
     if not siphash_path.is_file():
@@ -235,7 +242,7 @@ def create_valid_fixture(repo_root: Path) -> Path:
             "}\n",
         )
     write(
-        cuckatoo / "gpu/qsgpusolve.cu",
+        cuckatoo / "gpu/qsgpusolve-cuda.cu",
         "#define CUCKATOO_NO_MAIN\n"
         "#define SQUASH_OUTPUT 1\n"
         '#include "../vendor/lean.cu"\n'
@@ -306,7 +313,7 @@ def run_self_tests() -> int:
 
         bad_cmake = tmp / "bad_cmake"
         cuckatoo = create_valid_fixture(bad_cmake)
-        write(cuckatoo / "CMakeLists.txt", "add_library(quicksilver_cuckatoo STATIC gpu/qsgpusolve.cu)\n")
+        write(cuckatoo / "CMakeLists.txt", "add_library(quicksilver_cuckatoo STATIC gpu/qsgpusolve-cuda.cu)\n")
         failures.extend(expect_violation("bad cmake", bad_cmake, ".cu"))
 
         missing_solver = tmp / "missing_solver"

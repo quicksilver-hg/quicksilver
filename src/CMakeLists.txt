@@ -135,6 +135,7 @@ add_library(quicksilver_common STATIC EXCLUDE_FROM_ALL
   common/args.cpp
   common/bloom.cpp
   common/config.cpp
+  common/executable.cpp
   common/init.cpp
   common/interfaces.cpp
   common/messages.cpp
@@ -150,7 +151,7 @@ add_library(quicksilver_common STATIC EXCLUDE_FROM_ALL
   core_write.cpp
   deploymentinfo.cpp
   external_signer.cpp
-  gpu/detection_service.cpp
+  gpu/helper_config.cpp
   init/common.cpp
   kernel/chainparams.cpp
   key.cpp

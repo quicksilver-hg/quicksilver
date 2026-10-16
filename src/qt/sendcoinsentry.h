@@ -75,6 +75,7 @@ private Q_SLOTS:
 
 protected:
     void changeEvent(QEvent* e) override;
+    bool eventFilter(QObject* object, QEvent* event) override;
 
 private:
     SendCoinsRecipient recipient;
@@ -85,6 +86,8 @@ private:
     QLabel* m_amount_key{nullptr};
 
     bool updateLabel(const QString &address);
+    //! The label field's minimum follows its font and the style's frame.
+    void updateLabelFieldMinimum();
 };
 
 #endif // QUICKSILVER_QT_SENDCOINSENTRY_H

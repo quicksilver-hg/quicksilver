@@ -5,6 +5,8 @@
 #ifndef QUICKSILVER_QT_MINEMINTPAGE_H
 #define QUICKSILVER_QT_MINEMINTPAGE_H
 
+#include <qt/quicksilverunits.h>
+
 #include <QWidget>
 
 #include <cstdint>
@@ -35,6 +37,7 @@ public:
     static StatusText statusTextForTesting(const interfaces::MiningStatus& status);
 
     void setStatus(const interfaces::MiningStatus& status);
+    void setDisplayUnit(QuicksilverUnit unit);
     //! Connection count from the client model, or -1 while it is not yet known.
     //!
     //! Mining with zero peers is not a degraded mode, it is a different activity:
@@ -58,6 +61,7 @@ Q_SIGNALS:
 private:
     void handleStartClicked();
     void refreshIsolationState();
+    void renderMinted();
     void renderPayout();
 
     QWidget* m_isolation_panel{nullptr};
@@ -81,6 +85,8 @@ private:
     //! not accuse the user of being offline.
     int m_peers{-1};
     int64_t m_blocks_found{0};
+    int64_t m_coins_minted_session{0};
+    QuicksilverUnit m_display_unit{QuicksilverUnit::HGS};
 };
 
 #endif // QUICKSILVER_QT_MINEMINTPAGE_H

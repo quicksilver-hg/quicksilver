@@ -18,6 +18,7 @@ add_library(quicksilver_cuckatoo STATIC EXCLUDE_FROM_ALL
   solve_28.cpp
   dispatch.cpp
   gpu_solver.cpp
+  gpu_devices.cpp
   vendor/blake2b-ref.c
 )
 
@@ -50,3 +51,5 @@ target_compile_options(quicksilver_cuckatoo PRIVATE ${QS_CUCKATOO_SANITIZER_IGNO
 
 # Calibration-only single-graph harness (Stage 1 of the tx-cost flag day).
 add_subdirectory(bench)
+
+add_subdirectory(gpu)

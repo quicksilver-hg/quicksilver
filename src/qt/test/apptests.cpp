@@ -382,7 +382,7 @@ void TestAssayBenchChromeLayout(QuicksilverGUI* window)
         previous_top = top;
     }
 
-    // The checked row carries the 2 px cinnabar edge; an unchecked row does not.
+    // The checked row carries the 2 px vermilion edge; an unchecked row does not.
     QAction* home = window->findChild<QAction*>(QStringLiteral("homeBootstrapAction"));
     QAction* network = window->findChild<QAction*>(QStringLiteral("networkAction"));
     QVERIFY(home);
@@ -394,12 +394,12 @@ void TestAssayBenchChromeLayout(QuicksilverGUI* window)
         const QImage image = button->grab().toImage();
         return image.pixelColor(QPoint(x, button->height() / 2) * image.devicePixelRatio());
     };
-    const QColor cinnabar = QuicksilverStyle::Color(QuicksilverStyle::Token::Cinnabar);
+    const QColor vermilion = QuicksilverStyle::Color(QuicksilverStyle::Token::Vermilion);
     QToolButton* home_button = RailButtonFor(rail, home);
     QToolButton* network_button = RailButtonFor(rail, network);
-    QCOMPARE(edge(home_button, 0), cinnabar);
-    QCOMPARE(edge(home_button, 1), cinnabar);
-    QVERIFY(edge(network_button, 0) != cinnabar);
+    QCOMPARE(edge(home_button, 0), vermilion);
+    QCOMPARE(edge(home_button, 1), vermilion);
+    QVERIFY(edge(network_button, 0) != vermilion);
 
     // Breadcrumb above the ticker, a total, and the two transfer controls.
     QFrame* top = window->findChild<QFrame*>(QStringLiteral("benchTopBar"));
@@ -600,7 +600,7 @@ void TestPrimaryNavigation(QuicksilverGUI* window)
         QVERIFY(action->isCheckable());
         // Every destination is a rail row driven by its action. The rows no
         // longer carry per-page accent colours: icons are muted and only the
-        // checked row is cinnabar.
+        // checked row is vermilion.
         QToolButton* button = RailButtonFor(rail, action);
         QVERIFY(button);
         QVERIFY(!button->property("accent").isValid());
@@ -781,7 +781,7 @@ bool ClickNetworkRestartDialogButton(const QString& button_text, QString* text, 
     for (QWidget* widget : QApplication::topLevelWidgets()) {
         if (!widget->inherits("QMessageBox")) continue;
         QMessageBox* box = qobject_cast<QMessageBox*>(widget);
-        if (!box || box->windowTitle() != QStringLiteral("Restart network context")) continue;
+        if (!box || box->windowTitle() != QStringLiteral("Switch network")) continue;
         if (text) *text = box->text();
         if (informative_text) *informative_text = box->informativeText();
         for (QAbstractButton* button : box->buttons()) {
@@ -814,16 +814,18 @@ void TestNetworkRestartConfirmation(QuicksilverGUI& window, QWidget& network_pag
 
     bool clicked = false;
     QTimer::singleShot(0, [&] {
-        clicked = ClickNetworkRestartDialogButton(QStringLiteral("Restart"), &text, &informative_text);
+        clicked = ClickNetworkRestartDialogButton(QStringLiteral("Switch and restart"), &text, &informative_text);
     });
     publictest_restart->click();
     QTRY_VERIFY(clicked);
     QTRY_COMPARE(restart_spy.count(), 1);
     QCOMPARE(restart_spy.takeFirst().at(0).toString(), QStringLiteral("publictest"));
-    QCOMPARE(text, QStringLiteral("Restart Quicksilver with -chain=publictest?"));
-    QVERIFY(informative_text.contains(QStringLiteral("chain parameters")));
-    QVERIFY(informative_text.contains(QStringLiteral("live vault is unaffected")));
-    QVERIFY(informative_text.contains(QStringLiteral("datadir")));
+    // F-477: the confirmation names the network, not the -chain token.
+    QCOMPARE(text, QStringLiteral("Switch to Public Test?"));
+    QCOMPARE(informative_text, QStringLiteral("Quicksilver will close and reopen on Public Test. Each network keeps its own data folder, so your main-network vault and balances are not affected."));
+    // The data folder changes with the network: said in words, not as "datadir".
+    QVERIFY(informative_text.contains(QStringLiteral("data folder")));
+    QVERIFY(!informative_text.contains(QStringLiteral("datadir")));
 }
 
 //! Sync state follows known work, not the clock.
@@ -1399,7 +1401,7 @@ void AppTests::restartArgumentsForDeveloperNetwork()
         QStringLiteral("--publictest=1"),
         QStringLiteral("-txpownocycle=1"),
         QStringLiteral("-testactivationheight=segwit@10"),
-        QStringLiteral("-cuckatoosolver=/opt/quicksilver/qsgpusolve"),
+        QStringLiteral("-cuckatoosolver=/opt/quicksilver/qsgpusolve-opencl"),
         QStringLiteral("-datadir=/home/user/.quicksilver"),
         QStringLiteral("quicksilver:ignored-on-restart"),
     };
@@ -1407,7 +1409,7 @@ void AppTests::restartArgumentsForDeveloperNetwork()
     QCOMPARE(QuicksilverApplication::restartArgumentsForChainForTesting(original_arguments, QStringLiteral("publictest")),
         QStringList({
             QStringLiteral("-min"),
-            QStringLiteral("-cuckatoosolver=/opt/quicksilver/qsgpusolve"),
+            QStringLiteral("-cuckatoosolver=/opt/quicksilver/qsgpusolve-opencl"),
             QStringLiteral("-datadir=/home/user/.quicksilver"),
             QStringLiteral("-chain=publictest"),
         }));
@@ -1417,7 +1419,7 @@ void AppTests::restartArgumentsForDeveloperNetwork()
             QStringLiteral("-min"),
             QStringLiteral("-txpownocycle=1"),
             QStringLiteral("-testactivationheight=segwit@10"),
-            QStringLiteral("-cuckatoosolver=/opt/quicksilver/qsgpusolve"),
+            QStringLiteral("-cuckatoosolver=/opt/quicksilver/qsgpusolve-opencl"),
             QStringLiteral("-datadir=/home/user/.quicksilver"),
             QStringLiteral("-chain=sandbox"),
         }));

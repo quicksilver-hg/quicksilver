@@ -10,13 +10,13 @@ param(
     [string]$GpuArch = 'sm_61',
     # Must match the shipped consensus graph size (chainparams nEdgeBits/nTxEdgeBits
     # on main and publictest). A solver built at any other size is rejected at
-    # runtime by qsgpusolve's own compiled-size guard.
+    # runtime by qsgpusolve-cuda's own compiled-size guard.
     [int]$EdgeBits = 28,
     # The gpu/ Makefile builds two binaries from the same vendored solver: the
     # miner and its calibration twin. Only the miner was reachable from Windows,
     # so a Windows card could not be measured the way the Linux ones were.
-    [ValidateSet('qsgpusolve', 'qsgpucalibrate')]
-    [string]$Target = 'qsgpusolve',
+    [ValidateSet('qsgpusolve-cuda', 'qsgpucalibrate')]
+    [string]$Target = 'qsgpusolve-cuda',
     [string]$OutputPath
 )
 
@@ -68,7 +68,7 @@ Enter-VsDevShell -VsInstallPath $VsInstallPath `
 Push-Location $gpuDir
 try {
     $args = @(
-        '-std=c++14',
+        '-std=c++17',
         "-I$sourceRoot",
         '-o', $OutputPath,
         "-DEDGEBITS=$EdgeBits",

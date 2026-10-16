@@ -49,6 +49,17 @@ Notable changes
   node that cannot reach Tor needs an explicit peer configured with `-addnode`,
   `-connect`, or `-seednode`; see `doc/bootstrapping.md`.
 
+Changes in 0.1.3
+================
+
+- Transfers and mining now use the graphics card on their own, on AMD, NVIDIA
+  and Intel cards, through a graphics helper that comes with Quicksilver. On
+  Ubuntu it is the new `quicksilver-gpu` package, which the desktop and the
+  developer tools recommend. Settings > Options > Main has a new Graphics cards
+  section; built-in graphics are opt-in. `-cuckatoodevice` chooses cards for the
+  daemon and the agent. The CUDA helper is now `qsgpusolve-cuda` and remains a
+  build-it-yourself option.
+
 Changes in 0.1.2
 ================
 

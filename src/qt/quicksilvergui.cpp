@@ -12,6 +12,7 @@
 #include <qt/createvaultdialog.h>
 #include <qt/guiconstants.h>
 #include <qt/guiutil.h>
+#include <qt/gpusituation.h>
 #include <qt/minemintpage.h>
 #include <qt/networkstyle.h>
 #include <qt/notificator.h>
@@ -30,12 +31,12 @@
 #include <qt/vaultview.h>
 #endif // ENABLE_VAULT
 
+#include <chainparams.h>
 #ifdef Q_OS_MACOS
 #include <qt/macdockiconhandler.h>
 #endif
 
 #include <common/system.h>
-#include <gpu/detection_service.h>
 #include <interfaces/handler.h>
 #include <interfaces/node.h>
 #include <node/interface_ui.h>
@@ -107,8 +108,9 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
     platformStyle(_platformStyle),
     m_network_style(networkStyle)
 {
-    // Prime the process-wide hardware cache before a transfer page needs it.
-    (void)gpu::GpuDetectionService::detectGpu();
+    // Start the graphics-card listing now, off the GUI thread, so the transfer
+    // page usually finds it done. DiscoverGpus caches it for the process.
+    gpusituation::RunDiscovery(Params().GetConsensus().nTxEdgeBits, this, [](const cuckatoo::GpuDiscovery&) {});
 
     QSettings settings;
     if (!restoreGeometry(settings.value("MainWindowGeometry").toByteArray())) {
@@ -159,6 +161,12 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
         connect(vaultFrame, &VaultFrame::networkRestartRequested, this, &QuicksilverGUI::confirmNetworkRestart);
         // Through the rail action, so the rail marks the Ledger page.
         connect(vaultFrame, &VaultFrame::ledgerRequested, this, &QuicksilverGUI::gotoHistoryPage);
+        // Through the rail action, so the rail marks the Home page.
+        connect(vaultFrame, &VaultFrame::vaultRequested, this, &QuicksilverGUI::gotoVaultPage);
+        // Through the rail action, so the rail marks the Network page.
+        connect(vaultFrame, &VaultFrame::networkRequested, this, &QuicksilverGUI::gotoNetworkPage);
+        // Through the rail action, so the rail marks the Mine / Mint page.
+        connect(vaultFrame, &VaultFrame::miningRequested, this, &QuicksilverGUI::gotoMineMintPage);
         content_scroll->setWidget(vaultFrame);
         createBenchChrome(content_scroll);
         setCentralWidget(m_bench_top_bar->parentWidget());
@@ -359,7 +367,7 @@ private:
     }
 };
 
-//! Rail icons are muted; the checked destination's icon is cinnabar.
+//! Rail icons are muted; the checked destination's icon is vermilion.
 QIcon RailIcon(const PlatformStyle* style, const QString& file)
 {
     using QuicksilverStyle::Color;
@@ -367,7 +375,7 @@ QIcon RailIcon(const PlatformStyle* style, const QString& file)
     const QSize size{18, 18};
     QIcon icon;
     icon.addPixmap(style->ColorIcon(file, Color(Token::RailText)).pixmap(size), QIcon::Normal, QIcon::Off);
-    icon.addPixmap(style->ColorIcon(file, Color(Token::Cinnabar)).pixmap(size), QIcon::Normal, QIcon::On);
+    icon.addPixmap(style->ColorIcon(file, Color(Token::Vermilion)).pixmap(size), QIcon::Normal, QIcon::On);
     icon.addPixmap(style->ColorIcon(file, Color(Token::RailDisabled)).pixmap(size), QIcon::Disabled, QIcon::Off);
     icon.addPixmap(style->ColorIcon(file, Color(Token::RailDisabled)).pixmap(size), QIcon::Disabled, QIcon::On);
     return icon;
@@ -863,17 +871,10 @@ void QuicksilverGUI::createBenchChrome(QWidget* content)
         key_font.setLetterSpacing(QFont::AbsoluteSpacing, 1.5);
         key_label->setFont(key_font);
         column->addWidget(key_label);
-        auto* line = new QHBoxLayout;
-        line->setSpacing(5);
         value = new QLabel(box);
         value->setObjectName(value_name);
         value->setFont(figure_font);
-        line->addWidget(value, 0, Qt::AlignBottom);
-        auto* unit = new QLabel(box);
-        unit->setObjectName(QStringLiteral("benchTickerUnit"));
-        line->addWidget(unit, 0, Qt::AlignBottom);
-        line->addStretch();
-        column->addLayout(line);
+        column->addWidget(value);
         figures->addWidget(box);
         return box;
     };
@@ -981,18 +982,13 @@ void QuicksilverGUI::refreshTicker()
     const QuicksilverUnit unit = model->getOptionsModel() ? model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HGS;
     const bool privacy = isPrivacyModeActivated();
     const auto paint = [&](QLabel* label, CAmount amount) {
-        label->setText(QuicksilverUnits::formatInlineValueWithPrivacy(unit, amount, QuicksilverUnits::SeparatorStyle::ALWAYS, privacy));
+        label->setText(QuicksilverUnits::formatInlineHtmlWithPrivacy(unit, amount, QuicksilverUnits::SeparatorStyle::ALWAYS, privacy));
     };
     paint(m_ticker_spendable, balances.balance);
     paint(m_ticker_pending, balances.unconfirmed_balance);
     paint(m_ticker_maturing, balances.immature_balance);
     paint(m_ticker_delegated, balances.delegated_balance);
     paint(m_ticker_total, balances.balance + balances.unconfirmed_balance + balances.immature_balance + balances.delegated_balance);
-    // The figure's unit is the display suffix. Names and column titles keep the code.
-    const QString unit_name = QuicksilverUnits::displaySuffix(unit);
-    for (QLabel* unit_label : m_ticker_figures->findChildren<QLabel*>(QStringLiteral("benchTickerUnit"))) {
-        unit_label->setText(unit_name);
-    }
     m_ticker_delegated_box->setVisible(balances.delegated_balance != 0);
     m_ticker_empty->hide();
     m_ticker_figures->show();
@@ -1240,7 +1236,7 @@ void QuicksilverGUI::addVault(VaultModel* vaultModel)
 
     connect(vault_view, &VaultView::coinsSent, this, &QuicksilverGUI::gotoHistoryPage);
     connect(vault_view, &VaultView::solverSettingsRequested, this, [this] {
-        openOptionsDialogWithTab(OptionsDialog::TAB_MAIN);
+        openOptionsDialogWithTab(OptionsDialog::TAB_HARDWARE);
     });
     connect(vault_view, &VaultView::message, [this](const QString& title, const QString& message, unsigned int style) {
         this->message(title, message, style);
@@ -1574,15 +1570,15 @@ void QuicksilverGUI::showHelpMessageClicked()
     GUIUtil::bringToFront(helpMessageDialog);
 }
 
-void QuicksilverGUI::confirmNetworkRestart(const QString& chain_token)
+void QuicksilverGUI::confirmNetworkRestart(const QString& chain_token, const QString& network_name)
 {
     auto* box = new QMessageBox(this);
     box->setObjectName(QStringLiteral("networkRestartConfirm"));
     box->setIcon(QMessageBox::Question);
-    box->setWindowTitle(tr("Restart network context"));
-    box->setText(tr("Restart Quicksilver with -chain=%1?").arg(chain_token));
-    box->setInformativeText(tr("Network selection changes chain parameters, ports, and datadir, so the application must close and reopen. Your live vault is unaffected by developer network context."));
-    QPushButton* restart_button = box->addButton(tr("Restart"), QMessageBox::AcceptRole);
+    box->setWindowTitle(tr("Switch network"));
+    box->setText(tr("Switch to %1?").arg(network_name));
+    box->setInformativeText(tr("Quicksilver will close and reopen on %1. Each network keeps its own data folder, so your main-network vault and balances are not affected.").arg(network_name));
+    QPushButton* restart_button = box->addButton(tr("Switch and restart"), QMessageBox::AcceptRole);
     QPushButton* cancel_button = box->addButton(tr("Cancel"), QMessageBox::RejectRole);
     box->setDefaultButton(cancel_button);
     GUIUtil::ShowModalMessageBoxAsynchronously(box, [this, chain_token, restart_button](int, QAbstractButton* clicked) {
@@ -1606,6 +1602,12 @@ void QuicksilverGUI::gotoHomePage()
 {
     overviewAction->setChecked(true);
     if (vaultFrame) vaultFrame->gotoLaunchPage();
+}
+
+void QuicksilverGUI::gotoVaultPage()
+{
+    overviewAction->setChecked(true);
+    if (vaultFrame) vaultFrame->gotoVaultPage();
 }
 
 void QuicksilverGUI::gotoHistoryPage()
@@ -2293,7 +2295,7 @@ void UnitDisplayStatusBarControl::createContextMenu()
 {
     menu = new QMenu(this);
     for (const QuicksilverUnit u : QuicksilverUnits::availableUnits()) {
-        menu->addAction(QuicksilverUnits::longName(u))->setData(QVariant::fromValue(u));
+        menu->addAction(QuicksilverUnits::choiceName(u))->setData(QVariant::fromValue(u));
     }
     connect(menu, &QMenu::triggered, this, &UnitDisplayStatusBarControl::onMenuSelection);
 }

@@ -112,7 +112,7 @@ run_inside() {
     fail=0
     checked=0
     while IFS= read -r path; do
-        [[ $path == /usr/bin/* ]] || continue
+        [[ $path == /usr/bin/* || $path == /usr/libexec/quicksilver/* ]] || continue
         [[ -f $path && ! -L $path ]] || continue
         is_elf "$path" || continue
         checked=$((checked + 1))
@@ -139,7 +139,7 @@ run_inside() {
     done <<<"$paths"
 
     if [[ $checked -eq 0 ]]; then
-        echo "F-391: installed packages contain no ELF binary under /usr/bin" >&2
+        echo "F-391: installed packages contain no ELF binary under /usr/bin or /usr/libexec/quicksilver" >&2
         exit 1
     fi
     if [[ $fail -ne 0 ]]; then

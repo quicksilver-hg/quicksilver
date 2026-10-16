@@ -19,6 +19,8 @@
 #include <QPushButton>
 #include <QStyleFactory>
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 
 void QuicksilverStyleTests::paletteTokens()
@@ -27,9 +29,9 @@ void QuicksilverStyleTests::paletteTokens()
     QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::Surface), QColor(QStringLiteral("#171b1f")));
     QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::SurfaceRaised), QColor(QStringLiteral("#20262b")));
     QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::Rail), QColor(QStringLiteral("#0b0d0f")));
-    QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::Cinnabar), QColor(QStringLiteral("#d84b3e")));
+    QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::Vermilion), QColor(QStringLiteral("#d84b3e")));
     QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarBright), QColor(QStringLiteral("#ff7a6c")));
-    QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarDim), QColor(QStringLiteral("#6b3431")));
+    QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarFill), QColor(QStringLiteral("#6b3431")));
     QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarTrace), QColor(QStringLiteral("#2d2222")));
     QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::Silver), QColor(QStringLiteral("#ccd5dc")));
     QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::SilverHi), QColor(QStringLiteral("#f5f7f9")));
@@ -47,7 +49,7 @@ void QuicksilverStyleTests::applySetsGlobalPaletteAndStylesheet()
     QCOMPARE(qApp->palette().color(QPalette::Window), QColor(QStringLiteral("#101214")));
     QCOMPARE(qApp->palette().color(QPalette::WindowText), QColor(QStringLiteral("#ccd5dc")));
     QCOMPARE(qApp->palette().color(QPalette::Base), QColor(QStringLiteral("#171b1f")));
-    QCOMPARE(qApp->palette().color(QPalette::Highlight), QColor(QStringLiteral("#d84b3e")));
+    QCOMPARE(qApp->palette().color(QPalette::Highlight), QColor(QStringLiteral("#6b3431")));
     QVERIFY(qApp->styleSheet().contains(QStringLiteral("QToolBar#primaryCommandRail")));
     // Page sections are Bench panels; a section a form lays out sits flat
     // inside one.
@@ -158,10 +160,11 @@ void QuicksilverStyleTests::dialogButtonsCarryNoStockIcon()
 
 namespace {
 //! The fill a button paints just inside its left border, clear of its text.
-QColor ButtonFill(const QString& button_class, bool enabled)
+QColor ButtonFill(const QString& button_class, bool enabled, const QString& object_name = QString())
 {
     QPushButton button(QStringLiteral("Transfer"));
     if (!button_class.isEmpty()) button.setProperty("class", button_class);
+    if (!object_name.isEmpty()) button.setObjectName(object_name);
     button.setEnabled(enabled);
     button.resize(120, 30);
     button.ensurePolished();
@@ -176,4 +179,34 @@ void QuicksilverStyleTests::disabledPrimaryButtonLooksDisabled()
     const QString primary = QStringLiteral("primaryActionButton");
     QVERIFY(ButtonFill(primary, true) != ButtonFill(QString(), true));
     QCOMPARE(ButtonFill(primary, false), ButtonFill(QString(), false));
+}
+
+namespace {
+//! WCAG 2 contrast ratio between two opaque colours.
+double Contrast(const QColor& a, const QColor& b)
+{
+    const auto luminance = [](const QColor& c) {
+        const auto channel = [](double v) { return v <= 0.03928 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4); };
+        return 0.2126 * channel(c.redF()) + 0.7152 * channel(c.greenF()) + 0.0722 * channel(c.blueF());
+    };
+    const double la = luminance(a);
+    const double lb = luminance(b);
+    return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+}
+} // namespace
+
+void QuicksilverStyleTests::redCommandsAreFilledWithCinnabar()
+{
+    // F-477: a red command has the cinnabar fill of a selected row, not the
+    // vermilion accent, which carries white text at only 3.9:1.
+    QuicksilverStyle::Apply(*qApp);
+    const QColor fill = QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarFill);
+    QCOMPARE(ButtonFill(QStringLiteral("primaryActionButton"), true), fill);
+    QCOMPARE(ButtonFill(QString(), true, QStringLiteral("sendButton")), fill);
+    for (const char* name : {"consensusContinueButton", "startMiningButton", "agentAllotmentCreateButton"}) {
+        QCOMPARE(ButtonFill(QString(), true, QString::fromLatin1(name)), fill);
+    }
+    const QColor text = QuicksilverStyle::Color(QuicksilverStyle::Token::SilverHi);
+    QVERIFY(Contrast(text, fill) >= 4.5);
+    QVERIFY(Contrast(text, QuicksilverStyle::Color(QuicksilverStyle::Token::Vermilion)) < 4.5);
 }

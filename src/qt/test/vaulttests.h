@@ -35,6 +35,7 @@ private Q_SLOTS:
     void agentAllotmentStoppedAllotmentOffersNoFunding();
     void vaultTests();
     void benchTickerMatchesVaultBalances();
+    void homeAndMineLinksFollowRail();
     void homeLedgerListsVaultTransactions();
     void homeLaysOutLedgerBesideInstruments();
     void homeAndLedgerReadTransactionsAlike();
@@ -42,6 +43,7 @@ private Q_SLOTS:
     void captureBenchPageScreenshots();
     void transferRecipientsAreCompactRows();
     void transferKeepsTheAddressReadableAndReviewInReach();
+    void transferLabelFieldHoldsAReferenceLabel();
     void remainingPagesUseTheBenchGrammar();
     void benchStyleKeepsOneScaleAndQuietStates();
     void benchSpinAndCheckControlsStayWhole();
@@ -57,6 +59,7 @@ private Q_SLOTS:
     void mineMintPageShowsARawScriptPayout();
     void mineMintPageNamesAnIdleNodeWithNothingPermitted();
     void networkPageFormatsStatus();
+    void networkPageHidesDeveloperNetworksOnMain();
     void networkPageDiagnosesBootstrapAndAddsPeers();
     void networkPageHidesTheManualTorRecipeWhenAProxyIsCarryingOnions();
     void nodeWindowSaysWhyEveryFieldReadsNotApplicable();
@@ -71,6 +74,7 @@ private Q_SLOTS:
     void consensusCancelDoesNotShowStarting();
     void vaultModelReturnsSendFailureReasonWithoutShowingIt();
     void vaultModelReturnsCommitFailureWithoutEmittingSendSuccess();
+    void solverConfigurationErrorUsesIdentity();
     void vaultInterfaceSkipsUninitializedTipWithoutConsensus();
     void vaultModelLoadsStoredConfirmationBeforeConsensus();
     void thinHeaderSourceRefreshesDetachedVault();
@@ -82,11 +86,13 @@ private Q_SLOTS:
     void vaultModelPollsBalanceFromVaultTipWithoutClientModel();
     void vaultModelCachesEncryptionStatus();
     void sendGenerationGuardDropsStaleResult();
-    void sendWorkResourceTextClassifiesGpuSolver();
-    void cpuFallbackWarningPolicyMatchesNetworkAndPreference();
+    void gpuSituationWordingIsExact();
+    void discoveryRunsOffTheGuiThread();
+    void cpuFallbackWarningFollowsDiscovery();
     void transferPageShowsItsFormAndTransmitButtonTogether();
     void transferCoinControlQuantityAndBytesUseSeparateRows();
     void coinControlDialogQuantityAndBytesUseSeparateRows();
+    void coinControlIndicatorsMatchDialogCheckboxes();
     void copyAmountActionsCopyTheBareNumber();
     void transferSolverTextNamesRealMenuAndSetting();
     void transferPrecheckRefusesOverBalanceBeforeUnlock();

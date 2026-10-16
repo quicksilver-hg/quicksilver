@@ -96,8 +96,8 @@ struct MiningStatus {
     //! The GUI substitutes its own wording for this case and points at the control it
     //! actually has, so it needs the fault's identity, not its prose.
     bool solver_missing{false};
-    //! Whether a block can be solved in this configuration: a GPU solver is
-    //! configured, or CPU block mining is permitted. False is the halted state
+    //! Whether a block can be solved in this configuration: a graphics card is
+    //! in use, or CPU block mining is permitted. False is the halted state
     //! — armed, with no solver and no permitted fallback — and it is known at
     //! arming, not after the first solve attempt. This member is the permit
     //! Start() published for the armed worker; an idle reading asks
@@ -177,8 +177,8 @@ interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateM
 //! thread, not at process start. A settings change is visible on the next call.
 bool CpuBlockFallbackEnabled(uint8_t edgebits);
 
-//! True when this process can solve a block at `edgebits`: a GPU solver is
-//! configured, or CpuBlockFallbackEnabled. Same live read as the fallback bit.
+//! True when this process can solve a block at `edgebits`: a graphics card is
+//! in use, or CpuBlockFallbackEnabled. Same live read as the fallback bit.
 bool BlockSolvingPossible(uint8_t edgebits);
 
 //! Decode an address and start the service on it. Idempotent when the service

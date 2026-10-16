@@ -6,6 +6,7 @@
 #include <quicksilver-build-config.h> // IWYU pragma: keep
 
 #include <common/args.h>
+#include <crypto/cuckatoo/gpu_devices.h>
 #include <qt/quicksilver.h>
 #include <qt/createvaultdialog.h>
 #include <qt/clientmodel.h>
@@ -27,11 +28,14 @@
 #include <QGroupBox>
 #include <QCoreApplication>
 #include <QFileInfo>
+#include <QFile>
+#include <QDir>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPoint>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSpinBox>
@@ -57,6 +61,10 @@ void OptionTests::init()
     // reset args
     gArgs.LockSettings([&](common::Settings& s) { s = m_previous_settings; });
     gArgs.ClearPathCache();
+    for (const char* name : {"CUCKATOO_GPU_SOLVER", "QS_PROBE_STUB_LISTING", "QS_PROBE_STUB_EXIT", "QS_PROBE_STUB_SLEEP_MS", "CUCKATOO_GPU_DEVICES"}) qunsetenv(name);
+    gArgs.LockSettings([](common::Settings& settings) { settings.rw_settings.erase("cuckatoodevice"); });
+    QSettings().remove(QStringLiteral("gpu_device_names"));
+    cuckatoo::ResetGpuDiscoveryForTesting();
 }
 
 void OptionTests::leftoverQSettingsKeysAreIgnored()
@@ -312,17 +320,151 @@ void OptionTests::integerGetArgBug()
 }
 
 namespace {
-// The stub sits beside this test binary in the runtime output directory; see
-// src/qt/test/CMakeLists.txt.
-QString SolverProbeStubPath()
+QString WriteListing(const QStringList& lines)
 {
-    QString path{QCoreApplication::applicationDirPath() + QStringLiteral("/test_solver_probe_stub")};
-#ifdef Q_OS_WIN
-    path += QStringLiteral(".exe");
-#endif
+    static int counter{0};
+    const QString path = QDir::temp().filePath(QStringLiteral("qs_optiontests_%1_%2.listing").arg(QCoreApplication::applicationPid()).arg(++counter));
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) qFatal("cannot write %s", qPrintable(path));
+    for (const QString& line : lines) f.write((line + QLatin1Char('\n')).toUtf8());
     return path;
 }
+
+void PointDiscoveryAtStub(const QString& listing)
+{
+    qputenv("CUCKATOO_GPU_SOLVER", SolverProbeStubPath().toUtf8());
+    qputenv("QS_PROBE_STUB_LISTING", listing.toUtf8());
+    qunsetenv("QS_PROBE_STUB_EXIT");
+    qunsetenv("QS_PROBE_STUB_SLEEP_MS");
+    qunsetenv("CUCKATOO_GPU_DEVICES");
+    cuckatoo::ResetGpuDiscoveryForTesting();
+}
 } // namespace
+
+void OptionTests::gpuDevicesSettingRoundTrips()
+{
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    const QStringList chosen{QStringLiteral("pci:0000:04:00.0"), QStringLiteral("pci:0000:01:00.0")};
+    QVERIFY(options.setOption(OptionsModel::GpuDevices, chosen));
+    QCOMPARE(options.getOption(OptionsModel::GpuDevices).toStringList(), chosen);
+    QVERIFY(options.isRestartRequired());
+    QCOMPARE(QString::fromStdString(gArgs.GetArgs("-cuckatoodevice").at(1)), chosen.at(1));
+    QVERIFY(options.setOption(OptionsModel::GpuDevices, QStringList{QStringLiteral("cpu")}));
+    QVERIFY(gArgs.GetArgs("-cuckatoodevice") == std::vector<std::string>{"cpu"});
+    QVERIFY(options.setOption(OptionsModel::GpuDevices, QStringList{}));
+    QVERIFY(gArgs.GetArgs("-cuckatoodevice").empty());
+    const QMap<QString, QString> names{{QStringLiteral("pci:0000:04:00.0"), QStringLiteral("AMD Radeon RX 480")}};
+    options.setGpuDeviceNames(names);
+    QCOMPARE(options.getGpuDeviceNames(), names);
+}
+
+void OptionTests::gpuCardsListAndModes()
+{
+    PointDiscoveryAtStub(WriteListing({
+        QStringLiteral("device backend=opencl id=pci:0000:00:02.0 type=gpu integrated=1 mem=0 status=ok name=Intel(R) HD Graphics 4600"),
+        QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480"),
+        QStringLiteral("device backend=opencl id=pci:0000:05:00.0 type=gpu integrated=0 mem=0 status=compile-failed reason=x name=Old Card") }));
+    OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
+    auto* list = dialog.findChild<QWidget*>(QStringLiteral("gpuDeviceList")); QVERIFY(list);
+    QTRY_VERIFY_WITH_TIMEOUT(list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_04_00_0")), 30000);
+    const auto state = [&](const char* id) { return list->findChild<QLabel*>(QString::fromLatin1(id) + QStringLiteral("_state"))->text(); };
+    QCOMPARE(state("gpuDevice_pci_0000_04_00_0"), /*W-D5*/ QStringLiteral("In use"));
+    QCOMPARE(state("gpuDevice_pci_0000_00_02_0"), /*W-D6*/ QStringLiteral("Not used: built-in graphics"));
+    QCOMPARE(state("gpuDevice_pci_0000_05_00_0"), /*W-D7*/ QStringLiteral("Can't be used: its driver couldn't run Quicksilver's graphics code"));
+    dialog.findChild<QRadioButton*>(QStringLiteral("gpuModeChoose"))->click();
+    auto* hd = list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_00_02_0")); QVERIFY(!hd->isChecked());
+    QTest::mouseClick(dialog.findChild<QPushButton*>(QStringLiteral("okButton")), Qt::LeftButton);
+    QCOMPARE(options.getOption(OptionsModel::GpuDevices).toStringList(), QStringList{QStringLiteral("pci:0000:04:00.0")});
+    QCOMPARE(options.getGpuDeviceNames().value(QStringLiteral("pci:0000:04:00.0")), QStringLiteral("AMD Radeon RX 480"));
+}
+
+void OptionTests::tickingBuiltInGraphicsAsksFirst()
+{
+    PointDiscoveryAtStub(WriteListing({
+        QStringLiteral("device backend=opencl id=pci:0000:00:02.0 type=gpu integrated=1 mem=0 status=ok name=Intel(R) HD Graphics 4600"),
+        QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480") }));
+    OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
+    auto* list = dialog.findChild<QWidget*>(QStringLiteral("gpuDeviceList"));
+    QTRY_VERIFY_WITH_TIMEOUT(list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_00_02_0")), 30000);
+    dialog.findChild<QRadioButton*>(QStringLiteral("gpuModeChoose"))->click();
+    auto* hd = list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_00_02_0"));
+    hd->click();
+    QMessageBox* box{nullptr};
+    QTRY_VERIFY((box = dialog.findChild<QMessageBox*>(QStringLiteral("gpuIntegratedConfirm"))) != nullptr);
+    QCOMPARE(box->windowTitle(), /*W-D14*/ QStringLiteral("Use built-in graphics?"));
+    QCOMPARE(box->text(), /*W-D15*/ QStringLiteral("Your screen may respond slowly while transfers are being prepared."));
+    box->button(QMessageBox::Cancel)->click(); QTRY_VERIFY(!hd->isChecked());
+    hd->click(); QTRY_VERIFY((box = dialog.findChild<QMessageBox*>(QStringLiteral("gpuIntegratedConfirm"))) != nullptr);
+    QPushButton* use{nullptr};
+    for (QAbstractButton* button : box->buttons()) if (button->text() == /*W-D16*/ QStringLiteral("Use built-in graphics")) use = qobject_cast<QPushButton*>(button);
+    QVERIFY(use); use->click(); QTRY_VERIFY(hd->isChecked());
+    QCOMPARE(list->findChild<QLabel*>(QStringLiteral("gpuDevice_pci_0000_00_02_0_state"))->text(), /*W-D5*/ QStringLiteral("In use"));
+    QTest::mouseClick(dialog.findChild<QPushButton*>(QStringLiteral("okButton")), Qt::LeftButton);
+    QVERIFY(options.getOption(OptionsModel::GpuDevices).toStringList().contains(QStringLiteral("pci:0000:00:02.0")));
+    QCOMPARE(options.getGpuDeviceNames().value(QStringLiteral("pci:0000:00:02.0")), QStringLiteral("Intel(R) HD Graphics 4600"));
+}
+
+void OptionTests::missingChosenCardKeepsItsName()
+{
+    PointDiscoveryAtStub(WriteListing({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")}));
+    OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
+    QVERIFY(options.setOption(OptionsModel::GpuDevices, QStringList{QStringLiteral("pci:0000:09:00.0")}));
+    options.setGpuDeviceNames({{QStringLiteral("pci:0000:09:00.0"), QStringLiteral("NVIDIA P106-100")}});
+    OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
+    auto* list = dialog.findChild<QWidget*>(QStringLiteral("gpuDeviceList"));
+    QTRY_VERIFY_WITH_TIMEOUT(list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_09_00_0")), 30000);
+    QVERIFY(dialog.findChild<QRadioButton*>(QStringLiteral("gpuModeChoose"))->isChecked());
+    auto* gone = list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_09_00_0"));
+    QCOMPARE(gone->text(), QStringLiteral("NVIDIA P106-100")); QVERIFY(gone->isChecked());
+    QCOMPARE(list->findChild<QLabel*>(QStringLiteral("gpuDevice_pci_0000_09_00_0_state"))->text(), /*W-D8*/ QStringLiteral("Not found"));
+    QCOMPARE(list->findChild<QLabel*>(QStringLiteral("gpuDevice_pci_0000_04_00_0_state"))->text(), /*W-D9*/ QStringLiteral("Not chosen"));
+    gone->click(); list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_04_00_0"))->click();
+    QTest::mouseClick(dialog.findChild<QPushButton*>(QStringLiteral("okButton")), Qt::LeftButton);
+    QCOMPARE(options.getOption(OptionsModel::GpuDevices).toStringList(), QStringList{QStringLiteral("pci:0000:04:00.0")});
+}
+
+void OptionTests::cpuOnlyHidesTheList()
+{
+    PointDiscoveryAtStub(WriteListing({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")}));
+    OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
+    auto* list = dialog.findChild<QWidget*>(QStringLiteral("gpuDeviceList"));
+    QTRY_VERIFY_WITH_TIMEOUT(list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_04_00_0")), 30000);
+    dialog.findChild<QRadioButton*>(QStringLiteral("gpuModeCpu"))->click(); QVERIFY(list->isHidden());
+    QTest::mouseClick(dialog.findChild<QPushButton*>(QStringLiteral("okButton")), Qt::LeftButton);
+    QCOMPARE(options.getOption(OptionsModel::GpuDevices).toStringList(), QStringList{QStringLiteral("cpu")});
+}
+
+void OptionTests::savedGpuDevicesSelectTheMatchingRadio()
+{
+    PointDiscoveryAtStub(WriteListing({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")}));
+    const struct {
+        QStringList devices;
+        const char* checked;
+    } cases[]{
+        {QStringList{}, "gpuModeAutomatic"},
+        {QStringList{QStringLiteral("cpu")}, "gpuModeCpu"},
+        {QStringList{QStringLiteral("pci:0000:04:00.0")}, "gpuModeChoose"},
+        {QStringList{QStringLiteral("cpu"), QStringLiteral("pci:0000:04:00.0")}, "gpuModeChoose"},
+    };
+    for (const auto& sample : cases) {
+        OptionsModel options{m_node};
+        bilingual_str error;
+        QVERIFY(options.Init(error));
+        QVERIFY(options.setOption(OptionsModel::GpuDevices, sample.devices));
+        OptionsDialog dialog(nullptr, true);
+        dialog.setModel(&options);
+        for (const char* name : {"gpuModeAutomatic", "gpuModeCpu", "gpuModeChoose"}) {
+            auto* radio = dialog.findChild<QRadioButton*>(QString::fromLatin1(name));
+            QVERIFY2(radio != nullptr, name);
+            QCOMPARE(radio->isChecked(), QString::fromLatin1(name) == QLatin1String(sample.checked));
+        }
+    }
+}
 
 void OptionTests::gpuSolverSettingPersistsAndRequiresRestart()
 {
@@ -333,6 +475,7 @@ void OptionTests::gpuSolverSettingPersistsAndRequiresRestart()
     // (src/qt/test/solverprobestub.cpp).
     const QString solver{SolverProbeStubPath()};
     QVERIFY2(QFileInfo(solver).isExecutable(), qPrintable(solver));
+    qputenv("QS_PROBE_STUB_LISTING", WriteListing({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")}).toUtf8());
 
     OptionsModel options{m_node};
     bilingual_str error;
@@ -347,14 +490,24 @@ void OptionTests::gpuSolverSettingPersistsAndRequiresRestart()
     QVERIFY(status);
     QVERIFY(ok_button);
     path->setText(solver);
-    QTRY_VERIFY_WITH_TIMEOUT(!status->text().contains(QStringLiteral("Checking whether")), 5000);
-    QVERIFY2(status->text().contains(QStringLiteral("passed the startup check")), qPrintable(status->text()));
+    QTRY_COMPARE_WITH_TIMEOUT(status->text(), /*W-D23*/ QStringLiteral("The selected graphics helper loaded successfully."), 5000);
     QVERIFY(ok_button->isEnabled());
     QVERIFY(dialog.findChild<QLabel*>(QStringLiteral("statusLabel"))->text().contains(QStringLiteral("restart")));
 
     QTest::mouseClick(ok_button, Qt::LeftButton);
     QCOMPARE(options.getOption(OptionsModel::GpuSolverPath).toString(), solver);
     QVERIFY(options.isRestartRequired());
+
+    qputenv("QS_PROBE_STUB_EXIT", "4");
+    OptionsDialog failed(nullptr, true);
+    failed.setModel(&options);
+    auto* failed_path = failed.findChild<QLineEdit*>(QStringLiteral("gpuSolverPath"));
+    auto* failed_status = failed.findChild<QLabel*>(QStringLiteral("gpuSolverStatusLabel"));
+    auto* failed_ok = failed.findChild<QPushButton*>(QStringLiteral("okButton"));
+    failed_path->setText(QString());
+    failed_path->setText(solver);
+    QTRY_COMPARE_WITH_TIMEOUT(failed_status->text(), /*W-D24*/ QStringLiteral("The selected graphics helper was unable to load."), 5000);
+    QVERIFY(!failed_ok->isEnabled());
 }
 
 void OptionTests::gpuSolverDialogRejectsInvalidPath()
@@ -372,8 +525,8 @@ void OptionTests::gpuSolverDialogRejectsInvalidPath()
     QVERIFY(path);
     QVERIFY(status);
     QVERIFY(ok_button);
-    path->setText(QStringLiteral("/path/that/does/not/exist/qsgpusolve"));
-    QVERIFY(status->text().contains(QStringLiteral("does not exist")));
+    path->setText(QStringLiteral("/path/that/does/not/exist/qsgpusolve-opencl"));
+    QCOMPARE(status->text(), /*W-D20*/ QStringLiteral("The selected graphics helper does not exist."));
     QVERIFY(!ok_button->isEnabled());
     QCOMPARE(options.getOption(OptionsModel::GpuSolverPath).toString(), original);
 }
@@ -394,6 +547,9 @@ void OptionTests::externalSignerSurfacesAreHiddenNotGreyedOut()
 
     auto* signer_group = options_dialog.findChild<QGroupBox*>(QStringLiteral("groupBoxHww"));
     QVERIFY(signer_group);
+    // F-485: the signer group moves with the other hardware rows, and stays hidden.
+    auto* hardware = options_dialog.findChild<QWidget*>(QStringLiteral("tabHardware"));
+    QVERIFY2(hardware && hardware->isAncestorOf(signer_group), "groupBoxHww belongs on the Hardware tab");
 
     CreateVaultDialog create_dialog(nullptr);
     auto* signer_checkbox = create_dialog.findChild<QCheckBox*>(QStringLiteral("external_signer_checkbox"));
@@ -468,13 +624,8 @@ void OptionTests::allowCpuBlockMiningPersistsWithoutRestart()
     QVERIFY(solver_status);
     QVERIFY(ok_button);
     QVERIFY(!box->isChecked());
-    QVERIFY(box->text().contains(QStringLiteral("very unlikely")));
-    QVERIFY(box->text().contains(QStringLiteral("next time mining starts")));
-    QVERIFY(!box->text().contains(QStringLiteral("-allowcpumining")));
-    QVERIFY(solver_status->text().contains(QStringLiteral("may take many minutes")));
-    QVERIFY(solver_status->text().contains(QStringLiteral("processor block mining is enabled above")));
-    QVERIFY(!solver_status->text().contains(QStringLiteral("Live transfers and mining need one")));
-    QVERIFY(!solver_status->text().contains(QStringLiteral("-allowcpumining")));
+    QCOMPARE(box->text(), /*W-D25*/ QStringLiteral("&Allow this computer's processor to mine blocks when no graphics card is in use."));
+    QCOMPARE(solver_status->text(), /*W-D19*/ QStringLiteral("Using Quicksilver's graphics helper."));
 
     box->setChecked(true);
     QTest::mouseClick(ok_button, Qt::LeftButton);
@@ -521,28 +672,43 @@ void OptionTests::allowCpuBlockMiningPersistsWithoutRestart()
     restore_allowcpu();
 }
 
-//! F-427: the Main tab's rows used to be crushed into the dialog's 700x540
-//! minimum. Each label, checkbox and spin box has to receive its height, and
-//! sit fully inside the scroll viewport's width. What does not fit vertically
-//! has to be reachable by scrolling. A 1366x768 laptop, after a taskbar and a
+//! F-427, moved with F-485: the graphics rows used to be crushed into the
+//! dialog's 700x540 minimum. They now live on Hardware, which owns the scroll
+//! area. Each label, checkbox and spin box has to receive its height, and sit
+//! fully inside the scroll viewport's width. What does not fit vertically has
+//! to be reachable by scrolling. A 1366x768 laptop, after a taskbar and a
 //! title bar, is checked by sizing the client to 1366x700.
-void OptionTests::mainTabFitsAtTheOpeningSize()
+void OptionTests::hardwareTabFitsAtTheOpeningSize()
 {
     OptionsModel options{m_node};
     bilingual_str error;
     QVERIFY(options.Init(error));
     OptionsDialog dialog(nullptr, /*enableVault=*/true);
     dialog.setModel(&options);
+    auto* tabs = dialog.findChild<QTabWidget*>(QStringLiteral("tabWidget"));
+    QVERIFY(tabs);
+    QStringList order;
+    for (int i = 0; i < tabs->count(); ++i) order << tabs->widget(i)->objectName();
+    QCOMPARE(order, QStringList({QStringLiteral("tabMain"), QStringLiteral("tabHardware"), QStringLiteral("tabVault"), QStringLiteral("tabNetwork"), QStringLiteral("tabDisplay")}));
+
     dialog.show();
     QVERIFY(QTest::qWaitForWindowExposed(&dialog));
-    QWidget* tab = dialog.findChild<QWidget*>(QStringLiteral("tabMain"));
+    QWidget* tab = dialog.findChild<QWidget*>(QStringLiteral("tabHardware"));
+    QWidget* main = dialog.findChild<QWidget*>(QStringLiteral("tabMain"));
     QVERIFY(tab);
+    QVERIFY(main);
+    tabs->setCurrentWidget(tab);
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
 
-    QVERIFY(!tab->findChild<QCheckBox*>(QStringLiteral("allowCpuAgentTxPow")));
-    const char* required[]{"allowCpuBlockMining", "gpuSolverStatusLabel",
-                           "pruneSize", "databaseCache", "threadsScriptVerif"};
+    QVERIFY(!dialog.findChild<QCheckBox*>(QStringLiteral("allowCpuAgentTxPow")));
+    const char* required[]{"allowCpuBlockMining", "gpuSolverStatusLabel", "gpuCardsGroup", "gpuModeAutomatic", "gpuModeChoose", "gpuModeCpu", "gpuDeviceList", "gpuCardsHelp",
+                           "threadsScriptVerif"};
     for (const char* name : required) {
         QVERIFY2(tab->findChild<QWidget*>(QString::fromLatin1(name)), name);
+    }
+    for (const char* name : {"pruneSize", "databaseCache"}) {
+        QVERIFY2(main->findChild<QWidget*>(QString::fromLatin1(name)), name);
+        QVERIFY2(!tab->findChild<QWidget*>(QString::fromLatin1(name)), name);
     }
 
     QString problem;
@@ -592,10 +758,46 @@ void OptionTests::mainTabFitsAtTheOpeningSize()
         }
         return true;
     };
+    // Prune and the database cache stayed on Main. Same height rule, and the
+    // same horizontal rule against the page they actually sit on.
+    auto main_rows_fit = [&](bool horizontal) {
+        const auto widgets = main->findChildren<QWidget*>();
+        for (QWidget* widget : widgets) {
+            const bool tracked = qobject_cast<QLabel*>(widget) || qobject_cast<QCheckBox*>(widget) || qobject_cast<QSpinBox*>(widget);
+            if (!tracked || widget->isHidden()) continue;
+            const int hint = widget->hasHeightForWidth()
+                ? widget->heightForWidth(qMax(1, widget->width()))
+                : widget->sizeHint().height();
+            if (widget->height() < hint) {
+                problem = widget->objectName()
+                    + QStringLiteral(" height ") + QString::number(widget->height())
+                    + QStringLiteral(" < needed ") + QString::number(hint)
+                    + QStringLiteral(" dialog ") + QString::number(dialog.width()) + QLatin1Char('x') + QString::number(dialog.height());
+                return false;
+            }
+            if (!horizontal) continue;
+            const QPoint origin = widget->mapTo(main, QPoint(0, 0));
+            if (origin.x() < 0 || origin.x() + widget->width() > main->width()) {
+                problem = widget->objectName()
+                    + QStringLiteral(" x ") + QString::number(origin.x())
+                    + QStringLiteral(" width ") + QString::number(widget->width())
+                    + QStringLiteral(" outside Main width ") + QString::number(main->width());
+                return false;
+            }
+        }
+        return true;
+    };
+    auto show_page = [&](QWidget* page) {
+        tabs->setCurrentWidget(page);
+        return QTest::qWaitForWindowExposed(&dialog);
+    };
 
     // Opening size. On this platform that is the 700x540 minimum, which is the
     // size the desktop opened at when the rows were crushed.
     QVERIFY2(rows_fit(false), qPrintable(problem));
+    QVERIFY(show_page(main));
+    QVERIFY2(main_rows_fit(false), qPrintable(problem));
+    QVERIFY(show_page(tab));
 
     // A 1920x1080 desktop gives the rows their own size. This platform cannot:
     // its screen is 240x320, and the dialog will not grow past the screen.
@@ -616,12 +818,32 @@ void OptionTests::mainTabFitsAtTheOpeningSize()
         QVERIFY(QTest::qWaitForWindowExposed(&dialog));
     }
     QVERIFY2(rows_fit(true), qPrintable(problem));
+    QVERIFY(show_page(main));
+    QVERIFY2(main_rows_fit(true), qPrintable(problem));
+    QVERIFY(show_page(tab));
 
     dialog.resize(qMin(dialog.width(), 1366), qMin(dialog.height(), 700));
     QVERIFY(QTest::qWaitForWindowExposed(&dialog));
     QVERIFY2(dialog.width() <= 1366 && dialog.height() <= 700,
              qPrintable(QStringLiteral("laptop size %1x%2").arg(dialog.width()).arg(dialog.height())));
     QVERIFY2(rows_fit(true), qPrintable(problem));
+    QVERIFY(show_page(main));
+    QVERIFY2(main_rows_fit(true), qPrintable(problem));
+}
+
+void OptionTests::graphicsSettingsOpenOnTheHardwareTab()
+{
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, /*enableVault=*/true);
+    dialog.setModel(&options);
+    auto* tabs = dialog.findChild<QTabWidget*>(QStringLiteral("tabWidget"));
+    QVERIFY(tabs);
+    // The menu's Options entry leaves the dialog on Main.
+    QCOMPARE(tabs->currentWidget()->objectName(), QStringLiteral("tabMain"));
+    dialog.setCurrentTab(OptionsDialog::TAB_HARDWARE);
+    QCOMPARE(tabs->currentWidget()->objectName(), QStringLiteral("tabHardware"));
 }
 
 void OptionTests::optionsUseBenchPanelAndExplainAutomaticThreads()
@@ -657,18 +879,29 @@ void OptionTests::mainTabMatchesCardSurface()
     QVERIFY(QTest::qWaitForWindowExposed(&dialog));
     auto* tabs = dialog.findChild<QTabWidget*>(QStringLiteral("tabWidget"));
     auto* contents = dialog.findChild<QWidget*>(QStringLiteral("tabMainScrollContents"));
+    auto* hardware = dialog.findChild<QWidget*>(QStringLiteral("tabHardware"));
+    auto* main_tab = dialog.findChild<QWidget*>(QStringLiteral("tabMain"));
     auto* network = dialog.findChild<QWidget*>(QStringLiteral("tabNetwork"));
     QVERIFY(tabs);
     QVERIFY(contents);
+    QVERIFY(hardware);
+    QVERIFY(main_tab);
     QVERIFY(network);
-    tabs->setCurrentIndex(0);
+    tabs->setCurrentWidget(main_tab);
     QCoreApplication::processEvents();
     // The top-left layout margin is outside every child control.
-    const QPoint main_point = contents->mapTo(&dialog, QPoint(2, 2));
-    QVERIFY(!contents->childAt(QPoint(2, 2)));
+    QVERIFY(!main_tab->childAt(QPoint(2, 2)));
     const QImage main = dialog.grab().toImage();
+    const QPoint main_point = main_tab->mapTo(&dialog, QPoint(2, 2));
     const QColor main_color = main.pixelColor(main_point * main.devicePixelRatio());
     qInfo() << "Main sample" << main_point << main_color.name();
+    tabs->setCurrentWidget(hardware);
+    QCoreApplication::processEvents();
+    QVERIFY(!contents->childAt(QPoint(2, 2)));
+    const QImage hardware_image = dialog.grab().toImage();
+    const QPoint hardware_point = contents->mapTo(&dialog, QPoint(2, 2));
+    const QColor hardware_color = hardware_image.pixelColor(hardware_point * hardware_image.devicePixelRatio());
+    qInfo() << "Hardware sample" << hardware_point << hardware_color.name();
     tabs->setCurrentWidget(network);
     QCoreApplication::processEvents();
     QVERIFY(!network->childAt(QPoint(2, 2)));
@@ -676,6 +909,7 @@ void OptionTests::mainTabMatchesCardSurface()
     const QColor network_color = other.pixelColor(network->mapTo(&dialog, QPoint(2, 2)) * other.devicePixelRatio());
     qInfo() << "Network sample" << network_color.name();
     QCOMPARE(main_color, network_color);
+    QCOMPARE(hardware_color, network_color);
     QCOMPARE(main_color, QColor(QStringLiteral("#171b1f")));
 }
 
@@ -802,4 +1036,15 @@ void OptionTests::displayTabHasNoDeadFontChoiceAndAlignsItsFields()
     QWidget* urls = dialog.findChild<QWidget*>(QStringLiteral("thirdPartyTxUrls"));
     QVERIFY(unit && urls);
     QCOMPARE(unit->mapTo(display, QPoint{}).x(), urls->mapTo(display, QPoint{}).x());
+
+    QVERIFY2(!dialog.findChild<QWidget*>(QStringLiteral("tabWindow")), "the Window tab was merged into Display");
+#ifndef Q_OS_MACOS
+    for (const char* name : {"showTrayIcon", "minimizeToTray", "minimizeOnClose"}) {
+        QWidget* box = dialog.findChild<QWidget*>(QString::fromLatin1(name));
+        QVERIFY2(box, name);
+        QVERIFY2(display->isAncestorOf(box), name);
+    }
+    QWidget* tray = dialog.findChild<QWidget*>(QStringLiteral("showTrayIcon"));
+    QVERIFY(tray->mapTo(display, QPoint{}).y() < unit->mapTo(display, QPoint{}).y());
+#endif
 }

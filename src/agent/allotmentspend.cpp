@@ -175,9 +175,10 @@ util::Result<void> ProveAgentSpend(CMutableTransaction& transaction,
             if (solver_status == cuckatoo::GpuSolveStatus::kCancelled) {
                 return util::Error{Untranslated("Per-transaction proof-of-work was cancelled.")};
             }
-            // "No solver configured" and "the solver ran and failed" used to read
-            // identically, which sent an operator with a working -cuckatoosolver
-            // and a dead card looking for a configuration mistake.
+            // "No graphics helper configured" and "the helper ran and failed" used
+            // to read identically, which sent an operator with a working
+            // -cuckatoosolver and selected -cuckatoodevice but a dead card looking
+            // for a configuration mistake.
             if (const auto fault = cuckatoo::SolverFault(solver_status, cpu_fallback)) {
                 return util::Error{Untranslated("Per-transaction proof-of-work failed. " + *fault)};
             }

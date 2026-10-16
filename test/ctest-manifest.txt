@@ -8,7 +8,7 @@
 #
 # Format: name  registration-conditions  skip-policy  reason
 # Conditions are comma-separated AND terms: always, tests, gui, gui-tests,
-# bench, fuzz, vault, tx, python, linux, windows, msvc, not-coverage.
+# bench, fuzz, vault, tx, gpu-helper, python, linux, windows, msvc, not-coverage.
 # Build options come from CMakeCache.txt, with BUILD_FOR_FUZZING overrides.
 # Platform/compiler identities come from the cache or generated metadata
 # in CMakeFiles/<version>/CMake{System,CXXCompiler}.cmake.
@@ -16,7 +16,8 @@
 # not-coverage means CMAKE_BUILD_TYPE is not Coverage (secp256k1's guard).
 # fuzz currently adds no CTest names. tests guards enable_testing().
 # Skip policies: never; gpu-unset (CUCKATOO_GPU_SOLVER absent, including no
-# empty-value exemption); msvc (MSVC compiler or MSVC simulation ABI).
+# empty-value exemption); opencl-unset (QS_OPENCL_TEST_DEVICE absent); msvc
+# (MSVC compiler or MSVC simulation ABI).
 # Results may cover a targeted subset; every reported test is checked.
 #
 addrman_tests  tests  never  -
@@ -67,8 +68,9 @@ disconnected_transactions  tests  never  -
 flatfile_tests  tests  never  -
 fs_tests  tests  never  -
 getarg_tests  tests  never  -
-gpu_detection_tests  tests  never  -
-gpu_parity_tests  tests  gpu-unset  CUCKATOO_GPU_SOLVER is unset; set it to a qsgpusolve binary to run parity.
+gpu_devices_tests  tests  never  -
+gpu_helper_config_tests  tests  never  -
+gpu_parity_tests  tests  gpu-unset  CUCKATOO_GPU_SOLVER is unset; set it to a qsgpusolve-cuda binary to run parity.
 gpu_solver_tests  tests  never  -
 group_outputs_tests  tests,vault  never  -
 hash_tests  tests  never  -
@@ -93,6 +95,10 @@ net_peer_eviction_tests  tests  never  -
 net_tests  tests  never  -
 netbase_tests  tests  never  -
 node_warnings_tests  tests  never  -
+opencl_api_tests  tests,gpu-helper  never  -
+opencl_devices_tests  tests,gpu-helper  never  -
+opencl_helper_tests  tests,gpu-helper  never  -
+opencl_parity_tests  tests,gpu-helper  opencl-unset  QS_OPENCL_TEST_DEVICE is unset; set it to a device id from qsgpusolve-opencl --list-devices to run parity.
 orphanage_tests  tests  never  -
 outputtype_tests  tests  never  -
 pcp_tests  tests  never  -

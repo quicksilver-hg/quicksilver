@@ -46,8 +46,9 @@ add_executable(test_quicksilver
   cuckatoo_verify_codes_tests.cpp
   cuckoocache_tests.cpp
   gpu_parity_tests.cpp
-  gpu_detection_tests.cpp
+  gpu_helper_config_tests.cpp
   gpu_solver_tests.cpp
+  gpu_devices_tests.cpp
   dbwrapper_tests.cpp
   denialofservice_tests.cpp
   descriptor_tests.cpp
@@ -168,6 +169,18 @@ target_link_libraries(test_quicksilver
   libevent::extra
 )
 
+if(QS_BUILD_GPU_HELPER)
+  target_sources(test_quicksilver PRIVATE opencl_api_tests.cpp)
+  target_sources(test_quicksilver PRIVATE opencl_devices_tests.cpp)
+  target_sources(test_quicksilver PRIVATE opencl_helper_tests.cpp opencl_parity_tests.cpp)
+  target_link_libraries(test_quicksilver qsgpu_opencl_devices qsgpu_opencl_loader)
+  target_compile_definitions(test_quicksilver PRIVATE
+    QSGPUSOLVE_OPENCL_PATH="$<TARGET_FILE:qsgpusolve-opencl>"
+    QSGPUSOLVE_OPENCL_E19_PATH="$<TARGET_FILE:qsgpusolve-opencl-e19>"
+  )
+  add_dependencies(test_quicksilver qsgpusolve-opencl qsgpusolve-opencl-e19)
+endif()
+
 # A real second process for UtilTests/test_LockDirectory. The datadir lock's
 # promise is that ANOTHER PROCESS cannot take it, which one process cannot check
 # about itself; upstream forked, which is why the check was #ifndef WIN32 and so
@@ -250,6 +263,9 @@ add_all_test_targets()
 # would start skipping.
 set_property(TEST gpu_parity_tests APPEND PROPERTY
   SKIP_REGULAR_EXPRESSION "CUCKATOO_GPU_SOLVER unset"
+)
+set_property(TEST opencl_parity_tests APPEND PROPERTY
+  SKIP_REGULAR_EXPRESSION "QS_OPENCL_TEST_DEVICE unset"
 )
 
 install_binary_component(test_quicksilver DEVELOPER_TOOL)

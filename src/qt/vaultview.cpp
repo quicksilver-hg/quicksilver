@@ -66,6 +66,8 @@ VaultView::VaultView(VaultModel* vault_model, const PlatformStyle* _platformStyl
     });
 
     mineMintPage = new MineMintPage(this);
+    mineMintPage->setDisplayUnit(vaultModel->getOptionsModel()->getDisplayUnit());
+    connect(vaultModel->getOptionsModel(), &OptionsModel::displayUnitChanged, mineMintPage, &MineMintPage::setDisplayUnit);
     networkPage = new NetworkPage(this);
 
     usedSendingAddressesPage = new AddressBookPage(platformStyle, AddressBookPage::ForEditing, AddressBookPage::SendingTab, this);
@@ -84,7 +86,7 @@ VaultView::VaultView(VaultModel* vault_model, const PlatformStyle* _platformStyl
     connect(sendCoinsPage, &SendCoinsDialog::coinsSent, this, &VaultView::coinsSent);
     connect(sendCoinsPage, &SendCoinsDialog::solverSettingsRequested, this, &VaultView::solverSettingsRequested);
     connect(mineMintPage, &MineMintPage::solverSettingsRequested, this, &VaultView::solverSettingsRequested);
-    connect(mineMintPage, &MineMintPage::networkHelpRequested, this, &VaultView::gotoNetworkPage);
+    connect(mineMintPage, &MineMintPage::networkHelpRequested, this, &VaultView::networkRequested);
     connect(networkPage, &NetworkPage::addPeerRequested, this, [this](const QString& address) {
         if (!clientModel) {
             networkPage->setAddPeerResult(tr("Consensus is not running, so there is nothing to connect."));

@@ -71,11 +71,11 @@ KNOWN_VIOLATIONS = [
     # (nonce=/cycle=, and the CSV) now use only %u/%s/%llx plus Seconds6, so no
     # LC_NUMERIC surface remains; the entries below are stderr diagnostics,
     # argument parsing, and integer formatting.
-    "src/crypto/cuckatoo/gpu/qsgpusolve.cu:.*std::fprintf",
-    "src/crypto/cuckatoo/gpu/qsgpusolve.cu:.*std::printf",
-    "src/crypto/cuckatoo/gpu/qsgpusolve.cu:.*std::atoi",
-    "src/crypto/cuckatoo/gpu/qsgpusolve.cu:.*std::sscanf",
-    "src/crypto/cuckatoo/gpu/qsgpusolve.cu:.*std::strtoul",
+    "src/crypto/cuckatoo/gpu/qsgpusolve-cuda.cu:.*std::fprintf",
+    "src/crypto/cuckatoo/gpu/qsgpusolve-cuda.cu:.*std::printf",
+    "src/crypto/cuckatoo/gpu/qsgpusolve-cuda.cu:.*std::atoi",
+    "src/crypto/cuckatoo/gpu/qsgpusolve-cuda.cu:.*std::sscanf",
+    "src/crypto/cuckatoo/gpu/qsgpusolve-cuda.cu:.*std::strtoul",
     "src/crypto/cuckatoo/gpu/qsgpucalibrate.cu:.*std::fprintf",
     "src/crypto/cuckatoo/gpu/qsgpucalibrate.cu:.*std::printf",
     "src/crypto/cuckatoo/gpu/qsgpucalibrate.cu:.*std::snprintf",
@@ -98,6 +98,23 @@ KNOWN_VIOLATIONS = [
     "src/crypto/cuckatoo/vendor/lean.cu:.*sscanf",
     "src/crypto/cuckatoo/vendor/lean.cu:.*snprintf",
     "src/crypto/cuckatoo/vendor/lean.cu:.*trim",
+    # OpenCL helper (F-469). Same standing as the CUDA tools above: a standalone
+    # binary, never linked into the daemon, and it never calls setlocale. Its
+    # stdout is the helper contract (listing lines, progress=, nonce=/cycle=)
+    # with %s/%u/%llx only. The snprintf calls format integers or a fixed error
+    # token. The parity test parses that contract back.
+    "src/crypto/cuckatoo/gpu/qsgpusolve-opencl.cpp:.*std::fprintf",
+    "src/crypto/cuckatoo/gpu/qsgpusolve-opencl.cpp:.*std::printf",
+    "src/crypto/cuckatoo/gpu/watchdog_check.h:.*std::fprintf",
+    "src/crypto/cuckatoo/gpu/listing_format.h:.*std::snprintf",
+    "src/crypto/cuckatoo/gpu/opencl_devices.cpp:.*std::snprintf",
+    "src/crypto/cuckatoo/gpu_devices.cpp:.*std::snprintf",
+    "src/crypto/cuckatoo/gpu_solver.cpp:.*std::snprintf",
+    "src/crypto/cuckatoo/vendor/lean_ocl.cpp:.*std::fprintf",
+    "src/crypto/cuckatoo/vendor/lean_ocl.cpp:.*std::snprintf",
+    "src/test/opencl_parity_tests.cpp:.*std::snprintf",
+    "src/test/opencl_parity_tests.cpp:.*std::strtoul",
+    "src/test/opencl_parity_tests.cpp:.*std::strtoull",
     # --------------------------------------------------------------------------
     "src/test/fuzz/locale.cpp:.*setlocale",
     "src/test/util_tests.cpp:.*strtoll",

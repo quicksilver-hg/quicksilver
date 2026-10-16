@@ -12,6 +12,7 @@
 
 #include <QAbstractListModel>
 #include <QFont>
+#include <QMap>
 
 #include <assert.h>
 
@@ -67,6 +68,7 @@ public:
         PruneSize,              // int
         DatabaseCache,          // int
         GpuSolverPath,          // QString
+        GpuDevices,             // QStringList
         AllowCpuBlockMining,    // bool
         ShowCpuFallbackWarning, // bool
         ExternalSignerPath,     // QString
@@ -98,6 +100,8 @@ public:
     bool getCoinControlFeatures() const { return fCoinControlFeatures; }
     bool getEnablePSQTControls() const { return m_enable_psqt_controls; }
     const QString& getOverriddenByCommandLine() { return strOverriddenByCommandLine; }
+    QMap<QString, QString> getGpuDeviceNames() const;
+    void setGpuDeviceNames(const QMap<QString, QString>& names);
 
     /** Whether -signer was set or not */
     bool hasSigner();

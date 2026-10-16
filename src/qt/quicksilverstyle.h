@@ -17,9 +17,12 @@ enum class Token {
     Surface,
     SurfaceRaised,
     Rail,
-    Cinnabar,
+    // The red accent: borders, markers, icons and red text. Too bright to
+    // carry white text, so a red control is filled with CinnabarFill.
+    Vermilion,
     CinnabarBright,
-    CinnabarDim,
+    // The red fill: selected rows and items, and the primary command.
+    CinnabarFill,
     CinnabarTrace,
     Silver,
     SilverHi,
@@ -45,10 +48,10 @@ enum class Token {
     CinnabarSoft,
     // A row's key and the notes under it: as legible as the values they name.
     BenchLabel,
-    // The border of the focused input. Not cinnabar, which reads as an error.
+    // The border of the focused input. Not vermilion, which reads as an error.
     Focus,
     // A caution: something to know or do, not a failure. Shares the pending
-    // amber; cinnabar is kept for errors.
+    // amber; vermilion is kept for errors.
     Warning,
 };
 

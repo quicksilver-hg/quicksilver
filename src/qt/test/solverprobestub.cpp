@@ -2,16 +2,36 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
-// A do-nothing stand-in for the GPU solver, for the options-dialog startup
-// probe test. OptionsDialog::validateGpuSolverPath() accepts a solver when it
-// exits 0, so this ignores its arguments and exits 0.
-//
-// It is a real compiled executable rather than a script fixture because
-// "executable" is spelled differently per platform: POSIX reads the execute
-// bit, Windows reads the file extension. QProcess reaches CreateProcess on
-// Windows, which cannot launch a .bat or .cmd, so only a genuine .exe will
-// start there.
-int main(int, char**)
+// Test helper: --list-devices copies QS_PROBE_STUB_LISTING after an optional
+// delay and returns QS_PROBE_STUB_EXIT. Other invocations succeed unchanged.
+
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <thread>
+
+namespace {
+int EnvInt(const char* name)
 {
+    const char* v = std::getenv(name);
+    int n = 0;
+    for (; v && *v >= '0' && *v <= '9'; ++v) n = n * 10 + (*v - '0');
+    return n;
+}
+} // namespace
+
+int main(int argc, char** argv)
+{
+    if (argc == 2 && std::strcmp(argv[1], "--list-devices") == 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(EnvInt("QS_PROBE_STUB_SLEEP_MS")));
+        if (const char* listing = std::getenv("QS_PROBE_STUB_LISTING")) {
+            std::ifstream in(listing);
+            std::cout << in.rdbuf();
+            std::cout.flush();
+        }
+        return EnvInt("QS_PROBE_STUB_EXIT");
+    }
     return 0;
 }

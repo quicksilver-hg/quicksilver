@@ -14,13 +14,13 @@
 #include <qt/clientmodel.h>
 #include <qt/coincontroldialog.h>
 #include <qt/guiutil.h>
+#include <qt/gpusituation.h>
 #include <qt/optionsmodel.h>
 #include <qt/platformstyle.h>
 #include <qt/quicksilverstyle.h>
 #include <qt/sendcoinsentry.h>
 
 #include <chainparams.h>
-#include <common/args.h>
 #include <interfaces/node.h>
 #include <key_io.h>
 #include <node/interface_ui.h>
@@ -29,6 +29,7 @@
 #include <validation.h>
 #include <vault/coincontrol.h>
 #include <vault/vault.h>
+#include <crypto/cuckatoo/gpu_solver.h>
 
 #include <chrono>
 #include <fstream>
@@ -37,7 +38,6 @@
 
 #include <QDebug>
 #include <QCheckBox>
-#include <QFileInfo>
 #include <QFontDatabase>
 #include <QFrame>
 #include <QGridLayout>
@@ -66,20 +66,9 @@ struct PreparedSendResult {
     quint64 generation;
 };
 
-bool TxProofRequiresConfiguredGpuSolver()
+bool TxProofWantsGraphicsCard()
 {
     return Params().GetConsensus().nTxEdgeBits > 19;
-}
-
-QString ConfiguredGpuSolverPath()
-{
-    return QString::fromStdString(gArgs.GetArg("-cuckatoosolver", ""));
-}
-
-bool IsExecutableSolverFile(const QString& solver_path)
-{
-    const QFileInfo solver_info(solver_path.trimmed());
-    return solver_info.exists() && solver_info.isFile() && solver_info.isExecutable();
 }
 
 bool g_startup_acceleration_warning_shown{false};
@@ -92,7 +81,11 @@ SendCoinsDialog::SendCoinsDialog(const PlatformStyle *_platformStyle, QWidget *p
     platformStyle(_platformStyle)
 {
     ui->setupUi(this);
-    m_gpu_state = gpu::GpuDetectionService::detectGpu(IsExecutableSolverFile(ConfiguredGpuSolverPath()));
+    gpusituation::RunDiscovery(Params().GetConsensus().nTxEdgeBits, this, [this](const cuckatoo::GpuDiscovery& discovery) {
+        m_gpu_discovery = discovery;
+        updateSendWorkDisclosure();
+        if (m_startup_notice_pending) showStartupAccelerationWarningIfNeeded();
+    });
 
     if (!_platformStyle->getImagesOnButtons()) {
         ui->addButton->setIcon(QIcon());
@@ -152,7 +145,6 @@ void SendCoinsDialog::setClientModel(ClientModel *_clientModel)
 void SendCoinsDialog::setModel(VaultModel *_model)
 {
     this->model = _model;
-    m_gpu_state = gpu::GpuDetectionService::detectGpu(IsExecutableSolverFile(ConfiguredGpuSolverPath()));
     updateSendWorkDisclosure();
 
     if(_model && _model->getOptionsModel())
@@ -209,7 +201,6 @@ void SendCoinsDialog::showEvent(QShowEvent* event)
 
 SendCoinsDialog::~SendCoinsDialog()
 {
-    stopGpuSolverProbe();
     delete ui;
 }
 
@@ -620,8 +611,7 @@ void SendCoinsDialog::updateSendWorkElapsed()
 
 void SendCoinsDialog::updateSendWorkDisclosure()
 {
-    refreshGpuSolverProbe(TxProofRequiresConfiguredGpuSolver(), ConfiguredGpuSolverPath());
-    showSendWorkNotes(sendWorkNotes(TxProofRequiresConfiguredGpuSolver(), ConfiguredGpuSolverPath(), m_gpu_solver_probe_status));
+    showSendWorkNotes(sendWorkNotes(m_gpu_discovery, !TxProofWantsGraphicsCard()));
 }
 
 void SendCoinsDialog::updateSendWorkGraphs(uint32_t nonce)
@@ -650,151 +640,30 @@ QString SendCoinsDialog::sendWorkGraphsConfirmationText() const
 
 QString SendCoinsDialog::sendWorkResourceText() const
 {
-    return sendWorkResourceText(TxProofRequiresConfiguredGpuSolver(), ConfiguredGpuSolverPath(), m_gpu_solver_probe_status);
+    return sendWorkResourceText(m_gpu_discovery, !TxProofWantsGraphicsCard());
 }
 
-QString SendCoinsDialog::sendWorkResourceTextForTesting(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status)
+QString SendCoinsDialog::sendWorkResourceTextForTesting(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox)
 {
-    return sendWorkResourceText(requires_configured_gpu_solver, solver_path, probe_status);
+    return sendWorkResourceText(discovery, sandbox);
 }
 
-bool SendCoinsDialog::cpuFallbackWarningRequiredForTesting(bool slow_network, GpuSolverProbeStatus probe_status, bool warning_enabled)
+bool SendCoinsDialog::cpuFallbackWarningRequiredForTesting(bool slow_network, bool card_will_work, bool warning_enabled)
 {
-    return cpuFallbackWarningRequired(slow_network, probe_status, warning_enabled);
+    return cpuFallbackWarningRequired(slow_network, card_will_work, warning_enabled);
 }
 
-void SendCoinsDialog::refreshGpuSolverProbe(bool requires_configured_gpu_solver, const QString& solver_path)
+QString SendCoinsDialog::sendWorkResourceText(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox)
 {
-    const QString trimmed_solver_path = solver_path.trimmed();
-    if (!requires_configured_gpu_solver || !IsExecutableSolverFile(trimmed_solver_path)) {
-        stopGpuSolverProbe();
-        m_gpu_solver_probe_path.clear();
-        m_gpu_solver_probe_status = GpuSolverProbeStatus::Unchecked;
-        return;
-    }
-
-    if (m_gpu_solver_probe_path == trimmed_solver_path && m_gpu_solver_probe_status != GpuSolverProbeStatus::Unchecked) {
-        return;
-    }
-
-    stopGpuSolverProbe();
-    m_gpu_solver_probe_path = trimmed_solver_path;
-    m_gpu_solver_probe_status = GpuSolverProbeStatus::Checking;
-
-    QProcess* probe = new QProcess(this);
-    m_gpu_solver_probe = probe;
-    probe->setProgram(trimmed_solver_path);
-    probe->setArguments(gpuSolverProbeArguments(Params().GetConsensus().nTxEdgeBits));
-    probe->setProcessChannelMode(QProcess::ForwardedErrorChannel);
-
-    connect(probe, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, [this, probe](int exit_code, QProcess::ExitStatus exit_status) {
-        if (m_gpu_solver_probe != probe) {
-            probe->deleteLater();
-            return;
-        }
-        m_gpu_solver_probe = nullptr;
-        if (m_gpu_solver_probe_status != GpuSolverProbeStatus::TimedOut) {
-            m_gpu_solver_probe_status = (exit_status == QProcess::NormalExit && exit_code == 0)
-                ? GpuSolverProbeStatus::Available
-                : GpuSolverProbeStatus::Failed;
-        }
-        updateSendWorkDisclosure();
-        probe->deleteLater();
-    });
-    connect(probe, &QProcess::errorOccurred, this, [this, probe](QProcess::ProcessError error) {
-        if (m_gpu_solver_probe != probe || error == QProcess::Timedout || m_gpu_solver_probe_status == GpuSolverProbeStatus::TimedOut) return;
-        m_gpu_solver_probe_status = GpuSolverProbeStatus::Failed;
-        if (error == QProcess::FailedToStart) {
-            m_gpu_solver_probe = nullptr;
-            updateSendWorkDisclosure();
-            probe->deleteLater();
-        }
-    });
-
-    probe->start();
-    QTimer::singleShot(3000, this, [this, probe]() {
-        if (m_gpu_solver_probe != probe || probe->state() == QProcess::NotRunning) return;
-        m_gpu_solver_probe_status = GpuSolverProbeStatus::TimedOut;
-        probe->kill();
-    });
-}
-
-void SendCoinsDialog::stopGpuSolverProbe()
-{
-    if (!m_gpu_solver_probe) return;
-    QProcess* probe = m_gpu_solver_probe;
-    m_gpu_solver_probe = nullptr;
-    probe->kill();
-    probe->deleteLater();
-}
-
-QStringList SendCoinsDialog::gpuSolverProbeArguments(uint8_t edgebits)
-{
-    return QStringList{
-        QString::number(edgebits),
-        QStringLiteral("00000000"),
-        QStringLiteral("0"),
-        QStringLiteral("0"),
-    };
-}
-
-QString SendCoinsDialog::sendWorkResourceText(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status)
-{
-    const SendWorkNotes notes = sendWorkNotes(requires_configured_gpu_solver, solver_path, probe_status);
+    const SendWorkNotes notes = sendWorkNotes(discovery, sandbox);
     return notes.intro + QLatin1Char('\n') + notes.acceleration;
 }
 
-SendCoinsDialog::SendWorkNotes SendCoinsDialog::sendWorkNotes(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status)
+SendCoinsDialog::SendWorkNotes SendCoinsDialog::sendWorkNotes(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox)
 {
-    SendWorkNotes notes;
-    // Each branch that leaves the work to the processor says so as a warning.
-    const auto fallback = [&notes](const QString& text) {
-        notes.acceleration = text;
-        notes.processor_fallback = true;
-    };
-    notes.intro = tr("Quicksilver sends the full amount. Before broadcast, this desktop prepares a transfer proof; that work can take time.");
-
-    if (requires_configured_gpu_solver) {
-        const QString trimmed_solver_path = solver_path.trimmed();
-        if (trimmed_solver_path.isEmpty()) {
-            fallback(tr("Graphics acceleration is not configured. The processor will take over, which may take many minutes. Choose a GPU solver in Settings > Options > Main for faster preparation."));
-        } else {
-            const QFileInfo solver_info(trimmed_solver_path);
-            if (!solver_info.exists()) {
-                fallback(tr("The configured GPU solver could not be found. The processor will take over, which may take many minutes. Choose a working GPU solver in Settings > Options > Main."));
-            } else if (!solver_info.isFile() || !solver_info.isExecutable()) {
-                fallback(tr("The configured GPU solver cannot be started. The processor will take over, which may take many minutes. Choose a working GPU solver in Settings > Options > Main."));
-            } else {
-                switch (probe_status) {
-                case GpuSolverProbeStatus::Checking:
-                    notes.acceleration = tr("Checking whether graphics acceleration is ready for this network.");
-                    break;
-                case GpuSolverProbeStatus::Available:
-                    // The wait is a geometric search with no upper bound, so a
-                    // single number would be wrong half the time by construction.
-                    // State the typical case and the tail together -- without
-                    // this, the success branch was the only one that named no
-                    // duration at all, leaving the user whose acceleration works
-                    // the least informed about the wait ahead.
-                    notes.acceleration = tr("Graphics acceleration is ready for this network. Preparing a transfer usually takes one to two minutes, but the search is random: some transfers finish in seconds and some run past five minutes. You can stop the work at any time.");
-                    break;
-                case GpuSolverProbeStatus::Failed:
-                    fallback(tr("Graphics acceleration did not start. The processor will take over, which may take many minutes. Check the GPU solver in Settings > Options > Main."));
-                    break;
-                case GpuSolverProbeStatus::TimedOut:
-                    fallback(tr("The graphics acceleration check timed out. The processor will take over, which may take many minutes."));
-                    break;
-                case GpuSolverProbeStatus::Unchecked:
-                    notes.acceleration = tr("A GPU solver is configured. The desktop will check it before preparation starts.");
-                    break;
-                }
-            }
-        }
-    } else {
-        notes.acceleration = tr("Sandbox transfers use quick built-in preparation and do not need graphics acceleration.");
-    }
-
-    return notes;
+    const gpusituation::SendNote acceleration{gpusituation::SendNoteFor(discovery, sandbox)};
+    return {tr("Quicksilver sends the full amount. Before broadcast, this desktop prepares a transfer proof; that work can take time."),
+            acceleration.text, acceleration.processor_fallback};
 }
 
 void SendCoinsDialog::showSendWorkNotes(const SendWorkNotes& notes)
@@ -804,40 +673,39 @@ void SendCoinsDialog::showSendWorkNotes(const SendWorkNotes& notes)
     m_acceleration_warning->setVisible(notes.processor_fallback);
 }
 
-bool SendCoinsDialog::cpuFallbackWarningRequired(bool slow_network, GpuSolverProbeStatus probe_status, bool warning_enabled)
+bool SendCoinsDialog::cpuFallbackWarningRequired(bool slow_network, bool card_will_work, bool warning_enabled)
 {
-    return slow_network && probe_status != GpuSolverProbeStatus::Available && warning_enabled;
-}
-
-QStringList SendCoinsDialog::startupAccelerationText(bool has_gpu)
-{
-    QStringList text;
-    if (has_gpu) {
-        text << tr("Graphics acceleration is available, but no GPU solver is configured.");
-        text << tr("Quicksilver can still send using this computer's processor, but preparing a transfer may take many minutes. Choose a GPU solver in Settings > Options > Main for faster preparation.");
-    } else {
-        text << tr("Graphics acceleration was not detected on this computer.");
-        text << tr("Quicksilver can still send using this computer's processor, but preparing a transfer may take many minutes. The transfer screen will stay responsive and lets you stop the work at any time.");
-    }
-    return text;
+    return slow_network && !card_will_work && warning_enabled;
 }
 
 void SendCoinsDialog::showStartupAccelerationWarningIfNeeded()
 {
     if (g_startup_acceleration_warning_shown || Params().GetConsensus().nTxEdgeBits != 28) return;
-    if (m_gpu_state.has_gpu && m_gpu_state.is_configured) return;
+    if (!m_gpu_discovery) {
+        m_startup_notice_pending = true;
+        return;
+    }
+    m_startup_notice_pending = false;
+#ifdef Q_OS_WIN
+    constexpr bool windows{true};
+#else
+    constexpr bool windows{false};
+#endif
+    const QMap<QString, QString> names{model && model->getOptionsModel() ? model->getOptionsModel()->getGpuDeviceNames() : QMap<QString, QString>{}};
+    const auto notice{gpusituation::StartupNoticeFor(*m_gpu_discovery, windows, names)};
+    if (!notice) return;
 
     g_startup_acceleration_warning_shown = true;
     auto* box = new QMessageBox{QMessageBox::Information, tr("Transfer acceleration"), QString(), QMessageBox::NoButton, this};
     box->setObjectName(QStringLiteral("cpuFallbackStartupWarning"));
-    const QStringList text = startupAccelerationText(m_gpu_state.has_gpu);
-    box->setText(text.at(0));
-    box->setInformativeText(text.at(1));
-    QPushButton* settings_button{box->addButton(tr("Open settings"), QMessageBox::ActionRole)};
+    box->setText(notice->headline);
+    box->setInformativeText(notice->informative);
+    box->setDetailedText(QString::fromStdString(cuckatoo::DescribeDiscovery(*m_gpu_discovery)));
+    QPushButton* settings_button{notice->offer_settings ? box->addButton(tr("Open settings"), QMessageBox::ActionRole) : nullptr};
     QPushButton* continue_button{box->addButton(tr("Continue"), QMessageBox::AcceptRole)};
     box->setDefaultButton(continue_button);
     connect(box, &QMessageBox::finished, this, [this, box, settings_button] {
-        if (box->clickedButton() == settings_button) Q_EMIT solverSettingsRequested();
+        if (settings_button && box->clickedButton() == settings_button) Q_EMIT solverSettingsRequested();
     });
     GUIUtil::ShowModalDialogAsynchronously(box);
 }
@@ -848,7 +716,7 @@ void SendCoinsDialog::confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<Vault
     const bool warning_enabled{model && model->getOptionsModel()
         ? model->getOptionsModel()->getOption(OptionsModel::ShowCpuFallbackWarning).toBool()
         : true};
-    if (!cpuFallbackWarningRequired(Params().GetConsensus().nTxEdgeBits == 28, m_gpu_solver_probe_status, warning_enabled)) {
+    if (!cpuFallbackWarningRequired(Params().GetConsensus().nTxEdgeBits == 28, gpusituation::CardWillWork(m_gpu_discovery), warning_enabled)) {
         startAsyncSendPrepare(std::move(transaction), coin_control);
         return;
     }
@@ -1184,7 +1052,7 @@ void SendCoinsDialog::processSendCoinsReturn(const VaultModel::SendCoinsReturn &
     if (sendCoinsReturn.solver_configuration_required) {
         auto* box = new QMessageBox(QMessageBox::Critical, tr("Transfer Quicksilver"), msgParams.first,
                                     QMessageBox::NoButton, this);
-        QPushButton* settings_button = box->addButton(tr("Open solver settings"), QMessageBox::ActionRole);
+        QPushButton* settings_button = box->addButton(tr("Open graphics settings"), QMessageBox::ActionRole);
         box->addButton(QMessageBox::Ok);
         connect(box, &QMessageBox::finished, this, [this, box, settings_button] {
             if (box->clickedButton() == settings_button) Q_EMIT solverSettingsRequested();

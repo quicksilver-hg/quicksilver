@@ -9,11 +9,13 @@
 #include <QDialog>
 #include <QStringList>
 #include <QValidator>
+#include <crypto/cuckatoo/gpu_devices.h>
 
-#include <qt/sendcoinsdialog.h>
+#include <optional>
 
 class ClientModel;
 class OptionsModel;
+class GpuDeviceList;
 
 QT_BEGIN_NAMESPACE
 class QDataWidgetMapper;
@@ -51,6 +53,7 @@ public:
     enum Tab {
         TAB_MAIN,
         TAB_NETWORK,
+        TAB_HARDWARE,
     };
 
     void setClientModel(ClientModel* client_model);
@@ -79,6 +82,8 @@ private Q_SLOTS:
     void updateDefaultProxyNets();
     void updateOkButtonState();
     void stopGpuSolverProbe();
+    void updateGpuMode();
+    void populateGpuDevices();
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -92,7 +97,10 @@ private:
     OptionsModel* model{nullptr};
     QDataWidgetMapper* mapper{nullptr};
     QProcess* m_gpu_solver_probe{nullptr};
-    SendCoinsDialog::GpuSolverProbeStatus m_gpu_solver_probe_status{SendCoinsDialog::GpuSolverProbeStatus::Unchecked};
+    enum class HelperCheck { kUnchecked, kChecking, kWorks, kFailed };
+    HelperCheck m_gpu_solver_check{HelperCheck::kUnchecked};
+    GpuDeviceList* m_gpu_device_list{nullptr};
+    std::optional<cuckatoo::GpuDiscovery> m_gpu_discovery;
     bool m_proxy_valid{true};
     bool m_gpu_solver_valid{true};
 };

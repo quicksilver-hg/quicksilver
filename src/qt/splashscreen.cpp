@@ -75,7 +75,7 @@ SplashScreen::SplashScreen(const NetworkStyle* networkStyle)
         pixPaint.drawLine(0, y, logicalSize.width(), y);
     }
 
-    pixPaint.setPen(QPen(QuicksilverStyle::Color(QuicksilverStyle::Token::Cinnabar), 2));
+    pixPaint.setPen(QPen(QuicksilverStyle::Color(QuicksilverStyle::Token::Vermilion), 2));
     pixPaint.drawLine(32, 36, 222, 36);
     pixPaint.drawLine(32, 36, 32, 246);
     pixPaint.setPen(QPen(QColor(QStringLiteral("#c9483a")), 2));
@@ -121,7 +121,7 @@ SplashScreen::SplashScreen(const NetworkStyle* networkStyle)
     pixPaint.drawText(logicalSize.width()-titleTextWidth-paddingRight+2,paddingTop+titleVersionVSpace,versionText);
 
     pixPaint.setFont(QFont(font, 10*fontFactor, QFont::Bold));
-    pixPaint.setPen(QuicksilverStyle::Color(QuicksilverStyle::Token::Cinnabar));
+    pixPaint.setPen(QuicksilverStyle::Color(QuicksilverStyle::Token::Vermilion));
     pixPaint.drawText(logicalSize.width()-titleTextWidth-paddingRight+2,paddingTop+titleVersionVSpace+24,tr("Vault and node").toUpper());
 
     // draw copyright stuff
@@ -134,7 +134,7 @@ SplashScreen::SplashScreen(const NetworkStyle* networkStyle)
         pixPaint.drawText(copyrightRect, Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, copyrightText);
     }
 
-    pixPaint.setPen(QPen(QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarDim), 1));
+    pixPaint.setPen(QPen(QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarFill), 1));
     pixPaint.setBrush(Qt::NoBrush);
     pixPaint.drawRoundedRect(QRect(18, 18, logicalSize.width() - 36, logicalSize.height() - 36), 8, 8);
 
@@ -145,7 +145,7 @@ SplashScreen::SplashScreen(const NetworkStyle* networkStyle)
         pixPaint.setFont(boldFont);
         fm = pixPaint.fontMetrics();
         int titleAddTextWidth  = GUIUtil::TextWidth(fm, titleAddText);
-        pixPaint.setPen(QuicksilverStyle::Color(QuicksilverStyle::Token::Cinnabar));
+        pixPaint.setPen(QuicksilverStyle::Color(QuicksilverStyle::Token::Vermilion));
         pixPaint.drawText(logicalSize.width()-titleAddTextWidth-18,18,titleAddText);
     }
 

@@ -15,7 +15,7 @@ namespace agent {
  * quicksilver-agent had none, and that is worse than it sounds: gpu_solver puts
  * the solver in its own process group (POSIX) or job object (Windows), so the
  * terminal's SIGINT never reaches it. Without a handler the agent dies on the
- * default action and ORPHANS qsgpusolve, which keeps the card pinned on
+ * default action and ORPHANS the graphics helper, which keeps the card pinned on
  * abandoned work with up to 2^24 attempts still to burn. Catching the signal and
  * cancelling the grind lets the solver bridge kill its own child on the way out.
  *

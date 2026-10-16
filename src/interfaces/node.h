@@ -81,7 +81,7 @@ struct MiningStatus {
     int64_t last_block_time{0};
     int64_t elapsed_seconds{0};
     double congestion_multiplier{1.0};   //!< 1.0 == per-tx PoW hardware floor
-    bool gpu_solver{false};              //!< true when this process has a GPU solver bridge
+    bool gpu_solver{false};              //!< true when this process has a graphics helper for the chain's graph size and graphics cards are not turned off
     //! Monotonic count of Cuckatoo graphs attempted this session. Reported
     //! alongside the rate because it is the session total the rate deliberately is
     //! not: it distinguishes a solver that has never produced anything from one
@@ -97,7 +97,8 @@ struct MiningStatus {
     //! flag; the GUI has the setting as a control and must say so instead.
     bool solver_missing{false};
     //! Whether block solving can run at all in this configuration. The node
-    //! decides (GPU solver configured, or CPU block mining permitted); the GUI
+    //! decides (-cuckatoosolver/-cuckatoodevice select a graphics helper/card,
+    //! or CPU block mining is permitted); the GUI
     //! must not re-derive the policy. False while active is armed-and-halted;
     //! false while idle means nothing is permitted, and the page says Idle with
     //! Solver: None rather than Halted (F-426). Not published on

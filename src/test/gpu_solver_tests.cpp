@@ -269,12 +269,17 @@ void set_timeout_env(const char* secs) {
     set_env("CUCKATOO_GPU_TIMEOUT", secs);
 }
 struct EnvGuard {
+    EnvGuard() { cuckatoo::ResetGpuDiscoveryForTesting(); }
     ~EnvGuard() {
         qs_test_unsetenv("CUCKATOO_GPU_SOLVER");
+        qs_test_unsetenv("CUCKATOO_GPU_BUNDLED");
+        qs_test_unsetenv("CUCKATOO_GPU_DEVICES");
         qs_test_unsetenv("CUCKATOO_GPU_TIMEOUT");
         qs_test_unsetenv("CUCKATOO_GPU_FAULT");
         qs_test_unsetenv("QS_SOLVER_STUB_SCRIPT");
         qs_test_unsetenv("QS_SOLVER_STUB_ARGV");
+        qs_test_unsetenv("QS_SOLVER_STUB_LISTING");
+        cuckatoo::ResetGpuDiscoveryForTesting();
     }
 };
 } // namespace
@@ -283,6 +288,7 @@ BOOST_AUTO_TEST_CASE(returns_false_when_unset)
 {
     EnvGuard g;
     qs_test_unsetenv("CUCKATOO_GPU_SOLVER");
+    qs_test_unsetenv("CUCKATOO_GPU_BUNDLED");
     unsigned char pre[96] = {0};
     cuckatoo::Cycle out{}; uint32_t nonce = 0;
     BOOST_CHECK(!cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, 0, 10, out, nonce));
@@ -328,9 +334,9 @@ BOOST_AUTO_TEST_CASE(streams_progress_heartbeats)
     BOOST_CHECK_EQUAL(nonce, 42u);
 }
 
-// qsgpusolve exits 0 with no output both when it finds no cycle in the window and
+// The graphics helper exits 0 with no output both when it finds no cycle in the window and
 // -- before this -- when cuInit failed. On a CUDA test node that meant a dead card looked like
-// an unlucky grind for hours. Exit 4 now says "no CUDA device", and the bridge has
+// an unlucky grind for hours. Exit 4 now says "no usable GPU device", and the bridge has
 // to report it as something other than an exhausted window.
 //
 // Windows reads the exit status through its own ladder (GetExitCodeProcess, then
@@ -338,20 +344,20 @@ BOOST_AUTO_TEST_CASE(streams_progress_heartbeats)
 // resets are the Windows ones -- kDeviceFault is what produces the TdrDelay
 // remedy text. Testing this ladder on POSIX alone left the diagnosis untested on
 // exactly the platform whose hardware fault it exists to name.
-BOOST_AUTO_TEST_CASE(missing_cuda_device_is_distinguishable)
+BOOST_AUTO_TEST_CASE(missing_gpu_device_is_distinguishable)
 {
     EnvGuard g;
     unsigned char pre[96] = {0};
     cuckatoo::Cycle out{}; uint32_t nonce = 0;
 
-    // Exit 4, nothing on stdout: what qsgpusolve does with no usable device.
+    // Exit 4, nothing on stdout: what the graphics helper does with no usable device.
     set_solver(write_scripted_stub("qs_stub_exit4", {}, 4));
     auto status{cuckatoo::GpuSolveStatus::kSolved};
     BOOST_CHECK(!cuckatoo::GpuSolveBytes(pre, sizeof(pre), 28, 0, 10, out, nonce, {}, {}, &status));
-    BOOST_CHECK_MESSAGE(status == cuckatoo::GpuSolveStatus::kNoCudaDevice,
+    BOOST_CHECK_MESSAGE(status == cuckatoo::GpuSolveStatus::kNoGpuDevice,
                         "a missing GPU must not be reported as an exhausted search window");
 
-    // Exit 0, nothing on stdout: a genuinely empty window. Must NOT be kNoCudaDevice.
+    // Exit 0, nothing on stdout: a genuinely empty window. Must NOT be kNoGpuDevice.
     set_solver(write_scripted_stub("qs_stub_exit0", {}, 0));
     status = cuckatoo::GpuSolveStatus::kSolved;
     BOOST_CHECK(!cuckatoo::GpuSolveBytes(pre, sizeof(pre), 28, 0, 10, out, nonce, {}, {}, &status));
@@ -716,7 +722,7 @@ BOOST_AUTO_TEST_CASE(resource_failure_is_not_reported_as_an_empty_search_window)
 // (CreateJobObjectW may return null; SetInformationJobObject,
 // AssignProcessToJobObject and setpgid may fail), and the kill was guarded on
 // `if (job)` alone -- so on failure the bridge reported kCancelled having reaped
-// nobody, while qsgpusolve kept the card pinned on abandoned work.
+// nobody, while the graphics helper kept the card pinned on abandoned work.
 //
 // Killing harder is NOT the fix and this case deliberately does not ask for it.
 // When the bridge went through /bin/sh the solver was a grandchild and no signal
@@ -805,16 +811,18 @@ BOOST_AUTO_TEST_CASE(the_solver_path_is_never_interpreted_by_a_shell)
                         ": 99 is the value baked into the path, which only a shell could reach");
 
     // The argv the solver actually received. gpu_solver.h states the contract as
-    // `<path> <edgebits> <hex(prepow)> <start_nonce> <max_attempts>`, and a shell
+    // `<path> --device <id> <edgebits> <hex(prepow)> <start_nonce> <max_attempts>`, and a shell
     // is not the only thing that can break it -- a stray redirection token or a
     // path split into two words would both show up here as the wrong count.
     const std::vector<std::string> got = read_lines(argv_out);
-    BOOST_REQUIRE_MESSAGE(got.size() == 4,
-                          "the solver received " << got.size() << " arguments, expected 4");
-    BOOST_CHECK_EQUAL(got[0], "28");
-    BOOST_CHECK_EQUAL(got[1], std::string(2 * sizeof(pre), '0'));
-    BOOST_CHECK_EQUAL(got[2], "0");
-    BOOST_CHECK_EQUAL(got[3], "10");
+    BOOST_REQUIRE_MESSAGE(got.size() == 6,
+                          "the solver received " << got.size() << " arguments, expected 6");
+    BOOST_CHECK_EQUAL(got[0], "--device");
+    BOOST_CHECK_EQUAL(got[1], "pci:0000:01:00.0");
+    BOOST_CHECK_EQUAL(got[2], "28");
+    BOOST_CHECK_EQUAL(got[3], std::string(2 * sizeof(pre), '0'));
+    BOOST_CHECK_EQUAL(got[4], "0");
+    BOOST_CHECK_EQUAL(got[5], "10");
 
     std::remove(argv_out.c_str());
     std::remove(nasty.c_str());
@@ -831,6 +839,46 @@ BOOST_AUTO_TEST_CASE(cpu_fallback_false_skips_cpu_bytes)
     BOOST_CHECK(!cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), 19, 0, 1u << 20, out, nonce, /*cpu_fallback=*/false));
     // cpu_fallback=true (default behavior): E19 CPU solves -> true.
     BOOST_CHECK(cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), 19, 0, 1u << 20, out, nonce, /*cpu_fallback=*/true));
+}
+
+BOOST_AUTO_TEST_CASE(device_arg_is_the_lowest_address_chosen_card)
+{
+    EnvGuard g;
+    const std::string argv_out = tmp_path("qs_stub_argv_dev.txt");
+    std::remove(argv_out.c_str()); set_env("QS_SOLVER_STUB_ARGV", argv_out);
+    const std::string listing = tmp_path("qs_two_cards.listing");
+    write_file(listing, "echo device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=B\n"
+                        "echo device backend=opencl id=pci:0000:01:00.0 type=gpu integrated=0 mem=0 status=ok name=A\nexit 0\n");
+    set_env("QS_SOLVER_STUB_LISTING", listing); set_solver(write_scripted_stub("qs_stub_dev", {}, 0));
+    unsigned char pre[96]{}; cuckatoo::Cycle out{}; uint32_t nonce{0}; cuckatoo::GpuSolveBytes(pre, sizeof(pre), 28, 0, 1, out, nonce);
+    const auto got = read_lines(argv_out); BOOST_REQUIRE_EQUAL(got.size(), 6U); BOOST_CHECK_EQUAL(got[0], "--device"); BOOST_CHECK_EQUAL(got[1], "pci:0000:01:00.0");
+}
+
+BOOST_AUTO_TEST_CASE(missing_chosen_card_never_falls_back_to_another)
+{
+    EnvGuard g; const std::string argv_out = tmp_path("qs_stub_argv_missing.txt"); std::remove(argv_out.c_str());
+    set_env("CUCKATOO_GPU_DEVICES", "pci:0000:09:00.0"); set_env("QS_SOLVER_STUB_ARGV", argv_out); set_solver(write_scripted_stub("qs_stub_missing", {"nonce=1", cycle_line(1)}, 0));
+    unsigned char pre[96]{}; cuckatoo::Cycle out{}; uint32_t nonce{0}; auto status = cuckatoo::GpuSolveStatus::kSolved;
+    BOOST_CHECK(!cuckatoo::GpuSolveBytes(pre, sizeof(pre), 28, 0, 10, out, nonce, {}, {}, &status)); BOOST_CHECK(status == cuckatoo::GpuSolveStatus::kNoGpuDevice);
+    const auto got = read_lines(argv_out); BOOST_REQUIRE_EQUAL(got.size(), 1U); BOOST_CHECK_EQUAL(got[0], "--list-devices");
+}
+
+BOOST_AUTO_TEST_CASE(cpu_choice_never_spawns_the_helper)
+{
+    EnvGuard g; const std::string argv_out = tmp_path("qs_stub_argv_cpu.txt"); std::remove(argv_out.c_str());
+    set_env("CUCKATOO_GPU_DEVICES", "cpu"); set_env("QS_SOLVER_STUB_ARGV", argv_out); set_solver(write_scripted_stub("qs_stub_cpu", {"nonce=1", cycle_line(1)}, 0));
+    unsigned char pre[96]{}; cuckatoo::Cycle out{}; uint32_t nonce{0}; auto status = cuckatoo::GpuSolveStatus::kSolved;
+    BOOST_CHECK(!cuckatoo::GpuSolveBytes(pre, sizeof(pre), 28, 0, 10, out, nonce, {}, {}, &status)); BOOST_CHECK(status == cuckatoo::GpuSolveStatus::kNoSolver);
+    BOOST_CHECK(read_lines(argv_out).empty()); BOOST_CHECK(!cuckatoo::GpuHelperConfigured(28));
+}
+
+BOOST_AUTO_TEST_CASE(bundled_helper_is_not_used_for_e19)
+{
+    EnvGuard g; const std::string argv_out = tmp_path("qs_stub_argv_e19.txt"); std::remove(argv_out.c_str()); set_env("QS_SOLVER_STUB_ARGV", argv_out);
+    write_scripted_stub("qs_stub_bundled", {}, 3); set_env("CUCKATOO_GPU_BUNDLED", SOLVER_STUB_PATH);
+    unsigned char pre[96]{}; cuckatoo::Cycle out{}; uint32_t nonce{0}; auto status = cuckatoo::GpuSolveStatus::kSolved;
+    BOOST_CHECK(!cuckatoo::GpuSolveBytes(pre, sizeof(pre), 19, 0, 10, out, nonce, {}, {}, &status)); BOOST_CHECK(status == cuckatoo::GpuSolveStatus::kNoSolver);
+    BOOST_CHECK(read_lines(argv_out).empty()); BOOST_CHECK(cuckatoo::GpuHelperConfigured(28)); BOOST_CHECK(!cuckatoo::GpuHelperConfigured(19));
 }
 
 BOOST_AUTO_TEST_CASE(cpu_fallback_false_skips_cpu_fixed)
@@ -887,7 +935,7 @@ BOOST_AUTO_TEST_CASE(solver_fault_missing_solver_depends_on_fallback)
     // Without it, an unset -cuckatoosolver means nothing is mining at all.
     const auto fault = SolverFault(GpuSolveStatus::kNoSolver, /*cpu_fallback=*/false);
     BOOST_REQUIRE(fault.has_value());
-    BOOST_CHECK(fault->find("-cuckatoosolver") != std::string::npos);
+    BOOST_CHECK_EQUAL(*fault, "No graphics card is in use; install the quicksilver-gpu package, set -cuckatoodevice, or allow processor mining with -allowcpumining");
 }
 
 BOOST_AUTO_TEST_CASE(solver_missing_names_only_the_unconfigured_case)
@@ -904,7 +952,7 @@ BOOST_AUTO_TEST_CASE(solver_missing_names_only_the_unconfigured_case)
         BOOST_CHECK(!cuckatoo::SolverMissing(GpuSolveStatus::kSolved, fallback));
         BOOST_CHECK(!cuckatoo::SolverMissing(GpuSolveStatus::kNoCycle, fallback));
         BOOST_CHECK(!cuckatoo::SolverMissing(GpuSolveStatus::kCancelled, fallback));
-        BOOST_CHECK(!cuckatoo::SolverMissing(GpuSolveStatus::kNoCudaDevice, fallback));
+        BOOST_CHECK(!cuckatoo::SolverMissing(GpuSolveStatus::kNoGpuDevice, fallback));
         BOOST_CHECK(!cuckatoo::SolverMissing(GpuSolveStatus::kDeviceFault, fallback));
         BOOST_CHECK(!cuckatoo::SolverMissing(GpuSolveStatus::kSolverError, fallback));
         BOOST_CHECK(!cuckatoo::SolverMissing(GpuSolveStatus::kTimedOut, fallback));
@@ -912,7 +960,7 @@ BOOST_AUTO_TEST_CASE(solver_missing_names_only_the_unconfigured_case)
         // it must never be true where SolverFault stayed silent.
         for (const GpuSolveStatus status : {GpuSolveStatus::kSolved, GpuSolveStatus::kNoCycle,
                                             GpuSolveStatus::kCancelled, GpuSolveStatus::kNoSolver,
-                                            GpuSolveStatus::kNoCudaDevice, GpuSolveStatus::kDeviceFault,
+                                            GpuSolveStatus::kNoGpuDevice, GpuSolveStatus::kDeviceFault,
                                             GpuSolveStatus::kSolverError, GpuSolveStatus::kTimedOut}) {
             if (cuckatoo::SolverMissing(status, fallback)) {
                 BOOST_CHECK(SolverFault(status, fallback).has_value());
@@ -927,22 +975,24 @@ BOOST_AUTO_TEST_CASE(solver_fault_hardware_and_process_failures)
     // child process is broken, and that is what the 402k-attempts-per-second
     // incident on a CUDA test node failed to say for seven hours.
     for (const bool fallback : {false, true}) {
-        BOOST_CHECK(SolverFault(GpuSolveStatus::kNoCudaDevice, fallback).has_value());
+        BOOST_CHECK(SolverFault(GpuSolveStatus::kNoGpuDevice, fallback).has_value());
         BOOST_CHECK(SolverFault(GpuSolveStatus::kDeviceFault, fallback).has_value());
         BOOST_CHECK(SolverFault(GpuSolveStatus::kSolverError, fallback).has_value());
         BOOST_CHECK(SolverFault(GpuSolveStatus::kTimedOut, fallback).has_value());
     }
-    BOOST_CHECK(SolverFault(GpuSolveStatus::kNoCudaDevice, false)->find("CUDA") != std::string::npos);
+    BOOST_CHECK_EQUAL(*SolverFault(GpuSolveStatus::kNoGpuDevice, false), "No usable graphics card was found; check the card's OpenCL driver with clinfo, and see the debug log for the helper's device list");
     // The whole point of the status is that the message tells the operator what
     // to go and look at, so assert the text does that rather than merely exists.
     const auto device_fault = SolverFault(GpuSolveStatus::kDeviceFault, false);
     BOOST_REQUIRE(device_fault.has_value());
 #ifdef WIN32
-    BOOST_CHECK(device_fault->find("TdrDelay") != std::string::npos);
+    BOOST_CHECK_EQUAL(*device_fault, "The graphics card faulted while solving; on Windows this is usually the display-driver watchdog. Set GraphicsDrivers\\TdrDelay to 60 and reboot, then check Event ID 4101");
 #else
-    BOOST_CHECK(device_fault->find("dmesg") != std::string::npos);
+    BOOST_CHECK_EQUAL(*device_fault, "The graphics card faulted while solving; check dmesg for amdgpu, i915, xe or NVRM/Xid reset messages");
 #endif
-    BOOST_CHECK(*device_fault != *SolverFault(GpuSolveStatus::kNoCudaDevice, false));
+    BOOST_CHECK_EQUAL(*SolverFault(GpuSolveStatus::kSolverError, false), "The graphics helper exited with an error; see the debug log");
+    BOOST_CHECK_EQUAL(*SolverFault(GpuSolveStatus::kTimedOut, false), "The graphics helper stopped reporting progress and was killed; see the debug log");
+    BOOST_CHECK(*device_fault != *SolverFault(GpuSolveStatus::kNoGpuDevice, false));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

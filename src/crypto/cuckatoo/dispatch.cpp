@@ -16,7 +16,7 @@
 namespace cuckatoo {
 
 // Reconstruct keys from `prepow` with `nonce` placed at the tail, then verify the
-// cycle. Mirrors the byte placement in solve_28.cpp / qsgpusolve.cu, and the vendored
+// cycle. Mirrors the byte placement in solve_28.cpp / qsgpusolve-cuda.cu, and the vendored
 // solver's own `setheadernonce`, which writes the nonce into the same trailing 4 bytes
 // for the fixed-header sweep -- so one helper serves every solve path.
 //

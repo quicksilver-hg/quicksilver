@@ -7,10 +7,11 @@ from the repository root with a symlink:
     ln -sfn contrib/debian debian
     dpkg-buildpackage -us -uc -b
 
-This produces two packages:
+This produces three packages:
 
 - `quicksilver`       - graphical Qt client and agent runtime
 - `quicksilver-devtools` - headless daemon and command-line tools
+- `quicksilver-gpu`   - the graphics helper, qsgpusolve-opencl
 
 The `quicksilver` package is the user-facing desktop artifact and does not
 pull in the daemon or command-line tools. Install `quicksilver-devtools`

@@ -47,6 +47,8 @@ public:
     static QString longName(Unit unit);
     //! Short name. Codes only: Hg and HgS.
     static QString shortName(Unit unit);
+    //! Name shown in unit choices. Amount labels and keys continue to use the codes.
+    static QString choiceName(Unit unit);
     //! What follows a displayed amount. Hg stays the code. Cinnabar is U+1F713.
     static QString displaySuffix(Unit unit);
     //! Longer description
@@ -61,6 +63,8 @@ public:
     static QString formatWithUnit(Unit unit, const CAmount& amount, bool plussign = false, SeparatorStyle separators = SeparatorStyle::ALWAYS);
     //! Format as HTML string (with unit)
     static QString formatHtmlWithUnit(Unit unit, const CAmount& amount, bool plussign = false, SeparatorStyle separators = SeparatorStyle::ALWAYS);
+    //! Format an inline HTML amount and suffix with privacy masking, if set.
+    static QString formatInlineHtmlWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy);
     //! Format as string (with unit) of fixed length to preserve privacy, if it is set.
     static QString formatWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy);
     //! Format an inline amount with privacy masking, without column padding.

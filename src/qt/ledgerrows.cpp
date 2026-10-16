@@ -56,7 +56,7 @@ public:
         QTextCharFormat plain;
         plain.setForeground(body);
         QTextCharFormat accent;
-        accent.setForeground(Color(Token::Cinnabar));
+        accent.setForeground(Color(Token::Vermilion));
         QTextLayout layout(text, opt.font);
         QVector<QTextLayout::FormatRange> ranges(2);
         ranges[0].start = 0;

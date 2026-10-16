@@ -19,6 +19,7 @@ Rules-Requires-Root: no
 Package: quicksilver
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: quicksilver-gpu
 Description: feeless per-transaction proof-of-work currency
  Quicksilver is a feeless, per-transaction proof-of-work cryptocurrency built
  for autonomous agents and the humans who run them.
@@ -30,6 +31,7 @@ Description: feeless per-transaction proof-of-work currency
 Package: quicksilver-devtools
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: quicksilver-gpu
 Description: feeless per-transaction proof-of-work currency - developer tools
  Quicksilver is a feeless, per-transaction proof-of-work cryptocurrency built
  for autonomous agents and the humans who run them.
@@ -42,3 +44,17 @@ Description: feeless per-transaction proof-of-work currency - developer tools
  .
  See /usr/share/doc/quicksilver-devtools/developer-tools.md for what each one is
  for.
+
+Package: quicksilver-gpu
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: ocl-icd-libopencl1, mesa-opencl-icd
+Suggests: intel-opencl-icd
+Description: feeless per-transaction proof-of-work currency - graphics helper
+ Quicksilver is a feeless, per-transaction proof-of-work cryptocurrency built
+ for autonomous agents and the humans who run them.
+ .
+ This package provides qsgpusolve-opencl, which prepares transfer proofs and
+ mines blocks on any graphics card with an OpenCL driver: AMD, NVIDIA or Intel.
+ Without it, Quicksilver uses this computer's processor, which can take many
+ minutes per transfer.

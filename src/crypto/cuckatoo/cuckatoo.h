@@ -36,7 +36,7 @@ enum class GpuSolveStatus {
     kSolved,        //!< a cycle was parsed from stdout; dispatch overwrites this if self-verify fails
     kNoSolver,      //!< CUCKATOO_GPU_SOLVER unset or empty, or the preimage is too short
     kNoCycle,       //!< the solver ran and exited 0 without producing a cycle
-    kNoCudaDevice,  //!< the solver reports no usable CUDA device (exit 4)
+    kNoGpuDevice,   //!< no usable graphics card: none selected, chosen missing, or exit 4
     kDeviceFault,   //!< the device faulted mid-solve, e.g. a driver watchdog reset (exit 5)
     kSolverError,   //!< the solver exited non-zero, or a parsed cycle failed self-verify
     kTimedOut,      //!< killed by the no-progress watchdog

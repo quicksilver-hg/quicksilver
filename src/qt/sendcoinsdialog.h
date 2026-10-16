@@ -6,7 +6,7 @@
 #ifndef QUICKSILVER_QT_SENDCOINSDIALOG_H
 #define QUICKSILVER_QT_SENDCOINSDIALOG_H
 
-#include <gpu/detection_service.h>
+#include <crypto/cuckatoo/gpu_devices.h>
 #include <qt/clientmodel.h>
 #include <qt/vaultmodel.h>
 #include <vault/coincontrol.h>
@@ -14,13 +14,13 @@
 #include <QDialog>
 #include <QElapsedTimer>
 #include <QMessageBox>
-#include <QProcess>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 class PlatformStyle;
 class SendCoinsEntry;
@@ -43,14 +43,6 @@ class SendCoinsDialog : public QDialog
     Q_OBJECT
 
 public:
-    enum class GpuSolverProbeStatus {
-        Unchecked,
-        Checking,
-        Available,
-        Failed,
-        TimedOut,
-    };
-
     explicit SendCoinsDialog(const PlatformStyle *platformStyle, QWidget *parent = nullptr);
     ~SendCoinsDialog();
 
@@ -86,12 +78,10 @@ public:
         QString acceleration;
         bool processor_fallback{false};
     };
-    static SendWorkNotes sendWorkNotesForTesting(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status) { return sendWorkNotes(requires_configured_gpu_solver, solver_path, probe_status); }
+    static SendWorkNotes sendWorkNotesForTesting(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox) { return sendWorkNotes(discovery, sandbox); }
     void showSendWorkNotesForTesting(const SendWorkNotes& notes) { showSendWorkNotes(notes); }
-    static QString sendWorkResourceTextForTesting(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status = GpuSolverProbeStatus::Unchecked);
-    static QStringList startupAccelerationTextForTesting(bool has_gpu) { return startupAccelerationText(has_gpu); }
-    static QStringList gpuSolverProbeArguments(uint8_t edgebits);
-    static bool cpuFallbackWarningRequiredForTesting(bool slow_network, GpuSolverProbeStatus probe_status, bool warning_enabled);
+    static QString sendWorkResourceTextForTesting(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox);
+    static bool cpuFallbackWarningRequiredForTesting(bool slow_network, bool card_will_work, bool warning_enabled);
 
 public Q_SLOTS:
     void clear();
@@ -135,10 +125,8 @@ private:
     bool m_send_work_graph_attempted{false};
     QElapsedTimer m_send_work_started;
     QTimer m_send_work_update_timer;
-    QProcess* m_gpu_solver_probe{nullptr};
-    QString m_gpu_solver_probe_path;
-    GpuSolverProbeStatus m_gpu_solver_probe_status{GpuSolverProbeStatus::Unchecked};
-    gpu::GpuState m_gpu_state;
+    std::optional<cuckatoo::GpuDiscovery> m_gpu_discovery;
+    bool m_startup_notice_pending{false};
     bool m_startup_warning_queued{false};
 
     // Copy PSQT to clipboard and offer to save it.
@@ -165,16 +153,13 @@ private:
     QString sendWorkGraphsTriedText() const;
     QString sendWorkGraphsConfirmationText() const;
     QString sendWorkResourceText() const;
-    void refreshGpuSolverProbe(bool requires_configured_gpu_solver, const QString& solver_path);
-    void stopGpuSolverProbe();
-    static QString sendWorkResourceText(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status);
-    static SendWorkNotes sendWorkNotes(bool requires_configured_gpu_solver, const QString& solver_path, GpuSolverProbeStatus probe_status);
+    static QString sendWorkResourceText(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox);
+    static SendWorkNotes sendWorkNotes(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox);
     void showSendWorkNotes(const SendWorkNotes& notes);
-    static QStringList startupAccelerationText(bool has_gpu);
     void showStartupAccelerationWarningIfNeeded();
     void confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<VaultModelTransaction> transaction, vault::CCoinControl coin_control);
     void startAsyncSendPrepare(std::unique_ptr<VaultModelTransaction> transaction, vault::CCoinControl coin_control);
-    static bool cpuFallbackWarningRequired(bool slow_network, GpuSolverProbeStatus probe_status, bool warning_enabled);
+    static bool cpuFallbackWarningRequired(bool slow_network, bool card_will_work, bool warning_enabled);
     /* Sign PSQT using external signer.
      *
      * @param[in,out] psqtx the PSQT to sign

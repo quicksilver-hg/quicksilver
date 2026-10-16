@@ -24,6 +24,7 @@
 #include <consensus/consensus.h>
 #include <crypto/cuckatoo/cuckatoo.h>
 #include <deploymentstatus.h>
+#include <gpu/helper_config.h>
 #include <hash.h>
 #include <httprpc.h>
 #include <httpserver.h>
@@ -471,9 +472,8 @@ void SetupServerArgs(ArgsManager& argsman)
 #endif
     argsman.AddArg("-assumevalid=<hex>", strprintf("If this block is in the chain assume that it and its ancestors are valid and potentially skip their script verification (0 to verify all, default: %s, publictest: %s)", defaultChainParams->GetConsensus().defaultAssumeValid.GetHex(), publictestChainParams->GetConsensus().defaultAssumeValid.GetHex()), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-blocksdir=<dir>", "Specify directory to hold blocks subdirectory for *.dat files (default: <datadir>)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-cuckatoosolver=<path>", "Path to an external GPU Cuckatoo solver binary (mining/test only; never consensus). Returned proofs are self-verified before use, falling back to the CPU solver on any failure.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-cuckatoosolvertimeout=<sec>", "No-progress watchdog window for the external GPU solver, in seconds (mining/test only). The bridge kills a solver subprocess that emits no output for this long and falls back per policy.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-allowcpumining", "Permit CPU block mining at the real graph size when no GPU solver is configured (default: false). CPU mining is orders of magnitude slower than a GPU on the same graph, so on main and publictest it is a losing race against GPU miners rather than an impossible one. It exists for operators who choose to run without a GPU.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    gpu::AddGpuHelperArgs(argsman);
+    argsman.AddArg("-allowcpumining", "Permit block mining on this computer's processor at the real graph size when no graphics card is in use (default: false). Processor mining is orders of magnitude slower than a graphics card on the same graph, so on main and publictest it is a losing race against graphics-card miners rather than an impossible one. It exists for operators who choose to run without a graphics card.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-blocksxor",
                    strprintf("Whether an XOR-key applies to blocksdir *.dat files. "
                              "The created XOR-key will be zeros for an existing blocksdir or when `-blocksxor=0` is "
@@ -803,27 +803,13 @@ std::set<BlockFilterType> g_enabled_filter_types;
     std::terminate();
 };
 
-// Quicksilver: portable overwrite-set of an environment variable. POSIX setenv()
-// is unavailable under MSVC, which provides _putenv_s() instead.
-static void SetEnvVarOverwrite(const char* name, const std::string& value)
-{
-#ifdef WIN32
-    _putenv_s(name, value.c_str());
-#else
-    setenv(name, value.c_str(), 1);
-#endif
-}
-
 bool AppInitBasicSetup(const ArgsManager& args, std::atomic<int>& exit_status)
 {
-    // Quicksilver: expose the optional external GPU Cuckatoo solver to the
-    // mining path (the cuckatoo lib reads CUCKATOO_GPU_SOLVER). Mining/test only;
-    // returned proofs are self-verified before use. Done early, before any mining.
-    if (args.IsArgSet("-cuckatoosolver")) {
-        SetEnvVarOverwrite("CUCKATOO_GPU_SOLVER", args.GetArg("-cuckatoosolver", ""));
-    }
-    if (args.IsArgSet("-cuckatoosolvertimeout")) {
-        SetEnvVarOverwrite("CUCKATOO_GPU_TIMEOUT", args.GetArg("-cuckatoosolvertimeout", ""));
+    // The graphics helper: ours (found beside or below this executable), or the
+    // operator's (-cuckatoosolver), on the cards -cuckatoodevice chooses. Done
+    // before anything can solve; the cuckatoo library reads the environment.
+    if (auto applied{gpu::ApplyGpuHelperArgs(args, gpu::LocateBundledHelper())}; !applied) {
+        return InitError(util::ErrorString(applied));
     }
 
     // ********************************************************* Step 1: setup

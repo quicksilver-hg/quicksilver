@@ -19,9 +19,38 @@
 #include <QSizePolicy>
 #include <QClipboard>
 #include <QDialog>
+#include <QEvent>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
+#include <QStyle>
+#include <QStyleOption>
+
+namespace {
+//! The address-book label the Transfer test requires to show whole.
+//! Nineteen characters. A different string of the same length is a different
+//! width in a proportional font, so the reference is that label (F-493).
+constexpr char LABEL_REFERENCE[] = "household-budget-02";
+
+//! Outer width at which `field` paints `text` in full. The room is the same
+//! sum the vault test uses: the style's contents rect, less 2 px a side and
+//! the cursor. The frame and the sheet's padding are whatever that rect
+//! leaves outside a probe width, so the result follows the font and the style.
+int LineEditWidthForText(QLineEdit* field, const QString& text)
+{
+    field->ensurePolished();
+    const int text_width = GUIUtil::TextWidth(field->fontMetrics(), text);
+    QStyleOptionFrame option;
+    option.initFrom(field);
+    constexpr int probe = 1000;
+    option.rect = QRect(0, 0, probe, qMax(field->fontMetrics().height(), 1));
+    option.lineWidth = field->style()->pixelMetric(QStyle::PM_DefaultFrameWidth, &option, field);
+    const int contents = field->style()->subElementRect(QStyle::SE_LineEditContents, &option, field).width();
+    const int outside = contents > 0 && contents <= probe ? probe - contents : 0;
+    return text_width + 2 * 2 + 1 + outside;
+}
+} // namespace
 
 
 SendCoinsEntry::SendCoinsEntry(const PlatformStyle *_platformStyle, QWidget *parent) :
@@ -38,8 +67,9 @@ SendCoinsEntry::SendCoinsEntry(const PlatformStyle *_platformStyle, QWidget *par
     // in the columns of the list's heading row: a whole Bech32 address does
     // not fit one line beside the amount and label at 1200 px. The amount and
     // label follow under the address, each named by a key: the amount as wide
-    // as its figures, the label over the rest of the line, since labels run
-    // long (F-452). The unit is the display unit, named in the amount's key.
+    // as its figures, the label over the rest of the line and at least as wide
+    // as an address-book label (F-452, F-493). The unit is the display unit,
+    // named in the amount's key.
     ui->sendCoinsEntryIndex->setProperty("class", QStringLiteral("benchNote"));
     ui->sendCoinsEntryIndex->setFixedWidth(INDEX_WIDTH);
     ui->payAmount->setUnitSelectorVisible(false);
@@ -84,6 +114,12 @@ SendCoinsEntry::SendCoinsEntry(const PlatformStyle *_platformStyle, QWidget *par
     // The row's address column is narrow; the full example address the shared
     // setup puts in the placeholder only ever showed as "Enter a Quicksi…".
     ui->payTo->setPlaceholderText(tr("Address (%1…)").arg(QString::fromStdString(Params().Bech32HRP()) + QLatin1Char('1')));
+
+    // The bench sheet matches QLineEdit, so a font set on a parent does not
+    // arrive here by inheritance. FontChange and StyleChange on the field
+    // itself (polish, or a later setFont) recompute the minimum.
+    ui->addAsLabel->installEventFilter(this);
+    updateLabelFieldMinimum();
 
     // Connect signals
     connect(ui->payAmount, &QuicksilverAmountField::valueChanged, this, &SendCoinsEntry::payAmountChanged);
@@ -263,8 +299,27 @@ void SendCoinsEntry::changeEvent(QEvent* e)
         ui->addressBookButton->setIcon(platformStyle->ColorIcon(QStringLiteral(":/icons/address-book"), QuicksilverStyle::Color(QuicksilverStyle::Token::RailText)));
         ui->pasteButton->setIcon(platformStyle->ColorIcon(QStringLiteral(":/icons/editpaste"), QuicksilverStyle::Color(QuicksilverStyle::Token::RailText)));
     }
+    if (e->type() == QEvent::FontChange || e->type() == QEvent::StyleChange) {
+        updateLabelFieldMinimum();
+    }
 
     QWidget::changeEvent(e);
+}
+
+bool SendCoinsEntry::eventFilter(QObject* object, QEvent* event)
+{
+    if (object == ui->addAsLabel && (event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange)) {
+        updateLabelFieldMinimum();
+    }
+    return QWidget::eventFilter(object, event);
+}
+
+void SendCoinsEntry::updateLabelFieldMinimum()
+{
+    const int width = LineEditWidthForText(ui->addAsLabel, QString::fromLatin1(LABEL_REFERENCE));
+    if (ui->addAsLabel->minimumWidth() == width) return;
+    ui->addAsLabel->setMinimumWidth(width);
+    ui->addAsLabel->updateGeometry();
 }
 
 bool SendCoinsEntry::updateLabel(const QString &address)

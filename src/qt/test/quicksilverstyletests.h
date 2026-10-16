@@ -19,6 +19,7 @@ private Q_SLOTS:
     void benchSheetRules();
     void dialogButtonsCarryNoStockIcon();
     void disabledPrimaryButtonLooksDisabled();
+    void redCommandsAreFilledWithCinnabar();
 };
 
 #endif // QUICKSILVER_QT_TEST_QUICKSILVERSTYLETESTS_H

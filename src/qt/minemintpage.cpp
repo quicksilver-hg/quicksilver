@@ -115,7 +115,7 @@ MineMintPage::MineMintPage(QWidget* parent)
     add_row(tr("Block mining"), m_status_value);
     add_row(tr("Mining payout"), m_payout_value);
     m_payout_value->setToolTip(tr("The payout reported by the miner. The address above is applied when you press Start."));
-    add_row(tr("Solver"), m_solver_value);
+    add_row(tr("Mining on"), m_solver_value);
     m_solver_health_value = new QLabel(group);
     m_solver_health_value->setObjectName(QStringLiteral("solverHealthValue"));
     m_solver_health_value->setProperty("class", QStringLiteral("benchNote"));
@@ -124,9 +124,9 @@ MineMintPage::MineMintPage(QWidget* parent)
     // a value and an event ID -- and an unwrapped label stretches the whole page.
     m_solver_health_value->setWordWrap(true);
     m_solver_health_value->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-    // The halted state is fixable from Options: a solver path, or processor
+    // The halted state is fixable from Options: a graphics card, or processor
     // block mining. One button opens that screen; the health sentence names both.
-    m_configure_solver_button = new QPushButton(tr("Choose solver…"), group);
+    m_configure_solver_button = new QPushButton(tr("Open graphics settings"), group);
     m_configure_solver_button->setObjectName(QStringLiteral("configureSolverButton"));
     m_configure_solver_button->setProperty("class", QStringLiteral("benchQuiet"));
     m_configure_solver_button->setVisible(false);
@@ -233,11 +233,11 @@ MineMintPage::StatusText MineMintPage::statusText(const interfaces::MiningStatus
         rows.payout = tr("Raw script %1").arg(QString::fromStdString(s.payout_script));
     }
     if (s.gpu_solver) {
-        rows.solver = tr("GPU bridge");
+        rows.solver = tr("Graphics card");
     } else if (halted || idle_unconfigured) {
-        rows.solver = tr("None");
+        rows.solver = tr("Nothing");
     } else {
-        rows.solver = tr("CPU");
+        rows.solver = tr("Processor");
     }
     // No rate yet is not a rate of zero: printing 0.000 here is what made an
     // armed miner look identical to a dead one for the whole of its first graph.
@@ -264,7 +264,7 @@ MineMintPage::StatusText MineMintPage::statusText(const interfaces::MiningStatus
     } else if (halted || idle_unconfigured) {
         // The same sentence the halted row already uses. It describes the
         // configuration, so it is true before arming as well as after a refusal.
-        rows.health = tr("No GPU solver is configured, and processor block mining is off. Choose a solver, or allow processor block mining, in Settings > Options > Main.");
+        rows.health = tr("No graphics card is in use, and processor block mining is off. Choose a card, or allow processor block mining, in Settings > Options > Hardware.");
         rows.show_configure_solver = true;
     } else if (s.solver_ok) {
         // "armed but nothing finished yet" must not read the same as "armed
@@ -273,10 +273,10 @@ MineMintPage::StatusText MineMintPage::statusText(const interfaces::MiningStatus
             ? tr("Working — no graph finished yet")
             : tr("Working");
     } else if (s.solver_missing) {
-        // The core message names -cuckatoosolver, which is right for quicksilver-daemon and
+        // The core message names -cuckatoodevice/-cuckatoosolver, which is right for quicksilver-daemon and
         // useless here: this window owns the setting. Sending a desktop user after a
         // command-line flag pointed them away from a control two clicks away.
-        rows.health = tr("No GPU solver is configured. Choose one in Settings > Options > Main.");
+        rows.health = tr("No graphics card is in use. Choose one in Settings > Options > Hardware.");
         rows.show_configure_solver = true;
     } else {
         rows.health = QString::fromStdString(s.last_solver_error);
@@ -297,8 +297,8 @@ void MineMintPage::setStatus(const interfaces::MiningStatus& s)
     m_reported_payout = rows.payout;
     renderPayout();
     m_solver_value->setText(rows.solver);
-    m_minted_value->setText(QuicksilverUnits::formatWithUnit(
-        QuicksilverUnits::Unit::HG, s.coins_minted_session));
+    m_coins_minted_session = s.coins_minted_session;
+    renderMinted();
     m_blocks_found = s.blocks_found;
     refreshIsolationState();
     m_rate_value->setText(rows.attempts);
@@ -307,6 +307,17 @@ void MineMintPage::setStatus(const interfaces::MiningStatus& s)
     m_congestion_value->setText(QString::number(s.congestion_multiplier, 'f', 2) + QStringLiteral("×"));
     m_stop_button->setEnabled(s.active);
     m_start_button->setEnabled(!s.active);
+}
+
+void MineMintPage::setDisplayUnit(QuicksilverUnit unit)
+{
+    m_display_unit = unit;
+    renderMinted();
+}
+
+void MineMintPage::renderMinted()
+{
+    m_minted_value->setText(QuicksilverUnits::formatWithUnit(m_display_unit, m_coins_minted_session));
 }
 
 //! While idle, an entered address is the one Start will use, so the row names

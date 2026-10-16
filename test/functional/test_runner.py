@@ -94,6 +94,7 @@ BASE_SCRIPTS = [
     # out of the default run. It covers the block filter index and scanblocks against
     # pruned data, and a green default run that skips it says nothing about either.
     'feature_pruning.py',
+    'feature_gpu_device_args.py',
     'feature_quicksilver_bringup.py',
     'feature_quicksilver_feeless.py',
     'feature_quicksilver_no_fee_rpcs.py',

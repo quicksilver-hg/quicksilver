@@ -13,6 +13,8 @@
 #include <qt/clientmodel.h>
 #include <qt/guiconstants.h>
 #include <qt/guiutil.h>
+#include <qt/gpudevicelist.h>
+#include <qt/gpusituation.h>
 #include <qt/optionsmodel.h>
 
 #include <chainparams.h>
@@ -30,6 +32,7 @@
 #include <QCheckBox>
 #include <QGuiApplication>
 #include <QScreen>
+#include <QScrollBar>
 #include <QShowEvent>
 #include <QSizePolicy>
 #include <QDataWidgetMapper>
@@ -42,6 +45,7 @@
 #include <QPointer>
 #include <QProcess>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QSystemTrayIcon>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -66,7 +70,7 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
     // QCheckBox reports these multi-line labels as wider than the dialog.
     // setMinimumSize above then resizes to 700x540 and marks that as the user's
     // size, so showing the dialog does not grow it, and the layout crushes
-    // every Main-tab control into what is left. Take the dialog's width, keep
+    // the checkbox into what is left. Take the dialog's width, keep
     // the height of the lines, and let the scroll area move when a short screen
     // cannot show them all.
     for (QCheckBox* box : {ui->allowCpuBlockMining}) {
@@ -119,11 +123,37 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
     connect(ui->connectSocksTor, &QPushButton::toggled, ui->proxyPortTor, &QWidget::setEnabled);
     connect(ui->connectSocksTor, &QPushButton::toggled, this, &OptionsDialog::updateProxyValidationState);
     connect(ui->gpuSolverBrowseButton, &QPushButton::clicked, this, &OptionsDialog::chooseGpuSolverPath);
+    m_gpu_device_list = new GpuDeviceList(this);
+    m_gpu_device_list->setObjectName(QStringLiteral("gpuDeviceList"));
+    ui->gpuDeviceListLayout->addWidget(m_gpu_device_list);
+    m_gpu_device_list->setListingState(tr("Looking for graphics cards…"));
+    connect(ui->gpuModeAutomatic, &QRadioButton::toggled, this, &OptionsDialog::updateGpuMode);
+    connect(ui->gpuModeChoose, &QRadioButton::toggled, this, &OptionsDialog::updateGpuMode);
+    connect(ui->gpuModeCpu, &QRadioButton::toggled, this, &OptionsDialog::updateGpuMode);
+    connect(m_gpu_device_list, &GpuDeviceList::changed, this, [this] { showRestartWarning(); });
+    connect(m_gpu_device_list, &GpuDeviceList::integratedChecked, this, [this](const QString& id) {
+        auto* box = new QMessageBox(QMessageBox::Question, tr("Use built-in graphics?"),
+                                    tr("Your screen may respond slowly while transfers are being prepared."),
+                                    QMessageBox::NoButton, this);
+        box->setObjectName(QStringLiteral("gpuIntegratedConfirm"));
+        auto* use = box->addButton(tr("Use built-in graphics"), QMessageBox::AcceptRole);
+        box->addButton(QMessageBox::Cancel);
+        connect(box, &QMessageBox::finished, this, [this, box, use, id] {
+            if (box->clickedButton() != use) m_gpu_device_list->setChecked(id, false);
+        });
+        GUIUtil::ShowModalDialogAsynchronously(box);
+    });
+    gpusituation::RunDiscovery(cuckatoo::kBundledHelperEdgeBits, this, [this](const cuckatoo::GpuDiscovery& discovery) {
+        m_gpu_discovery = discovery;
+        populateGpuDevices();
+    });
 
-    /* Window elements init */
+    /* Tray and close live on Display. macOS has no tray here, so hide the
+       boxes instead of removing a tab. */
 #ifdef Q_OS_MACOS
-    /* remove Window tab on Mac */
-    ui->tabWidget->removeTab(ui->tabWidget->indexOf(ui->tabWindow));
+    ui->showTrayIcon->setVisible(false);
+    ui->minimizeToTray->setVisible(false);
+    ui->minimizeOnClose->setVisible(false);
     /* hide launch at startup option on macOS */
     ui->quicksilverAtStartup->setVisible(false);
     ui->verticalLayout_Main->removeWidget(ui->quicksilverAtStartup);
@@ -233,6 +263,16 @@ void OptionsDialog::setModel(OptionsModel *_model)
         setMapper();
         mapper->toFirst();
 
+        const QStringList devices{_model->getOption(OptionsModel::GpuDevices).toStringList()};
+        // Compare without QList::operator==. MSVC's checked iterator deprecates
+        // inside that operator, and WERROR turns it into C4996 (F-490).
+        const bool cpu_only{devices.size() == 1 && devices.front() == QStringLiteral("cpu")};
+        ui->gpuModeAutomatic->setChecked(devices.isEmpty());
+        ui->gpuModeCpu->setChecked(cpu_only);
+        ui->gpuModeChoose->setChecked(!devices.isEmpty() && !cpu_only);
+        populateGpuDevices();
+        updateGpuMode();
+
 
         updateDefaultProxyNets();
     }
@@ -269,31 +309,57 @@ void OptionsDialog::showEvent(QShowEvent* event)
 {
     QDialog::showEvent(event);
     // setMinimumSize resized this dialog to 700x540 before the rows existed,
-    // and that counts as a user resize, so showing it does not grow it. Ask
-    // the Main tab for the size of its rows at the width they actually need,
-    // then stop at the screen. A shorter screen scrolls instead of crushing
-    // the rows; the scroll area is what keeps a 1366x768 laptop honest.
-    if (ui->tabMainScrollArea->viewport()->width() <= 0) return;
+    // and that counts as a user resize, so showing it does not grow it. Size
+    // from the tallest tab's contents, not from Main by name. Hardware owns
+    // the scroll area: it holds the graphics rows, and a shorter screen
+    // scrolls those instead of crushing them. That is what keeps a 1366x768
+    // laptop honest.
+    QWidget* page = ui->tabWidget->currentWidget();
+    if (!page || page->width() <= 0) return;
     layout()->activate();
-    const QSize contents = ui->tabMainScrollContents->sizeHint().expandedTo(ui->tabMainScrollContents->minimumSizeHint());
-    const int chrome_w = width() - ui->tabMainScrollArea->viewport()->width();
-    const int chrome_h = height() - ui->tabMainScrollArea->viewport()->height();
-    int want_w = qMax(minimumWidth(), contents.width() + qMax(0, chrome_w));
-    int want_h = qMax(minimumHeight(), contents.height() + qMax(0, chrome_h));
+    if (QLayout* contents_layout = ui->tabMainScrollContents->layout()) contents_layout->activate();
+
+    QSize content(0, 0);
+    for (int i = 0; i < ui->tabWidget->count(); ++i) {
+        QWidget* tab = ui->tabWidget->widget(i);
+        tab->ensurePolished();
+        QSize hint;
+        if (tab == ui->tabHardware) {
+            ui->tabMainScrollContents->ensurePolished();
+            hint = ui->tabMainScrollContents->sizeHint().expandedTo(ui->tabMainScrollContents->minimumSizeHint());
+        } else {
+            hint = tab->sizeHint().expandedTo(tab->minimumSizeHint());
+        }
+        content = content.expandedTo(hint);
+    }
+    const int chrome_w = width() - page->width();
+    const int chrome_h = height() - page->height();
+    int want_w = qMax(minimumWidth(), content.width() + qMax(0, chrome_w));
+    int want_h = qMax(minimumHeight(), content.height() + qMax(0, chrome_h));
     QScreen* screen = this->screen() ? this->screen() : QGuiApplication::primaryScreen();
     const QRect avail = screen ? screen->availableGeometry() : QRect();
     // availableGeometry is the screen area the window frame may occupy.
     // resize() sets the client size, so leave a margin for the title bar.
     if (avail.width() > 0) want_w = qMin(want_w, qMax(minimumWidth(), avail.width() - 32));
     if (avail.height() > 0) want_h = qMin(want_h, qMax(minimumHeight(), avail.height() - 48));
+    // A normal open shows Main, so Hardware's viewport width is still 0 and
+    // the vertical bar is not in the contents hint. Reserve it when the rows
+    // are taller than the capped window.
+    if (content.height() + qMax(0, chrome_h) > want_h) {
+        want_w += ui->tabMainScrollArea->verticalScrollBar()->sizeHint().width();
+        if (avail.width() > 0) want_w = qMin(want_w, qMax(minimumWidth(), avail.width() - 32));
+    }
     resize(want_w, want_h);
-    // The vertical bar can appear or go as the height changes, which changes
-    // the width the rows actually get. One more pass covers that difference.
+    // When Hardware is already current, the viewport is real. The vertical
+    // bar can appear or go as the height changes, which changes the width
+    // the rows actually get. One more pass covers that difference.
     layout()->activate();
-    const int overflow = ui->tabMainScrollContents->width() - ui->tabMainScrollArea->viewport()->width();
-    if (overflow > 0) {
-        const int limit = avail.width() > 0 ? qMax(minimumWidth(), avail.width() - 32) : want_w + overflow;
-        resize(qMin(width() + overflow, limit), height());
+    if (ui->tabMainScrollArea->viewport()->width() > 0) {
+        const int overflow = ui->tabMainScrollContents->width() - ui->tabMainScrollArea->viewport()->width();
+        if (overflow > 0) {
+            const int limit = avail.width() > 0 ? qMax(minimumWidth(), avail.width() - 32) : want_w + overflow;
+            resize(qMin(width() + overflow, limit), height());
+        }
     }
 }
 
@@ -302,6 +368,7 @@ void OptionsDialog::setCurrentTab(OptionsDialog::Tab tab)
     QWidget *tab_widget = nullptr;
     if (tab == OptionsDialog::Tab::TAB_NETWORK) tab_widget = ui->tabNetwork;
     if (tab == OptionsDialog::Tab::TAB_MAIN) tab_widget = ui->tabMain;
+    if (tab == OptionsDialog::Tab::TAB_HARDWARE) tab_widget = ui->tabHardware;
     if (tab_widget && ui->tabWidget->currentWidget() != tab_widget) {
         ui->tabWidget->setCurrentWidget(tab_widget);
     }
@@ -309,7 +376,7 @@ void OptionsDialog::setCurrentTab(OptionsDialog::Tab tab)
 
 void OptionsDialog::setMapper()
 {
-    /* Main */
+    /* Main and Hardware. Position is not the settings key. */
     mapper->addMapping(ui->quicksilverAtStartup, OptionsModel::StartAtStartup);
     mapper->addMapping(ui->threadsScriptVerif, OptionsModel::ThreadsScriptVerif);
     mapper->addMapping(ui->databaseCache, OptionsModel::DatabaseCache);
@@ -385,7 +452,7 @@ void OptionsDialog::chooseGpuSolverPath()
     QPointer<OptionsDialog> self{this};
     GUIUtil::getOpenFileName(
         this,
-        tr("Choose GPU solver executable"),
+        tr("Choose graphics helper"),
         ui->gpuSolverPath->text().trimmed(),
         tr("Executables (*)"),
         [self](const QString& selected) {
@@ -409,35 +476,35 @@ void OptionsDialog::validateGpuSolverPath()
     ui->gpuSolverStatusLabel->setStyleSheet(QString());
 
     if (path.isEmpty()) {
-        m_gpu_solver_probe_status = SendCoinsDialog::GpuSolverProbeStatus::Unchecked;
+        m_gpu_solver_check = HelperCheck::kUnchecked;
         m_gpu_solver_valid = true;
-        ui->gpuSolverStatusLabel->setText(tr("No GPU solver is configured. Transfers fall back to this computer's processor and may take many minutes; block mining stays off unless processor block mining is enabled above."));
+        ui->gpuSolverStatusLabel->setText(tr("Using Quicksilver's graphics helper."));
         updateOkButtonState();
         return;
     }
 
     const QFileInfo info(path);
     if (!info.exists() || !info.isFile() || !info.isExecutable()) {
-        m_gpu_solver_probe_status = SendCoinsDialog::GpuSolverProbeStatus::Failed;
+        m_gpu_solver_check = HelperCheck::kFailed;
         m_gpu_solver_valid = false;
         ui->gpuSolverStatusLabel->setStyleSheet(QStringLiteral("QLabel { color: red; }"));
         ui->gpuSolverStatusLabel->setText(
             !info.exists()
-                ? tr("The selected GPU solver does not exist.")
-                : tr("The selected GPU solver is not an executable file."));
+                ? tr("The selected graphics helper does not exist.")
+                : tr("The selected graphics helper is not an executable file."));
         updateOkButtonState();
         return;
     }
 
-    m_gpu_solver_probe_status = SendCoinsDialog::GpuSolverProbeStatus::Checking;
+    m_gpu_solver_check = HelperCheck::kChecking;
     m_gpu_solver_valid = false;
-    ui->gpuSolverStatusLabel->setText(tr("Checking whether the selected solver starts for this network…"));
+    ui->gpuSolverStatusLabel->setText(tr("Checking the selected graphics helper…"));
     updateOkButtonState();
 
     QProcess* probe = new QProcess(this);
     m_gpu_solver_probe = probe;
     probe->setProgram(path);
-    probe->setArguments(SendCoinsDialog::gpuSolverProbeArguments(Params().GetConsensus().nTxEdgeBits));
+    probe->setArguments({QStringLiteral("--list-devices")});
     probe->setProcessChannelMode(QProcess::ForwardedErrorChannel);
 
     connect(probe, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
@@ -447,22 +514,14 @@ void OptionsDialog::validateGpuSolverPath()
             return;
         }
         m_gpu_solver_probe = nullptr;
-        if (m_gpu_solver_probe_status == SendCoinsDialog::GpuSolverProbeStatus::TimedOut) {
-            m_gpu_solver_valid = false;
-            ui->gpuSolverStatusLabel->setStyleSheet(QStringLiteral("QLabel { color: red; }"));
-            ui->gpuSolverStatusLabel->setText(tr("The selected GPU solver startup check timed out."));
+        const bool available = exit_status == QProcess::NormalExit && exit_code == 0;
+        m_gpu_solver_check = available ? HelperCheck::kWorks : HelperCheck::kFailed;
+        m_gpu_solver_valid = available;
+        if (available) {
+            ui->gpuSolverStatusLabel->setText(tr("The selected graphics helper loaded successfully."));
         } else {
-            const bool available = exit_status == QProcess::NormalExit && exit_code == 0;
-            m_gpu_solver_probe_status = available
-                ? SendCoinsDialog::GpuSolverProbeStatus::Available
-                : SendCoinsDialog::GpuSolverProbeStatus::Failed;
-            m_gpu_solver_valid = available;
-            if (available) {
-                ui->gpuSolverStatusLabel->setText(tr("The selected GPU solver passed the startup check."));
-            } else {
-                ui->gpuSolverStatusLabel->setStyleSheet(QStringLiteral("QLabel { color: red; }"));
-                ui->gpuSolverStatusLabel->setText(tr("The selected GPU solver did not pass the startup check."));
-            }
+            ui->gpuSolverStatusLabel->setStyleSheet(QStringLiteral("QLabel { color: red; }"));
+            ui->gpuSolverStatusLabel->setText(tr("The selected graphics helper was unable to load."));
         }
         updateOkButtonState();
         probe->deleteLater();
@@ -470,19 +529,44 @@ void OptionsDialog::validateGpuSolverPath()
     connect(probe, &QProcess::errorOccurred, this, [this, probe](QProcess::ProcessError error) {
         if (m_gpu_solver_probe != probe || error != QProcess::FailedToStart) return;
         m_gpu_solver_probe = nullptr;
-        m_gpu_solver_probe_status = SendCoinsDialog::GpuSolverProbeStatus::Failed;
+        m_gpu_solver_check = HelperCheck::kFailed;
         m_gpu_solver_valid = false;
         ui->gpuSolverStatusLabel->setStyleSheet(QStringLiteral("QLabel { color: red; }"));
-        ui->gpuSolverStatusLabel->setText(tr("The selected GPU solver could not be started."));
+        ui->gpuSolverStatusLabel->setText(tr("The selected graphics helper was unable to load."));
         updateOkButtonState();
         probe->deleteLater();
     });
     probe->start();
-    QTimer::singleShot(3000, this, [this, probe] {
+    QTimer::singleShot(cuckatoo::kListingLimit, this, [this, probe] {
         if (m_gpu_solver_probe != probe || probe->state() == QProcess::NotRunning) return;
-        m_gpu_solver_probe_status = SendCoinsDialog::GpuSolverProbeStatus::TimedOut;
+        m_gpu_solver_check = HelperCheck::kFailed;
         probe->kill();
     });
+}
+
+void OptionsDialog::populateGpuDevices()
+{
+    if (!m_gpu_discovery) return;
+    if (m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kListed && !m_gpu_discovery->listing.devices.empty()) {
+        const QStringList chosen{model ? model->getOption(OptionsModel::GpuDevices).toStringList() : QStringList{}};
+        m_gpu_device_list->setDevices(*m_gpu_discovery, chosen, model ? model->getGpuDeviceNames() : QMap<QString, QString>{});
+    } else if (m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kListed ||
+               m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kNoHelper) {
+        m_gpu_device_list->setListingState(tr("No graphics cards were found."));
+    } else {
+        m_gpu_device_list->setListingState(tr("Quicksilver couldn't list this computer's graphics cards. See the debug log."));
+    }
+    updateGpuMode();
+}
+
+void OptionsDialog::updateGpuMode()
+{
+    if (!m_gpu_device_list) return;
+    const auto mode = ui->gpuModeCpu->isChecked() ? GpuDeviceList::Mode::kCpuOnly
+                    : ui->gpuModeChoose->isChecked() ? GpuDeviceList::Mode::kChoose
+                                                     : GpuDeviceList::Mode::kAutomatic;
+    m_gpu_device_list->setMode(mode);
+    if (sender()) showRestartWarning();
 }
 
 void OptionsDialog::on_resetButton_clicked()
@@ -544,6 +628,13 @@ void OptionsDialog::on_openQuicksilverConfButton_clicked()
 void OptionsDialog::on_okButton_clicked()
 {
     mapper->submit();
+    if (model) {
+        const QStringList devices = ui->gpuModeAutomatic->isChecked() ? QStringList{}
+                                  : ui->gpuModeCpu->isChecked() ? QStringList{QStringLiteral("cpu")}
+                                                               : m_gpu_device_list->tickedIds();
+        model->setOption(OptionsModel::GpuDevices, devices);
+        model->setGpuDeviceNames(m_gpu_device_list->tickedNames());
+    }
     accept();
     updateDefaultProxyNets();
 }

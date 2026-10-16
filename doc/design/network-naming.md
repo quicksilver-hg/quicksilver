@@ -37,16 +37,17 @@ launch work.
 
 ### The live network
 
-The formal name exists for documentation, the about box, and the developer
-network selector. It does **not** appear on the application's launch screen,
-in the status bar, or in `getblockchaininfo`.
+The formal name exists for documentation. It does **not** appear on the
+application's launch screen, in the status bar, in `getblockchaininfo`, or on
+the Network page, where the live network is listed simply as "Quicksilver".
 
 The reasoning is that a network name only does work when networks are being
 distinguished, and the only people distinguishing them are developers. Naming
 the live network on the default path invites a first-time user to wonder which
 other kind exists — the precise confusion the desktop application is designed to
-remove. In the developer selector, where three networks sit side by side and
-distinguishing them is the entire purpose, the formal name is correct.
+remove. The Network page is on that default path: it shows the live network
+alone, and lists the two developer networks, under their formal names, only
+after "Show developer networks" is ticked (or while one of them is running).
 
 ### The public test network
 

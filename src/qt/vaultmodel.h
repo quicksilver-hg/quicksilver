@@ -124,6 +124,8 @@ public:
     void requestProofOfWorkCancel() { m_proof_cancel_requested = true; }
     bool proofOfWorkCancelRequested() const { return m_proof_cancel_requested.load(); }
 
+    static bool IsSolverConfigurationError(const bilingual_str& error);
+
     //! Marks a grind as running for as long as it exists. Held on the worker thread.
     class ProofOfWorkScope
     {

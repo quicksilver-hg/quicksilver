@@ -297,7 +297,7 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     auto* mining_rows = new QWidget(mining.frame);
     auto* mining_grid = BenchPanel::MakeRows(mining_rows);
     m_mining_state = BenchPanel::AddRow(mining_grid, tr("State"), QStringLiteral("launchMiningCardState"), mining_rows);
-    m_mining_solver = BenchPanel::AddRow(mining_grid, tr("Solver"), QStringLiteral("homeMiningSolver"), mining_rows);
+    m_mining_solver = BenchPanel::AddRow(mining_grid, tr("Mining on"), QStringLiteral("homeMiningSolver"), mining_rows);
     m_mining_rate = BenchPanel::AddRow(mining_grid, tr("Rate"), QStringLiteral("homeMiningRate"), mining_rows);
     mining.body->addWidget(mining_rows);
     m_mining_summary = MakeNote(QStringLiteral("launchMiningCardBody"), mining.frame);

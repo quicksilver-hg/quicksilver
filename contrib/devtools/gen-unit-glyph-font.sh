@@ -34,9 +34,31 @@ pyftsubset "$SOURCE" \
 python3 - "$OUT" <<'PY'
 import sys
 from fontTools.ttLib import TTFont
+from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
+
+def has_windows_bmp_cmap(font):
+    return any(sub.platformID == 3 and sub.platEncID == 1 for sub in font["cmap"].tables)
+
+def ensure_windows_bmp_cmap(font):
+    # pyftsubset drops (3,1) when the face maps nothing in the BMP. An empty
+    # format 4 subtable maps nothing new; GDI still requires one to load the face.
+    if has_windows_bmp_cmap(font):
+        return
+    sub = CmapSubtable.newSubtable(4)
+    sub.platformID = 3
+    sub.platEncID = 1
+    sub.language = 0
+    sub.cmap = {}
+    font["cmap"].tables.append(sub)
+
+def require_windows_bmp_cmap(font):
+    if has_windows_bmp_cmap(font):
+        return
+    raise SystemExit("cmap has no (3,1) subtable; Windows GDI will not load the face")
 
 path = sys.argv[1]
 font = TTFont(path)
+ensure_windows_bmp_cmap(font)
 cmap = font.getBestCmap()
 glyph_name = cmap.get(0x1F713)
 if glyph_name is None or glyph_name == ".notdef":
@@ -44,6 +66,7 @@ if glyph_name is None or glyph_name == ".notdef":
 glyph = font["glyf"][glyph_name]
 if getattr(glyph, "numberOfContours", 0) < 1:
     raise SystemExit("U+1F713 outline is empty")
+require_windows_bmp_cmap(font)
 
 name = font["name"]
 for rec in name.names:
@@ -61,6 +84,7 @@ set_name(3, "QuicksilverUnitGlyphs-Regular; U+1F713")
 font.save(path)
 
 font = TTFont(path)
+require_windows_bmp_cmap(font)
 print(f"bytes {path} {__import__('os').path.getsize(path)}")
 for rec in font["name"].names:
     if rec.nameID in (0, 1, 3, 4, 6, 13, 14, 16):

@@ -48,6 +48,15 @@ QString QuicksilverUnits::shortName(Unit unit)
     assert(false);
 }
 
+QString QuicksilverUnits::choiceName(Unit unit)
+{
+    switch (unit) {
+    case Unit::HG: return QStringLiteral("Hg");
+    case Unit::HGS: return QString::fromUtf8("HgS (\xF0\x9F\x9C\x93)");
+    }
+    assert(false);
+}
+
 QString QuicksilverUnits::displaySuffix(Unit unit)
 {
     switch (unit) {
@@ -121,6 +130,16 @@ QString StripAmountSeparators(QString text)
     text.remove(QLatin1Char(','));
     return text;
 }
+
+QString HtmlWithUnitSuffix(QuicksilverUnits::Unit unit, const QString& amount_text)
+{
+    QString suffix = QuicksilverUnits::displaySuffix(unit).toHtmlEscaped();
+    if (unit == QuicksilverUnits::Unit::HGS) {
+        const QString color = QuicksilverStyle::Color(QuicksilverStyle::Token::Vermilion).name();
+        suffix = QStringLiteral("<span style='color:%1;'>%2</span>").arg(color, suffix);
+    }
+    return QStringLiteral("<span style='white-space: nowrap;'>%1%2</span>").arg(amount_text.toHtmlEscaped(), suffix);
+}
 } // namespace
 
 QString QuicksilverUnits::format(Unit unit, const CAmount& nIn, bool fPlus, SeparatorStyle separators, bool justify)
@@ -169,13 +188,15 @@ QString QuicksilverUnits::formatWithUnit(Unit unit, const CAmount& amount, bool 
 
 QString QuicksilverUnits::formatHtmlWithUnit(Unit unit, const CAmount& amount, bool plussign, SeparatorStyle separators)
 {
-    const QString amount_text = format(unit, amount, plussign, separators).toHtmlEscaped();
-    QString suffix = displaySuffix(unit).toHtmlEscaped();
-    if (unit == Unit::HGS) {
-        const QString color = QuicksilverStyle::Color(QuicksilverStyle::Token::Cinnabar).name();
-        suffix = QStringLiteral("<span style='color:%1;'>%2</span>").arg(color, suffix);
-    }
-    return QStringLiteral("<span style='white-space: nowrap;'>%1%2</span>").arg(amount_text, suffix);
+    return HtmlWithUnitSuffix(unit, format(unit, amount, plussign, separators));
+}
+
+QString QuicksilverUnits::formatInlineHtmlWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy)
+{
+    assert(amount >= 0);
+    const QString value = privacy ? format(unit, 0, false, separators, true).replace('0', '#')
+                                  : format(unit, amount, false, separators, true);
+    return HtmlWithUnitSuffix(unit, value.trimmed());
 }
 
 QString QuicksilverUnits::formatWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy)
@@ -289,7 +310,7 @@ QVariant QuicksilverUnits::data(const QModelIndex &index, int role) const
         {
         case Qt::EditRole:
         case Qt::DisplayRole:
-            return QVariant(longName(unit));
+            return QVariant(choiceName(unit));
         case Qt::ToolTipRole:
             return QVariant(description(unit));
         case UnitRole:

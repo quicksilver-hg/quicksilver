@@ -9,6 +9,7 @@
 #include <chainparams.h>
 #include <common/args.h>
 #include <consensus/amount.h>
+#include <crypto/cuckatoo/gpu_devices.h>
 #include <crypto/cuckatoo/gpu_solver.h>
 #include <interfaces/mining.h>
 #include <interfaces/node.h>
@@ -21,17 +22,33 @@
 #include <test/util/setup_common.h>
 #include <test/util/txrelaypool.h>
 #include <univalue.h>
+#include <util/strencodings.h>
+#include <util/string.h>
 #include <util/time.h>
+#include <util/utf16.h>
 #include <validation.h>
 
 #include <boost/test/unit_test.hpp>
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
+#include <fstream>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
+
+#ifndef WIN32
+#include <dirent.h>
+#include <signal.h>
+#include <unistd.h>
+#else
+#include <windows.h>
+#include <tlhelp32.h>
+#endif
 
 using node::MiningService;
 using node::MiningStatus;
@@ -65,6 +82,125 @@ std::string BlockingSolverCommand()
 #else
     return "sleep 3600 #";
 #endif
+}
+
+void SetEnvVar(const char* name, const std::string& value)
+{
+#ifdef WIN32
+    _putenv_s(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
+
+void UnsetEnvVar(const char* name)
+{
+#ifdef WIN32
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+}
+
+std::string EnvOrEmpty(const char* name)
+{
+    const char* value{std::getenv(name)};
+    return value ? value : "";
+}
+
+std::string_view TrimAscii(std::string_view text)
+{
+    while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) text.remove_prefix(1);
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '\r')) text.remove_suffix(1);
+    return text;
+}
+
+bool IsSolverStubPath(std::string_view path)
+{
+    if (path == SOLVER_STUB_PATH) return true;
+    const auto slash = path.find_last_of("/\\");
+    const std::string_view base = slash == std::string_view::npos ? path : path.substr(slash + 1);
+    return base == "test_solver_stub" || base == "test_solver_stub.exe";
+}
+
+//! End the held solver window. The child is already inside SolveBlockPoW, so
+//! killing it returns "no cycle" without the abandon path, which would rebuild
+//! the template and stamp a fresh time on its own.
+void KillSolverStubChildren()
+{
+#ifdef WIN32
+    HANDLE snap{CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)};
+    if (snap == INVALID_HANDLE_VALUE) return;
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    const DWORD self{GetCurrentProcessId()};
+    if (Process32FirstW(snap, &entry)) {
+        do {
+            if (entry.th32ParentProcessID != self) continue;
+            if (!IsSolverStubPath(util::Utf16ToUtf8(entry.szExeFile))) continue;
+            HANDLE child{OpenProcess(PROCESS_TERMINATE, FALSE, entry.th32ProcessID)};
+            if (!child) continue;
+            static_cast<void>(TerminateProcess(child, 1));
+            CloseHandle(child);
+        } while (Process32NextW(snap, &entry));
+    }
+    CloseHandle(snap);
+#elif defined(__linux__)
+    DIR* dir{opendir("/proc")};
+    if (!dir) return;
+    const pid_t self{getpid()};
+    while (const dirent* ent = readdir(dir)) {
+        if (ent->d_name[0] < '1' || ent->d_name[0] > '9') continue;
+        std::ifstream status{std::string{"/proc/"} + ent->d_name + "/status"};
+        int32_t ppid{-1};
+        std::string line;
+        while (std::getline(status, line)) {
+            constexpr std::string_view key{"PPid:"};
+            if (line.compare(0, key.size(), key) != 0) continue;
+            int32_t parsed{0};
+            if (ParseInt32(TrimAscii(std::string_view{line}.substr(key.size())), &parsed)) ppid = parsed;
+            break;
+        }
+        if (ppid != self) continue;
+        char buf[4096];
+        const ssize_t n{::readlink((std::string{"/proc/"} + ent->d_name + "/exe").c_str(), buf, sizeof(buf) - 1)};
+        if (n < 0) continue;
+        buf[n] = '\0';
+        if (!IsSolverStubPath(buf)) continue;
+        int32_t pid{0};
+        if (!ParseInt32(ent->d_name, &pid)) continue;
+        static_cast<void>(::kill(pid, SIGKILL));
+    }
+    closedir(dir);
+#endif
+}
+
+std::string TempPath(const std::string& name)
+{
+#ifdef WIN32
+    return name;
+#else
+    return "/tmp/" + name;
+#endif
+}
+
+std::string ProcessIdTag()
+{
+#ifdef WIN32
+    return util::ToString(static_cast<uint64_t>(GetCurrentProcessId()));
+#else
+    return util::ToString(static_cast<int64_t>(::getpid()));
+#endif
+}
+
+bool WaitUntil(const std::function<bool()>& done, std::chrono::milliseconds budget)
+{
+    const auto deadline = std::chrono::steady_clock::now() + budget;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (done()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return done();
 }
 } // namespace
 
@@ -149,7 +285,7 @@ BOOST_AUTO_TEST_CASE(mining_status_reports_runtime_solver_after_setting_change)
     gArgs.LockSettings([&](common::Settings& settings) {
         const auto it = settings.rw_settings.find("cuckatoosolver");
         if (it != settings.rw_settings.end()) original_setting = it->second;
-        settings.rw_settings["cuckatoosolver"] = "/next-start/qsgpusolve";
+        settings.rw_settings["cuckatoosolver"] = "/next-start/qsgpusolve-opencl";
     });
     const char* original_solver = std::getenv("CUCKATOO_GPU_SOLVER");
     const std::optional<std::string> original_env = original_solver
@@ -181,13 +317,13 @@ BOOST_AUTO_TEST_CASE(mining_status_reports_runtime_solver_after_setting_change)
     // solve attempt's kNoSolver health result.
     SetSolverEnv("");
     BOOST_REQUIRE(gArgs.IsArgSet("-cuckatoosolver"));
-    BOOST_CHECK(!cuckatoo::GpuSolverPath().has_value());
+    BOOST_CHECK(!cuckatoo::GpuHelperFor(m_node.chainman->GetConsensus().nEdgeBits).has_value());
     BOOST_CHECK(!node::BuildMiningStatus(svc, *m_node.chainman).gpu_solver);
 
     // The converse pins the source of truth too: status follows the bridge that
     // can run now, regardless of what is merely queued for the next startup.
-    SetSolverEnv("/this-process/qsgpusolve");
-    BOOST_REQUIRE(cuckatoo::GpuSolverPath().has_value());
+    SetSolverEnv("/this-process/qsgpusolve-opencl");
+    BOOST_REQUIRE(cuckatoo::GpuHelperFor(m_node.chainman->GetConsensus().nEdgeBits).has_value());
     BOOST_CHECK(node::BuildMiningStatus(svc, *m_node.chainman).gpu_solver);
 }
 
@@ -319,7 +455,7 @@ BOOST_FIXTURE_TEST_CASE(idle_build_mining_status_reads_block_solving_possible, M
     } restore{original_rw, original_forced, original_cli, original_env};
     // The bridge this process can launch, not the path queued for next start.
     UnsetSolverEnv();
-    BOOST_REQUIRE(!cuckatoo::GpuSolverPath().has_value());
+    BOOST_REQUIRE(!cuckatoo::GpuHelperFor(m_node.chainman->GetConsensus().nEdgeBits).has_value());
 
     auto mining = interfaces::MakeMining(m_node);
     BOOST_REQUIRE(mining);
@@ -594,6 +730,100 @@ BOOST_AUTO_TEST_CASE(relaypool_update_rebuilds_same_height_template)
     BOOST_CHECK_EQUAL(after.template_height, before.template_height);
     BOOST_CHECK_EQUAL(after.template_transactions, 1);
     BOOST_CHECK_EQUAL(WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Height()), chain_height);
+}
+
+BOOST_AUTO_TEST_CASE(solved_block_time_follows_the_clock_not_the_template)
+{
+    // The template is stamped once. A window that ends with no cycle must pick
+    // up a later mock time before the next solve, and the block that lands must
+    // carry that later time. The waits below only watch the worker reach a
+    // marker and then a block; the clock under test moves with SetMockTime.
+    auto mining = interfaces::MakeMining(m_node);
+    BOOST_REQUIRE(mining);
+
+    Consensus::Params& params = const_cast<Consensus::Params&>(Params().GetConsensus());
+    const std::string tag{ProcessIdTag()};
+    const std::string marker{TempPath("f479-window-" + tag)};
+    const std::string script{TempPath("f479-solver-" + tag + ".stub")};
+    static_cast<void>(std::remove(marker.c_str()));
+
+    const bool had_devices{std::getenv("CUCKATOO_GPU_DEVICES") != nullptr};
+    const bool had_timeout{std::getenv("CUCKATOO_GPU_TIMEOUT") != nullptr};
+    struct TestStateRestorer {
+        Consensus::Params& params;
+        const bool block_pow_no_cycle;
+        const uint8_t edge_bits;
+        const std::string solver;
+        const std::string devices;
+        const std::string timeout;
+        const bool had_devices;
+        const bool had_timeout;
+        const std::string marker;
+        const std::string script;
+        ~TestStateRestorer()
+        {
+            params.fBlockPowNoCycle = block_pow_no_cycle;
+            params.nEdgeBits = edge_bits;
+            SetSolverEnv(solver);
+            if (had_devices) SetEnvVar("CUCKATOO_GPU_DEVICES", devices);
+            else UnsetEnvVar("CUCKATOO_GPU_DEVICES");
+            if (had_timeout) SetEnvVar("CUCKATOO_GPU_TIMEOUT", timeout);
+            else UnsetEnvVar("CUCKATOO_GPU_TIMEOUT");
+            UnsetEnvVar("QS_SOLVER_STUB_SCRIPT");
+            cuckatoo::ResetGpuDiscoveryForTesting();
+            KillSolverStubChildren();
+            static_cast<void>(std::remove(marker.c_str()));
+            static_cast<void>(std::remove(script.c_str()));
+        }
+    } restore{params, params.fBlockPowNoCycle, params.nEdgeBits, EnvOrEmpty("CUCKATOO_GPU_SOLVER"),
+              EnvOrEmpty("CUCKATOO_GPU_DEVICES"), EnvOrEmpty("CUCKATOO_GPU_TIMEOUT"), had_devices, had_timeout,
+              marker, script};
+
+    // Edge bits 19 always falls back to the CPU solver, which would solve the
+    // header the held window already captured. 28 leaves that fallback off, so
+    // the held window can end with no cycle. Restored by the destructor above.
+    params.fBlockPowNoCycle = false;
+    params.nEdgeBits = 28;
+    {
+        std::ofstream out{script};
+        BOOST_REQUIRE(out);
+        out << "append " << marker << "\n";
+        out << "sleep 300000\n";
+        out << "exit 1\n";
+        BOOST_REQUIRE(out);
+    }
+    SetSolverEnv(SOLVER_STUB_PATH);
+    SetEnvVar("QS_SOLVER_STUB_SCRIPT", script);
+    UnsetEnvVar("CUCKATOO_GPU_DEVICES");
+    SetEnvVar("CUCKATOO_GPU_TIMEOUT", "600");
+    cuckatoo::ResetGpuDiscoveryForTesting();
+
+    const int64_t time_built{GetTime()};
+    constexpr int64_t delta{1000};
+    const int start_height{WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Height())};
+    const uint256 parent{WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Tip()->GetBlockHash())};
+
+    const CScript payout = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
+    MiningService svc(*m_node.chainman, *mining);
+    BOOST_REQUIRE(svc.Start(payout, "test-payout"));
+
+    BOOST_REQUIRE(WaitUntil([&] { return static_cast<bool>(std::ifstream{marker}); }, std::chrono::seconds(5)));
+
+    // The worker is inside the window that captured the template header. Move
+    // the clock, then let that window end with no cycle. The next window is the
+    // one that must stamp the new time and solve.
+    SetMockTime(time_built + delta);
+    params.fBlockPowNoCycle = true;
+    KillSolverStubChildren();
+
+    BOOST_REQUIRE(WaitUntil([&] { return svc.GetStatus().blocks_found >= 1; }, std::chrono::seconds(5)));
+    svc.Stop();
+
+    const CBlockIndex* mined{WITH_LOCK(cs_main, return m_node.chainman->ActiveChain()[start_height + 1])};
+    BOOST_REQUIRE(mined);
+    BOOST_REQUIRE(mined->pprev);
+    BOOST_CHECK(mined->pprev->GetBlockHash() == parent);
+    BOOST_CHECK_GE(mined->GetBlockTime(), time_built + delta);
 }
 
 BOOST_AUTO_TEST_CASE(worker_thread_is_wrapped_so_an_escaping_exception_is_logged)

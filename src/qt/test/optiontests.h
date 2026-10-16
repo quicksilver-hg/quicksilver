@@ -32,10 +32,17 @@ private Q_SLOTS:
     void integerGetArgBug();
     void gpuSolverSettingPersistsAndRequiresRestart();
     void gpuSolverDialogRejectsInvalidPath();
+    void gpuDevicesSettingRoundTrips();
+    void gpuCardsListAndModes();
+    void tickingBuiltInGraphicsAsksFirst();
+    void missingChosenCardKeepsItsName();
+    void cpuOnlyHidesTheList();
+    void savedGpuDevicesSelectTheMatchingRadio();
     void externalSignerSurfacesAreHiddenNotGreyedOut();
     void cpuFallbackWarningPreferencePersists();
     void allowCpuBlockMiningPersistsWithoutRestart();
-    void mainTabFitsAtTheOpeningSize();
+    void hardwareTabFitsAtTheOpeningSize();
+    void graphicsSettingsOpenOnTheHardwareTab();
     void mainTabMatchesCardSurface();
     void documentModeStripHasNoLightBase();
     void parametersInteraction();

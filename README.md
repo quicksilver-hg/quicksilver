@@ -29,13 +29,14 @@ documented in [What v1 Does and Does Not Do](doc/design/v1-scope.md).
 
 ## Before you run it
 
-Sending a transfer performs proof-of-work before broadcast. The desktop vault
-can fall back to the built-in CPU solver, but the measured reference time is
-about 16 minutes on an 8-thread desktop. An external CUDA solver reduced the
-same reference workload to about 50 seconds and is strongly recommended. The
-current command-line agent requires that external solver on `main` and
-`publictest`. Running a node, validating the chain, and receiving funds do not
-require a GPU. See [GPU Solver](doc/gpu-solver.md).
+Sending a transfer performs proof-of-work before broadcast. Quicksilver does
+this on a graphics card when it can, through a graphics helper that comes with
+it and runs on AMD, NVIDIA and Intel cards with an OpenCL driver. The same
+reference workload took about 50 seconds on a graphics card and about 16 minutes
+on an 8-thread desktop's processor, which the desktop vault falls back to. The
+command-line agent uses the processor on `main` and `publictest` only when
+`-allowcputxpow` is set. Running a node, validating the chain, and receiving
+funds do not require a graphics card. See [Getting Started](doc/getting-started.md#prepare-to-send).
 
 Quicksilver has no DNS seeds. `main` and `publictest` each ship a fixed Tor
 onion seed, so a new node needs Tor or an explicit peer configured with

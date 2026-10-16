@@ -17,6 +17,15 @@
 #include <QTimer>
 #include <QWidget>
 
+QString SolverProbeStubPath()
+{
+    QString path{QCoreApplication::applicationDirPath() + QStringLiteral("/test_solver_probe_stub")};
+#ifdef Q_OS_WIN
+    path += QStringLiteral(".exe");
+#endif
+    return path;
+}
+
 namespace {
 
 QWidget* FindVisibleWidgetOfClass(const char* class_name)

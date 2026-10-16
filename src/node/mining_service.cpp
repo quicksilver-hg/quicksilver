@@ -15,6 +15,7 @@
 #include <key_io.h>
 #include <logging.h>
 #include <node/block_solve.h>
+#include <node/miner.h>
 #include <node/types.h>
 #include <pow.h>
 #include <primitives/block.h>
@@ -89,7 +90,7 @@ bool CpuBlockFallbackEnabled(uint8_t edgebits)
 
 bool BlockSolvingPossible(uint8_t edgebits)
 {
-    return cuckatoo::GpuSolverPath().has_value() || CpuBlockFallbackEnabled(edgebits);
+    return cuckatoo::GpuHelperConfigured(edgebits) || CpuBlockFallbackEnabled(edgebits);
 }
 
 MiningService::MiningService(ChainstateManager& chainman, interfaces::Mining& mining)
@@ -190,7 +191,8 @@ void MiningService::Run(CScript payout_script)
     // desktop writes -allowcpumining into rw settings without restarting, and
     // the next Start() runs this again.
     const bool cpu_fallback = CpuBlockFallbackEnabled(cparams.nEdgeBits);
-    const bool gpu_configured = cuckatoo::GpuSolverPath().has_value();
+    const bool gpu_configured = cuckatoo::GpuHelperConfigured(cparams.nEdgeBits);
+    if (gpu_configured) LogInfo(HgLog::FORGE, "%s\n", cuckatoo::DescribeDiscovery(cuckatoo::DiscoverGpus(cparams.nEdgeBits)));
     {
         LOCK(m_stats_mutex);
         m_status.block_solving_possible = gpu_configured || cpu_fallback;
@@ -199,7 +201,7 @@ void MiningService::Run(CScript payout_script)
         if (cpu_fallback) {
             LogInfo(HgLog::FORGE, "up solver=cpu edgebits=%d warn=cpu-mining-far-slower-than-gpu\n", cparams.nEdgeBits);
         } else {
-            LogInfo(HgLog::FORGE, "halted reason=no-solver edgebits=%d fix=-cuckatoosolver=<path>\n", cparams.nEdgeBits);
+            LogInfo(HgLog::FORGE, "halted reason=no-solver edgebits=%d fix=install-quicksilver-gpu-or--cuckatoodevice-or--allowcpumining\n", cparams.nEdgeBits);
         }
     }
 
@@ -243,6 +245,14 @@ void MiningService::Run(CScript payout_script)
         }
 
         while (m_active.load() && !m_interrupt.load() && !m_chainman.m_interrupt) {
+            {
+                LOCK(::cs_main);
+                // F-479: this window's header time is now, not when the template was built.
+                if (const CBlockIndex* pindexPrev = m_chainman.m_blockman.LookupBlockIndex(parent)) {
+                    UpdateTime(&block, cparams, pindexPrev);
+                }
+            }
+
             uint64_t budget = 4096;
             cuckatoo::GpuSolveStatus solver_status{cuckatoo::GpuSolveStatus::kNoCycle};
             bool template_changed{false};
@@ -324,7 +334,7 @@ interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateM
     // updates immediately, but CUCKATOO_GPU_SOLVER intentionally changes only
     // at startup; reading gArgs here made this row claim "GPU bridge" while the
     // next solve attempt and its health row still correctly reported no solver.
-    out.gpu_solver = cuckatoo::GpuSolverPath().has_value();
+    out.gpu_solver = cuckatoo::GpuHelperConfigured(chainman.GetConsensus().nEdgeBits);
     out.graphs_attempted = s.attempts;
     out.solver_ok = s.solver_ok;
     out.last_solver_error = s.last_solver_error;

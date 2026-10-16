@@ -61,9 +61,10 @@ user on a CPU-only machine can send, and will wait a quarter of an hour per
 transaction, with the machine fully loaded for that time.
 
 The desktop vault permits that CPU fallback on the live and public test
-networks. The current command-line agent does not: it requires an external
-solver process configured with `-cuckatoosolver=<path>` for agent spends on
-those networks. The sandbox network uses its small built-in CPU solver. See the
+networks. The current command-line agent does not, unless `-allowcputxpow` is
+set: agent spends on those networks need a graphics card, through the graphics
+helper that comes with Quicksilver or one configured with
+`-cuckatoosolver=<path>`. The sandbox network uses its small built-in CPU solver. See the
 [GPU solver guide](../gpu-solver.md) for the exact runtime boundaries.
 
 ## 4. The decision

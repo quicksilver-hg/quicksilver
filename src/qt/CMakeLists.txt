@@ -59,6 +59,10 @@ add_library(quicksilver_qt STATIC EXCLUDE_FROM_ALL
   csvmodelwriter.cpp
   csvmodelwriter.h
   guiutil.cpp
+  gpudevicelist.cpp
+  gpudevicelist.h
+  gpusituation.cpp
+  gpusituation.h
   maturity.cpp
   guiutil.h
   initexecutor.cpp

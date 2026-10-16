@@ -22,11 +22,11 @@ QColor Color(Token token)
         return QColor(QStringLiteral("#20262b"));
     case Token::Rail:
         return QColor(QStringLiteral("#0b0d0f"));
-    case Token::Cinnabar:
+    case Token::Vermilion:
         return QColor(QStringLiteral("#d84b3e"));
     case Token::CinnabarBright:
         return QColor(QStringLiteral("#ff7a6c"));
-    case Token::CinnabarDim:
+    case Token::CinnabarFill:
         return QColor(QStringLiteral("#6b3431"));
     case Token::CinnabarTrace:
         return QColor(QStringLiteral("#2d2222"));
@@ -133,8 +133,8 @@ void Apply(QApplication& app)
     palette.setColor(QPalette::ButtonText, Color(Token::Silver));
     palette.setColor(QPalette::BrightText, Color(Token::CinnabarBright));
     palette.setColor(QPalette::Link, Color(Token::CinnabarBright));
-    palette.setColor(QPalette::LinkVisited, Color(Token::Cinnabar));
-    palette.setColor(QPalette::Highlight, Color(Token::Cinnabar));
+    palette.setColor(QPalette::LinkVisited, Color(Token::Vermilion));
+    palette.setColor(QPalette::Highlight, Color(Token::CinnabarFill));
     palette.setColor(QPalette::HighlightedText, Color(Token::SilverHi));
     palette.setColor(QPalette::Disabled, QPalette::Base, Color(Token::Base));
     palette.setColor(QPalette::Disabled, QPalette::Button, Color(Token::Surface));
@@ -379,6 +379,29 @@ QCheckBox::indicator:checked {
     image: url(:/icons/check_tick);
 }
 QCheckBox::indicator:disabled {
+    border-color: #4a525a;
+}
+CoinControlTreeWidget#treeWidget::indicator {
+    background-color: #0f1114;
+    border: 1px solid #8b959e;
+    border-radius: 2px;
+    height: 12px;
+    width: 12px;
+}
+CoinControlTreeWidget#treeWidget::indicator:hover {
+    border-color: #aab3bb;
+}
+CoinControlTreeWidget#treeWidget::indicator:checked {
+    background-color: #2a3037;
+    border-color: #aab3bb;
+    image: url(:/icons/check_tick);
+}
+CoinControlTreeWidget#treeWidget::indicator:indeterminate {
+    background-color: #2a3037;
+    border-color: #aab3bb;
+    image: url(:/icons/check_partial);
+}
+CoinControlTreeWidget#treeWidget::indicator:disabled {
     border-color: #4a525a;
 }
 QWidget[class="quicksilverPage"] QGroupBox,
@@ -680,7 +703,8 @@ QProgressBar::chunk {
     const QString hero = Color(Token::SilverHi).name();
     const QString muted = Color(Token::SilverMuted).name();
     const QString rail = Color(Token::Rail).name();
-    const QString cinnabar = Color(Token::Cinnabar).name();
+    const QString vermilion = Color(Token::Vermilion).name();
+    const QString cinnabar_fill = Color(Token::CinnabarFill).name();
     sheet += QStringLiteral(R"(
 QFrame#benchTopBar {
     background-color: %1;
@@ -737,9 +761,14 @@ QLabel#benchStatusGood {
     sheet += QStringLiteral(R"(
 QPushButton#sendButton,
 QPushButton[class="primaryActionButton"] {
-    background-color: %1;
+    background-color: %7;
     border-color: %1;
     color: %2;
+}
+QPushButton#sendButton:hover:!disabled,
+QPushButton[class="primaryActionButton"]:hover:!disabled {
+    background-color: %8;
+    border-color: %1;
 }
 QPushButton#sendButton:disabled,
 QPushButton[class="primaryActionButton"]:disabled {
@@ -781,11 +810,6 @@ QLabel#benchTickerKey {
     font-size: {caption}px;
     font-weight: 700;
 }
-QLabel#benchTickerUnit {
-    color: %1;
-    font-size: {label}px;
-    font-weight: 700;
-}
 QLabel#benchBreadcrumb {
     font-size: {label}px;
 }
@@ -795,7 +819,7 @@ QLabel[class="benchSection"] {
     font-size: {caption}px;
     font-weight: 700;
 }
-)").arg(cinnabar, hero, bench_surface, status_good, muted, Color(Token::RailText).name());
+)").arg(vermilion, hero, bench_surface, status_good, muted, Color(Token::RailText).name(), cinnabar_fill, QStringLiteral("#7d3c38"));
     sheet += QStringLiteral(R"(
 QFrame#consensusChoicePanel,
 QWidget#mineMintIsolationPanel {
@@ -813,11 +837,18 @@ QPushButton#receiveButton,
 QPushButton#consensusContinueButton,
 QPushButton#startMiningButton,
 QPushButton#agentAllotmentCreateButton {
-    background-color: %4;
+    background-color: %5;
     border-color: %4;
     color: %3;
 }
-)").arg(bench_surface, hairline, hero, cinnabar);
+QPushButton#receiveButton:hover:!disabled,
+QPushButton#consensusContinueButton:hover:!disabled,
+QPushButton#startMiningButton:hover:!disabled,
+QPushButton#agentAllotmentCreateButton:hover:!disabled {
+    background-color: %6;
+    border-color: %4;
+}
+)").arg(bench_surface, hairline, hero, vermilion, cinnabar_fill, QStringLiteral("#7d3c38"));
 
     // The Bench page grammar: label/value rows, notes, quiet commands, the
     // segmented filter and the ledger table.
@@ -942,7 +973,7 @@ QTextBrowser#aboutMessage {
     background: transparent;
     padding: 0;
 }
-)").arg(Color(Token::Cinnabar).name());
+)").arg(Color(Token::Vermilion).name());
 
     // One type scale and the shared label colour, filled in last so every
     // section above draws from the same values.

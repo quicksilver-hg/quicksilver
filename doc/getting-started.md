@@ -190,15 +190,24 @@ Stop the daemon cleanly, with the same network selection:
 ## Prepare to send
 
 Every non-sandbox transfer performs Cuckatoo proof-of-work before broadcast.
-The desktop can use its built-in CPU solver, but preparation may take many
-minutes. Configure the external CUDA helper for practical transfer times:
+Quicksilver does this on a graphics card when it can, through its graphics
+helper, `qsgpusolve-opencl`. It runs on AMD, NVIDIA and Intel cards that have
+an OpenCL driver. A source build places the helper beside the application in
+`build/bin`, where Quicksilver finds it on its own; on Ubuntu it is the
+`quicksilver-gpu` package. Without a usable card, Quicksilver uses this
+computer's processor, which can take many minutes per transfer.
+
+Every graphics card except built-in graphics is used by default. Choose cards
+in Settings > Options > Hardware > Graphics cards, or at startup with
+`-cuckatoodevice`, using the id the helper lists:
 
 ```bash
-./build/bin/quicksilver -cuckatoosolver=/absolute/path/to/qsgpusolve
+./build/bin/qsgpusolve-opencl --list-devices
+./build/bin/quicksilver -cuckatoodevice=pci:0000:04:00.0
 ```
 
-The Qt settings screen can store the same path. Build and verification steps
-are in [GPU Solver](gpu-solver.md).
+To build a CUDA or ROCm helper yourself and use it instead, see
+[GPU Solver](gpu-solver.md).
 
 ## Get help or report a problem
 

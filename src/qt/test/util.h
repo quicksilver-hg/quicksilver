@@ -18,6 +18,7 @@
  * QDialog::exec() (nested event loop). Closes the modal afterwards.
  */
 void ExpectModalWithoutNestedEventLoop(const char* class_name, const std::function<void()>& show_dialog);
+QString SolverProbeStubPath();
 
 /**
  * QuicksilverStyle::Apply replaces the base style as well as the palette and

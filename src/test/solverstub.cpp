@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 // A scripted stand-in for the external GPU Cuckatoo solver, for the subprocess
-// bridge tests in gpu_solver_tests.cpp.
+// bridge and discovery tests in gpu_solver_tests.cpp and gpu_devices_tests.cpp.
 //
 // It is a real compiled executable rather than a shell script for two reasons.
 // The first is the one solverprobestub.cpp and lockdirstub.cpp already give:
@@ -86,15 +86,22 @@ bool Directive(const std::string& line, const char* verb, std::string& rest)
 
 int main(int argc, char* argv[])
 {
-    const char* script{std::getenv("QS_SOLVER_STUB_SCRIPT")};
-    if (!script || script[0] == '\0') {
-        std::cerr << "solver stub: QS_SOLVER_STUB_SCRIPT is unset" << std::endl;
-        return kMisconfigured;
-    }
-
     if (const char* argv_out{std::getenv("QS_SOLVER_STUB_ARGV")}) {
         std::ofstream out{argv_out, std::ios::binary};
         for (int i = 1; i < argc; ++i) out << argv[i] << "\n";
+    }
+    const char* script{std::getenv("QS_SOLVER_STUB_SCRIPT")};
+    if (argc == 2 && std::strcmp(argv[1], "--list-devices") == 0) {
+        const char* listing{std::getenv("QS_SOLVER_STUB_LISTING")};
+        if (!listing || listing[0] == '\0') {
+            std::puts("device backend=stub id=pci:0000:01:00.0 type=gpu integrated=0 mem=0 status=ok name=Stub graphics card");
+            return 0;
+        }
+        script = listing;
+    }
+    if (!script || script[0] == '\0') {
+        std::cerr << "solver stub: QS_SOLVER_STUB_SCRIPT is unset" << std::endl;
+        return kMisconfigured;
     }
 
     const std::vector<std::string> lines{ReadLines(script)};

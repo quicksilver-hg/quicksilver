@@ -7,16 +7,25 @@
 #include <consensus/amount.h>
 #include <qt/guiutil.h>
 #include <qt/quicksilveramountfield.h>
+#include <qt/quicksilvergui.h>
 #include <qt/quicksilverstyle.h>
 #include <qt/quicksilverunits.h>
+#include <qt/platformstyle.h>
+#include <qt/test/util.h>
 
+#include <QAbstractItemView>
 #include <QAbstractSpinBox>
 #include <QApplication>
 #include <QChar>
+#include <QComboBox>
+#include <QDir>
+#include <QFile>
 #include <QFontInfo>
+#include <QFontMetricsF>
 #include <QGlyphRun>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QRawFont>
 #include <QRegularExpression>
 #include <QString>
@@ -42,6 +51,18 @@ QValidator::State FieldState(QAbstractSpinBox* spin, const QString& typed)
     QString text = typed;
     int pos = text.size();
     return spin->validate(text, pos);
+}
+
+quint16 ReadBe16(const QByteArray& bytes, int offset)
+{
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(bytes.constData() + offset);
+    return static_cast<quint16>((p[0] << 8) | p[1]);
+}
+
+quint32 ReadBe32(const QByteArray& bytes, int offset)
+{
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(bytes.constData() + offset);
+    return (quint32{p[0]} << 24) | (quint32{p[1]} << 16) | (quint32{p[2]} << 8) | quint32{p[3]};
 }
 } // namespace
 
@@ -258,7 +279,7 @@ void UnitsTests::htmlColoursOnlyTheCinnabarSuffix()
 {
     const CAmount amount = 401238 * COIN + 63847287;
     const QString html = QuicksilverUnits::formatHtmlWithUnit(Unit::HGS, amount);
-    const QString color = QuicksilverStyle::Color(QuicksilverStyle::Token::Cinnabar).name();
+    const QString color = QuicksilverStyle::Color(QuicksilverStyle::Token::Vermilion).name();
     const QString number = QStringLiteral("40,123,863,847,287");
     QVERIFY(html.contains(QStringLiteral("white-space: nowrap")));
     QVERIFY(html.contains(number));
@@ -283,13 +304,39 @@ void UnitsTests::namesStayTheCodes()
     QCOMPARE(QuicksilverUnits::shortName(Unit::HGS), QStringLiteral("HgS"));
     QCOMPARE(QuicksilverUnits::longName(Unit::HG), QStringLiteral("Hg"));
     QCOMPARE(QuicksilverUnits::longName(Unit::HGS), QStringLiteral("HgS"));
+    QCOMPARE(QuicksilverUnits::choiceName(Unit::HG), QStringLiteral("Hg"));
+    QCOMPARE(QuicksilverUnits::choiceName(Unit::HGS), QString::fromUtf8("HgS (\xF0\x9F\x9C\x93)"));
     QCOMPARE(QuicksilverUnits::getAmountColumnTitle(Unit::HGS), QStringLiteral("Amount (HgS)"));
     QuicksilverUnits units{nullptr};
+    const QModelIndex quicksilver = units.index(0);
     const QModelIndex cinnabar = units.index(1);
-    QCOMPARE(units.data(cinnabar, Qt::DisplayRole).toString(), QStringLiteral("HgS"));
+    QCOMPARE(units.data(quicksilver, Qt::DisplayRole).toString(), QStringLiteral("Hg"));
+    QCOMPARE(units.data(quicksilver, Qt::EditRole).toString(), QStringLiteral("Hg"));
+    QCOMPARE(units.data(cinnabar, Qt::DisplayRole).toString(), QString::fromUtf8("HgS (\xF0\x9F\x9C\x93)"));
+    QCOMPARE(units.data(cinnabar, Qt::EditRole).toString(), QString::fromUtf8("HgS (\xF0\x9F\x9C\x93)"));
     QCOMPARE(units.data(cinnabar, Qt::ToolTipRole).toString(), QStringLiteral("cinnabar (0.00000001 Quicksilver)"));
-    QVERIFY(!units.data(cinnabar, Qt::DisplayRole).toString().contains(CinnabarSign()));
     QVERIFY(!units.data(cinnabar, Qt::ToolTipRole).toString().contains(CinnabarSign()));
+
+    const QFont previous = QApplication::font();
+    GUIUtil::LoadUnitGlyph();
+    QuicksilverAmountField field;
+    field.setDisplayUnit(Unit::HGS);
+    QComboBox* combo = field.findChild<QComboBox*>();
+    QVERIFY(combo);
+    QCOMPARE(combo->currentText(), QString::fromUtf8("HgS (\xF0\x9F\x9C\x93)"));
+    QVERIFY(combo->sizeHint().width() >= QFontMetricsF(combo->font()).horizontalAdvance(QString::fromUtf8("HgS (\xF0\x9F\x9C\x93)")));
+
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    UnitDisplayStatusBarControl status_control(platform_style.get());
+    QMenu* menu = status_control.findChild<QMenu*>();
+    QVERIFY(menu);
+    QCOMPARE(menu->actions().size(), 2);
+    QCOMPARE(menu->actions().at(0)->text(), QStringLiteral("Hg"));
+    QCOMPARE(menu->actions().at(1)->text(), QString::fromUtf8("HgS (\xF0\x9F\x9C\x93)"));
+    QVERIFY(QMetaObject::invokeMethod(&status_control, "updateDisplayUnit", Qt::DirectConnection,
+                                      Q_ARG(QuicksilverUnit, Unit::HGS)));
+    QCOMPARE(status_control.text(), QStringLiteral("HgS"));
+    QApplication::setFont(previous);
 }
 
 void UnitsTests::cinnabarGlyphUsesTheBundledFace()
@@ -298,6 +345,14 @@ void UnitsTests::cinnabarGlyphUsesTheBundledFace()
     GUIUtil::LoadUnitGlyph();
     const QString bundled = GUIUtil::UnitGlyphFamily();
     QCOMPARE(bundled, QStringLiteral("Quicksilver Unit Glyphs"));
+
+    const QFontMetricsF metrics(QApplication::font());
+    const QRectF ink = metrics.tightBoundingRect(CinnabarSign());
+    const qreal advance = metrics.horizontalAdvance(CinnabarSign());
+    qInfo() << "Cinnabar choice overlap:" << "left" << ink.left() << "right" << ink.right()
+            << "advance" << advance << "space" << metrics.horizontalAdvance(QStringLiteral(" "));
+    QVERIFY(ink.left() >= 0);
+    QVERIFY(ink.right() <= advance);
 
     QLabel label(QStringLiteral("1") + CinnabarSign());
     label.setFont(QApplication::font());
@@ -317,4 +372,87 @@ void UnitsTests::cinnabarGlyphUsesTheBundledFace()
     QVERIFY(!digits.isEmpty());
     QVERIFY(digits.first().rawFont().familyName() != bundled);
     QApplication::setFont(previous);
+
+    const QString dir = qEnvironmentVariable("QS_UNIT_DISPLAY_SCREENSHOTS");
+    if (dir.isEmpty()) return;
+    QVERIFY(QDir().mkpath(dir));
+
+    const RestoreApplicationStyle restore;
+    const QFont capture_previous = QApplication::font();
+    QuicksilverStyle::Apply(*qApp);
+    GUIUtil::LoadUnitGlyph();
+
+    QuicksilverAmountField field;
+    field.setDisplayUnit(Unit::HGS);
+    field.resize(field.sizeHint());
+    field.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&field));
+    QCoreApplication::processEvents();
+    QComboBox* combo = field.findChild<QComboBox*>();
+    QVERIFY(combo);
+    QVERIFY(combo->grab().save(QDir(dir).filePath(QStringLiteral("amount-combobox-closed.png"))));
+
+    combo->showPopup();
+    QCoreApplication::processEvents();
+    QWidget* popup = combo->view()->window();
+    QVERIFY(popup && popup->isVisible());
+    QVERIFY(popup->grab().save(QDir(dir).filePath(QStringLiteral("amount-combobox-popup.png"))));
+    combo->hidePopup();
+
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    UnitDisplayStatusBarControl status_control(platform_style.get());
+    status_control.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&status_control));
+    QMenu* menu = status_control.findChild<QMenu*>();
+    QVERIFY(menu);
+    menu->popup(status_control.mapToGlobal(QPoint(0, 0)));
+    QCoreApplication::processEvents();
+    QVERIFY(menu->isVisible());
+    QVERIFY(menu->grab().save(QDir(dir).filePath(QStringLiteral("status-bar-unit-menu.png"))));
+    menu->hide();
+    QApplication::setFont(capture_previous);
+}
+
+void UnitsTests::unitGlyphCmapHasWindowsBmpEncoding()
+{
+    // Windows' font loader refuses a face without a (3,1) cmap subtable (F-489).
+    QFile face{QStringLiteral(":/fonts/unitglyph")};
+    QVERIFY(face.open(QIODevice::ReadOnly));
+    const QByteArray bytes = face.readAll();
+    QVERIFY(bytes.size() >= 12);
+    const int num_tables = ReadBe16(bytes, 4);
+    QVERIFY(num_tables > 0);
+    QVERIFY(bytes.size() >= 12 + num_tables * 16);
+
+    bool saw_cmap{false};
+    quint32 cmap_offset{0};
+    quint32 cmap_length{0};
+    for (int i = 0; i < num_tables; ++i) {
+        const int record = 12 + i * 16;
+        if (QByteArray::fromRawData(bytes.constData() + record, 4) != QByteArrayLiteral("cmap")) continue;
+        saw_cmap = true;
+        cmap_offset = ReadBe32(bytes, record + 8);
+        cmap_length = ReadBe32(bytes, record + 12);
+        break;
+    }
+    QVERIFY2(saw_cmap, "sfnt directory has no cmap table");
+    const quint32 file_size = static_cast<quint32>(bytes.size());
+    QVERIFY(cmap_offset <= file_size);
+    QVERIFY(cmap_length >= 4);
+    QVERIFY(cmap_length <= file_size - cmap_offset);
+
+    const int cmap_at = static_cast<int>(cmap_offset);
+    const quint16 num_encodings = ReadBe16(bytes, cmap_at + 2);
+    const quint32 records_bytes = 4u + static_cast<quint32>(num_encodings) * 8u;
+    QVERIFY(records_bytes <= cmap_length);
+
+    bool found{false};
+    for (quint16 i = 0; i < num_encodings; ++i) {
+        const int record = cmap_at + 4 + static_cast<int>(i) * 8;
+        if (ReadBe16(bytes, record) == 3 && ReadBe16(bytes, record + 2) == 1) {
+            found = true;
+            break;
+        }
+    }
+    QVERIFY2(found, "no cmap encoding record with platform 3 and encoding 1");
 }

@@ -118,12 +118,13 @@ shopt -s nullglob
 debs=("$scratch"/*.deb)
 buildinfos=("$scratch"/*.buildinfo)
 changes=("$scratch"/*.changes)
-[[ ${#debs[@]} == 2 && ${#buildinfos[@]} == 1 && ${#changes[@]} == 1 ]]
+[[ ${#debs[@]} == 3 && ${#buildinfos[@]} == 1 && ${#changes[@]} == 1 ]]
 mv -- "$scratch"/*.deb "$scratch"/*.ddeb "$scratch"/*.buildinfo \
     "$scratch"/*.changes "$output"/
 package_version=$(dpkg-parsechangelog -l"$repo/contrib/debian/changelog" -SVersion)
 [[ -f "$output/quicksilver_${package_version}_amd64.deb" && \
-   -f "$output/quicksilver-devtools_${package_version}_amd64.deb" ]]
+   -f "$output/quicksilver-devtools_${package_version}_amd64.deb" && \
+   -f "$output/quicksilver-gpu_${package_version}_amd64.deb" ]]
 
 # F-391: a -dbgsym that gdb cannot symbolise fails the package build.
 "$(dirname "$0")/check-dbgsym.sh" "$suite" "$output"

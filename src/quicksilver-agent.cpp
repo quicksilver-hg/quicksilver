@@ -21,6 +21,8 @@
 #include <compat/compat.h>
 #include <consensus/amount.h>
 #include <core_io.h>
+#include <crypto/cuckatoo/gpu_solver.h>
+#include <gpu/helper_config.h>
 #include <hash.h>
 #include <key_io.h>
 #include <netbase.h>
@@ -103,9 +105,8 @@ static void SetupAgentArgs(ArgsManager& argsman)
     argsman.AddArg("-prevout=<n>", "Optional funding transaction output index for signbundle. If omitted, signbundle selects from funding_outputs in the bundle.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-prevamount=<cinnabar>", "Optional funding transaction output amount in cinnabar for signbundle. If omitted, signbundle selects from funding_outputs in the bundle.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-destination=<address>", "Spend destination address for signbundle.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
-    argsman.AddArg("-cuckatoosolver=<path>", "Path to an external GPU Cuckatoo solver binary for proving agent spends on non-sandbox networks.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
-    argsman.AddArg("-allowcputxpow", "Permit this computer's processor to produce the per-transaction proof when no GPU solver is configured (default: false). Proving one spend on a processor takes many minutes and uses every core, and an agent spend can start at any time, including while the computer is in use. A GPU solver is strongly preferred.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-cuckatoosolvertimeout=<sec>", "No-progress watchdog window for the external GPU solver, in seconds.", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
+    gpu::AddGpuHelperArgs(argsman);
+    argsman.AddArg("-allowcputxpow", "Permit this computer's processor to produce the per-transaction proof when no graphics card is in use (default: false). Proving one spend on a processor takes many minutes and uses every core, and an agent spend can start at any time, including while the computer is in use. A graphics card is strongly preferred.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-prove=<0|1>", "Create per-tx proof-of-work for signbundle. Proving reads the anchor's congestion multiplier from the header store, so -prove=1 works at any synced header, not only at genesis. Set -prove=0 for offline tests only; the transaction will not relay. (default: 1)", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
 
     argsman.AddCommand("status", "Print agent client header state");
@@ -276,31 +277,6 @@ static fs::path RelayPeerStorePath(const ArgsManager& args)
 {
     const fs::path configured_path{args.GetPathArg("-peerstore", fs::path{"agent"} / "relay-peers.json")};
     return fsbridge::AbsPathJoin(args.GetDataDirNet(), configured_path);
-}
-
-static void SetEnvVarOverwrite(const char* name, const std::string& value)
-{
-#ifdef WIN32
-    _putenv_s(name, value.c_str());
-#else
-    setenv(name, value.c_str(), 1);
-#endif
-}
-
-static bool GpuSolverConfigured()
-{
-    const char* solver{std::getenv("CUCKATOO_GPU_SOLVER")};
-    return solver != nullptr && solver[0] != '\0';
-}
-
-static void ConfigureCuckatooSolverEnvironment(const ArgsManager& args)
-{
-    if (args.IsArgSet("-cuckatoosolver")) {
-        SetEnvVarOverwrite("CUCKATOO_GPU_SOLVER", args.GetArg("-cuckatoosolver", ""));
-    }
-    if (args.IsArgSet("-cuckatoosolvertimeout")) {
-        SetEnvVarOverwrite("CUCKATOO_GPU_TIMEOUT", args.GetArg("-cuckatoosolvertimeout", ""));
-    }
 }
 
 static agent::AgentClient MakeAgentClient(const ArgsManager& args, const fs::path& header_store_path)
@@ -1138,13 +1114,13 @@ static int SignBundle(const ArgsManager& args)
     const bool prove{args.GetBoolArg("-prove", true)};
     const bool allow_cpu_txpow{args.GetBoolArg("-allowcputxpow", false)};
     // Only when the processor is about to be used. Sandbox never needs the opt-in,
-    // a configured GPU solver is tried first, and -prove=0 does not grind at all.
+    // a configured graphics helper is tried first, and -prove=0 does not grind at all.
     // Printed before the call: the message is useless once the minutes are gone.
-    if (allow_cpu_txpow && prove && Params().GetConsensus().nTxEdgeBits == 28 && !GpuSolverConfigured()) {
-        tfm::format(std::cerr, "Notice: no GPU solver is configured, so this spend will be proved on the processor. This takes many minutes and will use every core.\n");
+    if (allow_cpu_txpow && prove && Params().GetConsensus().nTxEdgeBits == 28 && !cuckatoo::GpuHelperConfigured(Params().GetConsensus().nTxEdgeBits)) {
+        tfm::format(std::cerr, "Notice: no graphics card is in use, so this spend will be proved on the processor. This takes many minutes and will use every core.\n");
     }
 
-    // Ctrl-C during a grind used to kill the agent outright and leave qsgpusolve
+    // Ctrl-C during a grind used to kill the agent outright and leave the graphics helper
     // running with the card pinned: the solver sits in its own process group, so
     // the terminal's SIGINT never reached it. Catching it here lets the prove
     // loop stop between attempts and the solver bridge kill its own child.
@@ -2525,7 +2501,10 @@ MAIN_FUNCTION
     }
 
     ECC_Context ecc_context{};
-    ConfigureCuckatooSolverEnvironment(args);
+    if (auto applied{gpu::ApplyGpuHelperArgs(args, gpu::LocateBundledHelper())}; !applied) {
+        tfm::format(std::cerr, "Error: %s\n", util::ErrorString(applied).original);
+        return EXIT_FAILURE;
+    }
 
     try {
         if (command->command == "status") return PrintStatus(args);

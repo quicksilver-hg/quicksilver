@@ -65,6 +65,9 @@ constexpr bool AllowsTxPowCpuFallback(uint8_t edgebits)
     return edgebits == 19 || edgebits == 28;
 }
 
+//! The transfer failure that directs the user to configure a graphics card.
+bilingual_str TxProofNeedsGraphicsCardError();
+
 /** Quicksilver: grind `txNew`'s per-tx Cuckatoo proof and write the tail into it.
  *
  * Sets nAnchorHeight, nCycle and nPowNonce. `bytes` is the WITH-witness serialized

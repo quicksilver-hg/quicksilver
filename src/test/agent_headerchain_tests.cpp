@@ -23,6 +23,7 @@
 #include <addresstype.h>
 #include <chainparams.h>
 #include <consensus/amount.h>
+#include <crypto/cuckatoo/gpu_devices.h>
 #include <key.h>
 #include <key_io.h>
 #include <netmessagemaker.h>
@@ -2723,7 +2724,7 @@ BOOST_AUTO_TEST_CASE(agent_interrupt_handler_cancels_the_grind_on_sigint)
                         "SIGINT was caught but not recorded; the grind would run on");
     BOOST_CHECK_MESSAGE(cancel(),
                         "the cancel callback handed to the solver must report the interrupt, "
-                        "otherwise Ctrl-C orphans qsgpusolve with the card pinned");
+                        "otherwise Ctrl-C orphans the graphics helper with the card pinned");
 }
 
 // --- F-153: THE AGENT GRIND MUST BE STOPPABLE ------------------------------
@@ -2732,7 +2733,7 @@ BOOST_AUTO_TEST_CASE(agent_interrupt_handler_cancels_the_grind_on_sigint)
 // leaves when a cycle beats the target. So there was no way to stop a signbundle
 // grind at all. Worse than it sounds on POSIX -- the agent installs no signal
 // handler, and gpu_solver puts the solver in its own process group, so Ctrl-C
-// kills the agent and ORPHANS qsgpusolve with the card pinned.
+// kills the agent and ORPHANS the graphics helper with the card pinned.
 BOOST_AUTO_TEST_CASE(agent_allotment_proof_stops_when_cancelled)
 {
     Consensus::Params consensus{Params().GetConsensus()};
@@ -3249,16 +3250,24 @@ BOOST_AUTO_TEST_CASE(agent_allotment_e28_spend_without_opt_in_names_the_missing_
     // SolverFault, not the generic "could not produce" line, or an operator
     // with a dead card and one with no solver configured read the same error.
     struct RestoreGpuSolverEnv {
-        std::optional<std::string> previous;
+        std::optional<std::string> previous, bundled, devices;
         RestoreGpuSolverEnv()
         {
             if (const char* value{std::getenv("CUCKATOO_GPU_SOLVER")}) previous = value;
+            if (const char* value{std::getenv("CUCKATOO_GPU_BUNDLED")}) bundled = value;
+            if (const char* value{std::getenv("CUCKATOO_GPU_DEVICES")}) devices = value;
             ClearEnvVar("CUCKATOO_GPU_SOLVER");
+            ClearEnvVar("CUCKATOO_GPU_BUNDLED");
+            ClearEnvVar("CUCKATOO_GPU_DEVICES");
+            cuckatoo::ResetGpuDiscoveryForTesting();
         }
         ~RestoreGpuSolverEnv()
         {
             if (previous) SetEnvVar("CUCKATOO_GPU_SOLVER", previous->c_str());
             else ClearEnvVar("CUCKATOO_GPU_SOLVER");
+            if (bundled) SetEnvVar("CUCKATOO_GPU_BUNDLED", bundled->c_str()); else ClearEnvVar("CUCKATOO_GPU_BUNDLED");
+            if (devices) SetEnvVar("CUCKATOO_GPU_DEVICES", devices->c_str()); else ClearEnvVar("CUCKATOO_GPU_DEVICES");
+            cuckatoo::ResetGpuDiscoveryForTesting();
         }
     } restore_env;
 
@@ -3291,7 +3300,7 @@ BOOST_AUTO_TEST_CASE(agent_allotment_e28_spend_without_opt_in_names_the_missing_
         consensus)};
     BOOST_REQUIRE(!signed_spend);
     BOOST_CHECK_EQUAL(util::ErrorString(signed_spend).original,
-                      "Per-transaction proof-of-work failed. No GPU solver is configured; set -cuckatoosolver=<path>");
+                      "Per-transaction proof-of-work failed. No graphics card is in use; install the quicksilver-gpu package, set -cuckatoodevice, or allow processor mining with -allowcpumining");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

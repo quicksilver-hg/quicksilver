@@ -56,7 +56,11 @@ One more is built only when explicitly enabled, and is experimental:
 is the client an agent runs, and agents are who Quicksilver is for — it is not a
 development aid.
 
-`qsgpusolve`, the CUDA solver, is built outside CMake and is not placed on
-`PATH`. Users who need transfer or mining acceleration configure its absolute
-path in the application or with `-cuckatoosolver`; see
-[GPU Solver](gpu-solver.md).
+`qsgpusolve-opencl`, the graphics helper, is not a tool you run yourself. The
+daemon and the agent find it on their own, in `../libexec/quicksilver` from
+their own directory or beside their own executable. On Ubuntu it is the
+`quicksilver-gpu` package, which these tools recommend. It runs on AMD, NVIDIA
+and Intel cards that have an OpenCL driver. Choose cards with
+`-cuckatoodevice=<id>`, using the ids `qsgpusolve-opencl --list-devices`
+prints. Building a CUDA or ROCm helper and pointing `-cuckatoosolver` at it is
+described in [GPU Solver](gpu-solver.md).

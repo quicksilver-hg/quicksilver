@@ -305,8 +305,9 @@ contrib/release/build-noble-debs.sh /path/outside/the/checkout/for/noble-artifac
 ```
 
 The wrappers select the suite in the shared `build-debs.sh` driver. Each output
-directory must be empty. The driver clones the checked-out commit, builds both
-Debian packages at `-j6`, checks the generated exact-tag or commit stamp, and
+directory must be empty. The driver clones the checked-out commit, builds the
+three Debian packages (`quicksilver`, `quicksilver-devtools` and `quicksilver-gpu`)
+at `-j6`, checks the generated exact-tag or commit stamp, and
 copies the `.deb`, debug packages, `.buildinfo` and `.changes` files into that
 directory. It then runs `check-dbgsym.sh` on that directory: a fresh container
 of the same suite installs the packages with their `-dbgsym` debug packages,

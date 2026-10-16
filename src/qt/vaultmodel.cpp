@@ -26,6 +26,7 @@
 #include <psqt.h>
 #include <util/translation.h>
 #include <vault/coincontrol.h>
+#include <vault/spend.h>
 #include <vault/vault.h> // for CRecipient
 
 #include <cassert>
@@ -41,6 +42,11 @@
 using vault::CCoinControl;
 using vault::CRecipient;
 using vault::DEFAULT_DISABLE_VAULT;
+
+bool VaultModel::IsSolverConfigurationError(const bilingual_str& error)
+{
+    return error.original == vault::TxProofNeedsGraphicsCardError().original;
+}
 
 VaultModel::VaultModel(std::unique_ptr<interfaces::Vault> vault, ClientModel& client_model, const PlatformStyle* platformStyle, QObject* parent) : VaultModel(std::move(vault), client_model.node(), client_model.getOptionsModel(), platformStyle, parent)
 {
@@ -227,7 +233,7 @@ VaultModel::SendCoinsReturn VaultModel::prepareTransaction(VaultModelTransaction
             const bilingual_str error = util::ErrorString(res);
             return SendCoinsReturn(TransactionCreationFailed,
                                    QString::fromStdString(error.translated),
-                                   error.original.find("GPU solver") != std::string::npos);
+                                   IsSolverConfigurationError(error));
         }
 
     } catch (const std::runtime_error& err) {

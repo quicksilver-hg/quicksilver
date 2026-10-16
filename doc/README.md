@@ -15,8 +15,8 @@ Start with:
 - [Getting Started](getting-started.md) — choose a program and network, start a
   node, and check connectivity
 - [Building Quicksilver](../INSTALL.md) — platform build guides and build profiles
-- [GPU Solver](gpu-solver.md) — optional desktop acceleration and the agent
-  client's live-network requirement
+- [GPU Solver](gpu-solver.md) — building a CUDA or ROCm graphics helper
+  yourself
 - [Bootstrapping](bootstrapping.md) — Tor, explicit peers, ports, and zero-peer
   diagnosis
 

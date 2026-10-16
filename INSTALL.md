@@ -59,7 +59,7 @@ and `-DCONFIG=Release` to the manifest check. In PowerShell, keep the quotes:
 an unquoted `-D` value containing a `.` is split there.
 
 If `CUCKATOO_GPU_SOLVER` is unset, `gpu_parity_tests` is skipped; set it to a
-`qsgpusolve` binary to run the test. On MSVC, `compilerbug_tests` also skips
+`qsgpusolve-cuda` binary to run the test. On MSVC, `compilerbug_tests` also skips
 because its only case is GNU-specific. A skipped test is still counted in
 `100%` — the results check rejects other skips. See [GPU Solver](doc/gpu-solver.md)
 for what the parity test needs. Add `-j` to `ctest` as well if you want it to
@@ -78,11 +78,15 @@ cmake -B build -DBUILD_GUI=ON -DWITH_QRENCODE=OFF
 Run `cmake -B build -LH` to list the available project options. Build products
 are placed under `build/bin/`.
 
-## GPU helper
+## Graphics helper
 
-The optional CUDA helper is built separately from the CMake project. It is
-strongly recommended for desktop transfers and is required by the current
-agent client on `main` and `publictest`. See [doc/gpu-solver.md](doc/gpu-solver.md).
+`qsgpusolve-opencl`, the graphics helper, is built with the project
+(`BUILD_GPU_HELPER`, on by default) and placed in `build/bin/` beside the
+programs that use it, which find it there on their own. It prepares transfer
+proofs and mines blocks on AMD, NVIDIA and Intel cards that have an OpenCL
+driver. It loads the driver when it runs, so building it needs no OpenCL SDK.
+The CUDA helper, `qsgpusolve-cuda`, is still built separately; see
+[doc/gpu-solver.md](doc/gpu-solver.md).
 
 ## After building
 

@@ -41,7 +41,7 @@ namespace cuckatoo {
 // Fixed-width (PREPOW_BYTES) BLOCK pre-pow solver at EDGEBITS=28. Block PoW shares the per-tx
 // graph size (one E28 solver serves both); block difficulty comes from the target
 // (cycles-per-block), not a larger graph. Mining only — CPU fallback for the block
-// PoW under -allowcpumining; the GPU path (qsgpusolve, E28) is primary.
+// PoW under -allowcpumining; the GPU path (the graphics helper, E28) is primary.
 bool Solve28(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint32_t start_nonce,
              uint32_t max_attempts, Cycle& out, uint32_t& out_nonce,
              const SolverProgressCallback& progress,

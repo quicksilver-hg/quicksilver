@@ -17,19 +17,22 @@ are gated on real hardware before every release.
 | | Apple Silicon (arm64) | Intel Mac (x86-64) |
 |---|---|---|
 | Compiles | **No** — the solver does not compile | Not known; never built |
-| GPU mining | **No** — CUDA is unavailable | **No** — CUDA is unavailable |
+| GPU mining | **No** — no graphics helper runs | **No** — no graphics helper runs |
 | CPU mining | **No** — the solver is x86-only | Not known; never run |
 | GUI | Never launched on macOS | Never launched on macOS |
 
-### GPU mining: there is no CUDA on macOS
+### GPU mining: no graphics helper runs on macOS
 
-The GPU solver is CUDA. `src/crypto/cuckatoo/gpu/qsgpusolve.cu` is compiled by
-`nvcc` and talks to an NVIDIA device through the CUDA runtime; see
-[gpu-solver.md](gpu-solver.md), which documents Linux and Windows only.
+The bundled helper, `qsgpusolve-opencl`, loads the OpenCL driver at run time by
+the names Linux and Windows give it (`libOpenCL.so.1` and `OpenCL.dll`).
+`src/crypto/cuckatoo/gpu/opencl_loader.cpp` has no macOS name, so on a Mac it
+finds no driver. Apple has also deprecated OpenCL since macOS 10.14, so adding
+the name is a contributor port, not a build flag.
 
-Apple dropped NVIDIA driver support after macOS 10.13, and Apple Silicon has no
-NVIDIA hardware at all. Neither Mac generation can run the GPU solver, and that
-is not something a build flag changes.
+The CUDA helper, `qsgpusolve-cuda`, is compiled by `nvcc` and talks to an NVIDIA
+device through the CUDA runtime; see [gpu-solver.md](gpu-solver.md), which
+documents Linux and Windows only. Apple dropped NVIDIA driver support after
+macOS 10.13, and Apple Silicon has no NVIDIA hardware at all.
 
 ### CPU mining: the lean solver is x86 SIMD
 
@@ -62,7 +65,7 @@ to say so. That is a contributor port. We do not ship an arm64 binary.
 No macOS job runs on any push. The jobs that used to run on every push —
 a GUI build and a fuzz build, both on `macos-14`, which is arm64 — could
 not pass: the solver is x86 SIMD, every binary that validates a block
-links it, and CUDA does not exist on the platform. They were removed.
+links it, and no graphics helper runs on the platform. They were removed.
 
 While they ran they caught defects that were not macOS bugs at all: an
 undeclared `libevent` dependency that breaks any prefixed dependency

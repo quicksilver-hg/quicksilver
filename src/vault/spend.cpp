@@ -53,6 +53,12 @@ TRACEPOINT_SEMAPHORE(coin_selection, attempting_aps_create_tx);
 TRACEPOINT_SEMAPHORE(coin_selection, aps_create_tx_internal);
 
 namespace vault {
+
+bilingual_str TxProofNeedsGraphicsCardError()
+{
+    return _("This transfer could not be proved. Quicksilver charges no fees, so every transfer is paid for with proof-of-work, and this network's work needs a graphics card. Choose one in Settings > Options > Hardware and restart. Nothing was sent and your funds are untouched.");
+}
+
 static constexpr size_t OUTPUT_GROUP_MAX_ENTRIES{100};
 
 bool IsUnconfirmedChange(const CVault& vault, const CVaultTx& prev)
@@ -1019,11 +1025,11 @@ std::optional<bilingual_str> GrindTransactionPow(CVault& vault, CMutableTransact
         if (tx_proof_cancel && tx_proof_cancel()) return _("Transfer proof-of-work canceled");
         if (!cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), cp.nTxEdgeBits, start_nonce, 1u << 24, cyc, won, cpu_ok, tx_proof_progress, tx_proof_cancel, /*gpu_status=*/nullptr, &discarded_cycles)) {
             // A cancelled solve also returns false, so ask before blaming the hardware:
-            // reporting a missing GPU solver to someone who pressed Cancel sends them
+            // reporting a missing graphics card to someone who pressed Cancel sends them
             // looking for a fault that is not there.
             if (tx_proof_cancel && tx_proof_cancel()) return _("Transfer proof-of-work canceled");
             if (!cpu_ok) {
-                return _("This transfer could not be proved. Quicksilver charges no fees, so every transfer is paid for with proof-of-work, and that work needs a CUDA-capable graphics card. Open the GPU solver setting, choose the solver executable for your card, and restart. Nothing was sent and your funds are untouched.");
+                return TxProofNeedsGraphicsCardError();
             }
             return _("Could not produce per-tx proof-of-work");
         }

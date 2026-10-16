@@ -980,7 +980,7 @@ BOOST_AUTO_TEST_CASE(congestion_header_prepow_layout_keeps_nonce_at_the_tail)
     // THE hazard of #5c-1 Phase 2. Every Cuckatoo solver entry point grinds the last
     // four bytes of the pre-pow in place: solve_19/solve_28 via mutate_nonce,
     // Solve28Bytes explicitly, dispatch.cpp's key reconstruction, the bench
-    // KeyedPrepow helpers, and the external CUDA solver gpu/qsgpusolve.cu. Appending
+    // KeyedPrepow helpers, and the external CUDA solver gpu/qsgpusolve-cuda.cu. Appending
     // nCongestion AFTER nNonce would leave every one of them grinding the congestion
     // field while the nonce sat frozen — and it would not fail loudly. This assertion
     // is the permanent fence against that, so it must stay exact.

@@ -23,6 +23,7 @@
 
 #include <util/process/contained_child.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -89,7 +90,7 @@ void dispatch_progress_lines(std::string& pending, const char* data, size_t len,
 
 // No-progress watchdog window, seconds. Calibrated on the rig (SP1b Task 7):
 // a single solve attempt on a P104-100 (sm_61) took ~3.4s at the then-current
-// E29, and qsgpusolve emits one progress= heartbeat per attempt, so the max
+// E29, and the graphics helper emits one progress= heartbeat per attempt, so the max
 // no-progress gap under healthy operation was ~3.44s. The shipped size is now
 // E28, which is ~2x faster per graph, so the gap shrinks and the margin only
 // widens — the 30s window stays valid without recalibration. 30s gave ~8.7x
@@ -102,15 +103,16 @@ void dispatch_progress_lines(std::string& pending, const char* data, size_t len,
 // Built once, in the shared part of this file, so the two branches cannot drift
 // on what the solver is actually asked to do -- and so that neither of them has
 // to reassemble it into a string a shell would then take apart again.
-std::vector<std::string> solver_argv(const std::string& solver, uint8_t edgebits,
+std::string decimal(uint32_t value) { char out[16]; std::snprintf(out, sizeof(out), "%u", value); return out; }
+std::vector<std::string> solver_argv(const std::string& solver, const std::string& device, uint8_t edgebits,
                                      const unsigned char* prepow, size_t len,
                                      uint32_t start_nonce, uint32_t max_attempts)
 {
-    return {solver,
-            std::to_string((int)edgebits),
+    return {solver, "--device", device,
+            decimal(edgebits),
             to_hex(prepow, len),
-            std::to_string(start_nonce),
-            std::to_string(max_attempts)};
+            decimal(start_nonce),
+            decimal(max_attempts)};
 }
 
 int no_progress_timeout_sec() {
@@ -120,11 +122,9 @@ int no_progress_timeout_sec() {
 }
 } // namespace
 
-std::optional<std::string> GpuSolverPath()
+bool GpuHelperConfigured(uint8_t edgebits)
 {
-    const char* solver = std::getenv("CUCKATOO_GPU_SOLVER");
-    if (!solver || solver[0] == '\0') return std::nullopt;
-    return solver;
+    return GpuHelperFor(edgebits).has_value() && DeviceChoiceFromEnv().mode != DeviceChoice::Mode::kCpuOnly;
 }
 
 std::optional<std::string> SolverFault(GpuSolveStatus status, bool cpu_fallback)
@@ -136,28 +136,63 @@ std::optional<std::string> SolverFault(GpuSolveStatus status, bool cpu_fallback)
         return std::nullopt;
     case GpuSolveStatus::kNoSolver:
         if (cpu_fallback) return std::nullopt;
-        return "No GPU solver is configured; set -cuckatoosolver=<path>";
-    case GpuSolveStatus::kNoCudaDevice:
-        return "The GPU solver reports no usable CUDA device; check the driver with nvidia-smi";
+        return "No graphics card is in use; install the quicksilver-gpu package, set -cuckatoodevice, or allow processor mining with -allowcpumining";
+    case GpuSolveStatus::kNoGpuDevice:
+        return "No usable graphics card was found; check the card's OpenCL driver with clinfo, and see the debug log for the helper's device list";
     case GpuSolveStatus::kDeviceFault:
 #ifdef WIN32
-        return "The GPU faulted while solving; on Windows this is usually the display-driver "
+        return "The graphics card faulted while solving; on Windows this is usually the display-driver "
                "watchdog. Set GraphicsDrivers\\TdrDelay to 60 and reboot, then check Event ID 4101";
 #else
-        return "The GPU faulted while solving; check dmesg for NVRM/Xid messages and nvidia-smi";
+        return "The graphics card faulted while solving; check dmesg for amdgpu, i915, xe or NVRM/Xid reset messages";
 #endif
     case GpuSolveStatus::kSolverError:
-        return "The GPU solver exited with an error; see the debug log";
+        return "The graphics helper exited with an error; see the debug log";
     case GpuSolveStatus::kTimedOut:
-        return "The GPU solver stopped reporting progress and was killed; see the debug log";
+        return "The graphics helper stopped reporting progress and was killed; see the debug log";
     }
     assert(false);
-    return "The GPU solver reported an unrecognised status; see the debug log";
+    return "The graphics helper reported an unrecognised status; see the debug log";
 }
 
 bool SolverMissing(GpuSolveStatus status, bool cpu_fallback)
 {
     return status == GpuSolveStatus::kNoSolver && SolverFault(status, cpu_fallback).has_value();
+}
+
+std::string DescribeDiscovery(const GpuDiscovery& discovery)
+{
+    const auto outcome = [&] {
+        switch (discovery.listing.outcome) {
+        case ListOutcome::kListed: return "listed";
+        case ListOutcome::kNoHelper: return "no-helper";
+        case ListOutcome::kNoLoader: return "no-loader";
+        case ListOutcome::kFailed: return "failed";
+        case ListOutcome::kTimedOut: return "timed-out";
+        }
+        return "failed";
+    }();
+    const auto status_name = [](DeviceStatus status) {
+        switch (status) {
+        case DeviceStatus::kOk: return "ok";
+        case DeviceStatus::kNoDriver: return "no-driver";
+        case DeviceStatus::kCompileFailed: return "compile-failed";
+        case DeviceStatus::kProbeFailed: return "probe-failed";
+        case DeviceStatus::kOther: return "other";
+        }
+        return "other";
+    };
+    std::string out = "gpu-helper path=" + discovery.helper.value_or("") + " listing=" + outcome + " detail=" + discovery.listing.detail;
+    for (const auto& device : discovery.listing.devices) {
+        const bool used = std::any_of(discovery.selection.use.begin(), discovery.selection.use.end(), [&](const auto& selected) { return selected.id == device.id; });
+        out += "\ngpu-device id=" + device.id + " type=" + device.type;
+        out += device.integrated ? " integrated=1 status=" : " integrated=0 status=";
+        out += status_name(device.status);
+        out += " reason=" + device.reason + " name=" + device.name + " use=" + (used ? "yes" : "no");
+    }
+    for (const auto& id : discovery.selection.missing) out += "\ngpu-device-missing id=" + id;
+    out += "\ngpu-solve-device id=" + SolveDevice(discovery.selection).value_or("none");
+    return out;
 }
 
 bool GpuSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
@@ -170,9 +205,12 @@ bool GpuSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
     const auto report = [status](GpuSolveStatus s) { if (status) *status = s; };
     report(GpuSolveStatus::kNoCycle);
 
-    const std::optional<std::string> solver = GpuSolverPath();
+    const std::optional<std::string> solver = GpuHelperFor(edgebits);
     if (!solver || len < 4) { report(GpuSolveStatus::kNoSolver); return false; }
+    if (DeviceChoiceFromEnv().mode == DeviceChoice::Mode::kCpuOnly) { report(GpuSolveStatus::kNoSolver); return false; }
     if (cancel && cancel()) { report(GpuSolveStatus::kCancelled); return false; }  // already shutting down: do not spawn
+    const std::optional<std::string> device = SolveDevice(DiscoverGpus(edgebits).selection);
+    if (!device) { report(GpuSolveStatus::kNoGpuDevice); return false; }
 
     // NOT kNoCycle on failure: a child we could not start or could not contain is
     // a failure of ours, and the default set at the top of this function would
@@ -180,7 +218,7 @@ bool GpuSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
     // window. The difference is what SolverFault() needs to tell the operator
     // anything at all.
     auto child = util::ContainedChild::Spawn(
-        solver_argv(*solver, edgebits, prepow, len, start_nonce, max_attempts),
+        solver_argv(*solver, *device, edgebits, prepow, len, start_nonce, max_attempts),
         util::ChildStdout::kPipe,
         util::SpawnFaultFromEnv("CUCKATOO_GPU_FAULT"));
     if (!child) { report(GpuSolveStatus::kSolverError); return false; }
@@ -220,12 +258,12 @@ bool GpuSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
         return false;
     }
     // The solver's own exit code, with no shell in between to reinterpret it. 4 is
-    // "no usable CUDA device" and 5 is "the device faulted mid-solve" -- see the
-    // exit-code block at the top of gpu/qsgpusolve.cu. Without them a dead card is
+    // "no usable GPU device" and 5 is "the device faulted mid-solve" -- see the
+    // exit-code block at the top of the graphics helper. Without them a dead card is
     // byte-identical to an exhausted nonce window. Wait() reports -1 for a child
     // that did not exit normally, which lands on kSolverError with the rest.
     const int exit_code = child->Wait();
-    if (exit_code == 4) { report(GpuSolveStatus::kNoCudaDevice); return false; }
+    if (exit_code == 4) { report(GpuSolveStatus::kNoGpuDevice); return false; }
     if (exit_code == 5) { report(GpuSolveStatus::kDeviceFault); return false; }
     if (exit_code != 0) { report(GpuSolveStatus::kSolverError); return false; }
     if (!parse_solver_output(acc, out_nonce, out)) { report(GpuSolveStatus::kNoCycle); return false; }

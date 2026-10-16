@@ -187,9 +187,9 @@ lint-cuckatoo-solver-filenames.py
 =================================
 Checks that every hardcoded Cuckatoo solver filename across `src/`, `test/`,
 `cmake/` and `contrib/` names a file that actually exists in
-`src/crypto/cuckatoo/`, and that `gpu/qsgpusolve.cu` still documents its exit
-codes -- `gpu_solver.cpp` maps exit 4 to "no CUDA device", and nothing else
-records that contract.
+`src/crypto/cuckatoo/`, and that `gpu/qsgpusolve-cuda.cu` and
+`gpu/qsgpusolve-opencl.cpp` still document their exit codes -- `gpu_solver.cpp`
+maps exit 4 to "no usable GPU device", and nothing else records that contract.
 
 Run directly from the repository root:
 

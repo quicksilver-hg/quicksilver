@@ -24,6 +24,7 @@
 #define QUICKSILVER_CRYPTO_CUCKATOO_GPU_DEVICE_HEALTH_CUH
 
 #include <cstdio>
+#include "watchdog_check.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -32,7 +33,7 @@
 #endif
 #endif
 
-//! A zero-window qsgpusolve invocation still has to prove that code compiled
+//! A zero-window qsgpusolve-cuda invocation still has to prove that code compiled
 //! for this helper can execute on the selected device. Runtime calls such as
 //! cudaGetDeviceCount() and cudaMalloc() succeed even when the binary contains
 //! no kernel image for the card, which otherwise makes a wrong GPU_ARCH look
@@ -101,7 +102,7 @@ static inline const char* gpu_health_hint()
 //! graph time, so a low value is a strong suspicion, not a proof.
 //!
 //! F-421: ask the device this helper is using before the registry. Both call
-//! sites have already selected it (qsgpusolve leaves the default current
+//! sites have already selected it (qsgpusolve-cuda leaves the default current
 //! device; qsgpucalibrate has called cudaSetDevice). cudaDevAttrKernelExecTimeout
 //! is 1 when a run-time limit applies to kernels on that device and 0 when it
 //! does not. A reported 0 prints nothing. Any other reported value, and a
@@ -122,21 +123,7 @@ static inline void gpu_health_warn_if_watchdog_short(const char* tool)
         return;
     }
 
-    DWORD value = 0;
-    DWORD size = sizeof(value);
-    const LSTATUS st = RegGetValueA(HKEY_LOCAL_MACHINE,
-                                    "SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
-                                    "TdrDelay", RRF_RT_REG_DWORD, nullptr, &value, &size);
-    // Absent means Windows uses its 2-second default, which is the dangerous case.
-    const unsigned long effective = (st == ERROR_SUCCESS) ? (unsigned long)value : 2UL;
-    if (effective < 10UL) {
-        std::fprintf(stderr,
-                     "%s: WARNING TdrDelay is %lu s%s. A Cuckatoo graph takes several seconds, so "
-                     "the display-driver watchdog is likely to reset the GPU mid-kernel. %s\n",
-                     tool, effective,
-                     st == ERROR_SUCCESS ? "" : " (unset, so the 2 s default applies)",
-                     gpu_health_hint());
-    }
+    qsgpu::WarnIfWatchdogShort(tool, gpu_health_hint());
 #else
     (void)tool;
 #endif
