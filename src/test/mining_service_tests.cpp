@@ -17,6 +17,8 @@
 #include <node/block_solve.h>
 #include <node/types.h>
 #include <primitives/block.h>
+#include <rpc/request.h>
+#include <rpc/server.h>
 #include <script/script.h>
 #include <test/util/logging.h>
 #include <test/util/setup_common.h>
@@ -820,6 +822,158 @@ BOOST_AUTO_TEST_CASE(solved_block_time_follows_the_clock_not_the_template)
     svc.Stop();
 
     const CBlockIndex* mined{WITH_LOCK(cs_main, return m_node.chainman->ActiveChain()[start_height + 1])};
+    BOOST_REQUIRE(mined);
+    BOOST_REQUIRE(mined->pprev);
+    BOOST_CHECK(mined->pprev->GetBlockHash() == parent);
+    BOOST_CHECK_GE(mined->GetBlockTime(), time_built + delta);
+}
+
+BOOST_AUTO_TEST_CASE(rpc_generated_block_time_follows_the_clock_not_the_template)
+{
+    // F-483: the RPC generate path has the same shape as F-479. One template,
+    // one solve call; a block found after the clock moved must not keep the
+    // template's time. Hold the first window, move mock time, and let a later
+    // window solve; the block the RPC returns must carry the later time.
+    Consensus::Params& params = const_cast<Consensus::Params&>(Params().GetConsensus());
+    const std::string tag{ProcessIdTag()};
+    const std::string marker{TempPath("f483-window-" + tag)};
+    const std::string script{TempPath("f483-solver-" + tag + ".stub")};
+    static_cast<void>(std::remove(marker.c_str()));
+
+    // The RPC finds the miner on the node context; this fixture leaves it unset.
+    // Declared before the joiner, so it outlives the RPC thread.
+    BOOST_REQUIRE(!m_node.mining);
+    m_node.mining = interfaces::MakeMining(m_node);
+    BOOST_REQUIRE(m_node.mining);
+    struct MiningResetter {
+        node::NodeContext& node;
+        ~MiningResetter() { node.mining.reset(); }
+    } mining_resetter{m_node};
+
+    // Joined after the restorer below has run: once the stub script is gone and
+    // the sandbox params are back, any window still running ends on its own.
+    std::thread rpc_thread;
+    struct ThreadJoiner {
+        std::thread& thread;
+        ~ThreadJoiner()
+        {
+            if (thread.joinable()) thread.join();
+        }
+    } joiner{rpc_thread};
+
+    const bool had_devices{std::getenv("CUCKATOO_GPU_DEVICES") != nullptr};
+    const bool had_timeout{std::getenv("CUCKATOO_GPU_TIMEOUT") != nullptr};
+    struct TestStateRestorer {
+        Consensus::Params& params;
+        const bool block_pow_no_cycle;
+        const uint8_t edge_bits;
+        const std::string solver;
+        const std::string devices;
+        const std::string timeout;
+        const bool had_devices;
+        const bool had_timeout;
+        const std::string marker;
+        const std::string script;
+        ~TestStateRestorer()
+        {
+            params.fBlockPowNoCycle = block_pow_no_cycle;
+            params.nEdgeBits = edge_bits;
+            SetSolverEnv(solver);
+            if (had_devices) SetEnvVar("CUCKATOO_GPU_DEVICES", devices);
+            else UnsetEnvVar("CUCKATOO_GPU_DEVICES");
+            if (had_timeout) SetEnvVar("CUCKATOO_GPU_TIMEOUT", timeout);
+            else UnsetEnvVar("CUCKATOO_GPU_TIMEOUT");
+            UnsetEnvVar("QS_SOLVER_STUB_SCRIPT");
+            cuckatoo::ResetGpuDiscoveryForTesting();
+            KillSolverStubChildren();
+            static_cast<void>(std::remove(marker.c_str()));
+            static_cast<void>(std::remove(script.c_str()));
+        }
+    } restore{params, params.fBlockPowNoCycle, params.nEdgeBits, EnvOrEmpty("CUCKATOO_GPU_SOLVER"),
+              EnvOrEmpty("CUCKATOO_GPU_DEVICES"), EnvOrEmpty("CUCKATOO_GPU_TIMEOUT"), had_devices, had_timeout,
+              marker, script};
+
+    // The RPC solves with the CPU fallback on. Edge bits 20 has no CPU solver,
+    // so the held window ends with no cycle when the stub dies. Edge bits 19,
+    // set before that, makes every later window fall back to the CPU solver.
+    // CuckatooSolve takes edge bits by value, so the held window keeps 20.
+    params.fBlockPowNoCycle = false;
+    params.nEdgeBits = 20;
+    {
+        std::ofstream out{script};
+        BOOST_REQUIRE(out);
+        out << "append " << marker << "\n";
+        out << "sleep 300000\n";
+        out << "exit 1\n";
+        BOOST_REQUIRE(out);
+    }
+    SetSolverEnv(SOLVER_STUB_PATH);
+    SetEnvVar("QS_SOLVER_STUB_SCRIPT", script);
+    UnsetEnvVar("CUCKATOO_GPU_DEVICES");
+    SetEnvVar("CUCKATOO_GPU_TIMEOUT", "600");
+    cuckatoo::ResetGpuDiscoveryForTesting();
+
+    const auto marker_bytes = [&]() -> std::streamoff {
+        std::ifstream in{marker, std::ios::binary | std::ios::ate};
+        return in ? static_cast<std::streamoff>(in.tellg()) : 0;
+    };
+
+    const int64_t time_built{GetTime()};
+    constexpr int64_t delta{1000};
+    const uint256 parent{WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Tip()->GetBlockHash())};
+
+    const CScript payout = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
+    JSONRPCRequest request;
+    request.context = &m_node;
+    request.strMethod = "generatetodescriptor";
+    request.params = UniValue{UniValue::VARR};
+    request.params.push_back(1);
+    request.params.push_back("raw(" + HexStr(payout) + ")");
+    if (RPCIsInWarmup(nullptr)) SetRPCWarmupFinished();
+
+    UniValue hashes;
+    std::string rpc_error;
+    std::atomic<bool> rpc_done{false};
+    rpc_thread = std::thread{[&] {
+        try {
+            hashes = tableRPC.execute(request);
+        } catch (const UniValue& err) {
+            rpc_error = err.write();
+        } catch (const std::exception& e) {
+            rpc_error = e.what();
+        }
+        rpc_done = true;
+    }};
+
+    // An RPC that fails before it reaches the solver must say why, not time out.
+    BOOST_REQUIRE(WaitUntil([&] { return rpc_done.load() || marker_bytes() >= 1; }, std::chrono::seconds(5)));
+    BOOST_REQUIRE_MESSAGE(!rpc_done.load(), "generatetodescriptor returned before the first window: " + rpc_error);
+
+    // The RPC is inside the window that captured the template header. Move the
+    // clock, arm the CPU solver for later windows, then end this one with no
+    // cycle. Later stubs exit at once: a cycle the CPU finds can still miss the
+    // target, so the block may land a window or two after the next one, and
+    // each of those windows must stamp the new time too.
+    SetMockTime(time_built + delta);
+    params.nEdgeBits = 19;
+    {
+        std::ofstream out{script, std::ios::trunc};
+        BOOST_REQUIRE(out);
+        out << "append " << marker << "\n";
+        out << "exit 1\n";
+        BOOST_REQUIRE(out);
+    }
+    KillSolverStubChildren();
+
+    BOOST_REQUIRE(WaitUntil([&] { return rpc_done.load(); }, std::chrono::seconds(60)));
+    rpc_thread.join();
+    BOOST_REQUIRE_GE(marker_bytes(), 2);
+
+    BOOST_REQUIRE_MESSAGE(rpc_error.empty(), rpc_error);
+    BOOST_REQUIRE(hashes.isArray());
+    BOOST_REQUIRE_EQUAL(hashes.size(), 1U);
+    const uint256 hash{*uint256::FromHex(hashes[0].get_str())};
+    const CBlockIndex* mined{WITH_LOCK(cs_main, return m_node.chainman->m_blockman.LookupBlockIndex(hash))};
     BOOST_REQUIRE(mined);
     BOOST_REQUIRE(mined->pprev);
     BOOST_CHECK(mined->pprev->GetBlockHash() == parent);

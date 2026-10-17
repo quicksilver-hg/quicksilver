@@ -167,8 +167,10 @@ public Q_SLOTS:
     void gotoMineMintPage();
     /** Switch to agent allotments page */
     void gotoAgentAllotmentPage();
-    /** Switch to consensus review page */
+    /** Switch to the network page in every consensus state */
     void gotoNetworkPage();
+    /** Switch to the consensus review page */
+    void gotoConsensusReviewPage();
     /** Switch to node status page */
     void gotoNetworkStatusPage();
     /** Switch to request page */

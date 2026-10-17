@@ -12,7 +12,6 @@
 #include <qt/guiutil.h>
 #include <qt/minemintpage.h>
 #include <qt/miningmodel.h>
-#include <qt/networkpage.h>
 #include <qt/optionsmodel.h>
 #include <qt/platformstyle.h>
 #include <qt/receivecoinsdialog.h>
@@ -68,7 +67,6 @@ VaultView::VaultView(VaultModel* vault_model, const PlatformStyle* _platformStyl
     mineMintPage = new MineMintPage(this);
     mineMintPage->setDisplayUnit(vaultModel->getOptionsModel()->getDisplayUnit());
     connect(vaultModel->getOptionsModel(), &OptionsModel::displayUnitChanged, mineMintPage, &MineMintPage::setDisplayUnit);
-    networkPage = new NetworkPage(this);
 
     usedSendingAddressesPage = new AddressBookPage(platformStyle, AddressBookPage::ForEditing, AddressBookPage::SendingTab, this);
     usedSendingAddressesPage->setModel(vaultModel->getAddressTableModel());
@@ -81,24 +79,11 @@ VaultView::VaultView(VaultModel* vault_model, const PlatformStyle* _platformStyl
     addWidget(sendCoinsPage);
     addWidget(agentAllotmentPage);
     addWidget(mineMintPage);
-    addWidget(networkPage);
 
     connect(sendCoinsPage, &SendCoinsDialog::coinsSent, this, &VaultView::coinsSent);
     connect(sendCoinsPage, &SendCoinsDialog::solverSettingsRequested, this, &VaultView::solverSettingsRequested);
     connect(mineMintPage, &MineMintPage::solverSettingsRequested, this, &VaultView::solverSettingsRequested);
     connect(mineMintPage, &MineMintPage::networkHelpRequested, this, &VaultView::networkRequested);
-    connect(networkPage, &NetworkPage::addPeerRequested, this, [this](const QString& address) {
-        if (!clientModel) {
-            networkPage->setAddPeerResult(tr("Consensus is not running, so there is nothing to connect."));
-            return;
-        }
-        // Queued for retrying, not connected: saying otherwise would repeat the
-        // false-success this panel exists to end.
-        const bool added = clientModel->node().addNode(address.toStdString());
-        networkPage->setAddPeerResult(added
-            ? tr("Added %1. If it answers, the peer count changes within a minute or two.").arg(address)
-            : tr("%1 is already on the list of peers this node tries.").arg(address));
-    });
     // Highlight transaction after send
     connect(sendCoinsPage, &SendCoinsDialog::coinsSent, transactionView, qOverload<const uint256&>(&TransactionView::focusTransaction));
 
@@ -170,7 +155,6 @@ void VaultView::setClientModel(ClientModel *_clientModel)
     if (_clientModel) {
         auto refresh_network = [this]{
             const int peers = clientModel->getNumConnections(CONNECTIONS_ALL);
-            networkPage->setPeerCount(peers);
             mineMintPage->setPeerCount(peers);
         };
         connect(clientModel, &ClientModel::numBlocksChanged, this,
@@ -216,11 +200,6 @@ void VaultView::gotoAgentAllotmentPage()
 {
     agentAllotmentPage->refresh();
     setCurrentWidget(agentAllotmentPage);
-}
-
-void VaultView::gotoNetworkPage()
-{
-    setCurrentWidget(networkPage);
 }
 
 void VaultView::gotoReceiveCoinsPage()

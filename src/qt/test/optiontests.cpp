@@ -10,13 +10,20 @@
 #include <qt/quicksilver.h>
 #include <qt/createvaultdialog.h>
 #include <qt/clientmodel.h>
+#include <qt/coincontroldialog.h>
 #include <qt/guiutil.h>
 #include <qt/optionsdialog.h>
+#include <qt/platformstyle.h>
 #include <qt/quicksilverunits.h>
 #include <qt/quicksilverstyle.h>
 #include <qt/test/optiontests.h>
 #include <qt/test/util.h>
+#include <qt/vaultmodel.h>
 #include <test/util/setup_common.h>
+#include <vault/context.h>
+#include <vault/coincontrol.h>
+#include <vault/test/util.h>
+#include <vault/vault.h>
 
 #include <QByteArray>
 #include <QDataStream>
@@ -1047,4 +1054,41 @@ void OptionTests::displayTabHasNoDeadFontChoiceAndAlignsItsFields()
     QWidget* tray = dialog.findChild<QWidget*>(QStringLiteral("showTrayIcon"));
     QVERIFY(tray->mapTo(display, QPoint{}).y() < unit->mapTo(display, QPoint{}).y());
 #endif
+}
+
+void OptionTests::coinControlSettingIsNamedCoinControl()
+{
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    OptionsDialog options_dialog(nullptr, /*enableVault=*/true);
+    options_dialog.setModel(&options);
+    auto* setting = options_dialog.findChild<QCheckBox*>(QStringLiteral("coinControlFeatures"));
+    QVERIFY(setting);
+    QCOMPARE(setting->text(), QStringLiteral("Enable &coin control"));
+    QCOMPARE(setting->toolTip(), QStringLiteral("Show the Coin control… button on Transfer, so you can choose which coins a transfer spends."));
+
+    TestChain100Setup test;
+    node::NodeContext* const previous_context = m_node.context();
+    m_node.setContext(&test.m_node);
+    QString coin_control_title;
+    {
+        vault::VaultContext context;
+        context.args = &test.m_args;
+        std::shared_ptr<vault::CVault> raw_vault = vault::TestLoadVault(context);
+        {
+            std::unique_ptr<interfaces::Vault> vault = interfaces::MakeVault(context, raw_vault);
+            std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate("other")};
+            VaultModel vault_model(std::move(vault), m_node, &options, style.get());
+            vault::CCoinControl coin_control;
+            CoinControlDialog coin_control_dialog(coin_control, &vault_model, style.get());
+            coin_control_title = coin_control_dialog.windowTitle();
+        }
+        // The model holding the vault is gone; wait for the vault itself to be
+        // released before `test` removes its data dir. Windows cannot remove
+        // the database file while the vault still holds it open.
+        vault::WaitForDeleteVault(std::move(raw_vault));
+    }
+    m_node.setContext(previous_context);
+    QCOMPARE(coin_control_title, QStringLiteral("Coin Control"));
 }

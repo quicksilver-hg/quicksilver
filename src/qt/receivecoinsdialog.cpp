@@ -13,7 +13,6 @@
 #include <qt/guiutil.h>
 #include <qt/optionsmodel.h>
 #include <qt/platformstyle.h>
-#include <qt/quicksilverstyle.h>
 #include <qt/receiverequestdialog.h>
 #include <qt/recentrequeststablemodel.h>
 #include <qt/vaultmodel.h>
@@ -33,16 +32,9 @@ ReceiveCoinsDialog::ReceiveCoinsDialog(const PlatformStyle *_platformStyle, QWid
 {
     ui->setupUi(this);
 
-    if (!_platformStyle->getImagesOnButtons()) {
-        ui->clearButton->setIcon(QIcon());
-        ui->receiveButton->setIcon(QIcon());
-        ui->showRequestButton->setIcon(QIcon());
-        ui->removeRequestButton->setIcon(QIcon());
-    } else {
-        ui->clearButton->setIcon(_platformStyle->ColorIcon(":/icons/remove", QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarBright)));
-        ui->receiveButton->setIcon(_platformStyle->ColorIcon(":/icons/receiving_addresses", QuicksilverStyle::Color(QuicksilverStyle::Token::Teal)));
-        ui->showRequestButton->setIcon(_platformStyle->ColorIcon(":/icons/eye", QuicksilverStyle::Color(QuicksilverStyle::Token::Amber)));
-        ui->removeRequestButton->setIcon(_platformStyle->ColorIcon(":/icons/remove", QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarBright)));
+    // A command is its words (F-442): the text buttons carry no icon.
+    for (QPushButton* button : {ui->clearButton, ui->receiveButton, ui->showRequestButton, ui->removeRequestButton}) {
+        button->setIcon(QIcon());
     }
 
     // The request form and the request history are Bench panels, on the

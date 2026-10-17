@@ -472,7 +472,7 @@
     </widget>
    </item>
    <item>
-    <widget class="QScrollArea" name="scrollArea">
+    <widget class="FittingScrollArea" name="scrollArea">
      <property name="widgetResizable">
       <bool>true</bool>
      </property>
@@ -686,6 +686,12 @@
   </layout>
  </widget>
  <customwidgets>
+  <customwidget>
+   <class>FittingScrollArea</class>
+   <extends>QScrollArea</extends>
+   <header>qt/fittingscrollarea.h</header>
+   <container>1</container>
+  </customwidget>
   <customwidget>
    <class>QValidatedLineEdit</class>
    <extends>QLineEdit</extends>

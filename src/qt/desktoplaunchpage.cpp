@@ -26,6 +26,7 @@
 
 #include <QAbstractItemView>
 #include <QDateTime>
+#include <QEvent>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -36,15 +37,55 @@
 #include <QSizePolicy>
 #include <QSortFilterProxyModel>
 #include <QTableView>
+#include <QTimer>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <vector>
 
 namespace {
 constexpr int INSTRUMENT_WIDTH{320};
+//! Below this window width Home's ledger is too narrow for every column at its
+//! content width (owner ruling, 2026-10-16): Type is hidden, and the
+//! instruments column gives up to INSTRUMENT_GIVE px to the label.
+constexpr int WIDE_WINDOW{1200};
+//! The most the instruments column narrows (owner ruling, 2026-10-17).
+//! Measured at 1024x768: 35 px when the page does not scroll, 45 when its
+//! vertical bar takes 10 px from the ledger. At 45 px less no text clips or
+//! elides.
+constexpr int INSTRUMENT_GIVE{45};
 //! How many of the newest rows Home's ledger shows (F-451). The Ledger page
 //! shows them all.
 constexpr int LEDGER_SNAPSHOT_ROWS{10};
+
+//! The label Home keeps whole down to 1024 px. Nineteen characters: the
+//! address-book label Transfer already requires to show in full (F-493), and
+//! the one the 1200 px check treats as readable. A different string of the
+//! same length has a different width in a proportional font, so the reference
+//! is this text. A longer label elides in the middle; the tooltip is the full
+//! text.
+constexpr char LABEL_COLUMN_REFERENCE[] = "household-budget-02";
+
+//! Width of the reference as the label cell paints it. The extra beyond the
+//! advance is the cell padding sizeHintForColumn adds, so the floor follows
+//! the font and the style rather than a pixel constant.
+int LabelColumnMinimum(QTableView* table)
+{
+    table->ensurePolished();
+    const QFontMetrics metrics(table->font());
+    const int text = GUIUtil::TextWidth(metrics, QString::fromLatin1(LABEL_COLUMN_REFERENCE));
+    const QAbstractItemModel* model = table->model();
+    if (!model || model->rowCount() <= 0) return text;
+    int widest = 0;
+    for (int row = 0; row < model->rowCount(); ++row) {
+        const QString cell = model->index(row, TransactionTableModel::ToAddress).data(Qt::DisplayRole).toString();
+        widest = std::max(widest, GUIUtil::TextWidth(metrics, cell));
+    }
+    QAbstractItemView* cells = table;
+    const int hint = cells->sizeHintForColumn(TransactionTableModel::ToAddress);
+    const int pad = widest > 0 && hint > widest ? hint - widest : 0;
+    return text + pad;
+}
 
 //! The first `count` rows of a model that is already sorted, newest first:
 //! Home's snapshot of the ledger. Whether a row is in depends on where it
@@ -82,12 +123,12 @@ private:
 };
 //! The text width inside an instrument panel: the column less the panel's
 //! border and body margins.
-constexpr int NOTE_WIDTH{INSTRUMENT_WIDTH - 2 - 24};
+constexpr int NoteWidth(int instrument_width) { return instrument_width - 2 - 24; }
 
 //! A wrapped note in the instrument column. A word-wrapped QLabel reports the
 //! height of a narrow golden-ratio box as its minimum, which made the column
-//! taller than the window; the column's width is fixed, so the note answers
-//! for that width instead.
+//! taller than the window; the column's width is set by the page, so the note
+//! answers for that width instead.
 class NoteLabel : public QLabel
 {
 public:
@@ -96,8 +137,19 @@ public:
         setWordWrap(true);
         setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
     }
-    QSize sizeHint() const override { return {NOTE_WIDTH, heightForWidth(NOTE_WIDTH)}; }
+    QSize sizeHint() const override { return {m_width, heightForWidth(m_width)}; }
     QSize minimumSizeHint() const override { return sizeHint(); }
+    //! The layout keeps the hint it read last, so a new width must ask it
+    //! again, or the note keeps the height of the old width and clips.
+    void setNoteWidth(int width)
+    {
+        if (width == m_width) return;
+        m_width = width;
+        updateGeometry();
+    }
+
+private:
+    int m_width{NoteWidth(INSTRUMENT_WIDTH)};
 };
 
 //! A note under a panel's rows: muted, or the warning tone when it says
@@ -199,9 +251,11 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     m_ledger_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_ledger_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_ledger_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_ledger_table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_ledger_table->setWordWrap(false);
     m_ledger_table->setTextElideMode(Qt::ElideMiddle);
+    m_ledger_table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_ledger_table->viewport()->installEventFilter(this);
+    m_ledger_table->installEventFilter(this);
     m_ledger_table->setIconSize(QSize(14, 14));
     m_ledger_table->verticalHeader()->hide();
     m_ledger_table->verticalHeader()->setDefaultSectionSize(30);
@@ -239,8 +293,10 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     ledger.body->insertWidget(1, m_backup_panel);
     root->addWidget(m_ledger, 1);
 
-    // The instruments: a fixed narrow column of label/value panels.
+    // The instruments: a narrow column of label/value panels, fixed at
+    // INSTRUMENT_WIDTH except below WIDE_WINDOW (fitInstruments).
     auto* instruments = new QWidget(this);
+    m_instruments = instruments;
     instruments->setObjectName(QStringLiteral("homeInstruments"));
     instruments->setFixedWidth(INSTRUMENT_WIDTH);
     auto* instruments_layout = new QVBoxLayout(instruments);
@@ -487,22 +543,110 @@ void DesktopLaunchPage::arrangeLedgerColumns()
     if (header->visualIndex(TransactionTableModel::Status) != TransactionTableModel::Amount) {
         header->moveSection(header->visualIndex(TransactionTableModel::Status), TransactionTableModel::Amount);
     }
+    // Fixed, including Label. Stretch would hand Label whatever is left and
+    // ignore a minimum. fitLedgerColumns sets every width, including on resize.
     header->setSectionResizeMode(QHeaderView::Fixed);
-    header->setSectionResizeMode(TransactionTableModel::ToAddress, QHeaderView::Stretch);
     fitLedgerColumns();
 }
 
 void DesktopLaunchPage::fitLedgerColumns()
 {
+    if (m_fitting_ledger) return;
     QHeaderView* header = m_ledger_table->horizontalHeader();
     if (header->count() <= TransactionTableModel::Amount) return;
-    // Every column but Label is exactly as wide as its content, so the label
-    // takes all the slack, as on the Ledger page.
+    m_fitting_ledger = true;
+    // Below WIDE_WINDOW Type is the column that gives way (owner ruling,
+    // 2026-10-16), and comes back when the window widens.
+    const bool narrow = window()->width() < WIDE_WINDOW;
+    m_ledger_table->setColumnHidden(TransactionTableModel::Type, narrow);
     // QTableView narrows the public QAbstractItemView call to protected.
     QAbstractItemView* cells = m_ledger_table;
-    for (int column : {TransactionTableModel::Date, TransactionTableModel::Type, TransactionTableModel::Amount, TransactionTableModel::Status}) {
-        m_ledger_table->setColumnWidth(column, std::max(cells->sizeHintForColumn(column), header->sectionSizeHint(column)));
+    const auto content = [&](int column) {
+        return std::max(cells->sizeHintForColumn(column), header->sectionSizeHint(column));
+    };
+    // A bar that appears on the first pass changes the viewport. Read it again.
+    int previous_viewport = -1;
+    for (int pass = 0; pass < 3; ++pass) {
+        const int viewport = m_ledger_table->viewport()->width();
+        if (viewport <= 0 || viewport == previous_viewport) break;
+        previous_viewport = viewport;
+        int others = 0;
+        for (int column : {TransactionTableModel::Date, TransactionTableModel::Type, TransactionTableModel::Amount, TransactionTableModel::Status}) {
+            if (m_ledger_table->isColumnHidden(column)) continue;
+            m_ledger_table->setColumnWidth(column, content(column));
+            others += m_ledger_table->columnWidth(column);
+        }
+        const int minimum = std::max(LabelColumnMinimum(m_ledger_table), header->sectionSizeHint(TransactionTableModel::ToAddress));
+        // Label takes the slack, and never less than the reference. At 1200 px
+        // the slack is already wider than the reference, so nothing moves.
+        m_ledger_table->setColumnWidth(TransactionTableModel::ToAddress, std::max(minimum, viewport - others));
     }
+    m_fitting_ledger = false;
+    // This runs inside a resize, while the page's layout is still placing
+    // its children: the ledger has its new width and the instruments column
+    // its old one, and a note asking for a new height then is not heard. The
+    // column is fitted once that layout is done.
+    if (!m_fitting_instruments) {
+        m_fitting_instruments = true;
+        QTimer::singleShot(0, this, &DesktopLaunchPage::fitInstruments);
+    }
+}
+
+void DesktopLaunchPage::fitInstruments()
+{
+    m_fitting_instruments = false;
+    const int viewport = m_ledger_table->viewport()->width();
+    if (window()->width() >= WIDE_WINDOW || viewport <= 0) {
+        setInstrumentWidth(INSTRUMENT_WIDTH);
+        return;
+    }
+    int others = 0;
+    for (int column : {TransactionTableModel::Date, TransactionTableModel::Type, TransactionTableModel::Amount, TransactionTableModel::Status}) {
+        if (!m_ledger_table->isColumnHidden(column)) others += m_ledger_table->columnWidth(column);
+    }
+    const int minimum = std::max(LabelColumnMinimum(m_ledger_table), m_ledger_table->horizontalHeader()->sectionSizeHint(TransactionTableModel::ToAddress));
+    // The column gives only what Label still lacks, and no more than
+    // INSTRUMENT_GIVE. The shortfall is read against the viewport the
+    // full-width column would leave, so it does not depend on the width the
+    // column has now. The viewport is read as it is, so a vertical page bar
+    // counts. Measured at 1024x768: 459 px of content, 104 of it Type, leaves
+    // 111 px against a reference of about 146, so the column gives 35, and 45
+    // when the page scrolls.
+    const int full_viewport = viewport - (INSTRUMENT_WIDTH - m_instruments->width());
+    setInstrumentWidth(INSTRUMENT_WIDTH - std::clamp(minimum + others - full_viewport, 0, INSTRUMENT_GIVE));
+}
+
+void DesktopLaunchPage::setInstrumentWidth(int width)
+{
+    if (m_instruments->maximumWidth() == width) return;
+    m_instruments->setFixedWidth(width);
+    // Every note follows, including the ledger's, which share the width.
+    std::vector<NoteLabel*> notes;
+    for (QLabel* label : findChildren<QLabel*>()) {
+        if (auto* note = dynamic_cast<NoteLabel*>(label)) {
+            note->setNoteWidth(NoteWidth(width));
+            notes.push_back(note);
+        }
+    }
+    // A note's new height climbs one posted layout request per widget. Going
+    // back from 1200 to 1024 px the column's own layout was left invalid and
+    // never re-run (measured: the cost note 259x85 where it needs 99). Lay
+    // each note's ancestors out now, bottom up, so each reads the one below.
+    for (NoteLabel* note : notes) {
+        for (QWidget* level = note->parentWidget(); level && level != this; level = level->parentWidget()) {
+            if (level->layout()) level->layout()->activate();
+        }
+    }
+}
+
+bool DesktopLaunchPage::eventFilter(QObject* watched, QEvent* event)
+{
+    if (m_ledger_table &&
+        (watched == m_ledger_table->viewport() || watched == m_ledger_table) &&
+        (event->type() == QEvent::Resize || event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange)) {
+        fitLedgerColumns();
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void DesktopLaunchPage::refreshLedgerCount()

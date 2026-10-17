@@ -289,6 +289,11 @@ NetworkPage::NetworkPage(ChainType active_chain, QWidget* parent)
     m_bootstrap_diagnosis->setWordWrap(true);
     m_bootstrap_diagnosis->setVisible(false);
     group_layout->addWidget(m_bootstrap_diagnosis);
+    m_review_consensus_button = new QPushButton(tr("Review consensus"), group);
+    m_review_consensus_button->setObjectName(QStringLiteral("reviewConsensusButton"));
+    m_review_consensus_button->setVisible(false);
+    connect(m_review_consensus_button, &QPushButton::clicked, this, &NetworkPage::reviewConsensusRequested);
+    group_layout->addWidget(m_review_consensus_button);
     root->addWidget(group);
 
     buildAddPeerSection(root);
@@ -356,6 +361,11 @@ void NetworkPage::setNodeControlsEnabled(bool enabled)
 {
     m_add_peer_edit->setEnabled(enabled);
     m_add_peer_button->setEnabled(enabled);
+}
+
+void NetworkPage::setReviewConsensusVisible(bool visible)
+{
+    if (m_review_consensus_button) m_review_consensus_button->setVisible(visible);
 }
 
 NetworkPage::BootstrapObstacle NetworkPage::diagnoseBootstrap(bool has_fixed_seeds, bool onion_only_seeds, bool onion_proxy_configured)
@@ -453,6 +463,7 @@ void NetworkPage::showInitializing()
     m_sync_value->setText(tr("Waiting for consensus"));
     m_bootstrap_diagnosis->setVisible(false);
     setNodeControlsEnabled(false);
+    setReviewConsensusVisible(false);
 }
 
 void NetworkPage::showStartFailed()
@@ -463,6 +474,18 @@ void NetworkPage::showStartFailed()
     m_sync_value->setText(tr("Not running"));
     m_bootstrap_diagnosis->setVisible(false);
     setNodeControlsEnabled(false);
+    setReviewConsensusVisible(false);
+}
+
+void NetworkPage::showConsensusOff()
+{
+    m_intro->setText(tr("Consensus is off, so this computer is not connected to any network. You can still switch networks below."));
+    m_status_value->setText(tr("Consensus off"));
+    m_peers_value->setText(tr("Not running"));
+    m_sync_value->setText(tr("Not running"));
+    m_bootstrap_diagnosis->setVisible(false);
+    setNodeControlsEnabled(false);
+    setReviewConsensusVisible(true);
 }
 
 void NetworkPage::showTorMissing()
@@ -478,6 +501,7 @@ void NetworkPage::showTorMissing()
     m_sync_value->setText(tr("Not running"));
     m_bootstrap_diagnosis->setVisible(false);
     setNodeControlsEnabled(false);
+    setReviewConsensusVisible(false);
 }
 
 void NetworkPage::updateStatus(int peers, ClientModel::SyncState sync_state, double progress)
@@ -499,4 +523,5 @@ void NetworkPage::setPeerCount(int peers)
     applyTorSetupAdvice(OnionProxyConfigured());
     refreshBootstrapDiagnosis(peers);
     setNodeControlsEnabled(true);
+    setReviewConsensusVisible(false);
 }

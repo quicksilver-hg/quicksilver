@@ -145,7 +145,28 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock&& block, uint64_t&
 {
     block_out.reset();
 
-    if (!node::SolveBlockPoW(chainman, block, max_tries)) {
+    // F-483: solve one window at a time and refresh the header time before
+    // each, as the miner does (F-479). SolveBlockPoW reads the pre-pow, which
+    // includes nTime, at the start of a window, and the nonce it returns is
+    // valid only for that header, so the refresh cannot happen inside it.
+    // A window it does not consume (sandbox PoW, shutdown, no tries left)
+    // ends the loop, so max_tries means the same number of tries as before.
+    bool solved{false};
+    do {
+        {
+            LOCK(cs_main);
+            if (const CBlockIndex* pindexPrev = chainman.m_blockman.LookupBlockIndex(block.hashPrevBlock)) {
+                UpdateTime(&block, chainman.GetConsensus(), pindexPrev);
+            }
+        }
+        const uint64_t window{std::min<uint64_t>(max_tries, 4096)};
+        uint64_t window_left{window};
+        solved = node::SolveBlockPoW(chainman, block, window_left);
+        max_tries -= window - window_left;
+        if (solved || window_left == window) break;
+    } while (max_tries > 0);
+
+    if (!solved) {
         return false;
     }
 

@@ -57,17 +57,13 @@ QString TransactionDesc::FormatTxStatus(const interfaces::VaultTxStatus& status,
             s += QLatin1String(", ") + tr("abandoned");
         }
         return s;
-    } else if (depth < 6) {
-        /*: Text explaining the current status of a transaction, shown in the
-            status field of the details window for this transaction. This
-            status represents a transaction confirmed in at least one block,
-            but less than 6 blocks. */
-        return tr("%1/unconfirmed").arg(depth);
     } else {
         /*: Text explaining the current status of a transaction, shown in the
-            status field of the details window for this transaction. This status
-            represents a transaction confirmed in 6 or more blocks. */
-        return tr("%1 confirmations").arg(depth);
+            status field of the details window for this transaction. This
+            status represents a transaction confirmed in at least one block. */
+        // Singular and plural are separate because no app catalogue is
+        // installed, so Qt would otherwise show the literal "(s)".
+        return depth == 1 ? tr("1 confirmation") : tr("%1 confirmations").arg(depth);
     }
 }
 
@@ -284,7 +280,7 @@ QString TransactionDesc::toHTML(interfaces::Node& node, interfaces::Vault& vault
     if (wtx.is_coinbase)
     {
         quint32 numBlocksToMaturity = COINBASE_MATURITY +  1;
-        strHTML += "<br>" + tr("Generated coins must mature %1 blocks before they can be spent. When you generated this block, it was broadcast to the network to be added to the block chain. If it fails to get into the chain, its state will change to \"not accepted\" and it won't be spendable. This may occasionally happen if another node generates a block within a few seconds of yours.").arg(QString::number(numBlocksToMaturity)) + "<br>";
+        strHTML += "<br>" + tr("Generated coins must mature %1 blocks before they can be spent. If the block fails to get into the chain, its state will change to \"not accepted\" and it won't be spendable. This may occasionally happen if another node generates a block within a few seconds of yours.").arg(QString::number(numBlocksToMaturity)) + "<br>";
     }
 
     //

@@ -366,7 +366,12 @@ bool QuicksilverApplication::createOptionsModel(bool resetSettings)
 
 void QuicksilverApplication::createWindow(const NetworkStyle *networkStyle)
 {
+    // The timer is a child of the previous window.
+    pollShutdownTimer = nullptr;
+    delete window;
+    window = nullptr;
     window = new QuicksilverGUI(node(), platformStyle, networkStyle, nullptr);
+    if (optionsModel) window->setOptionsModel(optionsModel);
 #ifdef ENABLE_VAULT
     window->setConsensusPreflight([] { return ConsensusTorAvailable(gArgs, tor::LocateBundledTor); });
 #endif
@@ -503,6 +508,11 @@ bool QuicksilverApplication::launchOpensVaultOnlyForTesting(const ArgsManager& a
     return LaunchOpensVaultOnly(args, locate);
 }
 
+void QuicksilverApplication::setRestartLauncherForTesting(std::function<bool(const QString&, const QStringList&)> launcher)
+{
+    m_restart_launcher = std::move(launcher);
+}
+
 void QuicksilverApplication::startPersistedConsensus()
 {
 #ifdef ENABLE_VAULT
@@ -550,6 +560,15 @@ void QuicksilverApplication::showWindow()
 
 void QuicksilverApplication::requestShutdown()
 {
+    // A test launcher, and no node thread yet: prove the relaunch reaches
+    // launchPendingRestart without startShutdown, appShutdown, or exit. The
+    // Qt test classes share one node. Production leaves the launcher empty
+    // and still shuts the node down before the relaunch below.
+    if (!m_executor && m_restart_launcher) {
+        launchPendingRestart();
+        return;
+    }
+
     for (const auto w : QGuiApplication::topLevelWindows()) {
         w->hide();
     }
@@ -651,7 +670,9 @@ void QuicksilverApplication::launchPendingRestart()
         ? QCoreApplication::applicationFilePath()
         : m_restart_executable;
     const QStringList arguments = RestartArgumentsForChain(m_restart_arguments, *m_pending_restart_chain);
-    if (!StartRestartProcess(executable, arguments)) {
+    const bool started = m_restart_launcher ? m_restart_launcher(executable, arguments)
+                                            : StartRestartProcess(executable, arguments);
+    if (!started) {
         qWarning() << "Failed to restart" << executable << arguments;
     }
     m_pending_restart_chain.reset();

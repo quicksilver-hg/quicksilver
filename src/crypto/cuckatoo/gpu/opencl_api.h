@@ -57,6 +57,7 @@ inline constexpr Bool kTrue{1};
 inline constexpr Uint kDevicePciBusInfoKhr{0x410F};
 struct PciBusInfoKhr { Uint pci_domain; Uint pci_bus; Uint pci_device; Uint pci_function; };
 inline constexpr Uint kDeviceTopologyAmd{0x4037};
+inline constexpr Uint kDeviceBoardNameAmd{0x4038};
 inline constexpr Uint kDeviceTopologyTypePcieAmd{1};
 union TopologyAmd {
     struct { Uint type; Uint data[5]; } raw;

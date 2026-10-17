@@ -126,23 +126,17 @@ MineMintPage::MineMintPage(QWidget* parent)
     m_solver_health_value->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     // The halted state is fixable from Options: a graphics card, or processor
     // block mining. One button opens that screen; the health sentence names both.
+    // Keep the sentence on its own row and put the action with the other commands.
     m_configure_solver_button = new QPushButton(tr("Open graphics settings"), group);
     m_configure_solver_button->setObjectName(QStringLiteral("configureSolverButton"));
     m_configure_solver_button->setProperty("class", QStringLiteral("benchQuiet"));
     m_configure_solver_button->setVisible(false);
-    auto* health_row = new QWidget(group);
-    auto* health_layout = new QHBoxLayout(health_row);
-    health_layout->setContentsMargins(0, 0, 0, 0);
-    health_layout->setSpacing(8);
-    health_layout->addWidget(m_solver_health_value, 1);
-    health_layout->addWidget(m_configure_solver_button, 0, Qt::AlignTop);
-
     add_row(tr("Session minted"), m_minted_value);
     add_row(tr("Blocks found"), m_blocks_value);
     add_row(tr("Recent attempts / sec"), m_rate_value);
     add_row(tr("Congestion"), m_congestion_value);
     state.body->addWidget(rows_host);
-    state.body->addWidget(health_row);
+    state.body->addWidget(m_solver_health_value);
 
     auto* controls = new QHBoxLayout();
     m_start_button = new QPushButton(tr("Start"), this);
@@ -154,6 +148,7 @@ MineMintPage::MineMintPage(QWidget* parent)
     m_stop_button->setEnabled(false);
     controls->addWidget(m_start_button);
     controls->addWidget(m_stop_button);
+    controls->addWidget(m_configure_solver_button);
     controls->addStretch();
     state.body->addLayout(controls);
     root->addWidget(group);

@@ -948,6 +948,13 @@ void QuicksilverGUI::refreshBenchChrome()
     m_bench_breadcrumb->setText((vault_name + QStringLiteral(" / ") + page).toUpper());
     refreshTicker();
     refreshStatusStrip();
+    // The command that opens the page you're already on is not a command.
+    if (m_bench_request_button) {
+        m_bench_request_button->setVisible(!(receiveCoinsAction && receiveCoinsAction->isChecked()));
+    }
+    if (m_bench_transfer_button) {
+        m_bench_transfer_button->setVisible(!(sendCoinsAction && sendCoinsAction->isChecked()));
+    }
 }
 
 void QuicksilverGUI::refreshTicker()
@@ -1739,16 +1746,22 @@ void QuicksilverGUI::setNetworkActive(bool network_active)
         [this, new_state = !network_active] { m_node.setNetworkActive(new_state); });
 }
 
+void QuicksilverGUI::setOptionsModel(OptionsModel* options_model)
+{
+    m_options_model = options_model;
+}
+
 void QuicksilverGUI::openOptionsDialogWithTab(OptionsDialog::Tab tab)
 {
-    if (!clientModel || !clientModel->getOptionsModel())
-        return;
+    OptionsModel* options_model = m_options_model;
+    if (!options_model && clientModel) options_model = clientModel->getOptionsModel();
+    if (!options_model) return;
 
     auto dlg = new OptionsDialog(this, enableVault);
     connect(dlg, &OptionsDialog::quitOnReset, this, &QuicksilverGUI::quitRequested);
     dlg->setCurrentTab(tab);
-    dlg->setClientModel(clientModel);
-    dlg->setModel(clientModel->getOptionsModel());
+    if (clientModel) dlg->setClientModel(clientModel);
+    dlg->setModel(options_model);
     GUIUtil::ShowModalDialogAsynchronously(dlg);
 }
 

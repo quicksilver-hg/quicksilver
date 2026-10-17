@@ -19,7 +19,11 @@
 #include <qt/quicksilverstyle.h>
 #include <qt/networkstyle.h>
 #include <qt/platformstyle.h>
+#include <qt/guiutil.h>
+#include <qt/optionsdialog.h>
 #include <qt/optionsmodel.h>
+#include <qt/qvaluecombobox.h>
+#include <qt/quicksilverunits.h>
 #include <qt/rpcconsole.h>
 #ifdef ENABLE_VAULT
 #include <interfaces/vault.h>
@@ -37,17 +41,26 @@
 #include <util/translation.h>
 #include <validation.h>
 
+#include <util/chaintype.h>
+
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <thread>
 
 #include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
+#include <QFileInfo>
+#include <QRadioButton>
+#include <QSpinBox>
+#include <QSystemTrayIcon>
 #include <QCoreApplication>
 #include <QEvent>
 #include <QFrame>
@@ -740,7 +753,9 @@ void TestModernShell(QuicksilverGUI* window)
     QVERIFY(vault_stack);
     VaultFrame* vault_frame = window->findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
     QVERIFY(vault_frame);
-    vault_frame->gotoNetworkPage();
+    // F-500: Network opens its own page. This block still reviews consensus,
+    // through the route Home and Mine use when consensus is off.
+    vault_frame->gotoConsensusReviewPage();
     QCOMPARE(vault_stack->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
     QWidget* consensus_review = window->findChild<QWidget*>(QStringLiteral("consensusReviewPage"));
     QVERIFY(consensus_review);
@@ -1063,7 +1078,9 @@ void TestLateVaultNetworkSyncUsesSharedState(QuicksilverGUI* window, interfaces:
         if (candidate->getVaultModel() == model) view = candidate;
     }
     QVERIFY(view);
-    auto* sync = view->findChild<QLabel*>(QStringLiteral("syncStatusValue"));
+    // F-482 removed VaultView's network page. The sync sentence now lives on
+    // the frame's page; the expected words below are unchanged.
+    auto* sync = frame->findChild<QLabel*>(QStringLiteral("syncStatusValue"));
     QVERIFY(sync);
     QCOMPARE(sync->text(), QStringLiteral("Catching up 98.7%"));
     window->setHeadersAnsweredPeers(0);
@@ -1265,7 +1282,22 @@ void TestLazyConsensusActivation(interfaces::Node& node, const NetworkStyle* net
     QVERIFY(mining_button);
     QCOMPARE(mining_button->text(), QStringLiteral("Locked"));
     QVERIFY(!mining_button->isEnabled());
+    // F-500: after a failed start the Network action shows the network page.
+    // The restart-required review is the separate route, and the title
+    // assertion below is unchanged.
     network_action->trigger();
+    QStackedWidget* failed_stack = window.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+    QVERIFY(failed_stack);
+    QWidget* failed_page = failed_stack->currentWidget();
+    QVERIFY(failed_page);
+    QCOMPARE(failed_page->objectName(), QStringLiteral("networkPage"));
+    QLabel* failed_status = failed_page->findChild<QLabel*>(QStringLiteral("networkStatusValue"));
+    QVERIFY(failed_status);
+    QCOMPARE(failed_status->text(), QStringLiteral("Startup failed"));
+    QPushButton* review_consensus = failed_page->findChild<QPushButton*>(QStringLiteral("reviewConsensusButton"));
+    QVERIFY(review_consensus);
+    QVERIFY(review_consensus->isHidden());
+    window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"))->gotoConsensusReviewPage();
     QCOMPARE(window.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"))->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
     QCOMPARE(consensus_review->findChild<QLabel*>(QStringLiteral("consensusReviewTitle"))->text(), QStringLiteral("Consensus restart required"));
     QVERIFY(!consensus_continue->isEnabled());
@@ -1444,7 +1476,7 @@ void AppTests::appTests()
     m_app.parameterSetup();
     QVERIFY(m_app.createOptionsModel(/*resetSettings=*/true));
     QScopedPointer<const NetworkStyle> style(NetworkStyle::instantiate(Params().GetChainType()));
-    m_app.setupPlatformStyle();
+    setupPlatformStyleOnce();
     TestLazyConsensusActivation(m_app.node(), style.data());
     TestConsensusRefusedWithoutTor(m_app.node(), style.data());
     // Reproduce the returning-user path: persisted consensus must let AppInitMain
@@ -1623,4 +1655,460 @@ AppTests::HandleCallback::~HandleCallback()
     if (callbacks.empty()) {
         m_app_tests.m_app.exit(0);
     }
+}
+
+namespace {
+fs::path AutostartDesktopPath()
+{
+    const char* config_home = std::getenv("XDG_CONFIG_HOME");
+    const char* home = std::getenv("HOME");
+    fs::path dir;
+    if (config_home && *config_home) dir = fs::path{config_home} / "autostart";
+    else if (home && *home) dir = fs::path{home} / ".config" / "autostart";
+    else return {};
+
+    const std::string chain = ChainTypeToString(gArgs.GetChainType());
+    if (chain == "main") return dir / "quicksilver.desktop";
+    return dir / fs::u8path("quicksilver-" + chain + ".desktop");
+}
+
+struct AutostartFileGuard {
+    fs::path path{AutostartDesktopPath()};
+    std::optional<std::string> original;
+    explicit AutostartFileGuard()
+    {
+        if (path.empty()) return;
+        std::ifstream in{path};
+        if (!in) return;
+        std::ostringstream bytes;
+        bytes << in.rdbuf();
+        original = bytes.str();
+    }
+    ~AutostartFileGuard()
+    {
+        if (path.empty()) return;
+        if (!original) {
+            fs::remove(path);
+            return;
+        }
+        std::ofstream out{path, std::ios::trunc};
+        out << *original;
+    }
+};
+
+QAction* PreferencesAction(QuicksilverGUI* window)
+{
+    for (QAction* action : window->findChildren<QAction*>()) {
+        if (action->menuRole() == QAction::PreferencesRole) return action;
+    }
+    return nullptr;
+}
+
+int ChangedSpin(const QSpinBox* box)
+{
+    return box->value() < box->maximum() ? box->value() + 1 : box->value() - 1;
+}
+} // namespace
+
+QuicksilverGUI* AppTests::consensusOffWindow()
+{
+    for (QWidget* widget : QApplication::topLevelWidgets()) {
+        if (auto* gui = qobject_cast<QuicksilverGUI*>(widget)) return gui;
+    }
+
+    // Reset first: it clears QSettings, including the consensus opt-in the frame
+    // is about to read. Put the opt-in back to off before the window exists.
+    if (!m_app.createOptionsModel(/*resetSettings=*/true)) return nullptr;
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    setupPlatformStyleOnce();
+    static const std::unique_ptr<const NetworkStyle> style{NetworkStyle::instantiate(Params().GetChainType())};
+    if (!style) return nullptr;
+    m_app.createWindow(style.get());
+
+    for (QWidget* widget : QApplication::topLevelWidgets()) {
+        if (auto* gui = qobject_cast<QuicksilverGUI*>(widget)) return gui;
+    }
+    return nullptr;
+}
+
+void AppTests::setupPlatformStyleOnce()
+{
+    if (m_platform_style_set) return;
+    m_app.setupPlatformStyle();
+    m_platform_style_set = true;
+}
+
+void AppTests::releaseConsensusOffWindow()
+{
+    for (QWidget* widget : QApplication::topLevelWidgets()) {
+        if (auto* gui = qobject_cast<QuicksilverGUI*>(widget)) gui->hide();
+    }
+    // The member in QuicksilverApplication is assigned over on the next
+    // createOptionsModel; that assignment does not dereference the old pointer.
+    qDeleteAll(m_app.findChildren<OptionsModel*>(QString{}, Qt::FindDirectChildrenOnly));
+    m_app.node().mapPort(false);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+void AppTests::optionsOpensWithConsensusOff()
+{
+    QuicksilverGUI* window = consensusOffWindow();
+    QVERIFY(window);
+    QVERIFY(!window->findChild<ClientModel*>());
+    window->show();
+    QApplication::processEvents();
+
+    QAction* options = PreferencesAction(window);
+    QVERIFY(options);
+    QVERIFY(options->isEnabled());
+    options->trigger();
+
+    auto* dialog = qobject_cast<OptionsDialog*>(QApplication::activeModalWidget());
+    QVERIFY2(dialog, "optionsAction did not open an OptionsDialog");
+    dialog->reject();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+void AppTests::optionsSaveWithNoNode()
+{
+    AutostartFileGuard autostart;
+    struct MapPortGuard {
+        interfaces::Node& node;
+        ~MapPortGuard() { node.mapPort(false); }
+    } map_port{m_app.node()};
+
+    QuicksilverGUI* window = consensusOffWindow();
+    QVERIFY(window);
+    QVERIFY(!window->findChild<ClientModel*>());
+    window->show();
+    QApplication::processEvents();
+
+    QAction* options = PreferencesAction(window);
+    QVERIFY(options);
+    QVERIFY(options->isEnabled());
+    options->trigger();
+    auto* dialog = qobject_cast<OptionsDialog*>(QApplication::activeModalWidget());
+    QVERIFY2(dialog, "optionsAction did not open an OptionsDialog");
+
+    OptionsModel* model = m_app.findChild<OptionsModel*>();
+    QVERIFY(model);
+
+    const bool tray_available = QSystemTrayIcon::isSystemTrayAvailable();
+#ifndef Q_OS_MACOS
+    if (tray_available) {
+        QVERIFY(model->setOption(OptionsModel::ShowTrayIcon, false));
+        QVERIFY(model->setOption(OptionsModel::MinimizeToTray, false));
+        dialog->reject();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        options->trigger();
+        dialog = qobject_cast<OptionsDialog*>(QApplication::activeModalWidget());
+        QVERIFY2(dialog, "optionsAction did not reopen an OptionsDialog");
+    }
+#endif
+
+    auto require = [](auto* widget, const char* name) {
+        return widget ? QString{} : QStringLiteral("missing widget %1").arg(QLatin1String(name));
+    };
+    QStringList problems;
+
+    auto* startup = dialog->findChild<QCheckBox*>(QStringLiteral("quicksilverAtStartup"));
+    auto* threads = dialog->findChild<QSpinBox*>(QStringLiteral("threadsScriptVerif"));
+    auto* dbcache = dialog->findChild<QSpinBox*>(QStringLiteral("databaseCache"));
+    auto* gpu_path = dialog->findChild<QLineEdit*>(QStringLiteral("gpuSolverPath"));
+    auto* cpu_mining = dialog->findChild<QCheckBox*>(QStringLiteral("allowCpuBlockMining"));
+    auto* prune = dialog->findChild<QCheckBox*>(QStringLiteral("prune"));
+    auto* prune_size = dialog->findChild<QSpinBox*>(QStringLiteral("pruneSize"));
+    auto* spend_zero = dialog->findChild<QCheckBox*>(QStringLiteral("spendZeroConfChange"));
+    auto* coin_control = dialog->findChild<QCheckBox*>(QStringLiteral("coinControlFeatures"));
+    auto* signer = dialog->findChild<QLineEdit*>(QStringLiteral("externalSignerPath"));
+    auto* psqt = dialog->findChild<QCheckBox*>(QStringLiteral("m_enable_psqt_controls"));
+    auto* natpmp = dialog->findChild<QCheckBox*>(QStringLiteral("mapPortNatpmp"));
+    auto* listen = dialog->findChild<QCheckBox*>(QStringLiteral("allowIncoming"));
+    auto* server = dialog->findChild<QCheckBox*>(QStringLiteral("enableServer"));
+    auto* proxy_use = dialog->findChild<QCheckBox*>(QStringLiteral("connectSocks"));
+    auto* proxy_ip = dialog->findChild<QLineEdit*>(QStringLiteral("proxyIp"));
+    auto* proxy_port = dialog->findChild<QLineEdit*>(QStringLiteral("proxyPort"));
+    auto* tor_use = dialog->findChild<QCheckBox*>(QStringLiteral("connectSocksTor"));
+    auto* tor_ip = dialog->findChild<QLineEdit*>(QStringLiteral("proxyIpTor"));
+    auto* tor_port = dialog->findChild<QLineEdit*>(QStringLiteral("proxyPortTor"));
+    auto* minimize_close = dialog->findChild<QCheckBox*>(QStringLiteral("minimizeOnClose"));
+    auto* lang = dialog->findChild<QValueComboBox*>(QStringLiteral("lang"));
+    auto* unit = dialog->findChild<QValueComboBox*>(QStringLiteral("unit"));
+    auto* third_party = dialog->findChild<QLineEdit*>(QStringLiteral("thirdPartyTxUrls"));
+    auto* gpu_cpu = dialog->findChild<QRadioButton*>(QStringLiteral("gpuModeCpu"));
+    auto* ok = dialog->findChild<QPushButton*>(QStringLiteral("okButton"));
+
+    const QWidget* widgets[] = {startup, threads, dbcache, gpu_path, cpu_mining, prune, prune_size, spend_zero,
+        coin_control, signer, psqt, natpmp, listen, server, proxy_use, proxy_ip, proxy_port, tor_use, tor_ip,
+        tor_port, lang, unit, third_party, gpu_cpu, ok};
+    const char* names[] = {"quicksilverAtStartup", "threadsScriptVerif", "databaseCache", "gpuSolverPath",
+        "allowCpuBlockMining", "prune", "pruneSize", "spendZeroConfChange", "coinControlFeatures",
+        "externalSignerPath", "m_enable_psqt_controls", "mapPortNatpmp", "allowIncoming", "enableServer",
+        "connectSocks", "proxyIp", "proxyPort", "connectSocksTor", "proxyIpTor", "proxyPortTor", "lang",
+        "unit", "thirdPartyTxUrls", "gpuModeCpu", "okButton"};
+    for (size_t i = 0; i < sizeof(widgets) / sizeof(widgets[0]); ++i) {
+        if (!widgets[i]) problems << require(widgets[i], names[i]);
+    }
+#ifndef Q_OS_MACOS
+    if (!minimize_close) problems << require(minimize_close, "minimizeOnClose");
+    QCheckBox* show_tray = nullptr;
+    QCheckBox* minimize_tray = nullptr;
+    if (tray_available) {
+        show_tray = dialog->findChild<QCheckBox*>(QStringLiteral("showTrayIcon"));
+        minimize_tray = dialog->findChild<QCheckBox*>(QStringLiteral("minimizeToTray"));
+        if (!show_tray) problems << require(show_tray, "showTrayIcon");
+        if (!minimize_tray) problems << require(minimize_tray, "minimizeToTray");
+    }
+#endif
+    QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QLatin1Char('\n'))));
+
+    const bool want_startup = !startup->isChecked();
+    startup->setChecked(want_startup);
+    const int want_threads = ChangedSpin(threads);
+    threads->setValue(want_threads);
+    const int want_dbcache = ChangedSpin(dbcache);
+    dbcache->setValue(want_dbcache);
+    cpu_mining->setChecked(!cpu_mining->isChecked());
+    const bool want_cpu_mining = cpu_mining->isChecked();
+    prune->setChecked(true);
+    const int want_prune_size = ChangedSpin(prune_size);
+    prune_size->setValue(want_prune_size);
+    const bool want_spend_zero = !spend_zero->isChecked();
+    spend_zero->setChecked(want_spend_zero);
+    const bool want_coin_control = !coin_control->isChecked();
+    coin_control->setChecked(want_coin_control);
+    const QString want_signer = QStringLiteral("/tmp/qs-f482-signer");
+    signer->setText(want_signer);
+    const bool want_psqt = !psqt->isChecked();
+    psqt->setChecked(want_psqt);
+    const bool want_natpmp = !natpmp->isChecked();
+    natpmp->setChecked(want_natpmp);
+    const bool want_listen = !listen->isChecked();
+    listen->setChecked(want_listen);
+    const bool want_server = !server->isChecked();
+    server->setChecked(want_server);
+
+    const QString want_proxy_ip = QStringLiteral("127.0.0.1");
+    const QString want_proxy_port = QStringLiteral("1080");
+    proxy_ip->setText(want_proxy_ip);
+    proxy_port->setText(want_proxy_port);
+    proxy_use->setChecked(true);
+    const QString want_tor_port = QStringLiteral("9051");
+    tor_ip->setText(want_proxy_ip);
+    tor_port->setText(want_tor_port);
+    tor_use->setChecked(true);
+
+#ifndef Q_OS_MACOS
+    const bool want_minimize_close = !minimize_close->isChecked();
+    minimize_close->setChecked(want_minimize_close);
+    if (tray_available) {
+        show_tray->setChecked(true);
+        minimize_tray->setChecked(true);
+    }
+#endif
+
+    const bool language_mapped = lang && !lang->isHidden();
+    QString want_language;
+    if (language_mapped) {
+        const int english = lang->findData(QStringLiteral("en"));
+        if (english >= 0) lang->setCurrentIndex(english);
+        want_language = lang->value().toString();
+    }
+
+    unit->setValue(QVariant::fromValue(QuicksilverUnit::HG));
+    // The model still holds the pre-accept value. HG is 0, so a failed metatype
+    // conversion would look like a successful save later; this pins the read.
+    QCOMPARE(model->getOption(OptionsModel::DisplayUnit).value<QuicksilverUnit>(), QuicksilverUnit::HGS);
+    const QString want_third_party = QStringLiteral("https://example.invalid/tx/%s");
+    third_party->setText(want_third_party);
+
+    // The dialog accepts a helper only if QFileInfo calls it an executable file
+    // and `<helper> --list-devices` exits 0. A shell script fails both on
+    // Windows, so use the stub binary the build ships beside this test, with
+    // its exit code and delay left at their defaults (0).
+    const QString helper_path{SolverProbeStubPath()};
+    QVERIFY2(QFileInfo(helper_path).isExecutable(), qPrintable(helper_path));
+    qunsetenv("QS_PROBE_STUB_EXIT");
+    qunsetenv("QS_PROBE_STUB_SLEEP_MS");
+    gpu_path->setText(helper_path);
+
+    QVERIFY(ok);
+    QTRY_VERIFY(ok->isEnabled());
+    // After the probe's event-loop wait: a late graphics-card listing rewrites the
+    // radios from the model. Set the CPU choice and accept before that can land.
+    gpu_cpu->setChecked(true);
+    ok->click();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+    OptionsModel fresh(m_app.node());
+    bilingual_str error;
+    QVERIFY2(fresh.Init(error), error.original.c_str());
+
+    auto mismatch = [&](const char* name, const QString& got, const QString& want) {
+        if (got != want) problems << QStringLiteral("%1: got '%2', want '%3'").arg(QLatin1String(name), got, want);
+    };
+    mismatch("StartAtStartup", fresh.getOption(OptionsModel::StartAtStartup).toString(), want_startup ? QStringLiteral("true") : QStringLiteral("false"));
+    mismatch("ThreadsScriptVerif", fresh.getOption(OptionsModel::ThreadsScriptVerif).toString(), QString::number(want_threads));
+    mismatch("DatabaseCache", fresh.getOption(OptionsModel::DatabaseCache).toString(), QString::number(want_dbcache));
+    mismatch("GpuSolverPath", fresh.getOption(OptionsModel::GpuSolverPath).toString(), helper_path);
+    mismatch("AllowCpuBlockMining", fresh.getOption(OptionsModel::AllowCpuBlockMining).toString(), want_cpu_mining ? QStringLiteral("true") : QStringLiteral("false"));
+    mismatch("Prune", fresh.getOption(OptionsModel::Prune).toString(), QStringLiteral("true"));
+    mismatch("PruneSize", fresh.getOption(OptionsModel::PruneSize).toString(), QString::number(want_prune_size));
+    mismatch("SpendZeroConfChange", fresh.getOption(OptionsModel::SpendZeroConfChange).toString(), want_spend_zero ? QStringLiteral("true") : QStringLiteral("false"));
+    mismatch("CoinControlFeatures", fresh.getOption(OptionsModel::CoinControlFeatures).toString(), want_coin_control ? QStringLiteral("true") : QStringLiteral("false"));
+    mismatch("ExternalSignerPath", fresh.getOption(OptionsModel::ExternalSignerPath).toString(), want_signer);
+    mismatch("EnablePSQTControls", fresh.getOption(OptionsModel::EnablePSQTControls).toString(), want_psqt ? QStringLiteral("true") : QStringLiteral("false"));
+    mismatch("MapPortNatpmp", fresh.getOption(OptionsModel::MapPortNatpmp).toString(), want_natpmp ? QStringLiteral("true") : QStringLiteral("false"));
+    mismatch("Listen", fresh.getOption(OptionsModel::Listen).toString(), want_listen ? QStringLiteral("true") : QStringLiteral("false"));
+    mismatch("Server", fresh.getOption(OptionsModel::Server).toString(), want_server ? QStringLiteral("true") : QStringLiteral("false"));
+    mismatch("ProxyUse", fresh.getOption(OptionsModel::ProxyUse).toString(), QStringLiteral("true"));
+    mismatch("ProxyIP", fresh.getOption(OptionsModel::ProxyIP).toString(), want_proxy_ip);
+    mismatch("ProxyPort", fresh.getOption(OptionsModel::ProxyPort).toString(), want_proxy_port);
+    mismatch("ProxyUseTor", fresh.getOption(OptionsModel::ProxyUseTor).toString(), QStringLiteral("true"));
+    mismatch("ProxyIPTor", fresh.getOption(OptionsModel::ProxyIPTor).toString(), want_proxy_ip);
+    mismatch("ProxyPortTor", fresh.getOption(OptionsModel::ProxyPortTor).toString(), want_tor_port);
+#ifndef Q_OS_MACOS
+    mismatch("MinimizeOnClose", fresh.getOption(OptionsModel::MinimizeOnClose).toString(), want_minimize_close ? QStringLiteral("true") : QStringLiteral("false"));
+    if (tray_available) {
+        mismatch("ShowTrayIcon", fresh.getOption(OptionsModel::ShowTrayIcon).toString(), QStringLiteral("true"));
+        mismatch("MinimizeToTray", fresh.getOption(OptionsModel::MinimizeToTray).toString(), QStringLiteral("true"));
+    }
+#endif
+    if (language_mapped) {
+        mismatch("Language", fresh.getOption(OptionsModel::Language).toString(), want_language);
+    }
+    mismatch("DisplayUnit", QString::number(static_cast<int>(fresh.getOption(OptionsModel::DisplayUnit).value<QuicksilverUnit>())),
+             QString::number(static_cast<int>(QuicksilverUnit::HG)));
+    mismatch("ThirdPartyTxUrls", fresh.getOption(OptionsModel::ThirdPartyTxUrls).toString(), want_third_party);
+    const QStringList devices = fresh.getOption(OptionsModel::GpuDevices).toStringList();
+    mismatch("GpuDevices", devices.join(QLatin1Char(',')), QStringLiteral("cpu"));
+
+    QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QLatin1Char('\n'))));
+}
+
+void AppTests::networkPageOpensWithConsensusOff()
+{
+    QuicksilverGUI* window = consensusOffWindow();
+    QVERIFY(window);
+    VaultFrame* frame = window->findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    QVERIFY(!frame->consensusEnabled());
+
+    frame->gotoNetworkPage();
+    auto* stack = window->findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+    QVERIFY(stack);
+    QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("networkPage"));
+
+    QWidget* page = stack->currentWidget();
+    QCOMPARE(page->findChild<QLabel*>(QStringLiteral("networkIntro"))->text(),
+             QStringLiteral("Consensus is off, so this computer is not connected to any network. You can still switch networks below."));
+    QCOMPARE(page->findChild<QLabel*>(QStringLiteral("networkStatusValue"))->text(), QStringLiteral("Consensus off"));
+    QCOMPARE(page->findChild<QLabel*>(QStringLiteral("peerCountValue"))->text(), QStringLiteral("Not running"));
+    QCOMPARE(page->findChild<QLabel*>(QStringLiteral("syncStatusValue"))->text(), QStringLiteral("Not running"));
+
+    QVERIFY(page->findChild<QWidget*>(QStringLiteral("developerNetworkMainCard")));
+    QVERIFY(page->findChild<QWidget*>(QStringLiteral("developerNetworkPublicTestCard")));
+    QVERIFY(page->findChild<QWidget*>(QStringLiteral("developerNetworkSandboxCard")));
+    QPushButton* main_switch = page->findChild<QPushButton*>(QStringLiteral("developerNetworkMainCardButton"));
+    QPushButton* public_switch = page->findChild<QPushButton*>(QStringLiteral("developerNetworkPublicTestCardButton"));
+    QVERIFY(main_switch);
+    QVERIFY(public_switch);
+    QVERIFY(main_switch->isEnabled());
+    QVERIFY(public_switch->isEnabled());
+    QVERIFY(!page->findChild<QLineEdit*>(QStringLiteral("addPeerEdit"))->isEnabled());
+    QVERIFY(!page->findChild<QPushButton*>(QStringLiteral("addPeerButton"))->isEnabled());
+
+    QPushButton* review = page->findChild<QPushButton*>(QStringLiteral("reviewConsensusButton"));
+    QVERIFY(review);
+    QVERIFY(!review->isHidden());
+    review->click();
+    QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
+
+    frame->gotoLaunchPage();
+    QPushButton* home_consensus = window->findChild<QPushButton*>(QStringLiteral("launchConsensusCardButton"));
+    QVERIFY(home_consensus);
+    QVERIFY(home_consensus->isEnabled());
+    home_consensus->click();
+    QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
+
+    QAction* mine = window->findChild<QAction*>(QStringLiteral("mineMintAction"));
+    QVERIFY(mine);
+    mine->trigger();
+    QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
+
+    // Confirmed switch reaches launchPendingRestart before any node thread exists.
+    // The launcher stands in for the process start. Production leaves it empty
+    // and still shuts the node down before the relaunch; this test skips that
+    // because the Qt classes share one node, and startShutdown is process-global.
+    struct ClearRestartLauncher {
+        QuicksilverApplication& app;
+        ~ClearRestartLauncher() { app.setRestartLauncherForTesting({}); }
+    } clear_launcher{m_app};
+    QString seen_executable;
+    QStringList seen_arguments;
+    m_app.setRestartLauncherForTesting([&](const QString& executable, const QStringList& arguments) {
+        seen_executable = executable;
+        seen_arguments = arguments;
+        return true;
+    });
+    frame->gotoNetworkPage();
+    QVERIFY(public_switch->isEnabled());
+    bool clicked = false;
+    QTimer::singleShot(0, [&] {
+        clicked = ClickNetworkRestartDialogButton(QStringLiteral("Switch and restart"), nullptr, nullptr);
+    });
+    public_switch->click();
+    QTRY_VERIFY(clicked);
+    QTRY_VERIFY(!seen_executable.isEmpty());
+    QVERIFY(seen_arguments.contains(QStringLiteral("-chain=publictest")));
+}
+
+void AppTests::headerHidesTheCurrentPagesButton()
+{
+    struct ReleaseGuard {
+        AppTests* tests;
+        ~ReleaseGuard() { tests->releaseConsensusOffWindow(); }
+    } release{this};
+
+    QuicksilverGUI* window = consensusOffWindow();
+    QVERIFY(window);
+    window->show();
+    QApplication::processEvents();
+
+    auto* request = window->findChild<QPushButton*>(QStringLiteral("benchRequestButton"));
+    auto* transfer = window->findChild<QPushButton*>(QStringLiteral("benchTransferButton"));
+    auto* home = window->findChild<QAction*>(QStringLiteral("homeBootstrapAction"));
+    auto* receive = window->findChild<QAction*>(QStringLiteral("receiveCoinsAction"));
+    auto* send = window->findChild<QAction*>(QStringLiteral("sendCoinsAction"));
+    QVERIFY(request);
+    QVERIFY(transfer);
+    QVERIFY(home);
+    QVERIFY(receive);
+    QVERIFY(send);
+
+    home->setChecked(true);
+    QVERIFY(request->isVisible());
+    QVERIFY(transfer->isVisible());
+
+    receive->setChecked(true);
+    QVERIFY(!request->isVisible());
+    QVERIFY(transfer->isVisible());
+    const bool send_enabled = send->isEnabled();
+    send->setEnabled(!send_enabled);
+    QCOMPARE(transfer->isEnabled(), send->isEnabled());
+    send->setEnabled(send_enabled);
+    QCOMPARE(transfer->isEnabled(), send->isEnabled());
+
+    send->setChecked(true);
+    QVERIFY(request->isVisible());
+    QVERIFY(!transfer->isVisible());
+    const bool receive_enabled = receive->isEnabled();
+    receive->setEnabled(!receive_enabled);
+    QCOMPARE(request->isEnabled(), receive->isEnabled());
+    receive->setEnabled(receive_enabled);
+    QCOMPARE(request->isEnabled(), receive->isEnabled());
+
+    home->setChecked(true);
+    QVERIFY(request->isVisible());
+    QVERIFY(transfer->isVisible());
 }

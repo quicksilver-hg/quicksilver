@@ -18,6 +18,7 @@
 #include <qt/optionsmodel.h>
 
 #include <chainparams.h>
+#include <common/args.h>
 #include <common/system.h>
 #include <interfaces/node.h>
 #include <netbase.h>
@@ -579,7 +580,9 @@ void OptionsDialog::on_resetButton_clicked()
         /*: Text explaining to the user that the client's current settings
             will be backed up at a specific location. %1 is a stand-in
             argument for the backup location's path. */
-        reset_dialog_text.append(tr("Current settings will be backed up at \"%1\".").arg(m_client_model->dataDir()) + "<br><br>");
+        const QString data_dir = m_client_model ? m_client_model->dataDir()
+                                                : GUIUtil::PathToQString(gArgs.GetDataDirNet());
+        reset_dialog_text.append(tr("Current settings will be backed up at \"%1\".").arg(data_dir) + "<br><br>");
         /*: Text asking the user to confirm if they would like to proceed
             with a client shutdown. */
         reset_dialog_text.append(tr("Client will be shut down. Do you want to proceed?"));

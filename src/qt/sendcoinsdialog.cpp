@@ -17,7 +17,6 @@
 #include <qt/gpusituation.h>
 #include <qt/optionsmodel.h>
 #include <qt/platformstyle.h>
-#include <qt/quicksilverstyle.h>
 #include <qt/sendcoinsentry.h>
 
 #include <chainparams.h>
@@ -87,14 +86,9 @@ SendCoinsDialog::SendCoinsDialog(const PlatformStyle *_platformStyle, QWidget *p
         if (m_startup_notice_pending) showStartupAccelerationWarningIfNeeded();
     });
 
-    if (!_platformStyle->getImagesOnButtons()) {
-        ui->addButton->setIcon(QIcon());
-        ui->clearButton->setIcon(QIcon());
-        ui->sendButton->setIcon(QIcon());
-    } else {
-        ui->addButton->setIcon(_platformStyle->ColorIcon(":/icons/add", QuicksilverStyle::Color(QuicksilverStyle::Token::Teal)));
-        ui->clearButton->setIcon(_platformStyle->ColorIcon(":/icons/remove", QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarBright)));
-        ui->sendButton->setIcon(_platformStyle->ColorIcon(":/icons/send", QuicksilverStyle::Color(QuicksilverStyle::Token::Amber)));
+    // A command is its words (F-442): the text buttons carry no icon.
+    for (QPushButton* button : {ui->addButton, ui->clearButton, ui->sendButton}) {
+        button->setIcon(QIcon());
     }
 
     GUIUtil::setupAddressWidget(ui->lineEditCoinControlChange, this);
@@ -871,6 +865,10 @@ SendCoinsEntry *SendCoinsDialog::addEntry()
     SendCoinsEntry *entry = new SendCoinsEntry(platformStyle, this);
     entry->setModel(model);
     ui->entries->addWidget(entry);
+    // Rows are counted and summed by !isHidden(), and a removed row is hidden.
+    // A widget added to a visible page's layout is shown later, from a queued
+    // call, so until then the new row would read as removed; show it now.
+    entry->show();
     connect(entry, &SendCoinsEntry::removeEntry, this, &SendCoinsDialog::removeEntry);
     connect(entry, &SendCoinsEntry::useAvailableBalance, this, &SendCoinsDialog::useAvailableBalance);
     connect(entry, &SendCoinsEntry::payAmountChanged, this, &SendCoinsDialog::coinControlUpdateLabels);

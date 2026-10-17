@@ -15,7 +15,6 @@
 class ClientModel;
 class MineMintPage;
 class MiningModel;
-class NetworkPage;
 class PlatformStyle;
 class ReceiveCoinsDialog;
 class SendCoinsDialog;
@@ -68,7 +67,6 @@ private:
     AgentAllotmentPage* agentAllotmentPage{nullptr};
     MineMintPage* mineMintPage{nullptr};
     MiningModel* miningModel{nullptr};
-    NetworkPage* networkPage{nullptr};
     QWidget *transactionsPage;
     ReceiveCoinsDialog *receiveCoinsPage;
     SendCoinsDialog *sendCoinsPage;
@@ -87,8 +85,6 @@ public Q_SLOTS:
     void gotoMineMintPage();
     /** Switch to agent allotments page */
     void gotoAgentAllotmentPage();
-    /** Switch to network page */
-    void gotoNetworkPage();
     /** Switch to request page */
     void gotoReceiveCoinsPage();
     /** Switch to transfer page */

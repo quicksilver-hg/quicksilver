@@ -12,7 +12,6 @@
 #include <qt/editaddressdialog.h>
 #include <qt/guiutil.h>
 #include <qt/platformstyle.h>
-#include <qt/quicksilverstyle.h>
 
 #include <QIcon>
 #include <QLayout>
@@ -92,18 +91,9 @@ AddressBookPage::AddressBookPage(const PlatformStyle *platformStyle, Mode _mode,
         button->setProperty("class", QStringLiteral("benchQuiet"));
     }
 
-    if (!platformStyle->getImagesOnButtons()) {
-        ui->newAddress->setIcon(QIcon());
-        ui->copyAddress->setIcon(QIcon());
-        ui->deleteAddress->setIcon(QIcon());
-        ui->exportButton->setIcon(QIcon());
-    } else {
-        // One quiet tint for every command, as on the pages.
-        const QColor tint = QuicksilverStyle::Color(QuicksilverStyle::Token::RailText);
-        ui->newAddress->setIcon(platformStyle->ColorIcon(":/icons/add", tint));
-        ui->copyAddress->setIcon(platformStyle->ColorIcon(":/icons/editcopy", tint));
-        ui->deleteAddress->setIcon(platformStyle->ColorIcon(":/icons/remove", tint));
-        ui->exportButton->setIcon(platformStyle->ColorIcon(":/icons/export", tint));
+    // A command is its words (F-442): the text buttons carry no icon.
+    for (QPushButton* button : {ui->newAddress, ui->copyAddress, ui->deleteAddress, ui->exportButton}) {
+        button->setIcon(QIcon());
     }
 
     if (mode == ForSelection) {

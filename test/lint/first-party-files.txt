@@ -126,6 +126,8 @@ src/qt/consensusreviewpage.cpp
 src/qt/consensusreviewpage.h
 src/qt/desktoplaunchpage.cpp
 src/qt/desktoplaunchpage.h
+src/qt/fittingscrollarea.cpp
+src/qt/fittingscrollarea.h
 src/qt/gpudevicelist.cpp
 src/qt/gpudevicelist.h
 src/qt/gpusituation.cpp

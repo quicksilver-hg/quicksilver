@@ -125,8 +125,12 @@ std::vector<ListedDevice> EnumerateDevices(const OpenClApi& api, bool probe)
             cl::Bool unified{0};
             fields.integrated = fields.type == "gpu" && Get(api, listed.device, cl::kDeviceHostUnifiedMemory, unified) && unified;
             Get(api, listed.device, cl::kDeviceGlobalMemSize, fields.mem);
-            fields.name = GetString(api, listed.device, cl::kDeviceName);
             const std::string extensions = GetString(api, listed.device, cl::kDeviceExtensions);
+            fields.name = GetString(api, listed.device, cl::kDeviceName);
+            if (HasExtension(extensions, "cl_amd_device_attribute_query")) {
+                std::string board_name = GetString(api, listed.device, cl::kDeviceBoardNameAmd);
+                if (!board_name.empty()) fields.name = std::move(board_name);
+            }
             fields.id = FallbackId(pi, di);
             if (HasExtension(extensions, "cl_khr_pci_bus_info")) {
                 cl::PciBusInfoKhr pci{};

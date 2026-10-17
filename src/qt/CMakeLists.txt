@@ -58,6 +58,8 @@ add_library(quicksilver_qt STATIC EXCLUDE_FROM_ALL
   clientmodel.h
   csvmodelwriter.cpp
   csvmodelwriter.h
+  fittingscrollarea.cpp
+  fittingscrollarea.h
   guiutil.cpp
   gpudevicelist.cpp
   gpudevicelist.h

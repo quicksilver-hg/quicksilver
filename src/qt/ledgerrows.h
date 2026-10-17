@@ -21,8 +21,9 @@ void ColorCinnabarAmountSuffix(QAbstractItemView* view);
 class LedgerRows : public QIdentityProxyModel
 {
 public:
-    //! Home shows a tooltip only on the label; the Ledger page keeps the
-    //! model's tooltips, which its legend points to for a row's details.
+    //! Home shows a tooltip only on the label, and that tooltip is the full
+    //! label text, which the column elides when it is narrow. The Ledger page
+    //! keeps the model's tooltips, which its legend points to for a row's details.
     enum class Tooltips { LabelOnly, All };
 
     explicit LedgerRows(Tooltips tooltips, QObject* parent);

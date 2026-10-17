@@ -385,10 +385,10 @@
           <item>
            <widget class="QCheckBox" name="coinControlFeatures">
             <property name="toolTip">
-             <string>Whether to show input selection controls or not.</string>
+             <string>Show the Coin control… button on Transfer, so you can choose which coins a transfer spends.</string>
             </property>
             <property name="text">
-             <string>Enable &amp;input selection</string>
+             <string>Enable &amp;coin control</string>
             </property>
            </widget>
           </item>

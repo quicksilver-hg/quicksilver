@@ -72,6 +72,8 @@ public:
     static bool consensusTorAvailableForTesting(const ArgsManager& args, const TorLocator& locate);
     //! Test wrapper for the launch decision: a saved opt-in without that Tor opens the vault alone.
     static bool launchOpensVaultOnlyForTesting(const ArgsManager& args, const TorLocator& locate);
+    //! Replace the process launch inside launchPendingRestart. Empty in production.
+    void setRestartLauncherForTesting(std::function<bool(const QString& executable, const QStringList& arguments)> launcher);
     /**
      * One tick of the shutdown poll, with the node's answer passed in.
      *
@@ -140,6 +142,7 @@ private:
     QString m_restart_executable;
     QStringList m_restart_arguments;
     std::optional<QString> m_pending_restart_chain;
+    std::function<bool(const QString& executable, const QStringList& arguments)> m_restart_launcher;
 #ifdef ENABLE_VAULT
     PaymentServer* paymentServer{nullptr};
     VaultController* m_vault_controller{nullptr};

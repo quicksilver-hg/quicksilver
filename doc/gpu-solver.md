@@ -15,15 +15,12 @@ of the node or vault build.
 - The desktop vault can fall back to the built-in CPU solver on `main` and
   `publictest`, but the measured reference workload takes about 16 minutes on
   an 8-thread desktop. An external GPU is strongly recommended.
-- An agent spend falls back to the built-in CPU solver on `main` or
-  `publictest` only when the operator opts in. The command-line agent takes
-  `-allowcputxpow`. The desktop stores the same choice as a checkbox under
-  Settings > Options > Hardware. That checkbox does not reach the command-line
-  agent, which does not read desktop settings, so the sign command the desktop
-  copies includes the flag when the checkbox is on. The default is off because
-  an agent starts the work on its own schedule, while the computer may be in
-  use, and the grind uses every core for many minutes. Configure the helper
-  before proving an agent spend unless that opt-in is deliberate.
+- An agent spend falls back to the built-in CPU solver on `main` or `publictest`
+  only when the operator opts in with the command-line agent's
+  `-allowcputxpow` flag. The desktop has no setting for it. The default is off
+  because an agent starts the work on its own schedule, while the computer may
+  be in use, and the grind uses every core for many minutes. Configure the
+  helper before proving an agent spend unless that opt-in is deliberate.
 - `sandbox` uses a small built-in graph and does not need GPU acceleration.
 - Running or synchronizing a node, validating blocks, and receiving funds do
   not require a GPU.

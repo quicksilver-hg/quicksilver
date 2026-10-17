@@ -216,6 +216,12 @@ QVariant LedgerRows::data(const QModelIndex& index, int role) const
     if (role == Qt::TextAlignmentRole) {
         return QVariant(column == TransactionTableModel::Amount ? (Qt::AlignRight | Qt::AlignVCenter) : (Qt::AlignLeft | Qt::AlignVCenter));
     }
-    if (role == Qt::ToolTipRole && m_tooltips == Tooltips::LabelOnly && column != TransactionTableModel::ToAddress) return {};
+    if (role == Qt::ToolTipRole && m_tooltips == Tooltips::LabelOnly) {
+        if (column != TransactionTableModel::ToAddress) return {};
+        // The cell elides. The tooltip is the full text the cell is showing
+        // (the label, or the address when there is no label), not the
+        // transaction-status tooltip the model would otherwise supply.
+        return Counterparty(index);
+    }
     return QIdentityProxyModel::data(index, role);
 }

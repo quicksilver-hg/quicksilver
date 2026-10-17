@@ -117,6 +117,11 @@ private Q_SLOTS:
     void changePassMismatchDoesNotNestEventLoop();
     void unloadWithUnrelatedModalDoesNotDefer();
     void unloadWithVaultParentedModalDefers();
+    void mineGraphicsSettingsSitsBesideStop();
+    void transferRecipientAreaFitsItsRow();
+    void transferSummaryCountsTheRowClearAllLeaves();
+    void transactionDescriptionCountsConfirmationsFromFirstBlock();
+    void homeLedgerKeepsALabelAt1024();
 };
 
 #endif // QUICKSILVER_QT_TEST_VAULTTESTS_H

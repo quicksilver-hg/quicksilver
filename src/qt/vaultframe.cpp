@@ -63,7 +63,15 @@ VaultFrame::VaultFrame(const PlatformStyle* _platformStyle, QWidget* parent)
     m_launch_page = new DesktopLaunchPage(platformStyle, Params().AssumedBlockchainSize(), Params().AssumedChainStateSize(), vaultStack);
     connect(m_launch_page, &DesktopLaunchPage::vaultRequested, this, &VaultFrame::vaultRequested);
     connect(m_launch_page, &DesktopLaunchPage::backupRequested, this, &VaultFrame::backupVault);
-    connect(m_launch_page, &DesktopLaunchPage::consensusRequested, this, &VaultFrame::networkRequested);
+    // Consensus on: the network page. Consensus off: the review page, which is
+    // the page Home's consensus button opened before Network had its own page.
+    connect(m_launch_page, &DesktopLaunchPage::consensusRequested, this, [this] {
+        if (m_consensus_enabled) {
+            Q_EMIT networkRequested();
+        } else {
+            gotoConsensusReviewPage();
+        }
+    });
     connect(m_launch_page, &DesktopLaunchPage::miningRequested, this, &VaultFrame::miningRequested);
     connect(m_launch_page, &DesktopLaunchPage::privacyRequested, this, &VaultFrame::privacyRequested);
     connect(m_launch_page, &DesktopLaunchPage::ledgerRequested, this, &VaultFrame::ledgerRequested);
@@ -82,6 +90,7 @@ VaultFrame::VaultFrame(const PlatformStyle* _platformStyle, QWidget* parent)
     m_network_page = new NetworkPage(vaultStack);
     connect(m_network_page, &NetworkPage::restartRequested, this, &VaultFrame::networkRestartRequested);
     connect(m_network_page, &NetworkPage::addPeerRequested, this, &VaultFrame::addPeer);
+    connect(m_network_page, &NetworkPage::reviewConsensusRequested, this, &VaultFrame::gotoConsensusReviewPage);
     vaultStack->addWidget(m_network_page);
 
     m_mining_page = new MineMintPage(vaultStack);
@@ -376,7 +385,7 @@ void VaultFrame::gotoHistoryPage()
 void VaultFrame::gotoMineMintPage()
 {
     if (!m_consensus_enabled) {
-        gotoNetworkPage();
+        gotoConsensusReviewPage();
         return;
     }
 
@@ -407,10 +416,11 @@ void VaultFrame::gotoAgentAllotmentPage()
 
 void VaultFrame::gotoNetworkPage()
 {
-    if (m_consensus_enabled) {
-        gotoNetworkStatusPage();
-        return;
-    }
+    gotoNetworkStatusPage();
+}
+
+void VaultFrame::gotoConsensusReviewPage()
+{
     vaultStack->setCurrentWidget(m_consensus_review_page);
 }
 
@@ -695,6 +705,13 @@ void VaultFrame::refreshNetworkPage()
 
     if (m_consensus_tor_missing && !clientModel) {
         m_network_page->showTorMissing();
+        setPeerCount(-1);
+        return;
+    }
+
+    // Ahead of "starting": consensus was never turned on, so there is no health to show.
+    if (!m_consensus_enabled) {
+        m_network_page->showConsensusOff();
         setPeerCount(-1);
         return;
     }

@@ -51,6 +51,7 @@ private Q_SLOTS:
     void resetDoesNotNestEventLoop();
     void gpuSolverBrowseDoesNotNestEventLoop();
     void displayTabHasNoDeadFontChoiceAndAlignsItsFields();
+    void coinControlSettingIsNamedCoinControl();
 
 private:
     interfaces::Node& m_node;

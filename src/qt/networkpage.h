@@ -48,6 +48,8 @@ public:
     void showStartFailed();
     //! Consensus was not started because no Tor executable was found.
     void showTorMissing();
+    //! Consensus is off. The switch cards stay; health says it is not running.
+    void showConsensusOff();
     void updateStatus(int peers, ClientModel::SyncState sync_state, double progress);
     void setPeerCount(int peers);
     //! Outcome of the last manual peer addition, reported by the container that owns
@@ -62,6 +64,8 @@ public:
 Q_SIGNALS:
     //! network_name is what the confirmation calls it: "Public Test", "main network".
     void restartRequested(const QString& chain_token, const QString& network_name);
+    //! The consensus-off health panel asked for the consensus review page.
+    void reviewConsensusRequested();
     //! A peer address typed by the user, for the container to hand to the node. The
     //! page holds no node handle, so it cannot add the peer itself.
     void addPeerRequested(const QString& address);
@@ -70,6 +74,7 @@ private:
     void buildDeveloperNetworkSection(QVBoxLayout* root, ChainType active_chain);
     void buildAddPeerSection(QVBoxLayout* root);
     void setNodeControlsEnabled(bool enabled);
+    void setReviewConsensusVisible(bool visible);
     void refreshBootstrapDiagnosis(int peers);
 
     QLabel* m_intro{nullptr};
@@ -84,6 +89,7 @@ private:
     QLabel* m_tor_setup_working{nullptr};
     QLineEdit* m_add_peer_edit{nullptr};
     QPushButton* m_add_peer_button{nullptr};
+    QPushButton* m_review_consensus_button{nullptr};
     QLabel* m_add_peer_result{nullptr};
 };
 

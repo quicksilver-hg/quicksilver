@@ -79,6 +79,8 @@ public:
         The client model represents the part of the core that communicates with the P2P network, and is vault-agnostic.
     */
     void setClientModel(ClientModel *clientModel = nullptr, interfaces::BlockAndHeaderTipInfo* tip_info = nullptr);
+    /** The application's options model, available before a node or client model exists. */
+    void setOptionsModel(OptionsModel* options_model);
 #ifdef ENABLE_VAULT
     void setVaultController(VaultController* vault_controller, bool show_loading_minimized);
     VaultController* getVaultController();
@@ -131,6 +133,9 @@ private:
     std::unique_ptr<interfaces::Handler> m_handler_message_box;
     std::unique_ptr<interfaces::Handler> m_handler_question;
     ClientModel* clientModel = nullptr;
+    // The options model exists before the node, so the window holds it directly.
+    // The client model, when there is one, still carries the same instance.
+    OptionsModel* m_options_model{nullptr};
     VaultFrame* vaultFrame = nullptr;
     bool m_consensus_enabled{false};
     std::function<bool()> m_consensus_preflight;

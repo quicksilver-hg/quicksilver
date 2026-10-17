@@ -31,6 +31,7 @@
 #include <qt/coincontroldialog.h>
 #include <qt/addressbookpage.h>
 #include <qt/desktoplaunchpage.h>
+#include <qt/fittingscrollarea.h>
 #include <qt/gpusituation.h>
 #include <qt/minemintpage.h>
 #include <qt/miningmodel.h>
@@ -53,6 +54,7 @@
 #include <qt/sendcoinsdialog.h>
 #include <qt/sendcoinsentry.h>
 #include <qt/transactionrecord.h>
+#include <qt/transactiondesc.h>
 #include <qt/transactiontablemodel.h>
 #include <qt/transactionview.h>
 #include <qt/thinvaultheadersource.h>
@@ -98,6 +100,7 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFontDatabase>
+#include <QHBoxLayout>
 #include <QFrame>
 #include <QGroupBox>
 #include <QHeaderView>
@@ -700,13 +703,23 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QCOMPARE(mineMintPage->findChild<QLabel*>(QStringLiteral("sessionMintedValue"))->text(), QStringLiteral("1.23456789Hg"));
     vaultModel.getOptionsModel()->setDisplayUnit(QVariant::fromValue(QuicksilverUnit::HGS));
 
-    vaultView.gotoNetworkPage();
-    NetworkPage* networkPage = qobject_cast<NetworkPage*>(vaultView.currentWidget());
-    QVERIFY(networkPage);
-    QCOMPARE(networkPage->objectName(), QStringLiteral("networkPage"));
-    // SP3: page is live off ClientModel. The test node has no peers, so status reads
-    // "Offline" rather than the scaffold placeholder.
-    QCOMPARE(networkPage->findChild<QLabel*>(QStringLiteral("networkStatusValue"))->text(), QStringLiteral("Offline"));
+    // F-482: VaultView no longer has a network page. The same "Offline" with no
+    // peers is read on VaultFrame's network page, with consensus running.
+    {
+        QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+        VaultFrame offlineFrame(platformStyle.get(), nullptr);
+        offlineFrame.setClientModel(mini_gui.clientModel.get());
+        offlineFrame.gotoConsensusReviewPage();
+        QStackedWidget* offline_stack = offlineFrame.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+        QVERIFY(offline_stack);
+        QPushButton* offline_continue = offline_stack->currentWidget()->findChild<QPushButton*>(QStringLiteral("consensusContinueButton"));
+        QVERIFY(offline_continue);
+        offline_continue->click();
+        NetworkPage* offline_page = qobject_cast<NetworkPage*>(offline_stack->currentWidget());
+        QVERIFY(offline_page);
+        QCOMPARE(offline_page->objectName(), QStringLiteral("networkPage"));
+        QCOMPARE(offline_page->findChild<QLabel*>(QStringLiteral("networkStatusValue"))->text(), QStringLiteral("Offline"));
+    }
 
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     VaultFrame noVaultFrame(platformStyle.get(), nullptr);
@@ -730,7 +743,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QVERIFY(no_vault_create->isEnabled());
     QVERIFY(no_vault_open->isEnabled());
     QVERIFY(no_vault_body->text().contains(QStringLiteral("Create a new vault")));
-    noVaultFrame.gotoNetworkPage();
+    noVaultFrame.gotoConsensusReviewPage();
     QCOMPARE(no_vault_stack->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
     QPushButton* no_vault_continue = no_vault_stack->currentWidget()->findChild<QPushButton*>(QStringLiteral("consensusContinueButton"));
     QVERIFY(no_vault_continue);
@@ -822,7 +835,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
         vaultFrame.gotoLaunchPage();
     }
 
-    vaultFrame.gotoNetworkPage();
+    vaultFrame.gotoConsensusReviewPage();
     QStackedWidget* vault_stack = vaultFrame.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
     QVERIFY(vault_stack);
     QCOMPARE(vault_stack->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
@@ -830,7 +843,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QVERIFY(consensus_continue);
     QCOMPARE(consensus_continue->text(), QStringLiteral("Enable consensus"));
     consensus_continue->click();
-    networkPage = qobject_cast<NetworkPage*>(vault_stack->currentWidget());
+    NetworkPage* networkPage = qobject_cast<NetworkPage*>(vault_stack->currentWidget());
     QVERIFY(networkPage);
     QCOMPARE(networkPage->objectName(), QStringLiteral("networkPage"));
     QVERIFY(vaultFrame.consensusEnabled());
@@ -2156,7 +2169,9 @@ void VaultTests::homeLedgerListsVaultTransactions()
         }
 
         // Columns: date (with the state dot), type, label, signed amount, and
-        // STATE last. No status-icon column.
+        // STATE last. No status-icon column. Below a 1200 px window Type is
+        // hidden (F-459, owner ruling 2026-10-16). The window asks for 1200x800
+        // but is bounded by the screen, which on Windows can be smaller.
         QHeaderView* header = table->horizontalHeader();
         QStringList columns;
         for (int visual = 0; visual < header->count(); ++visual) {
@@ -2165,8 +2180,17 @@ void VaultTests::homeLedgerListsVaultTransactions()
             columns << rows->headerData(logical, Qt::Horizontal).toString();
         }
         const QString unit = QuicksilverUnits::shortName(mini_gui.vaultModel->getOptionsModel()->getDisplayUnit());
-        QCOMPARE(columns, (QStringList{QStringLiteral("DATE"), QStringLiteral("TYPE"), QStringLiteral("LABEL"),
-                                       QStringLiteral("AMOUNT  ") + unit, QStringLiteral("STATE")}));
+        const bool wide_window = window.width() >= 1200;
+        if (!wide_window) {
+            const QRect screen = window.screen()->availableGeometry();
+            qWarning("Type column expected hidden: below the 1200 px window width, window %dx%d on a %dx%d screen",
+                     window.width(), window.height(), screen.width(), screen.height());
+        }
+        QCOMPARE(header->isSectionHidden(TransactionTableModel::Type), !wide_window);
+        QStringList want_columns{QStringLiteral("DATE"), QStringLiteral("TYPE"), QStringLiteral("LABEL"),
+                                 QStringLiteral("AMOUNT  ") + unit, QStringLiteral("STATE")};
+        if (!wide_window) want_columns.removeOne(QStringLiteral("TYPE"));
+        QCOMPARE(columns, want_columns);
         int state_column = -1;
         int amount_column = -1;
         int date_column = -1;
@@ -3662,6 +3686,36 @@ void VaultTests::menuDialogsUseTheBenchGrammar()
             QCOMPARE(dialog.findChild<QLabel*>(QString::fromLatin1(note))->property("class").toString(), QStringLiteral("benchNote"));
         }
     }
+
+    // F-487: the pages follow the same rule as the dialogs, with images on
+    // buttons enabled ("other"): a command with words carries no icon.
+    const auto words_only = [](QWidget& page, const char* name) {
+        QList<QAbstractButton*> buttons;
+        for (QPushButton* button : page.findChildren<QPushButton*>()) buttons << button;
+        for (QToolButton* button : page.findChildren<QToolButton*>()) buttons << button;
+        for (QAbstractButton* button : buttons) {
+            if (button->text().isEmpty()) continue;
+            QVERIFY2(button->icon().isNull(), qPrintable(QStringLiteral("%1 %2 (%3) carries an icon").arg(QString::fromLatin1(name), button->text(), button->objectName())));
+        }
+    };
+    {
+        SendCoinsDialog page(platform_style.data());
+        words_only(page, "Transfer");
+    }
+    {
+        ReceiveCoinsDialog page(platform_style.data());
+        words_only(page, "Request");
+    }
+    for (AddressBookPage::Tabs tab : {AddressBookPage::SendingTab, AddressBookPage::ReceivingTab}) {
+        for (AddressBookPage::Mode mode : {AddressBookPage::ForSelection, AddressBookPage::ForEditing}) {
+            AddressBookPage page(platform_style.data(), mode, tab);
+            words_only(page, "Address book");
+        }
+    }
+    {
+        RPCConsole page(m_node, platform_style.data(), nullptr);
+        words_only(page, "Node window");
+    }
 }
 
 void VaultTests::panelsMenuWindowsUseTheBenchGrammar()
@@ -3961,7 +4015,7 @@ void VaultTests::consensusCancelDoesNotShowStarting()
         if (enabled) frame.revertConsensusOptIn();
     });
 
-    frame.gotoNetworkPage();
+    frame.gotoConsensusReviewPage();
     QStackedWidget* stack = frame.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
     QVERIFY(stack);
     QPushButton* enable = stack->currentWidget()->findChild<QPushButton*>(QStringLiteral("consensusContinueButton"));
@@ -6339,4 +6393,466 @@ void VaultTests::unloadWithVaultParentedModalDefers()
 
     dialog->close();
     view.reset();
+}
+
+//! F-497: the way out of a halted mining configuration belongs with the mining
+//! commands, not at the far edge of the explanatory health sentence above them.
+void VaultTests::mineGraphicsSettingsSitsBesideStop()
+{
+    MineMintPage page;
+    page.resize(1000, 700);
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+
+    auto* configure = page.findChild<QPushButton*>(QStringLiteral("configureSolverButton"));
+    auto* stop = page.findChild<QPushButton*>(QStringLiteral("stopMiningButton"));
+    QVERIFY(configure);
+    QVERIFY(stop);
+
+    interfaces::MiningStatus status;
+    status.active = true;
+    status.gpu_solver = false;
+    status.block_solving_possible = false;
+    page.setStatus(status);
+    QVERIFY(configure->isVisibleTo(&page));
+
+    QHBoxLayout* command_row{nullptr};
+    for (QHBoxLayout* layout : page.findChildren<QHBoxLayout*>()) {
+        if (layout->indexOf(stop) >= 0) {
+            command_row = layout;
+            break;
+        }
+    }
+    QVERIFY(command_row);
+    QCOMPARE(command_row->indexOf(configure), command_row->indexOf(stop) + 1);
+    QCOMPARE(configure->geometry().center().y(), stop->geometry().center().y());
+    QVERIFY(configure->geometry().left() > stop->geometry().right());
+
+    status.active = false;
+    status.block_solving_possible = true;
+    page.setStatus(status);
+    QVERIFY(!configure->isVisibleTo(&page));
+}
+
+//! F-499: the recipient area is as tall as its rows. It is capped at its own
+//! size hint, and the stock hint kept the height the contents had when they
+//! were set: a row that grew (the invalid border after Review) or a horizontal
+//! bar (a narrow window) was clipped behind a vertical bar.
+void VaultTests::transferRecipientAreaFitsItsRow()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    CoinControlFormSetup setup(m_node);
+    if (!setup.ok) return;
+    for (const QSize size : {QSize(1200, 800), QSize(1024, 768)}) {
+        SendCoinsDialog dialog(setup.style.get());
+        dialog.setModel(setup.model.get());
+        dialog.resize(size);
+        dialog.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+        auto* area = dialog.findChild<QScrollArea*>(QStringLiteral("scrollArea"));
+        QVERIFY(area);
+        const auto rows = [&] {
+            QList<SendCoinsEntry*> list;
+            for (SendCoinsEntry* entry : area->widget()->findChildren<SendCoinsEntry*>()) {
+                if (entry->isVisible()) list << entry;
+            }
+            return list;
+        };
+        // A style change reaches the row's layout, then the contents', and so on
+        // up, a round of posted LayoutRequests each.
+        const auto settle = [] {
+            for (int round = 0; round < 16; ++round) QCoreApplication::processEvents();
+        };
+        // Narrower than the row, the fields may lie past the viewport's sides
+        // (the horizontal bar reaches them) but not past its top or bottom.
+        const auto fits = [&](const QString& stage, bool across = true) {
+            settle();
+            const QString where = QStringLiteral("%1x%2 %3").arg(size.width()).arg(size.height()).arg(stage);
+            QVERIFY2(!rows().isEmpty(), qPrintable(where));
+            QVERIFY2(!area->verticalScrollBar()->isVisible(),
+                     qPrintable(QStringLiteral("%1: vertical bar shown, viewport %2 px for contents %3 px")
+                                    .arg(where).arg(area->viewport()->height()).arg(area->widget()->sizeHint().height())));
+            for (SendCoinsEntry* entry : rows()) {
+                for (const char* name : {"payAmount", "addAsLabel"}) {
+                    QWidget* field = entry->findChild<QWidget*>(QString::fromLatin1(name));
+                    QVERIFY2(field, name);
+                    const QRect seen(field->mapTo(area->viewport(), QPoint(0, 0)), field->size());
+                    const QRect viewport = area->viewport()->rect();
+                    const bool inside = across ? viewport.contains(seen) : seen.top() >= viewport.top() && seen.bottom() <= viewport.bottom();
+                    QVERIFY2(inside,
+                             qPrintable(QStringLiteral("%1: %2 at %3,%4 %5x%6 outside the %7x%8 viewport").arg(where, QString::fromLatin1(name))
+                                            .arg(seen.x()).arg(seen.y()).arg(seen.width()).arg(seen.height())
+                                            .arg(area->viewport()->width()).arg(area->viewport()->height())));
+                }
+            }
+        };
+
+        fits(QStringLiteral("fresh"));
+
+        // Review with an empty row marks its fields invalid; their border is wider.
+        QPushButton* review = dialog.findChild<QPushButton*>(QStringLiteral("sendButton"));
+        QVERIFY(review);
+        review->click();
+        auto* address = rows().at(0)->findChild<QValidatedLineEdit*>(QStringLiteral("payTo"));
+        QVERIFY(address);
+        QVERIFY(!address->isValid());
+        fits(QStringLiteral("after Review"));
+
+        dialog.resize(1024, size.height());
+        fits(QStringLiteral("at 1024 px"));
+
+        // Narrower than the row: the horizontal bar takes room from the viewport.
+        // The area lays its contents out at least as wide as their minimum, an
+        // explicit one if set, else the hint.
+        const auto contents_minimum = [&] {
+            QWidget* contents = area->widget();
+            return qMax(contents->minimumWidth(), contents->minimumSizeHint().width());
+        };
+        const auto narrower_than_row = [&](const QString& stage) {
+            QVERIFY2(area->viewport()->width() < contents_minimum(),
+                     qPrintable(QStringLiteral("%1: viewport %2 px is not narrower than the row's %3 px").arg(stage).arg(area->viewport()->width()).arg(contents_minimum())));
+            QVERIFY2(area->horizontalScrollBar()->isVisible(),
+                     qPrintable(QStringLiteral("%1: no horizontal bar at %2 px").arg(stage).arg(dialog.width())));
+            fits(stage, /*across=*/false);
+        };
+        const int short_by = area->viewport()->width() - area->widget()->minimumSizeHint().width() + 2 * area->fontMetrics().height();
+        dialog.resize(qMax(dialog.minimumSizeHint().width(), dialog.width() - short_by), size.height());
+        settle();
+        if (area->viewport()->width() < contents_minimum()) {
+            narrower_than_row(QStringLiteral("narrower than its row"));
+        } else {
+            // The dialog's own minimum stopped the window first (on Windows,
+            // 910 px), so the row still fits it: no bar, every field in view.
+            qWarning("Row not narrowed by the window: at the dialog's %d px minimum the viewport is %d px for a %d px row",
+                     dialog.width(), area->viewport()->width(), contents_minimum());
+            QVERIFY2(!area->horizontalScrollBar()->isVisible(),
+                     qPrintable(QStringLiteral("horizontal bar at %1 px with a %2 px viewport for a %3 px row").arg(dialog.width()).arg(area->viewport()->width()).arg(contents_minimum())));
+            fits(QStringLiteral("at the dialog's minimum"));
+        }
+        // On every platform, whatever the window's minimum: a row wider than
+        // the viewport, from the contents' side, brings the bar in the same way.
+        area->widget()->setMinimumWidth(area->viewport()->width() + 2 * area->fontMetrics().height());
+        settle();
+        narrower_than_row(QStringLiteral("contents wider than the viewport"));
+        area->widget()->setMinimumWidth(0);
+
+        // Enough rows to pass the cap: the area stops growing and scrolls, in
+        // a window with room for more, so the cap and not the window stops it.
+        // A window the screen holds shorter (on Windows) gets its height in a
+        // later resize event, so the height is read once that has arrived.
+        const int cap = FittingScrollArea::MAX_LINES * area->fontMetrics().height();
+        const int asked = dialog.height() + 2 * cap;
+        dialog.resize(size.width(), asked);
+        settle();
+        const int window_height = dialog.height();
+        while (area->widget()->sizeHint().height() <= 2 * cap && rows().size() < 40) {
+            dialog.addEntry();
+            settle();
+        }
+        const int capped = area->height();
+        // Room for more: past every part's preferred height, the area's at the
+        // cap among them, the window has another row's height to give.
+        auto* entries = area->widget()->findChild<QVBoxLayout*>(QStringLiteral("entries"));
+        QVERIFY(entries);
+        const int spare = dialog.height() - dialog.sizeHint().height();
+        const int one_more_row = rows().last()->height() + entries->spacing();
+        if (spare >= one_more_row) {
+            QVERIFY2(capped == area->sizeHint().height(),
+                     qPrintable(QStringLiteral("%1x%2 at the cap: area %3 px of its %4 px hint with %5 px spare in the window")
+                                    .arg(size.width()).arg(size.height()).arg(capped).arg(area->sizeHint().height()).arg(spare)));
+        } else {
+            // A screen too short for the cap: the window, not the cap, stops
+            // the area. Only the screen may take that room.
+            qWarning("Window has no room past the cap: %d px spare for a %d px row in a %d px window, %d px asked",
+                     spare, one_more_row, window_height, asked);
+            QVERIFY2(window_height < asked,
+                     qPrintable(QStringLiteral("%1x%2: %3 px spare for a %4 px row, yet the window got the %5 px it asked")
+                                    .arg(size.width()).arg(size.height()).arg(spare).arg(one_more_row).arg(asked)));
+        }
+        dialog.addEntry();
+        settle();
+        QVERIFY2(area->height() == capped, qPrintable(QStringLiteral("area grew from %1 to %2 px").arg(capped).arg(area->height())));
+        QVERIFY2(area->height() <= cap, qPrintable(QStringLiteral("area %1 px, cap %2 px").arg(area->height()).arg(cap)));
+        QVERIFY(area->verticalScrollBar()->isVisible());
+        QCOMPARE(dialog.height(), window_height);
+    }
+}
+
+//! F-501: Clear All leaves one empty row, and the summary counts it.
+void VaultTests::transferSummaryCountsTheRowClearAllLeaves()
+{
+    CoinControlFormSetup setup(m_node);
+    if (!setup.ok) return;
+    SendCoinsDialog dialog(setup.style.get());
+    dialog.setModel(setup.model.get());
+    dialog.resize(1200, 800);
+    dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+    QLabel* recipients = dialog.findChild<QLabel*>(QStringLiteral("transferSummaryRecipients"));
+    QVERIFY(recipients);
+    QCOMPARE(recipients->text(), QStringLiteral("1"));
+
+    dialog.addEntry();
+    QCoreApplication::processEvents();
+    QCOMPARE(recipients->text(), QStringLiteral("2"));
+
+    QPushButton* clear = dialog.findChild<QPushButton*>(QStringLiteral("clearButton"));
+    QVERIFY(clear);
+    clear->click();
+    QCoreApplication::processEvents();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    int shown = 0;
+    for (SendCoinsEntry* entry : dialog.findChildren<SendCoinsEntry*>()) shown += entry->isVisible() ? 1 : 0;
+    QCOMPARE(shown, 1);
+    QCOMPARE(recipients->text(), QStringLiteral("1"));
+}
+
+void VaultTests::transactionDescriptionCountsConfirmationsFromFirstBlock()
+{
+    TestChain100Setup test;
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    vault::VaultContext context;
+    context.args = &test.m_args;
+    context.chain = test.m_node.chain.get();
+    std::shared_ptr<vault::CVault> raw_vault = vault::TestLoadVault(context);
+    std::unique_ptr<interfaces::Vault> vault;
+    // Release the vault before `test` removes its data dir, on every exit path,
+    // a failed check included: Windows cannot remove the database file the
+    // vault still holds open, and the exception ends the whole run. With a
+    // chain the vault is also held by its chain notifications, so a plain
+    // WaitForDeleteVault would wait forever; TestUnloadVault drops those first.
+    struct VaultRelease {
+        std::shared_ptr<vault::CVault>& raw;
+        std::unique_ptr<interfaces::Vault>& wrapped;
+        ~VaultRelease()
+        {
+            wrapped.reset();
+            vault::TestUnloadVault(std::move(raw));
+        }
+    } release{raw_vault, vault};
+
+    CMutableTransaction coinbase;
+    coinbase.vin.resize(1);
+    coinbase.vin[0].prevout.SetNull();
+    coinbase.vout.emplace_back(COIN, CScript() << OP_TRUE);
+    const CTransactionRef transaction = MakeTransactionRef(coinbase);
+    raw_vault->AddToVault(transaction, vault::TxStateConfirmed{
+        Params().GenesisBlock().GetHash(), /*height=*/0, /*index=*/0});
+    vault = interfaces::MakeVault(context, raw_vault);
+    TransactionRecord record{transaction->GetHash(), /*time=*/0, TransactionRecord::Generated, "", /*debit=*/0, /*credit=*/COIN};
+
+    QString description;
+    for (const auto& [depth, expected] : std::initializer_list<std::pair<int, QString>>{
+             {1, QStringLiteral("1 confirmation")},
+             {2, QStringLiteral("2 confirmations")},
+             {5, QStringLiteral("5 confirmations")},
+             {6, QStringLiteral("6 confirmations")},
+         }) {
+        {
+            LOCK(raw_vault->cs_vault);
+            raw_vault->SetLastBlockProcessed(depth - 1, Params().GenesisBlock().GetHash());
+        }
+        description = TransactionDesc::toHTML(m_node, *vault, &record, QuicksilverUnit::HG);
+        const QRegularExpressionMatch status_line = QRegularExpression(QStringLiteral("<b>Status:</b> ([^<]+)<br>")).match(description);
+        QVERIFY(status_line.hasMatch());
+        QCOMPARE(status_line.captured(1), expected);
+    }
+
+    QVERIFY(!description.contains(QStringLiteral("broadcast to the network")));
+    QVERIFY(description.contains(QStringLiteral("If the block fails to get into the chain")));
+}
+
+//! F-459: at 1024x768 Home's ledger fits its viewport with no horizontal
+//! overflow. Type is hidden below 1200 px and shown at 1200, the label column
+//! stays at least as wide as the reference label, Date, Amount and Status keep
+//! their content width, a longer label elides, and the tooltip is that full
+//! label. The instruments column gives the label what it lacks, so no note on
+//! Home may be shorter than the height its own width needs. All of it holds
+//! in each of Home's states: consensus off, consensus on, isolated, and
+//! isolated and mining.
+void VaultTests::homeLedgerKeepsALabelAt1024()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    // The same labelled reward as homeAndLedgerReadTransactionsAlike. The
+    // label is longer than the reference so the column can meet its minimum
+    // and still be narrower than the text.
+    test.CreateAndProcessBlock({}, GetScriptForDestination(WitnessV0KeyHash(test.coinbaseKey.GetPubKey())));
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    const QString long_label = QStringLiteral("household-budget-02-plus-a-purpose-too-long-for-the-column");
+    {
+        LOCK(vault->cs_vault);
+        vault->SetAddressBook(CTxDestination{WitnessV0KeyHash(test.coinbaseKey.GetPubKey())}, long_label.toStdString(), vault::AddressPurpose::RECEIVE);
+    }
+
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    QSettings().remove(QStringLiteral("TransactionViewHeaderState"));
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    MiniGUI mini_gui(m_node, platform_style.get());
+    mini_gui.initModelForVault(m_node, vault, platform_style.get());
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(mini_gui.vaultModel.get(), platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(mini_gui.vaultModel.get());
+    window.resize(1024, 768);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+    QAction* home = window.findChild<QAction*>(QStringLiteral("homeBootstrapAction"));
+    QVERIFY(home);
+    home->trigger();
+    QTableView* home_table = window.findChild<QTableView*>(QStringLiteral("homeLedgerTable"));
+    QVERIFY(home_table);
+    QTRY_VERIFY(home_table->isVisible() && home_table->model() && home_table->model()->rowCount() > 0);
+    QCoreApplication::processEvents();
+
+    QAbstractItemModel* rows = home_table->model();
+    int labelled = -1;
+    for (int row = 0; row < rows->rowCount(); ++row) {
+        if (rows->index(row, TransactionTableModel::ToAddress).data(Qt::DisplayRole).toString() == long_label) labelled = row;
+    }
+    QVERIFY(labelled >= 0);
+    const QModelIndex label_index = rows->index(labelled, TransactionTableModel::ToAddress);
+    QCOMPARE(label_index.data(Qt::DisplayRole).toString(), long_label);
+
+    const bool real_fonts = !QFontDatabase().families().isEmpty();
+    QWidget* page = window.findChild<QWidget*>(QStringLiteral("desktopLaunchPage"));
+    QVERIFY(page);
+    QWidget* instruments = page->findChild<QWidget*>(QStringLiteral("homeInstruments"));
+    QVERIFY(instruments);
+    // Home fits the instruments column after each layout, so a resize takes
+    // a few rounds of events. Settled is a round that changes nothing; a
+    // layout that keeps moving fails here rather than being sampled mid-swing.
+    const auto settle = [&] {
+        QString last;
+        for (int round = 0; round < 20; ++round) {
+            QCoreApplication::processEvents();
+            QString now = QStringLiteral("%1 %2 %3").arg(instruments->width()).arg(home_table->viewport()->width()).arg(home_table->columnWidth(TransactionTableModel::ToAddress));
+            for (QLabel* note : page->findChildren<QLabel*>()) {
+                if (note->isVisible() && note->wordWrap()) now += QStringLiteral(" %1x%2").arg(note->width()).arg(note->height());
+            }
+            if (now == last) return true;
+            last = now;
+        }
+        return false;
+    };
+    QVERIFY2(settle(), "Home's layout did not settle at 1024x768");
+    // The first word-wrapped note on Home painted shorter than its own width
+    // needs, or empty when none is.
+    const auto short_note = [&]() -> QString {
+        for (QLabel* note : page->findChildren<QLabel*>()) {
+            if (!note->isVisible() || !note->wordWrap()) continue;
+            const int need = note->heightForWidth(note->width());
+            if (note->height() < need) {
+                return QStringLiteral("%1 is %2x%3, needs height %4").arg(note->objectName()).arg(note->width()).arg(note->height()).arg(need);
+            }
+        }
+        return {};
+    };
+    const auto sized = [&](int width, int height) {
+        if (window.width() >= width && window.height() >= height) return true;
+        const QRect screen = window.screen()->availableGeometry();
+        qWarning("Label fit not checked: below the %dx%d size, window %dx%d on a %dx%d screen",
+                 width, height, window.width(), window.height(), screen.width(), screen.height());
+        return false;
+    };
+    if (real_fonts && sized(1024, 768)) {
+        QFont label_font = home_table->font();
+        const QVariant font_role = label_index.data(Qt::FontRole);
+        if (font_role.canConvert<QFont>()) label_font = font_role.value<QFont>();
+        const QFontMetrics metrics(label_font);
+        QAbstractItemView* cells = home_table;
+        const int long_advance = metrics.horizontalAdvance(long_label);
+        const int content = cells->sizeHintForColumn(TransactionTableModel::ToAddress);
+        const int pad = content > long_advance ? content - long_advance : 0;
+        const QString reference = QStringLiteral("household-budget-02");
+        const int minimum = metrics.horizontalAdvance(reference) + pad;
+        // At 1024x768, on first show and again after the window has been
+        // wider: Type hidden, Label at its minimum or more, the rest at their
+        // content width, nothing past the viewport, and no note clipped.
+        const auto check_1024 = [&](const QString& where) {
+            QVERIFY2(home_table->isColumnHidden(TransactionTableModel::Type), qPrintable(where + QStringLiteral(": Type is shown")));
+            QVERIFY2(home_table->columnWidth(TransactionTableModel::ToAddress) >= minimum,
+                     qPrintable(where + QStringLiteral(": Label %1 px, minimum %2").arg(home_table->columnWidth(TransactionTableModel::ToAddress)).arg(minimum)));
+            for (int column : {TransactionTableModel::Date, TransactionTableModel::Amount, TransactionTableModel::Status}) {
+                const int need = cells->sizeHintForColumn(column);
+                QVERIFY2(home_table->columnWidth(column) >= need,
+                         qPrintable(where + QStringLiteral(": Column %1 is %2 px of %3").arg(column).arg(home_table->columnWidth(column)).arg(need)));
+            }
+            QVERIFY2(home_table->columnWidth(TransactionTableModel::ToAddress) < long_advance,
+                     qPrintable(where + QStringLiteral(": Label column %1 px holds the %2 px label")
+                                    .arg(home_table->columnWidth(TransactionTableModel::ToAddress))
+                                    .arg(long_advance)));
+            int shown = 0;
+            for (int column = 0; column < home_table->horizontalHeader()->count(); ++column) {
+                if (!home_table->isColumnHidden(column)) shown += home_table->columnWidth(column);
+            }
+            QVERIFY2(shown <= home_table->viewport()->width() && home_table->horizontalScrollBar()->maximum() == 0,
+                     qPrintable(where + QStringLiteral(": Columns %1 px in a %2 px viewport, bar range %3")
+                                    .arg(shown)
+                                    .arg(home_table->viewport()->width())
+                                    .arg(home_table->horizontalScrollBar()->maximum())));
+            const QString note = short_note();
+            QVERIFY2(note.isEmpty(), qPrintable(where + QStringLiteral(": ") + note));
+        };
+        // Home's states differ in height, and the isolated two scroll the
+        // page, whose vertical bar takes ledger width.
+        auto* launch = qobject_cast<DesktopLaunchPage*>(page);
+        QVERIFY(launch);
+        const auto check_states = [&](const QString& where) {
+            launch->setConsensusEnabled(false);
+            launch->clearMiningStatus();
+            QVERIFY2(settle(), qPrintable(where + QStringLiteral(", consensus off: layout did not settle")));
+            check_1024(where + QStringLiteral(", consensus off"));
+            if (QTest::currentTestFailed()) return;
+            launch->setConsensusEnabled(true);
+            launch->setPeerCount(8);
+            launch->setChainTip(105, QDateTime::currentDateTime());
+            launch->setSyncState(105, 8, false, 1.0);
+            QVERIFY2(settle(), qPrintable(where + QStringLiteral(", consensus on: layout did not settle")));
+            check_1024(where + QStringLiteral(", consensus on"));
+            if (QTest::currentTestFailed()) return;
+            launch->setPeerCount(0);
+            QVERIFY2(settle(), qPrintable(where + QStringLiteral(", isolated: layout did not settle")));
+            check_1024(where + QStringLiteral(", isolated"));
+            if (QTest::currentTestFailed()) return;
+            interfaces::MiningStatus mining;
+            mining.active = true;
+            mining.attempts_per_second = 1.0;
+            launch->setMiningStatus(mining);
+            QVERIFY2(settle(), qPrintable(where + QStringLiteral(", isolated and mining: layout did not settle")));
+            check_1024(where + QStringLiteral(", isolated and mining"));
+            if (QTest::currentTestFailed()) return;
+            launch->setConsensusEnabled(false);
+            launch->clearMiningStatus();
+            QVERIFY2(settle(), qPrintable(where + QStringLiteral(", consensus off again: layout did not settle")));
+        };
+        check_1024(QStringLiteral("first shown at 1024"));
+        if (QTest::currentTestFailed()) return;
+        check_states(QStringLiteral("at 1024"));
+        if (QTest::currentTestFailed()) return;
+        window.resize(1200, 768);
+        QVERIFY2(settle(), "Home's layout did not settle at 1200x768");
+        if (sized(1200, 768)) {
+            QVERIFY(!home_table->isColumnHidden(TransactionTableModel::Type));
+            const QString at_1200 = short_note();
+            QVERIFY2(at_1200.isEmpty(), qPrintable(at_1200));
+        }
+        window.resize(1024, 768);
+        QVERIFY2(settle(), "Home's layout did not settle back at 1024x768");
+        check_1024(QStringLiteral("back at 1024 from 1200"));
+        if (QTest::currentTestFailed()) return;
+        check_states(QStringLiteral("back at 1024 from 1200"));
+        if (QTest::currentTestFailed()) return;
+    }
+    QCOMPARE(label_index.data(Qt::ToolTipRole).toString(), long_label);
 }

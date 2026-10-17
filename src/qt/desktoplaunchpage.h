@@ -18,6 +18,7 @@ namespace interfaces { struct MiningStatus; }
 
 QT_BEGIN_NAMESPACE
 class QDateTime;
+class QEvent;
 class QFrame;
 class QLabel;
 class QProgressBar;
@@ -88,6 +89,12 @@ private:
     //! Column order and widths, once the rows have columns to arrange.
     void arrangeLedgerColumns();
     void fitLedgerColumns();
+    //! Below WIDE_WINDOW, narrow the instruments column by what the label
+    //! still lacks. Runs after the page's layout is done.
+    void fitInstruments();
+    //! The instruments column's width, and the notes' text width with it.
+    void setInstrumentWidth(int width);
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
     const PlatformStyle* m_platform_style;
     const uint64_t m_blockchain_size_gb;
@@ -102,6 +109,8 @@ private:
     TransactionFilterProxy* m_ledger_filter{nullptr};
     LedgerRows* m_ledger_rows{nullptr};
     QPointer<VaultModel> m_ledger_model;
+
+    QWidget* m_instruments{nullptr};
 
     // Node panel.
     QLabel* m_consensus_state{nullptr};
@@ -152,6 +161,11 @@ private:
     bool m_mining_active{false};
     QString m_mining_word;
     int m_peers{-1};
+    //! Set while fitLedgerColumns is writing widths, so the resize it causes
+    //! does not re-enter.
+    bool m_fitting_ledger{false};
+    //! Set while a fitInstruments call is queued.
+    bool m_fitting_instruments{false};
 };
 
 #endif // QUICKSILVER_QT_DESKTOPLAUNCHPAGE_H
