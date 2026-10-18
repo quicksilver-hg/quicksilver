@@ -121,7 +121,11 @@ private Q_SLOTS:
     void transferRecipientAreaFitsItsRow();
     void transferSummaryCountsTheRowClearAllLeaves();
     void transactionDescriptionCountsConfirmationsFromFirstBlock();
-    void homeLedgerKeepsALabelAt1024();
+    void homeLedgerKeepsALabelAtFloor();
+    void idStyledPrimaryButtonsShowDisabledState();
+    void statusStripNamesConsensusOff();
+    void notificationBurstPolicyCoalescesTransactions();
+    void transactionBurstPostsOneImmediateNotification();
 };
 
 #endif // QUICKSILVER_QT_TEST_VAULTTESTS_H

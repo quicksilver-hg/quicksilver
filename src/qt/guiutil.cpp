@@ -299,26 +299,30 @@ bool hasEntryData(const QAbstractItemView *view, int column, int role)
     return !selection.at(0).data(role).toString().isEmpty();
 }
 
-void LoadFont(const QString& file_name)
+bool LoadFont(const QString& file_name)
 {
-    const int id = QFontDatabase::addApplicationFont(file_name);
-    assert(id != -1);
+    if (QFontDatabase::addApplicationFont(file_name) != -1) return true;
+    LogWarning(HgLog::QT, "Could not load the bundled font %s; using the system font\n", file_name.toStdString());
+    return false;
 }
 
 namespace {
 QString g_unit_glyph_family;
 }
 
-void LoadUnitGlyph()
+bool LoadUnitGlyph(const QString& file_name)
 {
-    const int id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/unitglyph"));
-    assert(id != -1);
-    const QStringList families = QFontDatabase::applicationFontFamilies(id);
-    assert(!families.isEmpty());
+    const int id = QFontDatabase::addApplicationFont(file_name);
+    const QStringList families = id == -1 ? QStringList{} : QFontDatabase::applicationFontFamilies(id);
+    if (families.isEmpty()) {
+        LogWarning(HgLog::QT, "Could not load the bundled face for the cinnabar sign (%s); it is drawn from the system fonts\n", file_name.toStdString());
+        return false;
+    }
     g_unit_glyph_family = families.front();
     const QString primary = QFontInfo(QApplication::font()).family();
     QFont::insertSubstitution(primary, g_unit_glyph_family);
     QApplication::setFont(WithUnitGlyph(QApplication::font()));
+    return true;
 }
 
 QString UnitGlyphFamily()

@@ -199,6 +199,18 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
         createTrayIcon();
     }
     notificator = new Notificator(QApplication::applicationName(), trayIcon, this);
+    m_notification_clock.start();
+    m_notification_timer.setSingleShot(true);
+    connect(&m_notification_timer, &QTimer::timeout, this, [this] {
+        const int64_t now = m_notification_clock.elapsed();
+        const int count = m_transaction_notifications.takeSummary(now);
+        if (count > 0) {
+            notificator->notify(Notificator::Information, tr("New transactions"), transactionSummaryText(count));
+        }
+        if (const auto delay = m_transaction_notifications.millisUntilNext(now)) {
+            m_notification_timer.start(static_cast<int>(*delay));
+        }
+    });
 
     // Create status bar
     statusBar();
@@ -1027,8 +1039,9 @@ void QuicksilverGUI::refreshStatusStrip()
 #ifdef ENABLE_VAULT
     if (vaultFrame) vaultFrame->setSyncState(sync_state, progress, m_reported_peers, m_reported_blocks, m_reported_answered, !m_reported_synced);
 #endif
-    m_status_sync->setText(ClientModel::syncStateText(sync_state));
-    if (catching_up) {
+    const bool consensus_off = vaultFrame && !m_consensus_enabled;
+    m_status_sync->setText(consensus_off ? tr("Consensus off") : ClientModel::syncStateText(sync_state));
+    if (!consensus_off && catching_up) {
         const int blocks_behind = m_best_header_height - m_reported_blocks;
         m_status_sync->setToolTip(blocks_behind == 1
                                      ? tr("1 block behind the newest block heard from peers.")
@@ -1036,7 +1049,7 @@ void QuicksilverGUI::refreshStatusStrip()
     } else {
         m_status_sync->setToolTip(QString());
     }
-    const char* tone = synchronized ? "good" : "plain";
+    const char* tone = !consensus_off && synchronized ? "good" : "plain";
     for (QLabel* label : {m_status_dot, m_status_sync}) {
         label->setProperty("benchTone", tone);
         label->style()->unpolish(label);
@@ -1968,6 +1981,16 @@ void QuicksilverGUI::showEvent(QShowEvent *event)
 #ifdef ENABLE_VAULT
 void QuicksilverGUI::incomingTransaction(const QString& date, QuicksilverUnit unit, const CAmount& amount, const QString& type, const QString& address, const QString& label, const QString& vaultName)
 {
+    const int64_t now = m_notification_clock.elapsed();
+    const NotificationBurst::Decision decision = m_transaction_notifications.record(now);
+    if (decision.summary_count > 0) {
+        notificator->notify(Notificator::Information, tr("New transactions"), transactionSummaryText(decision.summary_count));
+    }
+    if (const auto delay = m_transaction_notifications.millisUntilNext(now)) {
+        m_notification_timer.start(static_cast<int>(*delay));
+    }
+    if (!decision.notify_transaction) return;
+
     // On new transaction, make an info balloon
     QString msg = tr("Date: %1\n").arg(date) +
                   tr("Amount: %1\n").arg(QuicksilverUnits::formatWithUnit(unit, amount, true));
@@ -1981,6 +2004,15 @@ void QuicksilverGUI::incomingTransaction(const QString& date, QuicksilverUnit un
         msg += tr("Address: %1\n").arg(address);
     message((amount)<0 ? tr("Sent transaction") : tr("Incoming transaction"),
              msg, CClientUIInterface::MSG_INFORMATION);
+}
+
+QString QuicksilverGUI::transactionSummaryText(int count)
+{
+    // Singular and plural are separate because no app catalogue is installed,
+    // so Qt cannot resolve the %n plural form.
+    return count == 1
+               ? tr("1 more transaction. See Ledger for details.")
+               : tr("%1 more transactions. See Ledger for details.").arg(count);
 }
 #endif // ENABLE_VAULT
 

@@ -37,6 +37,7 @@
 #include <qt/miningmodel.h>
 #include <qt/networkpage.h>
 #include <qt/networkstyle.h>
+#include <qt/notificator.h>
 #include <qt/quicksilvergui.h>
 #include <qt/optionsmodel.h>
 #include <qt/platformstyle.h>
@@ -6444,7 +6445,7 @@ void VaultTests::transferRecipientAreaFitsItsRow()
     QuicksilverStyle::Apply(*qApp);
     CoinControlFormSetup setup(m_node);
     if (!setup.ok) return;
-    for (const QSize size : {QSize(1200, 800), QSize(1024, 768)}) {
+    for (const QSize size : {QSize(1600, 900), QSize(1366, 768)}) {
         SendCoinsDialog dialog(setup.style.get());
         dialog.setModel(setup.model.get());
         dialog.resize(size);
@@ -6499,8 +6500,8 @@ void VaultTests::transferRecipientAreaFitsItsRow()
         QVERIFY(!address->isValid());
         fits(QStringLiteral("after Review"));
 
-        dialog.resize(1024, size.height());
-        fits(QStringLiteral("at 1024 px"));
+        dialog.resize(1366, size.height());
+        fits(QStringLiteral("at 1366 px"));
 
         // Narrower than the row: the horizontal bar takes room from the viewport.
         // The area lays its contents out at least as wide as their minimum, an
@@ -6663,15 +6664,15 @@ void VaultTests::transactionDescriptionCountsConfirmationsFromFirstBlock()
     QVERIFY(description.contains(QStringLiteral("If the block fails to get into the chain")));
 }
 
-//! F-459: at 1024x768 Home's ledger fits its viewport with no horizontal
-//! overflow. Type is hidden below 1200 px and shown at 1200, the label column
+//! F-459 established Home's ledger fit at 1024x768. On 2026-10-17, F-511
+//! moved the supported floor to 1366x768. Type is shown there, the label column
 //! stays at least as wide as the reference label, Date, Amount and Status keep
 //! their content width, a longer label elides, and the tooltip is that full
 //! label. The instruments column gives the label what it lacks, so no note on
 //! Home may be shorter than the height its own width needs. All of it holds
 //! in each of Home's states: consensus off, consensus on, isolated, and
 //! isolated and mining.
-void VaultTests::homeLedgerKeepsALabelAt1024()
+void VaultTests::homeLedgerKeepsALabelAtFloor()
 {
     const RestoreApplicationStyle restore;
     QuicksilverStyle::Apply(*qApp);
@@ -6703,7 +6704,7 @@ void VaultTests::homeLedgerKeepsALabelAt1024()
     auto* view = new VaultView(mini_gui.vaultModel.get(), platform_style.get(), frame);
     QVERIFY(frame->addView(view));
     frame->setCurrentVault(mini_gui.vaultModel.get());
-    window.resize(1024, 768);
+    window.resize(1366, 768);
     window.show();
     QVERIFY(QTest::qWaitForWindowExposed(&window));
 
@@ -6745,7 +6746,7 @@ void VaultTests::homeLedgerKeepsALabelAt1024()
         }
         return false;
     };
-    QVERIFY2(settle(), "Home's layout did not settle at 1024x768");
+    QVERIFY2(settle(), "Home's layout did not settle at 1366x768");
     // The first word-wrapped note on Home painted shorter than its own width
     // needs, or empty when none is.
     const auto short_note = [&]() -> QString {
@@ -6765,7 +6766,7 @@ void VaultTests::homeLedgerKeepsALabelAt1024()
                  width, height, window.width(), window.height(), screen.width(), screen.height());
         return false;
     };
-    if (real_fonts && sized(1024, 768)) {
+    if (real_fonts && sized(1366, 768)) {
         QFont label_font = home_table->font();
         const QVariant font_role = label_index.data(Qt::FontRole);
         if (font_role.canConvert<QFont>()) label_font = font_role.value<QFont>();
@@ -6776,11 +6777,11 @@ void VaultTests::homeLedgerKeepsALabelAt1024()
         const int pad = content > long_advance ? content - long_advance : 0;
         const QString reference = QStringLiteral("household-budget-02");
         const int minimum = metrics.horizontalAdvance(reference) + pad;
-        // At 1024x768, on first show and again after the window has been
-        // wider: Type hidden, Label at its minimum or more, the rest at their
+        // At 1366x768, on first show and again after the window has been
+        // wider: Type shown, Label at its minimum or more, the rest at their
         // content width, nothing past the viewport, and no note clipped.
-        const auto check_1024 = [&](const QString& where) {
-            QVERIFY2(home_table->isColumnHidden(TransactionTableModel::Type), qPrintable(where + QStringLiteral(": Type is shown")));
+        const auto check_floor = [&](const QString& where) {
+            QVERIFY2(!home_table->isColumnHidden(TransactionTableModel::Type), qPrintable(where + QStringLiteral(": Type is hidden")));
             QVERIFY2(home_table->columnWidth(TransactionTableModel::ToAddress) >= minimum,
                      qPrintable(where + QStringLiteral(": Label %1 px, minimum %2").arg(home_table->columnWidth(TransactionTableModel::ToAddress)).arg(minimum)));
             for (int column : {TransactionTableModel::Date, TransactionTableModel::Amount, TransactionTableModel::Status}) {
@@ -6812,47 +6813,208 @@ void VaultTests::homeLedgerKeepsALabelAt1024()
             launch->setConsensusEnabled(false);
             launch->clearMiningStatus();
             QVERIFY2(settle(), qPrintable(where + QStringLiteral(", consensus off: layout did not settle")));
-            check_1024(where + QStringLiteral(", consensus off"));
+            check_floor(where + QStringLiteral(", consensus off"));
             if (QTest::currentTestFailed()) return;
             launch->setConsensusEnabled(true);
             launch->setPeerCount(8);
             launch->setChainTip(105, QDateTime::currentDateTime());
             launch->setSyncState(105, 8, false, 1.0);
             QVERIFY2(settle(), qPrintable(where + QStringLiteral(", consensus on: layout did not settle")));
-            check_1024(where + QStringLiteral(", consensus on"));
+            check_floor(where + QStringLiteral(", consensus on"));
             if (QTest::currentTestFailed()) return;
             launch->setPeerCount(0);
             QVERIFY2(settle(), qPrintable(where + QStringLiteral(", isolated: layout did not settle")));
-            check_1024(where + QStringLiteral(", isolated"));
+            check_floor(where + QStringLiteral(", isolated"));
             if (QTest::currentTestFailed()) return;
             interfaces::MiningStatus mining;
             mining.active = true;
             mining.attempts_per_second = 1.0;
             launch->setMiningStatus(mining);
             QVERIFY2(settle(), qPrintable(where + QStringLiteral(", isolated and mining: layout did not settle")));
-            check_1024(where + QStringLiteral(", isolated and mining"));
+            check_floor(where + QStringLiteral(", isolated and mining"));
             if (QTest::currentTestFailed()) return;
             launch->setConsensusEnabled(false);
             launch->clearMiningStatus();
             QVERIFY2(settle(), qPrintable(where + QStringLiteral(", consensus off again: layout did not settle")));
         };
-        check_1024(QStringLiteral("first shown at 1024"));
+        check_floor(QStringLiteral("first shown at 1366"));
         if (QTest::currentTestFailed()) return;
-        check_states(QStringLiteral("at 1024"));
+        check_states(QStringLiteral("at 1366"));
         if (QTest::currentTestFailed()) return;
-        window.resize(1200, 768);
-        QVERIFY2(settle(), "Home's layout did not settle at 1200x768");
-        if (sized(1200, 768)) {
+        window.resize(1600, 900);
+        QVERIFY2(settle(), "Home's layout did not settle at 1600x900");
+        if (sized(1600, 900)) {
             QVERIFY(!home_table->isColumnHidden(TransactionTableModel::Type));
-            const QString at_1200 = short_note();
-            QVERIFY2(at_1200.isEmpty(), qPrintable(at_1200));
+            const QString at_1600 = short_note();
+            QVERIFY2(at_1600.isEmpty(), qPrintable(at_1600));
         }
-        window.resize(1024, 768);
-        QVERIFY2(settle(), "Home's layout did not settle back at 1024x768");
-        check_1024(QStringLiteral("back at 1024 from 1200"));
+        window.resize(1366, 768);
+        QVERIFY2(settle(), "Home's layout did not settle back at 1366x768");
+        check_floor(QStringLiteral("back at 1366 from 1600x900"));
         if (QTest::currentTestFailed()) return;
-        check_states(QStringLiteral("back at 1024 from 1200"));
+        check_states(QStringLiteral("back at 1366 from 1600x900"));
         if (QTest::currentTestFailed()) return;
     }
     QCOMPARE(label_index.data(Qt::ToolTipRole).toString(), long_label);
+}
+
+//! F-506: the ID-specific primary-button rules must not mask the shared
+//! disabled state used by primary actions.
+void VaultTests::idStyledPrimaryButtonsShowDisabledState()
+{
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+
+    QWidget host;
+    auto* layout = new QVBoxLayout(&host);
+    auto make_button = [&](const QString& name) {
+        auto* button = new QPushButton(QStringLiteral("Action"), &host);
+        button->setObjectName(name);
+        button->setProperty("class", QStringLiteral("primaryActionButton"));
+        button->setFixedSize(180, 48);
+        layout->addWidget(button);
+        return button;
+    };
+    QPushButton* reference = make_button(QStringLiteral("disabledPrimaryReference"));
+    const std::array<QPushButton*, 4> buttons{
+        make_button(QStringLiteral("receiveButton")),
+        make_button(QStringLiteral("consensusContinueButton")),
+        make_button(QStringLiteral("startMiningButton")),
+        make_button(QStringLiteral("agentAllotmentCreateButton")),
+    };
+    host.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&host));
+
+    const auto background = [](QPushButton* button) {
+        QCoreApplication::processEvents();
+        const QImage image = button->grab().toImage();
+        const QPoint sample = QPoint(8, button->height() / 2) * image.devicePixelRatio();
+        return image.pixelColor(sample);
+    };
+    reference->setEnabled(false);
+    const QColor disabled_primary = background(reference);
+    for (QPushButton* button : buttons) {
+        button->setEnabled(true);
+        const QColor enabled = background(button);
+        button->setEnabled(false);
+        const QColor disabled = background(button);
+        QVERIFY2(disabled != enabled,
+                 qPrintable(QStringLiteral("%1 keeps its enabled background %2 while disabled")
+                                .arg(button->objectName(), enabled.name())));
+        QCOMPARE(disabled, disabled_primary);
+    }
+}
+
+//! F-507: an intentionally stopped consensus service is not a network
+//! connection attempt.
+void VaultTests::statusStripNamesConsensusOff()
+{
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+
+    QLabel* sync = window.findChild<QLabel*>(QStringLiteral("benchStatusSync"));
+    QVERIFY(sync);
+    QCOMPARE(sync->text(), QStringLiteral("Consensus off"));
+    QCOMPARE(sync->property("benchTone").toString(), QStringLiteral("plain"));
+    QVERIFY(sync->toolTip().isEmpty());
+
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    QVERIFY(QMetaObject::invokeMethod(frame, "consensusStateChanged", Q_ARG(bool, true)));
+    QVERIFY(sync->text() != QStringLiteral("Consensus off"));
+}
+
+void VaultTests::notificationBurstPolicyCoalescesTransactions()
+{
+    NotificationBurst policy;
+    auto decision = policy.record(0);
+    QVERIFY(decision.notify_transaction);
+    QCOMPARE(decision.summary_count, 0);
+    QCOMPARE(policy.takeSummary(NotificationBurst::INTERVAL_MILLIS), 0);
+
+    NotificationBurst fifty;
+    QVERIFY(fifty.record(0).notify_transaction);
+    for (int i = 1; i < 50; ++i) QVERIFY(!fifty.record(i).notify_transaction);
+    QCOMPARE(fifty.takeSummary(NotificationBurst::INTERVAL_MILLIS), 49);
+
+    NotificationBurst spaced;
+    for (int i = 0; i < 4; ++i) {
+        decision = spaced.record(i * (NotificationBurst::INTERVAL_MILLIS + 1));
+        QVERIFY(decision.notify_transaction);
+        QCOMPARE(decision.summary_count, 0);
+    }
+
+    NotificationBurst sustained;
+    int notified = sustained.record(0).notify_transaction ? 1 : 0;
+    int summarized = 0;
+    for (int second = 1; second <= 30; ++second) {
+        const int64_t now = second * 1000;
+        if (second % 10 == 0) summarized += sustained.takeSummary(now);
+        const auto event = sustained.record(now);
+        notified += event.notify_transaction ? 1 : 0;
+        summarized += event.summary_count;
+    }
+    summarized += sustained.takeSummary(40'000);
+    QCOMPARE(notified, 1);
+    QCOMPARE(summarized, 30);
+}
+
+void VaultTests::transactionBurstPostsOneImmediateNotification()
+{
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    for (int i = 0; i < 5; ++i) {
+        test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+        SetMockTime(GetTime() + 1);
+    }
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    MiniGUI mini_gui(m_node, platform_style.get());
+    mini_gui.initModelForVault(m_node, vault, platform_style.get());
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    QCOMPARE(QuicksilverGUI::transactionSummaryTextForTesting(1), QStringLiteral("1 more transaction. See Ledger for details."));
+    QCOMPARE(QuicksilverGUI::transactionSummaryTextForTesting(3), QStringLiteral("3 more transactions. See Ledger for details."));
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(mini_gui.vaultModel.get(), platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(mini_gui.vaultModel.get());
+    view->setClientModel(mini_gui.clientModel.get());
+    connect(view, &VaultView::incomingTransaction, &window, &QuicksilverGUI::incomingTransaction);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+    Notificator* notificator = window.findChild<Notificator*>();
+    QVERIFY(notificator);
+    qRegisterMetaType<Notificator::Class>("Class");
+    QSignalSpy notifications(notificator, &Notificator::notified);
+    TransactionTableModel* transactions = mini_gui.vaultModel->getTransactionTableModel();
+    QVERIFY(transactions);
+    QTRY_VERIFY(!transactions->processingQueuedTransactions());
+    const int rows_before = transactions->rowCount({});
+    QElapsedTimer elapsed;
+    elapsed.start();
+    constexpr int BLOCKS{20};
+    for (int i = 0; i < BLOCKS; ++i) {
+        const CBlock block = test.CreateAndProcessBlock({}, GetScriptForDestination(WitnessV0KeyHash(test.coinbaseKey.GetPubKey())));
+        const uint256 block_hash{block.GetHash()};
+        interfaces::BlockInfo block_info{block_hash};
+        block_info.height = 106 + i;
+        block_info.data = &block;
+        block_info.chain_time_max = block.GetBlockTime();
+        vault->blockConnected(block_info);
+        QCoreApplication::processEvents();
+        SetMockTime(GetTime() + 1);
+    }
+    QTRY_VERIFY(transactions->rowCount({}) >= rows_before + BLOCKS);
+    QCOMPARE(notifications.count(), 1);
+    QCOMPARE(notifications.at(0).at(1).toString(), QStringLiteral("Quicksilver - Incoming transaction"));
+    const int maximum_summaries = static_cast<int>((elapsed.elapsed() + NotificationBurst::INTERVAL_MILLIS - 1) / NotificationBurst::INTERVAL_MILLIS);
+    QVERIFY(notifications.count() - 1 <= maximum_summaries);
 }

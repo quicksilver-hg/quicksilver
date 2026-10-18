@@ -8,19 +8,22 @@
 
 #include <quicksilver-build-config.h> // IWYU pragma: keep
 
-#include <qt/quicksilverunits.h>
 #include <qt/clientmodel.h>
 #include <qt/guiutil.h>
+#include <qt/notificator.h>
 #include <qt/optionsdialog.h>
+#include <qt/quicksilverunits.h>
 
 #include <consensus/amount.h>
 
+#include <QElapsedTimer>
 #include <QLabel>
 #include <QMainWindow>
 #include <QMap>
 #include <QMenu>
 #include <QPoint>
 #include <QSystemTrayIcon>
+#include <QTimer>
 
 #ifdef Q_OS_MACOS
 #include <qt/macos_appnap.h>
@@ -30,7 +33,6 @@
 #include <memory>
 
 class NetworkStyle;
-class Notificator;
 class OptionsModel;
 class PlatformStyle;
 class RPCConsole;
@@ -92,6 +94,7 @@ public:
      * start, before an open vault is handed over, and shows why. Unset: proceed.
      */
     void setConsensusPreflight(std::function<bool()> preflight) { m_consensus_preflight = std::move(preflight); }
+    static QString transactionSummaryTextForTesting(int count) { return transactionSummaryText(count); }
 #endif
 
 #ifdef ENABLE_VAULT
@@ -220,6 +223,9 @@ private:
     QSystemTrayIcon* trayIcon = nullptr;
     const std::unique_ptr<QMenu> trayIconMenu;
     Notificator* notificator = nullptr;
+    NotificationBurst m_transaction_notifications;
+    QElapsedTimer m_notification_clock;
+    QTimer m_notification_timer;
     RPCConsole* rpcConsole = nullptr;
     HelpMessageDialog* helpMessageDialog = nullptr;
 
@@ -252,6 +258,10 @@ private:
     void createTrayIcon();
     /** Create system tray menu (or setup the dock menu) */
     void createTrayIconMenu();
+#ifdef ENABLE_VAULT
+    /** Text for a coalesced transaction-notification summary. */
+    static QString transactionSummaryText(int count);
+#endif
 
     /** Enable or disable all vault-related actions */
     void setVaultActionsEnabled(bool enabled);

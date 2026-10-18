@@ -341,6 +341,10 @@ void UnitsTests::namesStayTheCodes()
 
 void UnitsTests::cinnabarGlyphUsesTheBundledFace()
 {
+    // Qt's minimal platform refuses every application font, so there is no bundled face to test (F-513).
+    if (QGuiApplication::platformName() == QLatin1String("minimal")) {
+        QSKIP("the minimal platform does not support application fonts");
+    }
     const QFont previous = QApplication::font();
     GUIUtil::LoadUnitGlyph();
     const QString bundled = GUIUtil::UnitGlyphFamily();
@@ -455,4 +459,15 @@ void UnitsTests::unitGlyphCmapHasWindowsBmpEncoding()
         }
     }
     QVERIFY2(found, "no cmap encoding record with platform 3 and encoding 1");
+}
+
+void UnitsTests::failedFontLoadsChangeNothing()
+{
+    // F-513: a font the platform refuses must not stop the desktop.
+    const QFont previous = QApplication::font();
+    const QString family = GUIUtil::UnitGlyphFamily();
+    QVERIFY(!GUIUtil::LoadFont(QStringLiteral(":/fonts/no-such-font")));
+    QVERIFY(!GUIUtil::LoadUnitGlyph(QStringLiteral(":/fonts/no-such-font")));
+    QCOMPARE(GUIUtil::UnitGlyphFamily(), family);
+    QCOMPARE(QApplication::font(), previous);
 }

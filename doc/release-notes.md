@@ -52,13 +52,40 @@ Notable changes
 Changes in 0.1.3
 ================
 
-- Transfers and mining now use the graphics card on their own, on AMD, NVIDIA
-  and Intel cards, through a graphics helper that comes with Quicksilver. On
-  Ubuntu it is the new `quicksilver-gpu` package, which the desktop and the
-  developer tools recommend. Settings > Options > Main has a new Graphics cards
-  section; built-in graphics are opt-in. `-cuckatoodevice` chooses cards for the
-  daemon and the agent. The CUDA helper is now `qsgpusolve-cuda` and remains a
-  build-it-yourself option.
+- Transfers and mining now use a graphics card on their own, through a
+  graphics helper that comes with Quicksilver and runs on AMD, NVIDIA and
+  Intel cards with an OpenCL driver. This release solves on one card at a
+  time. On Ubuntu the helper is the new `quicksilver-gpu` package, which the
+  desktop and the developer tools recommend. Settings > Options > Hardware has
+  a Graphics cards section; built-in graphics are opt-in. `-cuckatoodevice`
+  chooses cards for the daemon and the agent. The CUDA helper is now
+  `qsgpusolve-cuda` and remains a build-it-yourself option.
+- On Ubuntu 22.04, AMD cards are listed by their order, not their slot, so
+  two cards of the same model look alike. See "Prepare to send" in
+  `doc/getting-started.md`.
+- Amounts show thousands separated by commas, and cinnabar (HgS) is the
+  default display unit, with the cinnabar sign beside the amount.
+- The status bar and the Node card show the sync state: "Connecting" until a
+  peer answers, then "Catching up", and "Consensus off" when consensus is off.
+  Sync progress is based on block height.
+- Settings > Options has a Hardware tab, and its Window and Display tabs are
+  now one. Options and the Network page open, and networks can be switched,
+  with consensus off.
+- When many transactions arrive at once, the desktop shows the first one and
+  then one summary ("83 more transactions. See Ledger for details.") instead
+  of a notification for each.
+- Mine: Start looks disabled while mining, AMD cards are named by their board
+  name, and the graphics settings button sits beside Stop.
+- Transfer and Request: text buttons have no icons, the recipient area grows
+  to fit its row, and the summary after Clear All counts the empty recipient.
+  Home's ledger keeps a readable label column in narrow windows.
+- Transaction details say "1 confirmation" or "N confirmations" instead of
+  "1/unconfirmed" for a transaction that is in a block. The coin control
+  setting is now "Enable coin control".
+- A bundled font that fails to load no longer stops the desktop; it uses the
+  system font instead.
+- The header time of a block being mined, by the desktop or by RPC
+  `generate*`, is refreshed every solve window.
 
 Changes in 0.1.2
 ================

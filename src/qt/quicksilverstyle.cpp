@@ -848,6 +848,14 @@ QPushButton#agentAllotmentCreateButton:hover:!disabled {
     background-color: %6;
     border-color: %4;
 }
+QPushButton#receiveButton:disabled,
+QPushButton#consensusContinueButton:disabled,
+QPushButton#startMiningButton:disabled,
+QPushButton#agentAllotmentCreateButton:disabled {
+    background-color: #171b1f;
+    border-color: #293138;
+    color: #6f7a82;
+}
 )").arg(bench_surface, hairline, hero, vermilion, cinnabar_fill, QStringLiteral("#7d3c38"));
 
     // The Bench page grammar: label/value rows, notes, quiet commands, the

@@ -11,6 +11,9 @@
 #include <QIcon>
 #include <QObject>
 
+#include <cstdint>
+#include <optional>
+
 QT_BEGIN_NAMESPACE
 class QSystemTrayIcon;
 
@@ -18,6 +21,31 @@ class QSystemTrayIcon;
 class QDBusInterface;
 #endif
 QT_END_NAMESPACE
+
+/** Timestamp-driven policy for coalescing transaction notifications. */
+class NotificationBurst
+{
+public:
+    static constexpr int64_t INTERVAL_MILLIS{10'000};
+
+    struct Decision {
+        bool notify_transaction{false};
+        int summary_count{0};
+    };
+
+    Decision record(int64_t now_millis);
+    int takeSummary(int64_t now_millis);
+    std::optional<int64_t> millisUntilNext(int64_t now_millis) const;
+
+private:
+    void begin(int64_t now_millis);
+    void advanceBoundary(int64_t now_millis);
+
+    bool m_active{false};
+    int64_t m_last_event{0};
+    int64_t m_next_summary{0};
+    int m_pending{0};
+};
 
 /** Cross-platform desktop notification client. */
 class Notificator: public QObject
@@ -50,6 +78,10 @@ public Q_SLOTS:
      */
     void notify(Class cls, const QString &title, const QString &text,
                 const QIcon &icon = QIcon(), int millisTimeout = 10000);
+
+Q_SIGNALS:
+    /** Counting seam for tests; emitted before platform delivery is attempted. */
+    void notified(Class cls, const QString& title, const QString& text);
 
 private:
     QWidget *parent;

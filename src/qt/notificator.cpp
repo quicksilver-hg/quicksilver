@@ -17,6 +17,8 @@
 #include <QSystemTrayIcon>
 #include <QTemporaryFile>
 #include <QVariant>
+
+#include <algorithm>
 #ifdef USE_DBUS
 #include <QDBusMetaType>
 #include <QtDBus>
@@ -26,7 +28,57 @@
 #include <qt/macnotificationhandler.h>
 #endif
 
+void NotificationBurst::begin(int64_t now_millis)
+{
+    m_active = true;
+    m_last_event = now_millis;
+    m_next_summary = now_millis + INTERVAL_MILLIS;
+    m_pending = 0;
+}
 
+void NotificationBurst::advanceBoundary(int64_t now_millis)
+{
+    do {
+        m_next_summary += INTERVAL_MILLIS;
+    } while (m_next_summary <= now_millis);
+}
+
+NotificationBurst::Decision NotificationBurst::record(int64_t now_millis)
+{
+    Decision decision;
+    if (!m_active || now_millis - m_last_event >= INTERVAL_MILLIS) {
+        decision.summary_count = m_pending;
+        begin(now_millis);
+        decision.notify_transaction = true;
+        return decision;
+    }
+
+    if (now_millis >= m_next_summary) {
+        decision.summary_count = m_pending;
+        m_pending = 0;
+        advanceBoundary(now_millis);
+    }
+    ++m_pending;
+    m_last_event = now_millis;
+    return decision;
+}
+
+int NotificationBurst::takeSummary(int64_t now_millis)
+{
+    if (!m_active || now_millis < m_next_summary) return 0;
+
+    const int summary = m_pending;
+    m_pending = 0;
+    advanceBoundary(now_millis);
+    if (now_millis - m_last_event >= INTERVAL_MILLIS) m_active = false;
+    return summary;
+}
+
+std::optional<int64_t> NotificationBurst::millisUntilNext(int64_t now_millis) const
+{
+    if (!m_active) return std::nullopt;
+    return std::max<int64_t>(0, m_next_summary - now_millis);
+}
 #ifdef USE_DBUS
 // https://wiki.ubuntu.com/NotificationDevelopmentGuidelines recommends at least 128
 const int FREEDESKTOP_NOTIFICATION_ICON_SIZE = 128;
@@ -220,6 +272,7 @@ void Notificator::notifyMacUserNotificationCenter(const QString &title, const QS
 
 void Notificator::notify(Class cls, const QString &title, const QString &text, const QIcon &icon, int millisTimeout)
 {
+    Q_EMIT notified(cls, title, text);
     switch(mode)
     {
 #ifdef USE_DBUS
