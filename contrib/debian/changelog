@@ -1,3 +1,12 @@
+quicksilver (0.1.4-1) unstable; urgency=low
+
+  * Quicksilver 0.1.4: the OpenCL graphics helper for AMD, NVIDIA and Intel
+    cards and the desktop fixes tagged as 0.1.3, which was not released as
+    binaries, plus desktop notification fixes. Ubuntu 22.04, Ubuntu 24.04 and
+    Windows x64, from public tag v0.1.4.
+
+ -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Sun, 18 Oct 2026 17:54:15 +0000
+
 quicksilver (0.1.3-1) unstable; urgency=low
 
   * Quicksilver 0.1.3: an OpenCL graphics helper for AMD, NVIDIA and Intel
