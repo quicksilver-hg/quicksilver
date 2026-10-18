@@ -202,10 +202,10 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
     m_notification_clock.start();
     m_notification_timer.setSingleShot(true);
     connect(&m_notification_timer, &QTimer::timeout, this, [this] {
-        const int64_t now = m_notification_clock.elapsed();
+        const int64_t now = notificationNow();
         const int count = m_transaction_notifications.takeSummary(now);
         if (count > 0) {
-            notificator->notify(Notificator::Information, tr("New transactions"), transactionSummaryText(count));
+            notificator->notify(Notificator::Information, transactionSummaryTitle(), transactionSummaryText(count));
         }
         if (const auto delay = m_transaction_notifications.millisUntilNext(now)) {
             m_notification_timer.start(static_cast<int>(*delay));
@@ -1981,10 +1981,10 @@ void QuicksilverGUI::showEvent(QShowEvent *event)
 #ifdef ENABLE_VAULT
 void QuicksilverGUI::incomingTransaction(const QString& date, QuicksilverUnit unit, const CAmount& amount, const QString& type, const QString& address, const QString& label, const QString& vaultName)
 {
-    const int64_t now = m_notification_clock.elapsed();
+    const int64_t now = notificationNow();
     const NotificationBurst::Decision decision = m_transaction_notifications.record(now);
     if (decision.summary_count > 0) {
-        notificator->notify(Notificator::Information, tr("New transactions"), transactionSummaryText(decision.summary_count));
+        notificator->notify(Notificator::Information, transactionSummaryTitle(), transactionSummaryText(decision.summary_count));
     }
     if (const auto delay = m_transaction_notifications.millisUntilNext(now)) {
         m_notification_timer.start(static_cast<int>(*delay));
@@ -2004,6 +2004,12 @@ void QuicksilverGUI::incomingTransaction(const QString& date, QuicksilverUnit un
         msg += tr("Address: %1\n").arg(address);
     message((amount)<0 ? tr("Sent transaction") : tr("Incoming transaction"),
              msg, CClientUIInterface::MSG_INFORMATION);
+}
+
+QString QuicksilverGUI::transactionSummaryTitle()
+{
+    // The same "<client> - <type>" form message() gives a single transaction's notification.
+    return QString{CLIENT_NAME} + " - " + tr("New transactions");
 }
 
 QString QuicksilverGUI::transactionSummaryText(int count)

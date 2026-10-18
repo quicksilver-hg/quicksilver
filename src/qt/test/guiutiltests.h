@@ -5,6 +5,8 @@
 #ifndef QUICKSILVER_QT_TEST_GUIUTILTESTS_H
 #define QUICKSILVER_QT_TEST_GUIUTILTESTS_H
 
+#include <quicksilver-build-config.h> // IWYU pragma: keep
+
 #include <QObject>
 #include <QTest>
 
@@ -18,6 +20,9 @@ private Q_SLOTS:
     void timeOffsetPluralAtEveryUnit();
     void timeOffsetPairsYearsWithWeeks();
     void timeOffsetBoundariesPickTheIntendedUnit();
+#ifdef USE_DBUS
+    void notificationImageMarshalsInitializedFields();
+#endif
 };
 
 #endif // QUICKSILVER_QT_TEST_GUIUTILTESTS_H

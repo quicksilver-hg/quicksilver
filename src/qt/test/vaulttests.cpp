@@ -6998,23 +6998,38 @@ void VaultTests::transactionBurstPostsOneImmediateNotification()
     QVERIFY(transactions);
     QTRY_VERIFY(!transactions->processingQueuedTransactions());
     const int rows_before = transactions->rowCount({});
-    QElapsedTimer elapsed;
-    elapsed.start();
-    constexpr int BLOCKS{20};
-    for (int i = 0; i < BLOCKS; ++i) {
+    // The burst policy reads the window's clock. Drive it, so the outcome is the
+    // same however long this machine takes to connect the blocks (F-515).
+    int64_t now_millis{0};
+    window.setNotificationClockForTesting([&now_millis] { return now_millis; });
+    const auto connect_block = [&](int height) {
         const CBlock block = test.CreateAndProcessBlock({}, GetScriptForDestination(WitnessV0KeyHash(test.coinbaseKey.GetPubKey())));
         const uint256 block_hash{block.GetHash()};
         interfaces::BlockInfo block_info{block_hash};
-        block_info.height = 106 + i;
+        block_info.height = height;
         block_info.data = &block;
         block_info.chain_time_max = block.GetBlockTime();
         vault->blockConnected(block_info);
         QCoreApplication::processEvents();
         SetMockTime(GetTime() + 1);
+    };
+    constexpr int BLOCKS{20};
+    constexpr int64_t STEP_MILLIS{100};
+    static_assert(BLOCKS * STEP_MILLIS < NotificationBurst::INTERVAL_MILLIS);
+    for (int i = 0; i < BLOCKS; ++i) {
+        connect_block(106 + i);
+        now_millis += STEP_MILLIS;
     }
-    QTRY_VERIFY(transactions->rowCount({}) >= rows_before + BLOCKS);
+    QTRY_COMPARE(transactions->rowCount({}), rows_before + BLOCKS);
     QCOMPARE(notifications.count(), 1);
     QCOMPARE(notifications.at(0).at(1).toString(), QStringLiteral("Quicksilver - Incoming transaction"));
-    const int maximum_summaries = static_cast<int>((elapsed.elapsed() + NotificationBurst::INTERVAL_MILLIS - 1) / NotificationBurst::INTERVAL_MILLIS);
-    QVERIFY(notifications.count() - 1 <= maximum_summaries);
+
+    // The first transaction after the window closes posts one summary of the
+    // rest of the burst, and no notification of its own.
+    now_millis = NotificationBurst::INTERVAL_MILLIS;
+    connect_block(106 + BLOCKS);
+    QTRY_COMPARE(transactions->rowCount({}), rows_before + BLOCKS + 1);
+    QCOMPARE(notifications.count(), 2);
+    QCOMPARE(notifications.at(1).at(1).toString(), QStringLiteral("Quicksilver - New transactions"));
+    QCOMPARE(notifications.at(1).at(2).toString(), QuicksilverGUI::transactionSummaryTextForTesting(BLOCKS - 1));
 }

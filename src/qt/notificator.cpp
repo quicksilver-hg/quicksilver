@@ -130,10 +130,10 @@ public:
     static QVariant toVariant(const QImage &img);
 
 private:
-    int width, height, stride;
-    bool hasAlpha;
-    int channels;
-    int bitsPerSample;
+    int width{0}, height{0}, stride{0};
+    bool hasAlpha{false};
+    int channels{0};
+    int bitsPerSample{0};
     QByteArray image;
 
     friend QDBusArgument &operator<<(QDBusArgument &a, const FreedesktopImage &i);
@@ -191,6 +191,11 @@ QVariant FreedesktopImage::toVariant(const QImage &img)
 {
     FreedesktopImage fimg(img);
     return QVariant(qDBusRegisterMetaType<FreedesktopImage>(), &fimg);
+}
+
+QString FreedesktopImageSignatureForTesting()
+{
+    return QString::fromLatin1(QDBusMetaType::typeToSignature(qDBusRegisterMetaType<FreedesktopImage>()));
 }
 
 void Notificator::notifyDBus(Class cls, const QString &title, const QString &text, const QIcon &icon, int millisTimeout)

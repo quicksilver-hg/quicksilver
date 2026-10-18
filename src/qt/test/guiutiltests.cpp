@@ -2,9 +2,12 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <quicksilver-build-config.h> // IWYU pragma: keep
+
 #include <qt/test/guiutiltests.h>
 
 #include <qt/guiutil.h>
+#include <qt/notificator.h>
 
 #include <QRegularExpression>
 #include <QString>
@@ -92,3 +95,14 @@ void GUIUtilTests::timeOffsetBoundariesPickTheIntendedUnit()
     QCOMPARE(GUIUtil::formatNiceTimeOffset(31556951), QStringLiteral("52 weeks"));
     QCOMPARE(GUIUtil::formatNiceTimeOffset(31556952), QStringLiteral("1 year"));
 }
+
+#ifdef USE_DBUS
+//! The first desktop notification on a Linux session bus makes Qt compute the
+//! image type's D-Bus signature, which marshals a default-constructed
+//! FreedesktopImage. Its scalar fields were left uninitialized, so UBSan
+//! reported an invalid bool load (F-516). No bus is needed to reach that path.
+void GUIUtilTests::notificationImageMarshalsInitializedFields()
+{
+    QCOMPARE(FreedesktopImageSignatureForTesting(), QStringLiteral("(iiibiiay)"));
+}
+#endif

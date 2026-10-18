@@ -49,6 +49,14 @@ Notable changes
   node that cannot reach Tor needs an explicit peer configured with `-addnode`,
   `-connect`, or `-seednode`; see `doc/bootstrapping.md`.
 
+Changes in 0.1.4
+================
+
+- 0.1.3 was tagged but not released as binaries. 0.1.4 is the first release
+  with the changes listed under 0.1.3.
+- On Linux, the desktop no longer reads uninitialized memory when it sends its
+  first notification to the desktop's notification service.
+
 Changes in 0.1.3
 ================
 
@@ -72,8 +80,8 @@ Changes in 0.1.3
   now one. Options and the Network page open, and networks can be switched,
   with consensus off.
 - When many transactions arrive at once, the desktop shows the first one and
-  then one summary ("83 more transactions. See Ledger for details.") instead
-  of a notification for each.
+  then, every 10 seconds while they keep arriving, one summary ("83 more
+  transactions. See Ledger for details.") instead of a notification for each.
 - Mine: Start looks disabled while mining, AMD cards are named by their board
   name, and the graphics settings button sits beside Stop.
 - Transfer and Request: text buttons have no icons, the recipient area grows

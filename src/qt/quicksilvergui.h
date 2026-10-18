@@ -95,6 +95,8 @@ public:
      */
     void setConsensusPreflight(std::function<bool()> preflight) { m_consensus_preflight = std::move(preflight); }
     static QString transactionSummaryTextForTesting(int count) { return transactionSummaryText(count); }
+    /** Milliseconds the transaction notification policy reads instead of the window's monotonic clock. */
+    void setNotificationClockForTesting(std::function<int64_t()> clock) { m_notification_now = std::move(clock); }
 #endif
 
 #ifdef ENABLE_VAULT
@@ -225,6 +227,8 @@ private:
     Notificator* notificator = nullptr;
     NotificationBurst m_transaction_notifications;
     QElapsedTimer m_notification_clock;
+    std::function<int64_t()> m_notification_now;
+    int64_t notificationNow() const { return m_notification_now ? m_notification_now() : m_notification_clock.elapsed(); }
     QTimer m_notification_timer;
     RPCConsole* rpcConsole = nullptr;
     HelpMessageDialog* helpMessageDialog = nullptr;
@@ -260,6 +264,7 @@ private:
     void createTrayIconMenu();
 #ifdef ENABLE_VAULT
     /** Text for a coalesced transaction-notification summary. */
+    static QString transactionSummaryTitle();
     static QString transactionSummaryText(int count);
 #endif
 

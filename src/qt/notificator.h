@@ -105,4 +105,10 @@ private:
 #endif
 };
 
+#ifdef USE_DBUS
+/** D-Bus signature of the notification image type. Qt computes it by marshalling a
+    default-constructed image, the step the first desktop notification takes. For tests. */
+QString FreedesktopImageSignatureForTesting();
+#endif
+
 #endif // QUICKSILVER_QT_NOTIFICATOR_H
