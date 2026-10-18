@@ -1,10 +1,11 @@
-quicksilver (0.1.3-1) UNRELEASED; urgency=low
+quicksilver (0.1.3-1) unstable; urgency=low
 
-  * Development series after the 0.1.2 release. Not a release: the 0.1.2 tag
-    is what a release build identifies itself as, and this tree carries work
-    that has not been tagged.
+  * Quicksilver 0.1.3: an OpenCL graphics helper for AMD, NVIDIA and Intel
+    cards, in the new quicksilver-gpu package and the Windows installer, and
+    desktop fixes. Ubuntu 22.04, Ubuntu 24.04 and Windows x64, from public
+    tag v0.1.3.
 
- -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Mon, 12 Oct 2026 00:00:00 +0000
+ -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Sun, 18 Oct 2026 11:00:33 +0000
 
 quicksilver (0.1.2-1) unstable; urgency=low
 
