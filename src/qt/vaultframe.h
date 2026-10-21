@@ -32,6 +32,9 @@ class QLabel;
 class QPushButton;
 QT_END_NAMESPACE
 
+//! Per-network QSettings key. QSettings() is already named for the network.
+inline constexpr char CONSENSUS_ENABLED_SETTING[] = "Desktop/ConsensusEnabled";
+
 /**
  * A container for embedding all vault-related
  * controls into QuicksilverGUI. The purpose of this class is to allow future

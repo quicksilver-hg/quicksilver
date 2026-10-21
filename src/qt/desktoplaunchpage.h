@@ -23,6 +23,7 @@ class QFrame;
 class QLabel;
 class QProgressBar;
 class QPushButton;
+class QSortFilterProxyModel;
 class QTableView;
 class QWidget;
 QT_END_NAMESPACE
@@ -66,6 +67,9 @@ public:
     //! mining is available.
     void setMiningStatus(const interfaces::MiningStatus& status);
     void clearMiningStatus();
+    //! How many times the ledger columns were measured. A burst of inserts
+    //! should add a handful, not one measurement per row.
+    int ledgerColumnFitsForTesting() const { return m_ledger_column_fits; }
 
 public Q_SLOTS:
     //! The node's warnings, such as a build that is not a release. Empty hides them.
@@ -86,6 +90,8 @@ private:
     //! When the vault's maturing rewards can be spent, above the ledger.
     void renderMaturing();
     void refreshLedgerCount();
+    //! One refilter, recount, and column fit for every insert queued this turn.
+    void scheduleLedgerRefresh();
     //! Column order and widths, once the rows have columns to arrange.
     void arrangeLedgerColumns();
     void fitLedgerColumns();
@@ -107,6 +113,7 @@ private:
     QPushButton* m_ledger_open_full{nullptr};
     QTableView* m_ledger_table{nullptr};
     TransactionFilterProxy* m_ledger_filter{nullptr};
+    QSortFilterProxyModel* m_first_rows{nullptr};
     LedgerRows* m_ledger_rows{nullptr};
     QPointer<VaultModel> m_ledger_model;
 
@@ -164,6 +171,12 @@ private:
     //! Set while fitLedgerColumns is writing widths, so the resize it causes
     //! does not re-enter.
     bool m_fitting_ledger{false};
+    //! A coalesced ledger refresh is waiting for this turn's inserts to finish.
+    bool m_ledger_refresh_pending{false};
+    //! Set while that refresh runs, so the signals it emits do not arm another.
+    bool m_refreshing_ledger{false};
+    //! Entries to fitLedgerColumns that measured. Early returns do not count.
+    int m_ledger_column_fits{0};
     //! Set while a fitInstruments call is queued.
     bool m_fitting_instruments{false};
 };

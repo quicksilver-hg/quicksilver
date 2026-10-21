@@ -58,6 +58,8 @@ public:
 
     void setClientModel(ClientModel* client_model);
     void setModel(OptionsModel *model);
+    //! Live consensus, not the saved setting. Unticking writes the setting only.
+    void setConsensusRunning(bool running);
     void setMapper();
     void setCurrentTab(OptionsDialog::Tab tab);
     static void configureLanguageRow(const QStringList& shipped_languages, QComboBox* languages, QLabel* language_label);
@@ -90,8 +92,13 @@ protected:
 
 Q_SIGNALS:
     void quitOnReset();
+    //! The box was ticked while consensus is not running. The saved setting stays false;
+    //! Continue on the review page is what turns it on.
+    void consensusOptInRequested();
 
 private:
+    void applyConsensusChoice();
+    bool savedConsensusEnabled() const;
     Ui::OptionsDialog *ui;
     ClientModel* m_client_model{nullptr};
     OptionsModel* model{nullptr};
@@ -103,6 +110,9 @@ private:
     std::optional<cuckatoo::GpuDiscovery> m_gpu_discovery;
     bool m_proxy_valid{true};
     bool m_gpu_solver_valid{true};
+    //! What the node is doing now. The checkbox itself shows the saved setting.
+    bool m_consensus_running{false};
+    bool m_consensus_opt_in{false};
 };
 
 #endif // QUICKSILVER_QT_OPTIONSDIALOG_H

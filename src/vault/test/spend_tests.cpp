@@ -8,8 +8,11 @@
 #include <chainparams.h>
 #include <consensus/amount.h>
 #include <crypto/cuckatoo/cuckatoo.h>
+#include <key_io.h>
 #include <pow.h>
+#include <script/descriptor.h>
 #include <script/solver.h>
+#include <test/util/logging.h>
 #include <validation.h>
 #include <vault/coincontrol.h>
 #include <vault/spend.h>
@@ -236,6 +239,85 @@ BOOST_FIXTURE_TEST_CASE(no_cycle_mode_skips_solver_but_meets_target, NoCycleTest
     BOOST_CHECK(!solver_reported_progress);
     BOOST_CHECK_EQUAL(tx.nAnchorHeight, static_cast<uint32_t>(*anchor_height));
     BOOST_CHECK_LE(UintToArith256(cuckatoo::CuckatooProofHash(tx.nCycle)), UintToArith256(target));
+}
+
+// "Signing transaction failed" must say why (F-520). A locked vault has no keys, and
+// the per-input script error it produces ("invalid stack size") points nowhere near
+// the cause, so the lock is named instead -- in the message and in the log.
+BOOST_FIXTURE_TEST_CASE(signing_failure_names_a_locked_vault, TestChain100Setup)
+{
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    auto vault = CreateSyncedVault(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
+    BOOST_REQUIRE(vault->EncryptVault(SecureString{"test"}));
+    BOOST_REQUIRE(vault->Lock());
+    BOOST_REQUIRE(vault->IsLocked());
+
+    CRecipient recipient{PubKeyDestination({}), 1 * COIN};
+    CCoinControl coin_control;
+    coin_control.m_change_type = OutputType::BASE58;
+    {
+        ASSERT_DEBUG_LOG("Signing transaction failed: locked=1");
+        auto res = CreateTransaction(*vault, {recipient}, /*change_pos=*/std::nullopt, coin_control);
+        BOOST_REQUIRE(!res);
+        BOOST_CHECK_EQUAL(util::ErrorString(res).original, "Signing transaction failed: the vault locked again before the transfer was signed. Try the transfer again.");
+    }
+}
+
+// Unlocked but without the key: the message carries the input and its reason.
+BOOST_FIXTURE_TEST_CASE(signing_failure_names_the_input_and_reason, TestChain100Setup)
+{
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    auto vault = std::make_unique<CVault>(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    {
+        LOCK2(vault->cs_vault, ::cs_main);
+        const CChain& cchain = m_node.chainman->ActiveChain();
+        vault->SetLastBlockProcessed(cchain.Height(), cchain.Tip()->GetBlockHash());
+        vault->SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
+        vault->SetVaultFlag(VAULT_FLAG_DISABLE_PRIVATE_KEYS);
+        FlatSigningProvider provider;
+        std::string error;
+        auto descs = Parse("combo(" + HexStr(coinbaseKey.GetPubKey()) + ")", provider, error, /*require_checksum=*/false);
+        BOOST_REQUIRE_EQUAL(descs.size(), 1U);
+        VaultDescriptor w_desc(std::move(descs.at(0)), 0, 0, 1, 1);
+        BOOST_REQUIRE(vault->AddVaultDescriptor(w_desc, provider, "", false));
+    }
+    {
+        VaultRescanReserver reserver(*vault);
+        reserver.reserve();
+        const auto genesis = WITH_LOCK(::cs_main, return m_node.chainman->ActiveChain().Genesis()->GetBlockHash());
+        const auto result = vault->ScanForVaultTransactions(genesis, /*start_height=*/0, /*max_height=*/{}, reserver, /*fUpdate=*/false, /*save_progress=*/false);
+        BOOST_REQUIRE(result.status == CVault::ScanResult::SUCCESS);
+    }
+    BOOST_REQUIRE(!vault->IsLocked());
+
+    // One preselected input, so the message's "1 of 1" is fixed.
+    const COutPoint spent{WITH_LOCK(vault->cs_vault, return AvailableCoins(*vault).All().at(0).outpoint)};
+    CRecipient recipient{PubKeyDestination({}), 1 * COIN};
+    CCoinControl coin_control;
+    coin_control.m_change_type = OutputType::BASE58;
+    coin_control.m_allow_other_inputs = false;
+    coin_control.Select(spent);
+    // A watch-only vault has no change keys of its own.
+    coin_control.destChange = PKHash(coinbaseKey.GetPubKey());
+    {
+        ASSERT_DEBUG_LOG("Signing transaction failed: input 0 (" + spent.ToString() + "): Unable to sign input, invalid stack size (possibly missing key)");
+        auto res = CreateTransaction(*vault, {recipient}, /*change_pos=*/std::nullopt, coin_control, /*sign=*/true);
+        BOOST_REQUIRE(!res);
+        BOOST_CHECK_EQUAL(util::ErrorString(res).original, "Signing transaction failed for input 1 of 1: Unable to sign input, invalid stack size (possibly missing key)");
+    }
+}
+
+// An input the vault holds no transaction for is reported, not dropped.
+BOOST_FIXTURE_TEST_CASE(signing_reports_an_input_not_in_the_vault, TestChain100Setup)
+{
+    auto vault = CreateSyncedVault(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
+    CMutableTransaction tx;
+    tx.vin.emplace_back(COutPoint{Txid::FromUint256(ArithToUint256(1)), 0});
+    tx.vout.emplace_back(COIN, CScript{});
+    std::map<int, bilingual_str> input_errors;
+    BOOST_CHECK(!WITH_LOCK(vault->cs_vault, return vault->SignTransaction(tx, input_errors)));
+    BOOST_REQUIRE_EQUAL(input_errors.size(), 1U);
+    BOOST_CHECK_EQUAL(input_errors.at(0).original, "Input not found in this vault");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

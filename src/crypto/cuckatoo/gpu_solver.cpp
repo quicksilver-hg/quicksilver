@@ -160,6 +160,21 @@ bool SolverMissing(GpuSolveStatus status, bool cpu_fallback)
     return status == GpuSolveStatus::kNoSolver && SolverFault(status, cpu_fallback).has_value();
 }
 
+const char* GpuSolveStatusName(GpuSolveStatus status)
+{
+    switch (status) {
+    case GpuSolveStatus::kSolved: return "solved";
+    case GpuSolveStatus::kNoSolver: return "no-solver";
+    case GpuSolveStatus::kNoCycle: return "no-cycle";
+    case GpuSolveStatus::kNoGpuDevice: return "no-gpu-device";
+    case GpuSolveStatus::kDeviceFault: return "device-fault";
+    case GpuSolveStatus::kSolverError: return "solver-error";
+    case GpuSolveStatus::kTimedOut: return "timed-out";
+    case GpuSolveStatus::kCancelled: return "cancelled";
+    }
+    return "solver-error";
+}
+
 std::string DescribeDiscovery(const GpuDiscovery& discovery)
 {
     const auto outcome = [&] {
@@ -196,6 +211,7 @@ std::string DescribeDiscovery(const GpuDiscovery& discovery)
 }
 
 bool GpuSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
+                   const std::string& device,
                    uint32_t start_nonce, uint32_t max_attempts,
                    Cycle& out, uint32_t& out_nonce,
                    const SolverProgressCallback& progress,
@@ -209,16 +225,13 @@ bool GpuSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
     if (!solver || len < 4) { report(GpuSolveStatus::kNoSolver); return false; }
     if (DeviceChoiceFromEnv().mode == DeviceChoice::Mode::kCpuOnly) { report(GpuSolveStatus::kNoSolver); return false; }
     if (cancel && cancel()) { report(GpuSolveStatus::kCancelled); return false; }  // already shutting down: do not spawn
-    const std::optional<std::string> device = SolveDevice(DiscoverGpus(edgebits).selection);
-    if (!device) { report(GpuSolveStatus::kNoGpuDevice); return false; }
-
     // NOT kNoCycle on failure: a child we could not start or could not contain is
     // a failure of ours, and the default set at the top of this function would
     // report it to the caller as a solver that ran fine over an empty nonce
     // window. The difference is what SolverFault() needs to tell the operator
     // anything at all.
     auto child = util::ContainedChild::Spawn(
-        solver_argv(*solver, *device, edgebits, prepow, len, start_nonce, max_attempts),
+        solver_argv(*solver, device, edgebits, prepow, len, start_nonce, max_attempts),
         util::ChildStdout::kPipe,
         util::SpawnFaultFromEnv("CUCKATOO_GPU_FAULT"));
     if (!child) { report(GpuSolveStatus::kSolverError); return false; }

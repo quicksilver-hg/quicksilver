@@ -26,9 +26,13 @@
 //   loop            jump back to the first directive (runs forever)
 //   exit <code>     exit with <code>
 //
-// Running off the end exits 0. Setting QS_SOLVER_STUB_ARGV additionally writes
+// QS_SOLVER_STUB_DEVICE_SCRIPTS may name a tab-separated `device<TAB>script`
+// map; solve invocations use the matching per-device script. Running off the
+// end exits 0. Setting QS_SOLVER_STUB_ARGV additionally writes
 // the arguments the stub actually received, one per line, so a test can assert
-// what the bridge delivered rather than infer it.
+// what the bridge delivered rather than infer it. QS_SOLVER_STUB_ARGV_APPEND
+// appends one tab-separated invocation per spawn, allowing concurrent launches
+// to be recorded without changing the original overwrite contract.
 
 #include <chrono>
 #include <cstdio>
@@ -36,9 +40,17 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef WIN32
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace {
 //! Loud and unique: a stub that could not read its own script must not be
@@ -82,6 +94,38 @@ bool Directive(const std::string& line, const char* verb, std::string& rest)
     rest = line.substr(n + 1);
     return true;
 }
+
+bool AppendLaunchRecord(const char* path, const std::string& record)
+{
+#ifdef WIN32
+    const HANDLE file{CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                  nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr)};
+    if (file == INVALID_HANDLE_VALUE) {
+        std::cerr << "solver stub: could not open launch record " << path << std::endl;
+        return false;
+    }
+    bool ok{record.size() <= std::numeric_limits<DWORD>::max()};
+    DWORD written{0};
+    if (ok) {
+        ok = WriteFile(file, record.data(), static_cast<DWORD>(record.size()), &written, nullptr) &&
+             written == static_cast<DWORD>(record.size());
+    }
+    if (!CloseHandle(file)) ok = false;
+#else
+    const int file{open(path, O_WRONLY | O_APPEND | O_CREAT, 0644)};
+    if (file == -1) {
+        std::cerr << "solver stub: could not open launch record " << path << std::endl;
+        return false;
+    }
+    const ssize_t written{write(file, record.data(), record.size())};
+    bool ok{written >= 0 && static_cast<size_t>(written) == record.size()};
+    if (close(file) != 0) ok = false;
+#endif
+    if (!ok) {
+        std::cerr << "solver stub: could not append complete launch record to " << path << std::endl;
+    }
+    return ok;
+}
 } // namespace
 
 int main(int argc, char* argv[])
@@ -89,6 +133,15 @@ int main(int argc, char* argv[])
     if (const char* argv_out{std::getenv("QS_SOLVER_STUB_ARGV")}) {
         std::ofstream out{argv_out, std::ios::binary};
         for (int i = 1; i < argc; ++i) out << argv[i] << "\n";
+    }
+    if (const char* argv_out{std::getenv("QS_SOLVER_STUB_ARGV_APPEND")}) {
+        std::string record;
+        for (int i = 1; i < argc; ++i) {
+            if (i != 1) record += '\t';
+            record += argv[i];
+        }
+        record += '\n';
+        if (!AppendLaunchRecord(argv_out, record)) return kMisconfigured;
     }
     const char* script{std::getenv("QS_SOLVER_STUB_SCRIPT")};
     if (argc == 2 && std::strcmp(argv[1], "--list-devices") == 0) {
@@ -98,6 +151,20 @@ int main(int argc, char* argv[])
             return 0;
         }
         script = listing;
+    }
+    if (argc >= 3 && std::strcmp(argv[1], "--device") == 0) {
+        if (const char* map_path{std::getenv("QS_SOLVER_STUB_DEVICE_SCRIPTS")}) {
+            const std::vector<std::string> mappings{ReadLines(map_path)};
+            const std::string prefix{std::string{argv[2]} + "\t"};
+            for (const std::string& mapping : mappings) {
+                if (mapping.rfind(prefix, 0) == 0) {
+                    static std::string selected;
+                    selected = mapping.substr(prefix.size());
+                    script = selected.c_str();
+                    break;
+                }
+            }
+        }
     }
     if (!script || script[0] == '\0') {
         std::cerr << "solver stub: QS_SOLVER_STUB_SCRIPT is unset" << std::endl;

@@ -58,6 +58,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QFileInfo>
+#include <QVBoxLayout>
 #include <QRadioButton>
 #include <QSpinBox>
 #include <QSystemTrayIcon>
@@ -1708,6 +1709,47 @@ int ChangedSpin(const QSpinBox* box)
 {
     return box->value() < box->maximum() ? box->value() + 1 : box->value() - 1;
 }
+
+//! Empty when Options › Network shows the consensus box with this saved state,
+//! the signed wording, and a place above port mapping. QVERIFY in a helper
+//! would return from the helper only.
+QString ConsensusBoxProblem(QWidget* dialog, bool ticked)
+{
+    auto* box = dialog->findChild<QCheckBox*>(QStringLiteral("runConsensus"));
+    if (!box) return QStringLiteral("missing runConsensus");
+    if (box->text() != QStringLiteral("R&un consensus on this network")) {
+        return QStringLiteral("text '%1'").arg(box->text());
+    }
+    const QString tooltip = QStringLiteral("Applies to this network only. Each network keeps its own setting. Turning consensus off takes effect when the client restarts. Turning it on opens the consensus review first.");
+    if (box->toolTip() != tooltip) return QStringLiteral("tooltip '%1'").arg(box->toolTip());
+    if (box->isChecked() != ticked) return QStringLiteral("checked=%1 want=%2").arg(box->isChecked()).arg(ticked);
+    auto* natpmp = dialog->findChild<QCheckBox*>(QStringLiteral("mapPortNatpmp"));
+    if (!natpmp) return QStringLiteral("missing mapPortNatpmp");
+    auto* network = dialog->findChild<QWidget*>(QStringLiteral("tabNetwork"));
+    if (!network || !network->isAncestorOf(box)) return QStringLiteral("runConsensus is not on tabNetwork");
+    auto* layout = qobject_cast<QVBoxLayout*>(network->layout());
+    if (!layout || layout->objectName() != QStringLiteral("verticalLayout_Network")) {
+        return QStringLiteral("tabNetwork layout is not verticalLayout_Network");
+    }
+    if (layout->indexOf(box) < 0 || layout->indexOf(natpmp) < 0 || layout->indexOf(box) >= layout->indexOf(natpmp)) {
+        return QStringLiteral("runConsensus index %1, mapPortNatpmp index %2").arg(layout->indexOf(box)).arg(layout->indexOf(natpmp));
+    }
+    return {};
+}
+
+//! Puts the saved opt-in back. A failed slot must not leave it true for the
+//! consensus-off window's later siblings.
+struct SavedConsensusGuard {
+    ~SavedConsensusGuard() { QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false); }
+};
+
+struct CloseModalGuard {
+    ~CloseModalGuard()
+    {
+        if (QWidget* modal = QApplication::activeModalWidget()) modal->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+};
 } // namespace
 
 QuicksilverGUI* AppTests::consensusOffWindow()
@@ -1765,8 +1807,169 @@ void AppTests::optionsOpensWithConsensusOff()
 
     auto* dialog = qobject_cast<OptionsDialog*>(QApplication::activeModalWidget());
     QVERIFY2(dialog, "optionsAction did not open an OptionsDialog");
+    const QString box_problem = ConsensusBoxProblem(dialog, /*ticked=*/false);
+    QVERIFY2(box_problem.isEmpty(), qPrintable(box_problem));
     dialog->reject();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QVERIFY(!QSettings().value(QStringLiteral("Desktop/ConsensusEnabled"), false).toBool());
+}
+
+void AppTests::optionsConsensusCancelChangesNothing()
+{
+    SavedConsensusGuard keep_off;
+    CloseModalGuard close_modal;
+    QuicksilverGUI* window = consensusOffWindow();
+    QVERIFY(window);
+    window->show();
+    QApplication::processEvents();
+    QAction* options = PreferencesAction(window);
+    QVERIFY(options && options->isEnabled());
+
+    options->trigger();
+    auto* dialog = qobject_cast<OptionsDialog*>(QApplication::activeModalWidget());
+    QVERIFY2(dialog, "optionsAction did not open an OptionsDialog");
+    auto* box = dialog->findChild<QCheckBox*>(QStringLiteral("runConsensus"));
+    QVERIFY(box);
+    QVERIFY(!box->isChecked());
+    box->click();
+    QVERIFY(box->isChecked());
+    dialog->findChild<QPushButton*>(QStringLiteral("cancelButton"))->click();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QVERIFY(!QSettings().value(QStringLiteral("Desktop/ConsensusEnabled"), false).toBool());
+
+    // The box shows the saved setting. Live consensus on this window stays off.
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), true);
+    options->trigger();
+    dialog = qobject_cast<OptionsDialog*>(QApplication::activeModalWidget());
+    QVERIFY2(dialog, "optionsAction did not reopen an OptionsDialog");
+    const QString ticked = ConsensusBoxProblem(dialog, /*ticked=*/true);
+    QVERIFY2(ticked.isEmpty(), qPrintable(ticked));
+    dialog->findChild<QCheckBox*>(QStringLiteral("runConsensus"))->click();
+    dialog->findChild<QPushButton*>(QStringLiteral("cancelButton"))->click();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QVERIFY(QSettings().value(QStringLiteral("Desktop/ConsensusEnabled"), false).toBool());
+}
+
+void AppTests::consensusOffOptionsTickOpensReview()
+{
+    CloseModalGuard close_modal;
+    QuicksilverGUI* window = consensusOffWindow();
+    QVERIFY(window);
+    window->show();
+    QApplication::processEvents();
+    VaultFrame* frame = window->findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    QVERIFY(!frame->consensusEnabled());
+    auto* stack = window->findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+    QVERIFY(stack);
+
+    QAction* options = PreferencesAction(window);
+    QVERIFY(options && options->isEnabled());
+    options->trigger();
+    auto* dialog = qobject_cast<OptionsDialog*>(QApplication::activeModalWidget());
+    QVERIFY2(dialog, "optionsAction did not open an OptionsDialog");
+    const QString box_problem = ConsensusBoxProblem(dialog, /*ticked=*/false);
+    QVERIFY2(box_problem.isEmpty(), qPrintable(box_problem));
+    dialog->findChild<QCheckBox*>(QStringLiteral("runConsensus"))->click();
+    auto* ok = dialog->findChild<QPushButton*>(QStringLiteral("okButton"));
+    QVERIFY(ok);
+    QTRY_VERIFY(ok->isEnabled());
+    ok->click();
+
+    QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
+    QVERIFY(!QSettings().value(QStringLiteral("Desktop/ConsensusEnabled"), false).toBool());
+    QVERIFY(!frame->consensusEnabled());
+    // Continue on this window would start the node. Decline leaves consensus off.
+    auto* decline = stack->currentWidget()->findChild<QPushButton*>(QStringLiteral("consensusDeclineButton"));
+    QVERIFY(decline);
+    decline->click();
+    QVERIFY(!QSettings().value(QStringLiteral("Desktop/ConsensusEnabled"), false).toBool());
+    QVERIFY(!frame->consensusEnabled());
+    QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("desktopLaunchPage"));
+}
+
+void AppTests::consensusOnOptionsUntickWaitsForRestart()
+{
+    SavedConsensusGuard keep_off;
+    CloseModalGuard close_modal;
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    OptionsModel* model = m_app.findChild<OptionsModel*>();
+    QVERIFY(model);
+    QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate(QuicksilverGUI::DEFAULT_UIPLATFORM.c_str()));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    QVERIFY(platform_style);
+    QVERIFY(network_style);
+    // Not createWindow: that connects consensus activation to requestInitialize.
+    QuicksilverGUI window(m_app.node(), platform_style.data(), network_style.data());
+    window.setOptionsModel(model);
+    window.show();
+    QApplication::processEvents();
+
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    QVERIFY(!frame->consensusEnabled());
+    auto* stack = window.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+    QVERIFY(stack);
+    frame->gotoConsensusReviewPage();
+    auto* continue_button = stack->currentWidget()->findChild<QPushButton*>(QStringLiteral("consensusContinueButton"));
+    QVERIFY(continue_button);
+    continue_button->click();
+    QVERIFY(frame->consensusEnabled());
+    QVERIFY(QSettings().value(QStringLiteral("Desktop/ConsensusEnabled"), false).toBool());
+
+    frame->gotoConsensusReviewPage();
+    QCOMPARE(window.findChild<QLabel*>(QStringLiteral("consensusChoiceCopy"))->text(),
+             QStringLiteral("You can review live status now. To turn consensus off, untick it in Settings > Options > Network. It stops when the client restarts."));
+
+    QAction* options = PreferencesAction(&window);
+    QVERIFY(options && options->isEnabled());
+    options->trigger();
+    auto* dialog = qobject_cast<OptionsDialog*>(QApplication::activeModalWidget());
+    QVERIFY2(dialog, "optionsAction did not open an OptionsDialog");
+    const QString ticked = ConsensusBoxProblem(dialog, /*ticked=*/true);
+    QVERIFY2(ticked.isEmpty(), qPrintable(ticked));
+    auto* consensus_box = dialog->findChild<QCheckBox*>(QStringLiteral("runConsensus"));
+    QVERIFY(consensus_box);
+    consensus_box->click();
+    // Visible before OK. The saved setting stays true until OK.
+    QCOMPARE(dialog->findChild<QLabel*>(QStringLiteral("statusLabel"))->text(), QStringLiteral("Client restart required to activate changes."));
+    QVERIFY(QSettings().value(QStringLiteral("Desktop/ConsensusEnabled"), false).toBool());
+    consensus_box->click();
+    QCOMPARE(dialog->findChild<QLabel*>(QStringLiteral("statusLabel"))->text(), QString());
+    QVERIFY(QSettings().value(QStringLiteral("Desktop/ConsensusEnabled"), false).toBool());
+    consensus_box->click();
+    auto* ok = dialog->findChild<QPushButton*>(QStringLiteral("okButton"));
+    QVERIFY(ok);
+    QTRY_VERIFY(ok->isEnabled());
+    ok->click();
+
+    QVERIFY(!QSettings().value(QStringLiteral("Desktop/ConsensusEnabled"), true).toBool());
+    QCOMPARE(dialog->findChild<QLabel*>(QStringLiteral("statusLabel"))->text(), QStringLiteral("Client restart required to activate changes."));
+    QVERIFY(frame->consensusEnabled());
+    auto* sync = window.findChild<QLabel*>(QStringLiteral("benchStatusSync"));
+    QVERIFY(sync);
+    QVERIFY(sync->text() != QStringLiteral("Consensus off"));
+
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    options->trigger();
+    dialog = qobject_cast<OptionsDialog*>(QApplication::activeModalWidget());
+    QVERIFY2(dialog, "optionsAction did not reopen an OptionsDialog");
+    const QString unticked = ConsensusBoxProblem(dialog, /*ticked=*/false);
+    QVERIFY2(unticked.isEmpty(), qPrintable(unticked));
+    QCOMPARE(dialog->findChild<QLabel*>(QStringLiteral("statusLabel"))->text(), QStringLiteral("Client restart required to activate changes."));
+
+    frame->gotoLaunchPage();
+    QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("desktopLaunchPage"));
+    dialog->findChild<QCheckBox*>(QStringLiteral("runConsensus"))->click();
+    ok = dialog->findChild<QPushButton*>(QStringLiteral("okButton"));
+    QVERIFY(ok);
+    QTRY_VERIFY(ok->isEnabled());
+    ok->click();
+    QVERIFY(QSettings().value(QStringLiteral("Desktop/ConsensusEnabled"), false).toBool());
+    QCOMPARE(dialog->findChild<QLabel*>(QStringLiteral("statusLabel"))->text(), QString());
+    QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("desktopLaunchPage"));
+    QVERIFY(frame->consensusEnabled());
+    m_app.node().mapPort(false);
 }
 
 void AppTests::optionsSaveWithNoNode()
@@ -2001,7 +2204,7 @@ void AppTests::networkPageOpensWithConsensusOff()
 
     QWidget* page = stack->currentWidget();
     QCOMPARE(page->findChild<QLabel*>(QStringLiteral("networkIntro"))->text(),
-             QStringLiteral("Consensus is off, so this computer is not connected to any network. You can still switch networks below."));
+             QStringLiteral("Consensus is off, so this computer is not connected to any network."));
     QCOMPARE(page->findChild<QLabel*>(QStringLiteral("networkStatusValue"))->text(), QStringLiteral("Consensus off"));
     QCOMPARE(page->findChild<QLabel*>(QStringLiteral("peerCountValue"))->text(), QStringLiteral("Not running"));
     QCOMPARE(page->findChild<QLabel*>(QStringLiteral("syncStatusValue"))->text(), QStringLiteral("Not running"));

@@ -16,6 +16,7 @@
 #include <qt/gpudevicelist.h>
 #include <qt/gpusituation.h>
 #include <qt/optionsmodel.h>
+#include <qt/vaultframe.h>
 
 #include <chainparams.h>
 #include <common/args.h>
@@ -47,6 +48,7 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QSettings>
 #include <QSystemTrayIcon>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -228,6 +230,7 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
 
 
     GUIUtil::handleCloseWindowShortcut(this);
+    ui->runConsensus->setChecked(savedConsensusEnabled());
 }
 
 OptionsDialog::~OptionsDialog()
@@ -239,6 +242,36 @@ OptionsDialog::~OptionsDialog()
 void OptionsDialog::setClientModel(ClientModel* client_model)
 {
     m_client_model = client_model;
+}
+
+bool OptionsDialog::savedConsensusEnabled() const
+{
+    return QSettings().value(QLatin1String(CONSENSUS_ENABLED_SETTING), false).toBool();
+}
+
+void OptionsDialog::setConsensusRunning(bool running)
+{
+    m_consensus_running = running;
+}
+
+void OptionsDialog::applyConsensusChoice()
+{
+    const bool saved = savedConsensusEnabled();
+    const bool want = ui->runConsensus->isChecked();
+    if (want == saved) return;
+    // Turning consensus on goes through the review page. Continue writes the setting.
+    if (want && !m_consensus_running) {
+        m_consensus_opt_in = true;
+        return;
+    }
+    // Untick, or tick back on while consensus is still running: the saved setting
+    // only. The live node is left as it is.
+    QSettings().setValue(QLatin1String(CONSENSUS_ENABLED_SETTING), want);
+    if (!want && m_consensus_running) {
+        showRestartWarning(true);
+    } else if (want) {
+        clearStatusLabel();
+    }
 }
 
 void OptionsDialog::setModel(OptionsModel *_model)
@@ -294,6 +327,16 @@ void OptionsDialog::setModel(OptionsModel *_model)
     /* Vault */
     connect(ui->spendZeroConfChange, &QCheckBox::clicked, this, &OptionsDialog::showRestartWarning);
     /* Network */
+    // The restart note is visible while the dialog is still open. Saving
+    // stays on OK. Consensus off has nothing to restart; the review page follows.
+    connect(ui->runConsensus, &QCheckBox::clicked, this, [this](bool checked) {
+        if (!m_consensus_running) return;
+        if (checked) {
+            clearStatusLabel();
+        } else {
+            showRestartWarning(true);
+        }
+    });
     connect(ui->allowIncoming, &QCheckBox::clicked, this, &OptionsDialog::showRestartWarning);
     connect(ui->enableServer, &QCheckBox::clicked, this, &OptionsDialog::showRestartWarning);
     connect(ui->connectSocks, &QCheckBox::clicked, this, &OptionsDialog::showRestartWarning);
@@ -304,6 +347,10 @@ void OptionsDialog::setModel(OptionsModel *_model)
     }
     connect(ui->thirdPartyTxUrls, &QLineEdit::textChanged, [this]{ showRestartWarning(); });
     validateGpuSolverPath();
+    // Saved off while the node is still running: the next start is the change.
+    if (m_consensus_running && !savedConsensusEnabled()) {
+        showRestartWarning(true);
+    }
 }
 
 void OptionsDialog::showEvent(QShowEvent* event)
@@ -638,7 +685,11 @@ void OptionsDialog::on_okButton_clicked()
         model->setOption(OptionsModel::GpuDevices, devices);
         model->setGpuDeviceNames(m_gpu_device_list->tickedNames());
     }
+    applyConsensusChoice();
     accept();
+    if (m_consensus_opt_in) {
+        Q_EMIT consensusOptInRequested();
+    }
     updateDefaultProxyNets();
 }
 
@@ -683,6 +734,8 @@ void OptionsDialog::clearStatusLabel()
 {
     ui->statusLabel->clear();
     if (model && model->isRestartRequired()) {
+        showRestartWarning(true);
+    } else if (m_consensus_running && !savedConsensusEnabled()) {
         showRestartWarning(true);
     }
 }

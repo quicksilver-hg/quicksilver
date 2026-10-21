@@ -1772,7 +1772,11 @@ void QuicksilverGUI::openOptionsDialogWithTab(OptionsDialog::Tab tab)
 
     auto dlg = new OptionsDialog(this, enableVault);
     connect(dlg, &OptionsDialog::quitOnReset, this, &QuicksilverGUI::quitRequested);
+    connect(dlg, &OptionsDialog::consensusOptInRequested, this, [this] {
+        if (vaultFrame) vaultFrame->gotoConsensusReviewPage();
+    });
     dlg->setCurrentTab(tab);
+    dlg->setConsensusRunning(vaultFrame && vaultFrame->consensusEnabled());
     if (clientModel) dlg->setClientModel(clientModel);
     dlg->setModel(options_model);
     GUIUtil::ShowModalDialogAsynchronously(dlg);

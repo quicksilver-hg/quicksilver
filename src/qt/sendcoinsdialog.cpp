@@ -704,14 +704,14 @@ void SendCoinsDialog::showStartupAccelerationWarningIfNeeded()
     GUIUtil::ShowModalDialogAsynchronously(box);
 }
 
-void SendCoinsDialog::confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<VaultModelTransaction> transaction, CCoinControl coin_control)
+void SendCoinsDialog::confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<VaultModelTransaction> transaction, CCoinControl coin_control, std::shared_ptr<VaultModel::UnlockContext> unlock)
 {
     Q_EMIT cpuFallbackCheckReachedForTesting();
     const bool warning_enabled{model && model->getOptionsModel()
         ? model->getOptionsModel()->getOption(OptionsModel::ShowCpuFallbackWarning).toBool()
         : true};
     if (!cpuFallbackWarningRequired(Params().GetConsensus().nTxEdgeBits == 28, gpusituation::CardWillWork(m_gpu_discovery), warning_enabled)) {
-        startAsyncSendPrepare(std::move(transaction), coin_control);
+        startAsyncSendPrepare(std::move(transaction), coin_control, std::move(unlock));
         return;
     }
 
@@ -728,10 +728,10 @@ void SendCoinsDialog::confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<Vault
     proceed_button->setObjectName(QStringLiteral("cpuFallbackProceedButton"));
     box->setDefaultButton(cancel_button);
     auto pending = std::make_shared<std::unique_ptr<VaultModelTransaction>>(std::move(transaction));
-    connect(box, &QMessageBox::finished, this, [this, box, proceed_button, suppress_warning, pending, coin_control]() {
+    connect(box, &QMessageBox::finished, this, [this, box, proceed_button, suppress_warning, pending, coin_control, unlock]() {
         const bool proceed = box->clickedButton() == proceed_button;
         const bool suppress = suppress_warning->isChecked();
-        QTimer::singleShot(0, this, [this, proceed, suppress, pending, coin_control]() mutable {
+        QTimer::singleShot(0, this, [this, proceed, suppress, pending, coin_control, unlock]() mutable {
             if (!proceed) {
                 fNewRecipientAllowed = true;
                 return;
@@ -739,13 +739,13 @@ void SendCoinsDialog::confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<Vault
             if (suppress && model && model->getOptionsModel()) {
                 model->getOptionsModel()->setOption(OptionsModel::ShowCpuFallbackWarning, false);
             }
-            startAsyncSendPrepare(std::move(*pending), coin_control);
+            startAsyncSendPrepare(std::move(*pending), coin_control, std::move(unlock));
         });
     });
     GUIUtil::ShowModalDialogAsynchronously(box);
 }
 
-void SendCoinsDialog::startAsyncSendPrepare(std::unique_ptr<VaultModelTransaction> transaction, CCoinControl coin_control)
+void SendCoinsDialog::startAsyncSendPrepare(std::unique_ptr<VaultModelTransaction> transaction, CCoinControl coin_control, std::shared_ptr<VaultModel::UnlockContext> unlock)
 {
     const quint64 generation = ++m_solve_generation;
     setSendControlsEnabled(false);
@@ -753,7 +753,7 @@ void SendCoinsDialog::startAsyncSendPrepare(std::unique_ptr<VaultModelTransactio
 
     VaultModel* vault_model = model;
     QPointer<SendCoinsDialog> self(this);
-    QThread* thread = QThread::create([self, vault_model, transaction = std::move(transaction), coin_control, generation]() mutable {
+    QThread* thread = QThread::create([self, vault_model, transaction = std::move(transaction), coin_control, generation, unlock = std::move(unlock)]() mutable {
         auto progress_callback = [self, generation](uint32_t nonce) {
             if (!self) return;
             QMetaObject::invokeMethod(self, [self, generation, nonce]() {
@@ -762,6 +762,8 @@ void SendCoinsDialog::startAsyncSendPrepare(std::unique_ptr<VaultModelTransactio
             }, Qt::QueuedConnection);
         };
         VaultModel::SendCoinsReturn status = vault_model->prepareTransaction(*transaction, coin_control, progress_callback);
+        // Signed or failed: the keys are no longer needed, so relock now (F-519).
+        unlock.reset();
         auto result = QSharedPointer<PreparedSendResult>::create(PreparedSendResult{
             std::move(transaction),
             status,
@@ -797,7 +799,7 @@ void SendCoinsDialog::sendButtonClicked([[maybe_unused]] bool checked)
             self->fNewRecipientAllowed = true;
             return;
         }
-        self->confirmCpuFallbackIfNeededAndPrepare(std::move(*pending), coin_control);
+        self->confirmCpuFallbackIfNeededAndPrepare(std::move(*pending), coin_control, std::move(ctx));
     });
 }
 

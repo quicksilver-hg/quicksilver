@@ -41,6 +41,7 @@ std::optional<std::string> SolverFault(GpuSolveStatus status, bool cpu_fallback)
  * are faults at all: a missing solver under a CPU fallback is not one.
  */
 bool SolverMissing(GpuSolveStatus status, bool cpu_fallback);
+const char* GpuSolveStatusName(GpuSolveStatus status);
 
 /**
  * Return the solver path active in this process, or nullopt when the runtime
@@ -52,7 +53,7 @@ bool SolverMissing(GpuSolveStatus status, bool cpu_fallback);
 bool GpuHelperConfigured(uint8_t edgebits);
 std::string DescribeDiscovery(const GpuDiscovery& discovery);
 
-//! If CUCKATOO_GPU_SOLVER is set, runs it as
+//! If CUCKATOO_GPU_SOLVER is set, runs the helper for `device` as
 //!   <path> --device <id> <edgebits> <hex(prepow)> <start_nonce> <max_attempts>
 //! and parses "nonce="/"cycle=". The external binary grinds the nonce into
 //! buf[len-4..len-1] (LE) itself, matching the CPU solver. Returns true and
@@ -63,6 +64,7 @@ std::string DescribeDiscovery(const GpuDiscovery& discovery);
 //! process group is killed and the call returns false without waiting out the
 //! no-progress window.
 bool GpuSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
+                   const std::string& device,
                    uint32_t start_nonce, uint32_t max_attempts,
                    Cycle& out, uint32_t& out_nonce,
                    const SolverProgressCallback& progress = {},

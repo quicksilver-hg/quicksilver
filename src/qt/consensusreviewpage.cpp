@@ -123,7 +123,7 @@ void ConsensusReviewPage::refreshState()
         ? tr("Independent verification has been accepted on this desktop. Node status shows the current peer and sync state.")
         : tr("Run independent verification only when the storage and background activity are an intentional choice. The vault works without it."));
     m_choice_copy->setText(m_consensus_enabled
-        ? tr("You can review live status now. Disabling the provisioned node is a separate startup setting and is not changed here.")
+        ? tr("You can review live status now. To turn consensus off, untick it in Settings > Options > Network. It stops when the client restarts.")
         : tr("Independent verification is valuable, but most vault-only users should decline until they specifically want to run consensus."));
     m_decline_button->setText(m_consensus_enabled ? tr("Back to home") : tr("Decline for now"));
     m_continue_button->setText(m_consensus_enabled ? tr("Show node status") : tr("Enable consensus"));

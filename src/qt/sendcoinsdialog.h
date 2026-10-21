@@ -157,8 +157,9 @@ private:
     static SendWorkNotes sendWorkNotes(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox);
     void showSendWorkNotes(const SendWorkNotes& notes);
     void showStartupAccelerationWarningIfNeeded();
-    void confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<VaultModelTransaction> transaction, vault::CCoinControl coin_control);
-    void startAsyncSendPrepare(std::unique_ptr<VaultModelTransaction> transaction, vault::CCoinControl coin_control);
+    //! `unlock` is held until the worker has signed (F-519).
+    void confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<VaultModelTransaction> transaction, vault::CCoinControl coin_control, std::shared_ptr<VaultModel::UnlockContext> unlock);
+    void startAsyncSendPrepare(std::unique_ptr<VaultModelTransaction> transaction, vault::CCoinControl coin_control, std::shared_ptr<VaultModel::UnlockContext> unlock);
     static bool cpuFallbackWarningRequired(bool slow_network, bool card_will_work, bool warning_enabled);
     /* Sign PSQT using external signer.
      *

@@ -82,11 +82,14 @@
 #include <vault/vaultdb.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 
 #include <QAbstractButton>
 #include <QAction>
@@ -202,7 +205,8 @@ public:
     int cosign_calls{0};
     CTransactionRef cosign_result;
     bool crypted{false};
-    bool locked{false};
+    //! Atomic: the transfer worker reads it while the GUI thread locks.
+    std::atomic<bool> locked{false};
     bool unlock_ok{true};
     bool unlock_throws{false};
     bool transaction_creation_available{false};
@@ -226,13 +230,21 @@ public:
     bool in_flight_during_create{false};
     bool cancel_requested_during_create{false};
     std::optional<bool> remove_load_on_start{true}; // an unset value the calls cannot produce
+    //! Closed by a test to hold createTransaction until the GUI thread has run on.
+    std::atomic<bool> create_gate_open{true};
+    std::atomic<bool> locked_during_create{false};
 
     bool encryptVault(const SecureString&) override { return false; }
     bool isCrypted() override { return crypted; }
-    bool lock() override { return true; }
+    bool lock() override
+    {
+        locked = true;
+        return true;
+    }
     bool unlock(const SecureString&) override
     {
         if (unlock_throws) throw std::runtime_error("unlock boom");
+        if (unlock_ok) locked = false;
         return unlock_ok;
     }
     bool isLocked() override { return locked; }
@@ -283,6 +295,9 @@ public:
     util::Result<CTransactionRef> createTransaction(const std::vector<vault::CRecipient>&, const vault::CCoinControl&, bool, int&, const std::function<void(uint32_t nonce)>& = {}, const std::function<bool()>& tx_proof_cancel = {}) override
     {
         ++create_calls;
+        for (int i = 0; !create_gate_open && i < 1000; ++i) std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        // Signing needs the keys, so the vault must still be unlocked here.
+        locked_during_create = locked.load();
         // Stands in for the grind: records what the vault model reported while a
         // transfer was in flight, which is what the close paths consult.
         in_flight_during_create = vault_model_under_test && vault_model_under_test->proofOfWorkInFlight();
@@ -5907,6 +5922,26 @@ void VaultTests::transferPrecheckAllowsStaleLowBalance()
     QCOMPARE(fixture.vault->auto_selection_bound_calls, 1);
 }
 
+void VaultTests::transferHoldsUnlockThroughPreparation()
+{
+    // F-519: the worker signs, so the unlock must outlive the button handler.
+    TransferPrecheckFixture fixture(m_node);
+    fixture.recipient(COIN);
+    fixture.vault->balance = 2 * COIN;
+    QSignalSpy finished(fixture.dialog.get(), &SendCoinsDialog::sendPreparationFinishedForTesting);
+    QObject::connect(fixture.model.get(), &VaultModel::requireUnlock, fixture.dialog.get(), [&] {
+        fixture.vault->locked = false;
+    });
+    fixture.vault->create_gate_open = false;
+    fixture.transmit();
+    fixture.vault->create_gate_open = true;
+    QTRY_COMPARE(finished.size(), 1);
+    QCOMPARE(fixture.vault->create_calls, 1);
+    QVERIFY(!fixture.vault->locked_during_create);
+    // Relocked once the preparation is over: the vault was locked before the transfer.
+    QTRY_VERIFY(fixture.vault->locked);
+}
+
 void VaultTests::transferPrecheckDefersUncertainBalance_data()
 {
     QTest::addColumn<int>("uncertainty");
@@ -7032,4 +7067,150 @@ void VaultTests::transactionBurstPostsOneImmediateNotification()
     QCOMPARE(notifications.count(), 2);
     QCOMPARE(notifications.at(1).at(1).toString(), QStringLiteral("Quicksilver - New transactions"));
     QCOMPARE(notifications.at(1).at(2).toString(), QuicksilverGUI::transactionSummaryTextForTesting(BLOCKS - 1));
+}
+
+void VaultTests::homeLedgerBurstCoalescesColumnFits()
+{
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    for (int i = 0; i < 5; ++i) {
+        test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+        SetMockTime(GetTime() + 1);
+    }
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    // Both vaults exist before the burst is mined. A model loads history when
+    // it is created, and a vault cannot be replayed, so the two windows have
+    // to watch the same new blocks arrive.
+    std::shared_ptr<CVault> vault_settled = SetupDescriptorsVault(m_node, test);
+    std::shared_ptr<CVault> vault_burst = SetupDescriptorsVault(m_node, test);
+
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    MiniGUI mini_settled(m_node, platform_style.get());
+    mini_settled.initModelForVault(m_node, vault_settled, platform_style.get());
+    MiniGUI mini_burst(m_node, platform_style.get());
+    mini_burst.initModelForVault(m_node, vault_burst, platform_style.get());
+
+    QuicksilverGUI settled_window(m_node, platform_style.get(), network_style.data());
+    QuicksilverGUI burst_window(m_node, platform_style.get(), network_style.data());
+    int64_t settled_now{0};
+    int64_t burst_now{0};
+    settled_window.setNotificationClockForTesting([&settled_now] { return settled_now; });
+    burst_window.setNotificationClockForTesting([&burst_now] { return burst_now; });
+
+    const auto attach = [&](MiniGUI& mini, QuicksilverGUI& window) -> QString {
+        VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+        if (!frame) return QStringLiteral("no vault frame");
+        auto* view = new VaultView(mini.vaultModel.get(), platform_style.get(), frame);
+        if (!frame->addView(view)) return QStringLiteral("addView failed");
+        frame->setCurrentVault(mini.vaultModel.get());
+        view->setClientModel(mini.clientModel.get());
+        connect(view, &VaultView::incomingTransaction, &window, &QuicksilverGUI::incomingTransaction);
+        window.resize(1200, 800);
+        window.show();
+        QAction* home = window.findChild<QAction*>(QStringLiteral("homeBootstrapAction"));
+        if (!home) return QStringLiteral("no home action");
+        home->trigger();
+        return {};
+    };
+    const QString settled_attached = attach(mini_settled, settled_window);
+    QVERIFY2(settled_attached.isEmpty(), qPrintable(settled_attached));
+    const QString burst_attached = attach(mini_burst, burst_window);
+    QVERIFY2(burst_attached.isEmpty(), qPrintable(burst_attached));
+    QVERIFY(QTest::qWaitForWindowExposed(&settled_window));
+    QVERIFY(QTest::qWaitForWindowExposed(&burst_window));
+    settled_window.resize(1200, 800);
+    burst_window.resize(1200, 800);
+
+    TransactionTableModel* settled_tx = mini_settled.vaultModel->getTransactionTableModel();
+    TransactionTableModel* burst_tx = mini_burst.vaultModel->getTransactionTableModel();
+    QVERIFY(settled_tx && burst_tx);
+    QTRY_VERIFY(!settled_tx->processingQueuedTransactions());
+    QTRY_VERIFY(!burst_tx->processingQueuedTransactions());
+    const int settled_before = settled_tx->rowCount({});
+    const int burst_before = burst_tx->rowCount({});
+    QCOMPARE(settled_before, burst_before);
+    QVERIFY(settled_before > 10);
+
+    constexpr int BLOCKS{200};
+    std::vector<CBlock> blocks;
+    blocks.reserve(BLOCKS);
+    const auto feed = [&](const std::shared_ptr<CVault>& vault, int index) {
+        const CBlock& block = blocks[index];
+        const uint256 hash{block.GetHash()};
+        interfaces::BlockInfo block_info{hash};
+        block_info.height = 106 + index;
+        block_info.data = &block;
+        block_info.chain_time_max = block.GetBlockTime();
+        vault->blockConnected(block_info);
+    };
+    for (int i = 0; i < BLOCKS; ++i) {
+        blocks.push_back(test.CreateAndProcessBlock({}, GetScriptForDestination(WitnessV0KeyHash(test.coinbaseKey.GetPubKey()))));
+        SetMockTime(GetTime() + 1);
+        feed(vault_settled, i);
+        settled_now += 1;
+        QTRY_COMPARE_WITH_TIMEOUT(settled_tx->rowCount({}), settled_before + i + 1, 30000);
+        for (int n = 0; n < 4; ++n) QCoreApplication::processEvents();
+    }
+    for (int n = 0; n < 8; ++n) QCoreApplication::processEvents();
+
+    struct HomeSnap {
+        QStringList hashes;
+        QString count;
+        QList<int> widths;
+        QList<bool> hidden;
+    };
+    const auto snapOf = [](QuicksilverGUI& window) {
+        HomeSnap snap;
+        auto* count = window.findChild<QLabel*>(QStringLiteral("homeLedgerCount"));
+        auto* table = window.findChild<QTableView*>(QStringLiteral("homeLedgerTable"));
+        snap.count = count->text();
+        QAbstractItemModel* rows = table->model();
+        for (int row = 0; row < rows->rowCount(); ++row) {
+            snap.hashes << rows->index(row, 0).data(TransactionTableModel::TxHashRole).toString();
+        }
+        for (int column = 0; column < table->horizontalHeader()->count(); ++column) {
+            snap.widths << table->columnWidth(column);
+            snap.hidden << table->isColumnHidden(column);
+        }
+        return snap;
+    };
+    const HomeSnap settled_snap = snapOf(settled_window);
+    QCOMPARE(settled_snap.hashes.size(), 10);
+
+    auto* burst_page = burst_window.findChild<DesktopLaunchPage*>(QStringLiteral("desktopLaunchPage"));
+    QVERIFY(burst_page);
+    for (int n = 0; n < 8; ++n) QCoreApplication::processEvents();
+    const int fits_before = burst_page->ledgerColumnFitsForTesting();
+
+    QElapsedTimer clock;
+    clock.start();
+    qint64 last = clock.elapsed();
+    qint64 longest = 0;
+    QTimer heartbeat;
+    heartbeat.setInterval(0);
+    QObject::connect(&heartbeat, &QTimer::timeout, [&] {
+        const qint64 now = clock.elapsed();
+        longest = std::max(longest, now - last);
+        last = now;
+    });
+    heartbeat.start();
+    for (int i = 0; i < BLOCKS; ++i) feed(vault_burst, i);
+    // blockConnected's own time is not an event-loop stall. The gap that
+    // starts here is the drain of the queued inserts.
+    last = clock.elapsed();
+    QTRY_COMPARE_WITH_TIMEOUT(burst_tx->rowCount({}), burst_before + BLOCKS, 60000);
+    for (int n = 0; n < 12; ++n) QCoreApplication::processEvents();
+    heartbeat.stop();
+
+    const int fits = burst_page->ledgerColumnFitsForTesting() - fits_before;
+    qWarning("F-512 burst fits=%d longest_event_loop_stall_ms=%lld", fits, static_cast<long long>(longest));
+    QVERIFY2(fits >= 1 && fits <= 6, qPrintable(QStringLiteral("fits=%1").arg(fits)));
+
+    const HomeSnap burst_snap = snapOf(burst_window);
+    QCOMPARE(burst_snap.hashes, settled_snap.hashes);
+    QCOMPARE(burst_snap.count, settled_snap.count);
+    QCOMPARE(burst_snap.hidden, settled_snap.hidden);
+    QCOMPARE(burst_snap.widths, settled_snap.widths);
 }

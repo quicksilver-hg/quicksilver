@@ -167,8 +167,12 @@ util::Result<void> ProveAgentSpend(CMutableTransaction& transaction,
             return util::Error{Untranslated("Per-transaction proof-of-work was cancelled.")};
         }
         cuckatoo::GpuSolveStatus solver_status{cuckatoo::GpuSolveStatus::kNoCycle};
+        const auto accept = [&](const cuckatoo::Cycle& candidate, uint32_t) {
+            return UintToArith256(cuckatoo::CuckatooProofHash(candidate)) <= target;
+        };
         if (!cuckatoo::CuckatooSolveBytes(preimage.data(), preimage.size(), consensus.nTxEdgeBits, start_nonce, 1u << 24, cycle, nonce, cpu_fallback,
-                                          /*progress=*/{}, cancel, &solver_status)) {
+                                          /*progress=*/{}, cancel, &solver_status,
+                                          /*discarded_cycles=*/nullptr, accept)) {
             // A cancelled solve is not a failure to find a proof, and SolverFault()
             // deliberately returns nullopt for it -- so without this the operator
             // would be told the grind could not produce a proof.

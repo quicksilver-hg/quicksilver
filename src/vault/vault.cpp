@@ -2012,22 +2012,23 @@ void MaybeResendVaultTxs(VaultContext& context)
  * @{
  */
 
-bool CVault::SignTransaction(CMutableTransaction& tx) const
+bool CVault::SignTransaction(CMutableTransaction& tx, std::map<int, bilingual_str>& input_errors) const
 {
     AssertLockHeld(cs_vault);
 
     // Build coins map
     std::map<COutPoint, Coin> coins;
-    for (auto& input : tx.vin) {
+    for (unsigned int i = 0; i < tx.vin.size(); ++i) {
+        const CTxIn& input = tx.vin[i];
         const auto mi = mapVault.find(input.prevout.hash);
         if (mi == mapVault.end() || input.prevout.n >= mi->second.tx->vout.size()) {
+            input_errors[i] = _("Input not found in this vault");
             return false;
         }
         const CVaultTx& wtx = mi->second;
         int prev_height = wtx.state<TxStateConfirmed>() ? wtx.state<TxStateConfirmed>()->confirmed_block_height : 0;
         coins[input.prevout] = Coin(wtx.tx->vout[input.prevout.n], prev_height, wtx.IsCoinBase());
     }
-    std::map<int, bilingual_str> input_errors;
     return SignTransaction(tx, coins, SIGHASH_DEFAULT, input_errors);
 }
 

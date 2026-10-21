@@ -24,11 +24,14 @@ public:
 private Q_SLOTS:
     void restartArgumentsForDeveloperNetwork();
     void consensusTorPreflight();
-    // These four run before appTests. appTests starts the shared node and then
+    // This block runs before appTests. appTests starts the shared node and then
     // shuts it down; a slot after that cannot open Options with no client model
     // or prove a restart before the node thread exists. Sibling slices append
     // at the end of this list, so this block stays clear of that region.
     void optionsOpensWithConsensusOff();
+    void optionsConsensusCancelChangesNothing();
+    void consensusOffOptionsTickOpensReview();
+    void consensusOnOptionsUntickWaitsForRestart();
     void optionsSaveWithNoNode();
     void networkPageOpensWithConsensusOff();
     void headerHidesTheCurrentPagesButton();
@@ -40,7 +43,7 @@ private:
     //! Driven from guiTests, where a real window and node already exist.
     void shutdownIsNotParkedBehindAModalDialog(QuicksilverGUI* window);
 
-    //! The consensus-off window the four slots above share. Not created through
+    //! The consensus-off window the slots above share. Not created through
     //! baseInitialize, so it does not leave a vault controller for appTests.
     QuicksilverGUI* consensusOffWindow();
     //! Hide that window and drop the options model it borrowed, before appTests

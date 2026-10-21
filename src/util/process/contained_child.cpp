@@ -70,6 +70,26 @@ SpawnFault SpawnFaultFromEnv(const char* env_var)
 
 namespace util {
 
+namespace {
+int CloseOnExecPipe(int fds[2])
+{
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
+    return pipe2(fds, O_CLOEXEC);
+#else
+    if (pipe(fds) != 0) return -1;
+    if (fcntl(fds[0], F_SETFD, FD_CLOEXEC) == 0 &&
+        fcntl(fds[1], F_SETFD, FD_CLOEXEC) == 0) {
+        return 0;
+    }
+    const int saved_errno = errno;
+    close(fds[0]);
+    close(fds[1]);
+    errno = saved_errno;
+    return -1;
+#endif
+}
+} // namespace
+
 struct ContainedChild::Impl {
     pid_t pid{-1};
     int stdout_fd{-1};
@@ -93,10 +113,13 @@ std::unique_ptr<ContainedChild> ContainedChild::Spawn(const std::vector<std::str
     for (const std::string& arg : argv) cargv.push_back(const_cast<char*>(arg.c_str()));
     cargv.push_back(nullptr);
 
+    // Spawn may run on several worker threads at once. Every pipe is born
+    // close-on-exec so a different child cannot keep this child's stream open.
+    // dup2 below clears the flag on the stdout copy that this child needs.
     const bool want_pipe = (stdout_mode == ChildStdout::kPipe);
     int fds[2] = {-1, -1};
     if (inject == SpawnFault::kPipe) return nullptr;
-    if (want_pipe && pipe(fds) != 0) return nullptr;
+    if (want_pipe && CloseOnExecPipe(fds) != 0) return nullptr;
 
     // The POSIX analogue of Windows' CREATE_SUSPENDED. The child blocks here
     // until the parent has CONFIRMED the process group exists; EOF without the
@@ -107,7 +130,7 @@ std::unique_ptr<ContainedChild> ContainedChild::Spawn(const std::vector<std::str
     // wrapper, and a wrapper that does not exec puts the real program back out
     // of reach of anything but killpg.
     int sync_fds[2];
-    if (pipe(sync_fds) != 0) {
+    if (CloseOnExecPipe(sync_fds) != 0) {
         if (want_pipe) { close(fds[0]); close(fds[1]); }
         return nullptr;
     }
@@ -297,12 +320,34 @@ std::unique_ptr<ContainedChild> ContainedChild::Spawn(const std::vector<std::str
         job_ok = SetInformationJobObject(job, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli)) != 0;
     }
 
-    STARTUPINFOA si{};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdOutput = want_pipe ? wr : nul;
-    si.hStdError = (nul != INVALID_HANDLE_VALUE) ? nul : si.hStdOutput;
-    si.hStdInput = (nul != INVALID_HANDLE_VALUE) ? nul : nullptr;
+    STARTUPINFOEXA si{};
+    si.StartupInfo.cb = sizeof(si);
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    si.StartupInfo.hStdOutput = want_pipe ? wr : nul;
+    si.StartupInfo.hStdError = (nul != INVALID_HANDLE_VALUE) ? nul : si.StartupInfo.hStdOutput;
+    si.StartupInfo.hStdInput = (nul != INVALID_HANDLE_VALUE) ? nul : nullptr;
+
+    // Spawn may run on several worker threads at once. bInheritHandles alone
+    // would let this child inherit every other in-flight child's pipe. Limit
+    // inheritance to the handles named as this child's standard streams.
+    std::vector<HANDLE> inherited_handles;
+    if (want_pipe) inherited_handles.push_back(wr);
+    if (nul != INVALID_HANDLE_VALUE) inherited_handles.push_back(nul);
+    SIZE_T attribute_bytes = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attribute_bytes);
+    std::vector<unsigned char> attribute_storage(attribute_bytes);
+    si.lpAttributeList = attribute_bytes
+        ? reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attribute_storage.data())
+        : nullptr;
+    bool attribute_ok = si.lpAttributeList &&
+        InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &attribute_bytes) != 0;
+    if (attribute_ok) {
+        attribute_ok = !inherited_handles.empty() &&
+            UpdateProcThreadAttribute(si.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                      inherited_handles.data(),
+                                      inherited_handles.size() * sizeof(inherited_handles[0]),
+                                      nullptr, nullptr) != 0;
+    }
 
     // CreateProcess writes to this buffer, so it cannot be the string's storage.
     std::vector<char> cmdbuf(cmdline.begin(), cmdline.end());
@@ -317,10 +362,11 @@ std::unique_ptr<ContainedChild> ContainedChild::Spawn(const std::vector<std::str
     // CREATE_SUSPENDED so the process is in the job BEFORE it can run and spawn
     // anything of its own; otherwise a fast child escapes the job and survives
     // the kill. CREATE_NO_WINDOW keeps a console from flashing over the GUI.
-    const BOOL spawned = (inject == SpawnFault::kSpawn) ? FALSE
+    const BOOL spawned = (inject == SpawnFault::kSpawn || !attribute_ok) ? FALSE
                        : CreateProcessA(nullptr, cmdbuf.data(), nullptr, nullptr, TRUE,
-                                        CREATE_SUSPENDED | CREATE_NO_WINDOW,
-                                        nullptr, nullptr, &si, &pi);
+                                        CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
+                                        nullptr, nullptr, &si.StartupInfo, &pi);
+    if (si.lpAttributeList) DeleteProcThreadAttributeList(si.lpAttributeList);
     if (want_pipe) CloseHandle(wr);  // parent must drop its write end or the pipe never sees EOF
     if (!spawned) {
         if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);

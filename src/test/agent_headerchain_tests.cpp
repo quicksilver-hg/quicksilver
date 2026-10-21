@@ -61,6 +61,8 @@
 
 #include <chrono>
 #include <cstdint>
+#include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -3232,6 +3234,122 @@ BOOST_AUTO_TEST_CASE(spent_today_sums_spend_amount_not_consumed_input)
     auto other_address{agent::SpentTodayFromActivities(activities, "other-address", 1'700'000'000)};
     BOOST_REQUIRE_MESSAGE(other_address, util::ErrorString(other_address).original);
     BOOST_CHECK_EQUAL(*other_address, 0);
+}
+
+BOOST_AUTO_TEST_CASE(agent_allotment_passes_the_target_as_the_accept_predicate)
+{
+    struct EnvRestore {
+        std::vector<std::pair<std::string, std::optional<std::string>>> values;
+        EnvRestore()
+        {
+            for (const char* name : {"CUCKATOO_GPU_SOLVER", "CUCKATOO_GPU_BUNDLED",
+                                     "CUCKATOO_GPU_DEVICES", "QS_SOLVER_STUB_SCRIPT",
+                                     "QS_SOLVER_STUB_LISTING", "QS_SOLVER_STUB_DEVICE_SCRIPTS",
+                                     "QS_SOLVER_STUB_ARGV_APPEND"}) {
+                const char* value{std::getenv(name)};
+                values.emplace_back(name, value ? std::optional<std::string>{value} : std::nullopt);
+                ClearEnvVar(name);
+            }
+            cuckatoo::ResetGpuDiscoveryForTesting();
+        }
+        ~EnvRestore()
+        {
+            for (const auto& [name, value] : values) {
+                if (value) SetEnvVar(name.c_str(), value->c_str());
+                else ClearEnvVar(name.c_str());
+            }
+            cuckatoo::ResetGpuDiscoveryForTesting();
+        }
+    } restore_env;
+
+    Consensus::Params consensus{Params().GetConsensus()};
+    consensus.nTxEdgeBits = 19;
+    consensus.nTxWorkCouplingK = 1;
+    agent::HeaderChain chain{consensus, Params().GenesisBlock()};
+    BOOST_REQUIRE(chain.AcceptHeader(NextHeader(chain, 0, {}, static_cast<uint32_t>(8 * CONGESTION_ONE))).accepted());
+    const CBlockIndex& anchor{chain.Tip()};
+
+    const CKey funding_key{GenerateRandomKey()};
+    auto context{agent::ImportAllotmentBundle(AgentAllotmentBundleJson(funding_key),
+                                               Params().GetChainTypeString(),
+                                               Params().GenesisBlock().GetHash().ToString())};
+    BOOST_REQUIRE_MESSAGE(context, util::ErrorString(context).original);
+    const agent::AllotmentSpendRequest request{
+        .prevout = COutPoint{Txid::FromUint256(ArithToUint256(92)), 0},
+        .prevout_value = COIN,
+        .destination = PKHash(GenerateRandomKey().GetPubKey()),
+        .spend_amount = COIN / 4,
+        .spent_today = 0,
+        .prove = true,
+        .anchor = &anchor,
+    };
+
+    auto baseline{agent::CreateSignedAllotmentSpend(*context, request, consensus)};
+    BOOST_REQUIRE_MESSAGE(baseline, util::ErrorString(baseline).original);
+    const auto preimage = CTransaction(baseline->transaction).PowPreimage(anchor.GetBlockHash());
+
+    cuckatoo::Cycle rejected{};
+    uint32_t rejected_nonce{0};
+    uint32_t start{0};
+    for (;;) {
+        BOOST_REQUIRE(cuckatoo::CuckatooSolveBytes(preimage.data(), preimage.size(), 19, start,
+                                                   1U << 20, rejected, rejected_nonce,
+                                                   /*cpu_fallback=*/true));
+        if (UintToArith256(cuckatoo::CuckatooProofHash(rejected)) > UintToArith256(baseline->proof_target)) break;
+        BOOST_REQUIRE(rejected_nonce != std::numeric_limits<uint32_t>::max());
+        start = rejected_nonce + 1;
+    }
+
+    const auto cycle_line = [](const cuckatoo::Cycle& cycle) {
+        std::string out{"cycle="};
+        for (size_t i{0}; i < cycle.size(); ++i) {
+            if (i != 0) out += " ";
+            out += strprintf("%x", cycle[i]);
+        }
+        return out;
+    };
+    const fs::path rejected_script{m_path_root / "agent-rejected.stub"};
+    const fs::path accepted_script{m_path_root / "agent-accepted.stub"};
+    const fs::path listing_script{m_path_root / "agent-listing.stub"};
+    const fs::path device_map{m_path_root / "agent-devices.map"};
+    const fs::path argv_log{m_path_root / "agent-argv.log"};
+    {
+        std::ofstream out{rejected_script};
+        out << "sleep 50\necho nonce=" << rejected_nonce << "\necho " << cycle_line(rejected) << "\nexit 0\n";
+    }
+    {
+        std::ofstream out{accepted_script};
+        out << "sleep 200\necho nonce=" << baseline->transaction.nPowNonce << "\necho "
+            << cycle_line(baseline->transaction.nCycle) << "\nexit 0\n";
+    }
+    {
+        std::ofstream out{listing_script};
+        out << "echo device backend=stub id=pci:0000:01:00.0 type=gpu integrated=0 mem=0 status=ok name=A\n"
+               "echo device backend=stub id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=B\nexit 0\n";
+    }
+    {
+        std::ofstream out{device_map};
+        out << "pci:0000:01:00.0\t" << fs::PathToString(rejected_script) << "\n"
+            << "pci:0000:04:00.0\t" << fs::PathToString(accepted_script) << "\n";
+    }
+    SetEnvVar("CUCKATOO_GPU_SOLVER", SOLVER_STUB_PATH);
+    SetEnvVar("QS_SOLVER_STUB_SCRIPT", fs::PathToString(rejected_script).c_str());
+    SetEnvVar("QS_SOLVER_STUB_LISTING", fs::PathToString(listing_script).c_str());
+    SetEnvVar("QS_SOLVER_STUB_DEVICE_SCRIPTS", fs::PathToString(device_map).c_str());
+    SetEnvVar("QS_SOLVER_STUB_ARGV_APPEND", fs::PathToString(argv_log).c_str());
+    cuckatoo::ResetGpuDiscoveryForTesting();
+
+    auto proved{agent::CreateSignedAllotmentSpend(*context, request, consensus)};
+    BOOST_REQUIRE_MESSAGE(proved, util::ErrorString(proved).original);
+    BOOST_CHECK_EQUAL(proved->transaction.nPowNonce, baseline->transaction.nPowNonce);
+    BOOST_CHECK(proved->transaction.nCycle == baseline->transaction.nCycle);
+    std::ifstream launches{argv_log};
+    std::string line;
+    bool launched_b{false};
+    while (std::getline(launches, line)) {
+        if (line.find("--device\tpci:0000:04:00.0\t") == 0) launched_b = true;
+    }
+    BOOST_CHECK(launched_b);
 }
 
 BOOST_AUTO_TEST_CASE(agent_allotment_cpu_fallback_requires_opt_in_past_sandbox)

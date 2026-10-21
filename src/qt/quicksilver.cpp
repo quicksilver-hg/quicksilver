@@ -22,6 +22,7 @@
 #include <tor/bundled_tor.h>
 #include <torcontrol.h>
 #include <qt/quicksilvergui.h>
+#include <qt/vaultframe.h>
 #include <qt/clientmodel.h>
 #include <qt/guiconstants.h>
 #include <qt/guiutil.h>
@@ -84,8 +85,6 @@ Q_DECLARE_METATYPE(vault::AddressPurpose)
 using util::MakeUnorderedList;
 
 namespace {
-constexpr const char* CONSENSUS_ENABLED_SETTING = "Desktop/ConsensusEnabled";
-
 bool ConsensusEnabledOnThisDesktop()
 {
     return QSettings().value(QLatin1String(CONSENSUS_ENABLED_SETTING), false).toBool();

@@ -49,6 +49,7 @@ add_executable(test_quicksilver
   gpu_helper_config_tests.cpp
   gpu_solver_tests.cpp
   gpu_devices_tests.cpp
+  multi_device_tests.cpp
   dbwrapper_tests.cpp
   denialofservice_tests.cpp
   descriptor_tests.cpp

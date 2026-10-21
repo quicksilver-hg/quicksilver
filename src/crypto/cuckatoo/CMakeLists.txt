@@ -17,6 +17,7 @@ add_library(quicksilver_cuckatoo STATIC EXCLUDE_FROM_ALL
   solve_19.cpp
   solve_28.cpp
   dispatch.cpp
+  multi_device.cpp
   gpu_solver.cpp
   gpu_devices.cpp
   vendor/blake2b-ref.c

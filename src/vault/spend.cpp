@@ -1023,7 +1023,13 @@ std::optional<bilingual_str> GrindTransactionPow(CVault& vault, CMutableTransact
         // misses the target comes back around, and a caller that asked to stop should
         // not be made to wait out another one.
         if (tx_proof_cancel && tx_proof_cancel()) return _("Transfer proof-of-work canceled");
-        if (!cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), cp.nTxEdgeBits, start_nonce, 1u << 24, cyc, won, cpu_ok, tx_proof_progress, tx_proof_cancel, /*gpu_status=*/nullptr, &discarded_cycles)) {
+        const auto accept = [&](const cuckatoo::Cycle& candidate, uint32_t) {
+            return UintToArith256(cuckatoo::CuckatooProofHash(candidate)) <= UintToArith256(target);
+        };
+        if (!cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), cp.nTxEdgeBits,
+                                          start_nonce, 1u << 24, cyc, won, cpu_ok,
+                                          tx_proof_progress, tx_proof_cancel,
+                                          /*gpu_status=*/nullptr, &discarded_cycles, accept)) {
             // A cancelled solve also returns false, so ask before blaming the hardware:
             // reporting a missing graphics card to someone who pressed Cancel sends them
             // looking for a fault that is not there.
@@ -1277,8 +1283,29 @@ static util::Result<BuiltTransaction> BuildTransactionForProof(
         return util::Error{error};
     }
 
-    if (sign && !vault.SignTransaction(txNew)) {
-        return util::Error{_("Signing transaction failed")};
+    if (sign) {
+        std::map<int, bilingual_str> input_errors;
+        if (!vault.SignTransaction(txNew, input_errors)) {
+            // Say why (F-520): a locked vault has no keys to sign with, so name that
+            // rather than the per-input script error it produces. Every input's reason
+            // goes to the log; the message carries the first.
+            const bool locked{vault.IsLocked()};
+            vault.VaultLogPrintf("Signing transaction failed: locked=%d inputs=%u failed=%u\n",
+                                 locked, txNew.vin.size(), input_errors.size());
+            for (const auto& [index, reason] : input_errors) {
+                vault.VaultLogPrintf("Signing transaction failed: input %d (%s): %s\n",
+                                     index, txNew.vin.at(index).prevout.ToString(), reason.original);
+            }
+            if (locked) {
+                return util::Error{_("Signing transaction failed: the vault locked again before the transfer was signed. Try the transfer again.")};
+            }
+            if (input_errors.empty()) {
+                return util::Error{_("Signing transaction failed: no signer in this vault could sign it.")};
+            }
+            const auto& [index, reason] = *input_errors.begin();
+            return util::Error{strprintf(_("Signing transaction failed for input %u of %u: %s"),
+                                         index + 1, txNew.vin.size(), reason)};
+        }
     }
 
     // Limit size. This runs BEFORE the proof-of-work grind below, not after it. The

@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <set>
 
 namespace node {
 
@@ -101,6 +102,7 @@ bool SolveBlockPoW(ChainstateManager& chainman, CBlock& block, uint64_t& max_tri
     cuckatoo::GpuSolveStatus local_status{cuckatoo::GpuSolveStatus::kNoCycle};
     cuckatoo::GpuSolveStatus& gpu_status{out_status ? *out_status : local_status};
     bool warned_no_device{false};
+    std::set<std::string> warned_faulted_devices;
 
     // F-253: a cycle the solver produced that does not verify. The sweep resumes and the
     // block still gets a sound proof, so this is not a failure -- but it is the same
@@ -114,10 +116,24 @@ bool SolveBlockPoW(ChainstateManager& chainman, CBlock& block, uint64_t& max_tri
         const auto pre = block.PrePowBytes();
         cuckatoo::Cycle cyc{};
         uint32_t won = 0;
+        std::vector<cuckatoo::GpuDeviceFault> gpu_faults;
+        const auto accept = [&](const cuckatoo::Cycle& candidate_cycle, uint32_t candidate_nonce) {
+            CBlockHeader candidate{block.GetBlockHeader()};
+            candidate.nNonce = candidate_nonce;
+            candidate.nCycle = candidate_cycle;
+            return CheckProofOfWork(candidate, cparams);
+        };
         const bool solved = cuckatoo::CuckatooSolve(pre, cparams.nEdgeBits, block.nNonce, budget,
                                                     cyc, won, cpu_fallback,
                                                     progress, cancel, &gpu_status,
-                                                    &discarded_cycles);
+                                                    &discarded_cycles, accept, &gpu_faults);
+        for (const auto& fault : gpu_faults) {
+            if (warned_faulted_devices.insert(fault.device).second) {
+                LogWarning(HgLog::FORGE,
+                           "degraded reason=gpu-card-faulted device=%s status=%s fix=see-log-continuing-on-other-cards\n",
+                           fault.device, cuckatoo::GpuSolveStatusName(fault.status));
+            }
+        }
         if (discarded_cycles > warned_discarded) {
             LogWarning(HgLog::FORGE,
                        "degraded reason=solver-cycle-failed-verify count=%u edgebits=%d fix=none-work-continues\n",

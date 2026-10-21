@@ -99,6 +99,7 @@ private Q_SLOTS:
     void transferPrecheckRefusesDuplicateBeforeUnlock();
     void transferPrecheckRefusesZeroBeforeUnlock();
     void transferPrecheckAllowsStaleLowBalance();
+    void transferHoldsUnlockThroughPreparation();
     void transferPrecheckDefersUncertainBalance_data();
     void transferPrecheckDefersUncertainBalance();
     void transferPreparationFailureWithoutGraphsHidesProgress();
@@ -126,6 +127,7 @@ private Q_SLOTS:
     void statusStripNamesConsensusOff();
     void notificationBurstPolicyCoalescesTransactions();
     void transactionBurstPostsOneImmediateNotification();
+    void homeLedgerBurstCoalescesColumnFits();
 };
 
 #endif // QUICKSILVER_QT_TEST_VAULTTESTS_H

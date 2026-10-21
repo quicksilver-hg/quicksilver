@@ -43,10 +43,6 @@
 #include <QStringList>
 #include <QVBoxLayout>
 
-namespace {
-const char* CONSENSUS_ENABLED_SETTING = "Desktop/ConsensusEnabled";
-} // namespace
-
 VaultFrame::VaultFrame(const PlatformStyle* _platformStyle, QWidget* parent)
     : QFrame(parent),
       platformStyle(_platformStyle)

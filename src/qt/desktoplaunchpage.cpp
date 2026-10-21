@@ -41,6 +41,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <functional>
 #include <vector>
 
 namespace {
@@ -89,11 +90,16 @@ int LabelColumnMinimum(QTableView* table)
 
 //! The first `count` rows of a model that is already sorted, newest first:
 //! Home's snapshot of the ledger. Whether a row is in depends on where it
-//! sits, so every change in the source re-asks every row.
-class FirstRows : public QSortFilterProxyModel
+//! sits, so every change in the source re-asks every row. The page coalesces
+//! those changes; refilterNow() is the pass it asked for.
+class HomeFirstRows : public QSortFilterProxyModel
 {
 public:
-    FirstRows(int count, QObject* parent) : QSortFilterProxyModel(parent), m_count(count) {}
+    HomeFirstRows(int count, QObject* parent) : QSortFilterProxyModel(parent), m_count(count) {}
+
+    void setOnSourceChanged(std::function<void()> callback) { m_on_source_changed = std::move(callback); }
+
+    void refilterNow() { invalidateFilter(); }
 
     void setSourceModel(QAbstractItemModel* source) override
     {
@@ -101,13 +107,15 @@ public:
         m_source_connections.clear();
         QSortFilterProxyModel::setSourceModel(source);
         if (!source) return;
-        const auto refilter = [this] { invalidateFilter(); };
+        const auto changed = [this] {
+            if (m_on_source_changed) m_on_source_changed();
+        };
         m_source_connections = {
-            connect(source, &QAbstractItemModel::rowsInserted, this, refilter),
-            connect(source, &QAbstractItemModel::rowsRemoved, this, refilter),
-            connect(source, &QAbstractItemModel::rowsMoved, this, refilter),
-            connect(source, &QAbstractItemModel::layoutChanged, this, refilter),
-            connect(source, &QAbstractItemModel::modelReset, this, refilter),
+            connect(source, &QAbstractItemModel::rowsInserted, this, changed),
+            connect(source, &QAbstractItemModel::rowsRemoved, this, changed),
+            connect(source, &QAbstractItemModel::rowsMoved, this, changed),
+            connect(source, &QAbstractItemModel::layoutChanged, this, changed),
+            connect(source, &QAbstractItemModel::modelReset, this, changed),
         };
     }
 
@@ -119,6 +127,7 @@ protected:
 
 private:
     const int m_count;
+    std::function<void()> m_on_source_changed;
     std::vector<QMetaObject::Connection> m_source_connections;
 };
 //! The text width inside an instrument panel: the column less the panel's
@@ -221,17 +230,20 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     m_ledger_filter = new TransactionFilterProxy(this);
     m_ledger_filter->setDynamicSortFilter(true);
     m_ledger_filter->setSortRole(Qt::EditRole);
-    auto* newest = new FirstRows(LEDGER_SNAPSHOT_ROWS, this);
+    auto* newest = new HomeFirstRows(LEDGER_SNAPSHOT_ROWS, this);
+    m_first_rows = newest;
+    newest->setOnSourceChanged([this] { scheduleLedgerRefresh(); });
     newest->setSourceModel(m_ledger_filter);
     m_ledger_rows = new LedgerRows(LedgerRows::Tooltips::LabelOnly, this);
     m_ledger_rows->setSourceModel(newest);
-    // The head counts every row, so it follows the full list as well as the snapshot.
+    // The head counts every row. A burst of inserts schedules one refresh, which
+    // refilters the snapshot and then recounts.
     for (QAbstractItemModel* rows : {static_cast<QAbstractItemModel*>(m_ledger_filter), static_cast<QAbstractItemModel*>(m_ledger_rows)}) {
         for (const auto& signal : {&QAbstractItemModel::rowsInserted, &QAbstractItemModel::rowsRemoved}) {
-            connect(rows, signal, this, &DesktopLaunchPage::refreshLedgerCount);
+            connect(rows, signal, this, &DesktopLaunchPage::scheduleLedgerRefresh);
         }
-        connect(rows, &QAbstractItemModel::modelReset, this, &DesktopLaunchPage::refreshLedgerCount);
-        connect(rows, &QAbstractItemModel::layoutChanged, this, &DesktopLaunchPage::refreshLedgerCount);
+        connect(rows, &QAbstractItemModel::modelReset, this, &DesktopLaunchPage::scheduleLedgerRefresh);
+        connect(rows, &QAbstractItemModel::layoutChanged, this, &DesktopLaunchPage::scheduleLedgerRefresh);
     }
 
     m_ledger_table = new QTableView(m_ledger);
@@ -240,11 +252,11 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     m_ledger_table->setModel(m_ledger_rows);
     ColorCinnabarAmountSuffix(m_ledger_table);
     for (const auto& signal : {&QAbstractItemModel::rowsInserted, &QAbstractItemModel::rowsRemoved}) {
-        connect(m_ledger_rows, signal, this, &DesktopLaunchPage::fitLedgerColumns);
+        connect(m_ledger_rows, signal, this, &DesktopLaunchPage::scheduleLedgerRefresh);
     }
-    connect(m_ledger_rows, &QAbstractItemModel::modelReset, this, &DesktopLaunchPage::fitLedgerColumns);
-    connect(m_ledger_rows, &QAbstractItemModel::dataChanged, this, &DesktopLaunchPage::fitLedgerColumns);
-    connect(m_ledger_rows, &QAbstractItemModel::layoutChanged, this, &DesktopLaunchPage::fitLedgerColumns);
+    connect(m_ledger_rows, &QAbstractItemModel::modelReset, this, &DesktopLaunchPage::scheduleLedgerRefresh);
+    connect(m_ledger_rows, &QAbstractItemModel::dataChanged, this, &DesktopLaunchPage::scheduleLedgerRefresh);
+    connect(m_ledger_rows, &QAbstractItemModel::layoutChanged, this, &DesktopLaunchPage::scheduleLedgerRefresh);
     m_ledger_table->setFrameShape(QFrame::NoFrame);
     m_ledger_table->setShowGrid(false);
     m_ledger_table->setAlternatingRowColors(true);
@@ -514,6 +526,9 @@ void DesktopLaunchPage::setVaultModel(VaultModel* model)
         if (m_ledger_model) disconnect(m_ledger_model, nullptr, this, nullptr);
         m_ledger_model = model;
         m_ledger_filter->setSourceModel(model ? model->getTransactionTableModel() : nullptr);
+        // The source-change handler only schedules. Callers read the count
+        // before the event loop turns, so the snapshot has to be current now.
+        if (m_first_rows) static_cast<HomeFirstRows*>(m_first_rows)->refilterNow();
         arrangeLedgerColumns();
         if (model) {
             m_ledger_filter->sort(TransactionTableModel::Date, Qt::DescendingOrder);
@@ -549,6 +564,23 @@ void DesktopLaunchPage::arrangeLedgerColumns()
     fitLedgerColumns();
 }
 
+void DesktopLaunchPage::scheduleLedgerRefresh()
+{
+    // The refresh's own invalidateFilter emits layoutChanged. Arming again
+    // from that would measure forever. A second insert in this same turn is
+    // already covered by the pass that is waiting.
+    if (m_ledger_refresh_pending || m_refreshing_ledger) return;
+    m_ledger_refresh_pending = true;
+    QTimer::singleShot(0, this, [this] {
+        m_refreshing_ledger = true;
+        m_ledger_refresh_pending = false;
+        if (m_first_rows) static_cast<HomeFirstRows*>(m_first_rows)->refilterNow();
+        refreshLedgerCount();
+        fitLedgerColumns();
+        m_refreshing_ledger = false;
+    });
+}
+
 void DesktopLaunchPage::fitLedgerColumns()
 {
     if (m_fitting_ledger) return;
@@ -569,6 +601,7 @@ void DesktopLaunchPage::fitLedgerColumns()
     for (int pass = 0; pass < 3; ++pass) {
         const int viewport = m_ledger_table->viewport()->width();
         if (viewport <= 0 || viewport == previous_viewport) break;
+        if (previous_viewport < 0) ++m_ledger_column_fits;
         previous_viewport = viewport;
         int others = 0;
         for (int column : {TransactionTableModel::Date, TransactionTableModel::Type, TransactionTableModel::Amount, TransactionTableModel::Status}) {
@@ -644,7 +677,7 @@ bool DesktopLaunchPage::eventFilter(QObject* watched, QEvent* event)
     if (m_ledger_table &&
         (watched == m_ledger_table->viewport() || watched == m_ledger_table) &&
         (event->type() == QEvent::Resize || event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange)) {
-        fitLedgerColumns();
+        scheduleLedgerRefresh();
     }
     return QWidget::eventFilter(watched, event);
 }

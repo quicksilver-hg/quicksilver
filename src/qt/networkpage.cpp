@@ -479,7 +479,7 @@ void NetworkPage::showStartFailed()
 
 void NetworkPage::showConsensusOff()
 {
-    m_intro->setText(tr("Consensus is off, so this computer is not connected to any network. You can still switch networks below."));
+    m_intro->setText(tr("Consensus is off, so this computer is not connected to any network."));
     m_status_value->setText(tr("Consensus off"));
     m_peers_value->setText(tr("Not running"));
     m_sync_value->setText(tr("Not running"));

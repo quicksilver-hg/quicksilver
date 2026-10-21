@@ -11,6 +11,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <string>
+#include <vector>
 
 #include <uint256.h>
 
@@ -19,6 +21,10 @@ namespace cuckatoo {
 static constexpr int PROOFSIZE = 42;              // 42-cycle, fixed
 using Cycle = std::array<uint32_t, PROOFSIZE>;    // edge indices, ascending
 using SolverProgressCallback = std::function<void(uint32_t nonce)>;
+//! Decides whether a verified cycle satisfies the caller's target. A rejected
+//! cycle does not end the sweep; solving resumes at the following nonce.
+//! The multi-device coordinator never calls progress, cancel, or accept concurrently.
+using SolverAcceptPredicate = std::function<bool(const Cycle&, uint32_t nonce)>;
 //! Polled by every solve loop; returning true abandons the sweep and returns
 //! false to the caller. A grind is the longest uninterruptible span in the node
 //! — one GPU attempt can block for the full no-progress window and a CPU sweep
@@ -41,6 +47,11 @@ enum class GpuSolveStatus {
     kSolverError,   //!< the solver exited non-zero, or a parsed cycle failed self-verify
     kTimedOut,      //!< killed by the no-progress watchdog
     kCancelled,     //!< the caller cancelled the attempt
+};
+
+struct GpuDeviceFault {
+    std::string device;
+    GpuSolveStatus status{GpuSolveStatus::kNoCycle};
 };
 
 //! Length of a block pre-pow: the CBlockHeader prefix through nNonce. Kept here so
@@ -72,19 +83,24 @@ bool CuckatooVerify(const Cycle& cycle, const Keys& keys, uint8_t edgebits);
 //! node::CpuBlockMiningAllowed and vault::AllowsTxPowCpuFallback. This layer
 //! does not know why.
 //! A GPU cycle that fails self-verify is reported as kSolverError, not kSolved.
-//! `discarded_cycles`, when non-null, is incremented for each cycle the solver produced
+//! `accept`, when non-empty, is called for every verified cycle. A rejection
+//! resumes at the following nonce; only an accepted proof ends the sweep.
+//! `discarded_cycles`, when non-null, is incremented for each cycle the CPU solver produced
 //! that failed CuckatooVerify and was therefore swept past (F-253). Such a cycle is not an
 //! error -- the sweep resumes and the caller still gets a sound proof -- but it must not be
 //! indistinguishable from a nonce that simply had no cycle: an elevated attempt count alone
 //! reads the same as a run of hard graphs. This layer has no logging, so the count is
 //! reported out like GpuSolveStatus and the node decides what to do with it.
+//! `gpu_faults`, when non-null, receives each chosen card benched during this call.
 bool CuckatooSolve(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint8_t edgebits,
                    uint32_t start_nonce, uint32_t max_attempts,
                    Cycle& out, uint32_t& out_nonce, bool cpu_fallback = true,
                    const SolverProgressCallback& progress = {},
                    const SolverCancelCallback& cancel = {},
                    GpuSolveStatus* gpu_status = nullptr,
-                   uint32_t* discarded_cycles = nullptr);
+                   uint32_t* discarded_cycles = nullptr,
+                   const SolverAcceptPredicate& accept = {},
+                   std::vector<GpuDeviceFault>* gpu_faults = nullptr);
 
 //! Mining only — variable-length pre-image grinder. Sweeps start_nonce ..
 //! start_nonce+max_attempts-1, writing each nonce as the trailing 4 LE bytes of a
@@ -97,19 +113,24 @@ bool CuckatooSolve(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint8_
 //! does not know why.
 //! A GPU cycle that fails self-verify is reported as kSolverError, not kSolved.
 //! A CPU cycle that fails self-verify is swept past; see `discarded_cycles` below.
-//! `discarded_cycles`, when non-null, is incremented for each cycle the solver produced
+//! `accept`, when non-empty, is called for every verified cycle. A rejection
+//! resumes at the following nonce; only an accepted proof ends the sweep.
+//! `discarded_cycles`, when non-null, is incremented for each cycle the CPU solver produced
 //! that failed CuckatooVerify and was therefore swept past (F-253). Such a cycle is not an
 //! error -- the sweep resumes and the caller still gets a sound proof -- but it must not be
 //! indistinguishable from a nonce that simply had no cycle: an elevated attempt count alone
 //! reads the same as a run of hard graphs. This layer has no logging, so the count is
 //! reported out like GpuSolveStatus and the node decides what to do with it.
+//! `gpu_faults`, when non-null, receives each chosen card benched during this call.
 bool CuckatooSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
                         uint32_t start_nonce, uint32_t max_attempts,
                         Cycle& out, uint32_t& out_nonce, bool cpu_fallback = true,
                         const SolverProgressCallback& progress = {},
                         const SolverCancelCallback& cancel = {},
                         GpuSolveStatus* gpu_status = nullptr,
-                        uint32_t* discarded_cycles = nullptr);
+                        uint32_t* discarded_cycles = nullptr,
+                        const SolverAcceptPredicate& accept = {},
+                        std::vector<GpuDeviceFault>* gpu_faults = nullptr);
 
 //! Where the solver's F-265 capture line goes (graph.hpp). The solver cannot reach
 //! the logger, so the node installs a sink that writes to debug.log (F-414, owner

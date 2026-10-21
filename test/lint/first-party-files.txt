@@ -104,6 +104,8 @@ src/crypto/cuckatoo/gpu_devices.cpp
 src/crypto/cuckatoo/gpu_devices.h
 src/crypto/cuckatoo/gpu_solver.cpp
 src/crypto/cuckatoo/gpu_solver.h
+src/crypto/cuckatoo/multi_device.cpp
+src/crypto/cuckatoo/multi_device.h
 src/crypto/cuckatoo/keys.cpp
 src/crypto/cuckatoo/proofhash.cpp
 src/crypto/cuckatoo/solve_19.cpp
@@ -183,6 +185,7 @@ src/test/opencl_parity_tests.cpp
 src/test/lockdirstub.cpp
 src/test/mining_anchor_tests.cpp
 src/test/mining_service_tests.cpp
+src/test/multi_device_tests.cpp
 src/test/mint_tests.cpp
 src/test/outputtype_tests.cpp
 src/test/solverstub.cpp

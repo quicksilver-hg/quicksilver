@@ -11,10 +11,13 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <set>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -65,6 +68,13 @@ BOOST_AUTO_TEST_CASE(windows_command_line_quotes_what_the_child_must_unquote)
 }
 
 namespace {
+// Text-mode stdout expands the stub's newline on Windows.
+#ifdef WIN32
+constexpr const char* EXPECTED_READY_LINE{"ready\r\n"};
+#else
+constexpr const char* EXPECTED_READY_LINE{"ready\n"};
+#endif
+
 // The stub reads its directives from a file named by QS_SOLVER_STUB_SCRIPT --
 // see src/test/solverstub.cpp. It is a general-purpose child here: this unit
 // does not know what a solver is, and the stub is simply the compiled program
@@ -77,6 +87,20 @@ void set_env(const char* name, const std::string& value)
     setenv(name, value.c_str(), 1);
 #endif
 }
+
+void unset_env(const char* name)
+{
+#ifdef WIN32
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+}
+
+struct EnvUnsetGuard {
+    const char* name;
+    ~EnvUnsetGuard() { unset_env(name); }
+};
 
 std::string tmp_path(const std::string& name)
 {
@@ -97,6 +121,14 @@ std::string write_script(const std::string& name, const std::string& body)
     return SOLVER_STUB_PATH;
 }
 
+std::string write_directive_file(const std::string& name, const std::string& body)
+{
+    const std::string path = tmp_path(name + ".stub");
+    std::ofstream f(path);
+    f << body;
+    return path;
+}
+
 //! Size of the marker file the stub appends to, or 0 if it does not exist. A
 //! size that stops advancing is the observable proof that a process is gone;
 //! its ABSENCE proves nothing, because a parent returning early looks identical
@@ -107,6 +139,57 @@ uintmax_t marker_size(const std::string& path)
     const auto n = fs::file_size(fs::PathFromString(path), ec);
     return ec ? 0 : n;
 }
+
+#ifdef __linux__
+std::string read_all(util::ContainedChild& child, int timeout_ms)
+{
+    std::string out;
+    char buf[256];
+    for (;;) {
+        size_t got = 0;
+        const auto status = child.ReadStdout(buf, sizeof(buf), timeout_ms, got);
+        if (status == util::ContainedChild::ReadStatus::kClosed) return out;
+        BOOST_REQUIRE(status == util::ContainedChild::ReadStatus::kData);
+        out.append(buf, got);
+    }
+}
+
+std::set<std::string> reported_nonstandard_pipes()
+{
+    // Do not use a shell pipeline here: it would add pipes of its own. Fds 0,
+    // 1, and 2 belong to this child; everything above them was inherited.
+    const char* command =
+        "for fd in /proc/self/fd/*; do "
+        "n=${fd##*/}; [ \"$n\" -le 2 ] && continue; "
+        "target=$(readlink \"$fd\") || continue; "
+        "case \"$target\" in pipe:\\[*\\]) printf '%s\\n' \"$target\";; esac; "
+        "done";
+    auto child = util::ContainedChild::Spawn({"/bin/sh", "-c", command}, util::ChildStdout::kPipe);
+    BOOST_REQUIRE(child);
+    const std::string output = read_all(*child, 5000);
+    BOOST_REQUIRE_EQUAL(child->Wait(), 0);
+
+    std::set<std::string> pipes;
+    std::istringstream lines(output);
+    for (std::string line; std::getline(lines, line);) pipes.insert(std::move(line));
+    return pipes;
+}
+
+
+void check_concurrent_child_does_not_inherit_an_existing_childs_pipe()
+{
+    const auto baseline = reported_nonstandard_pipes();
+    auto first = util::ContainedChild::Spawn({"/bin/sh", "-c", "sleep 3"}, util::ChildStdout::kPipe);
+    BOOST_REQUIRE(first);
+    const auto alongside = reported_nonstandard_pipes();
+    BOOST_CHECK_EQUAL_COLLECTIONS(alongside.begin(), alongside.end(), baseline.begin(), baseline.end());
+}
+#else
+void check_concurrent_child_does_not_inherit_an_existing_childs_pipe()
+{
+    BOOST_TEST_MESSAGE("skipped: descriptor inventory requires Linux /proc/self/fd");
+}
+#endif
 } // namespace
 
 BOOST_AUTO_TEST_CASE(spawn_reads_stdout_and_reports_the_exit_code)
@@ -184,6 +267,53 @@ BOOST_AUTO_TEST_CASE(destroying_the_handle_kills_a_child_that_never_exits)
     BOOST_CHECK_MESSAGE(marker_size(marker) == settled,
                         "the marker is still growing: the child outlived its handle");
     std::remove(marker.c_str());
+}
+
+BOOST_AUTO_TEST_CASE(a_concurrent_child_does_not_inherit_an_existing_childs_pipe)
+{
+    check_concurrent_child_does_not_inherit_an_existing_childs_pipe();
+}
+
+BOOST_AUTO_TEST_CASE(a_short_child_reports_eof_while_a_concurrent_child_sleeps)
+{
+    const std::string short_script = write_directive_file("cc_concurrent_short", "echo ready\nexit 0\n");
+    const std::string sleep_script = write_directive_file("cc_concurrent_sleep", "sleep 3000\nexit 0\n");
+    const std::string map = write_directive_file(
+        "cc_concurrent_map", "short\t" + short_script + "\nsleep\t" + sleep_script + "\n");
+    set_env("QS_SOLVER_STUB_DEVICE_SCRIPTS", map);
+    const EnvUnsetGuard map_guard{"QS_SOLVER_STUB_DEVICE_SCRIPTS"};
+
+    std::atomic<int> ready{0};
+    std::atomic<bool> go{false};
+    std::unique_ptr<util::ContainedChild> short_child;
+    std::unique_ptr<util::ContainedChild> sleeping_child;
+
+    auto spawn_when_released = [&](std::unique_ptr<util::ContainedChild>& destination,
+                                   std::vector<std::string> argv) {
+        ready.fetch_add(1);
+        while (!go.load()) std::this_thread::yield();
+        destination = util::ContainedChild::Spawn(argv, util::ChildStdout::kPipe);
+    };
+    std::thread short_thread(spawn_when_released, std::ref(short_child),
+                             std::vector<std::string>{SOLVER_STUB_PATH, "--device", "short"});
+    std::thread sleeping_thread(spawn_when_released, std::ref(sleeping_child),
+                                std::vector<std::string>{SOLVER_STUB_PATH, "--device", "sleep"});
+    while (ready.load() != 2) std::this_thread::yield();
+    go.store(true);
+    short_thread.join();
+    sleeping_thread.join();
+    BOOST_REQUIRE(short_child);
+    BOOST_REQUIRE(sleeping_child);
+
+    char buf[32];
+    size_t got = 0;
+    BOOST_REQUIRE(short_child->ReadStdout(buf, sizeof(buf), 1000, got) ==
+                  util::ContainedChild::ReadStatus::kData);
+    BOOST_CHECK_EQUAL(std::string(buf, got), EXPECTED_READY_LINE);
+    const auto started = std::chrono::steady_clock::now();
+    BOOST_CHECK(short_child->ReadStdout(buf, sizeof(buf), 750, got) ==
+                util::ContainedChild::ReadStatus::kClosed);
+    BOOST_CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
