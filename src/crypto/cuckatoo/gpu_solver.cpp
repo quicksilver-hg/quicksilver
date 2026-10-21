@@ -280,6 +280,14 @@ bool GpuSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
     if (exit_code == 5) { report(GpuSolveStatus::kDeviceFault); return false; }
     if (exit_code != 0) { report(GpuSolveStatus::kSolverError); return false; }
     if (!parse_solver_output(acc, out_nonce, out)) { report(GpuSolveStatus::kNoCycle); return false; }
+    // The helper was given [start_nonce, start_nonce + max_attempts). A nonce
+    // outside it is not one this call handed out: with several cards it may be
+    // another card's, and the caller's arithmetic on how much of the range was
+    // used assumes it lies inside. A helper that reports one broke its contract.
+    if (out_nonce < start_nonce || uint64_t{out_nonce} - start_nonce >= max_attempts) {
+        report(GpuSolveStatus::kSolverError);
+        return false;
+    }
     report(GpuSolveStatus::kSolved);
     return true;
 }

@@ -227,12 +227,55 @@ struct Fixture {
     }
 };
 
-std::string SolvedScript(const Proof& proof, uint32_t delay_ms = 0)
+// The coordinator's block size (multi_device.cpp). Two workers race for the
+// first claim, so a case can't know which card runs which block.
+constexpr uint32_t BLOCK{64};
+
+// A helper that reports each proof only when its nonce lies in the range the
+// launch was given, as a real one does; "found" in the stub. A case that needs a
+// card to answer whichever block it claims gives it a proof in each block.
+std::string FoundScript(const std::vector<Proof>& proofs, uint32_t delay_ms = 0)
 {
     std::string out;
     if (delay_ms != 0) out += "sleep " + Number(delay_ms) + "\n";
-    out += "echo nonce=" + Number(proof.nonce) + "\necho " + CycleLine(proof.cycle) + "\nexit 0\n";
+    for (const auto& proof : proofs) out += "found " + Number(proof.nonce) + " " + CycleLine(proof.cycle) + "\n";
+    out += "exit 0\n";
     return out;
+}
+
+// `per_block` proofs inside each of the first `blocks` blocks from nonce 0.
+std::vector<Proof> BlockProofs(const std::vector<unsigned char>& pre, uint32_t blocks, size_t per_block = 1)
+{
+    std::vector<Proof> out;
+    for (uint32_t block{0}; block < blocks; ++block) {
+        uint32_t start{block * BLOCK};
+        for (size_t i{0}; i < per_block; ++i) {
+            UnsetEnv("CUCKATOO_GPU_SOLVER");
+            UnsetEnv("CUCKATOO_GPU_BUNDLED");
+            cuckatoo::ResetGpuDiscoveryForTesting();
+            Proof proof{};
+            BOOST_REQUIRE(cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), 19, start, BLOCK,
+                                                       proof.cycle, proof.nonce, /*cpu_fallback=*/true));
+            BOOST_REQUIRE(proof.nonce >= block * BLOCK && proof.nonce < (block + 1) * BLOCK);
+            out.push_back(proof);
+            start = proof.nonce + 1;
+        }
+    }
+    return out;
+}
+
+// The proof among `proofs` that lies in `device`'s first launch.
+Proof FirstLaunchProof(const std::string& argv, const std::string& device, const std::vector<Proof>& proofs)
+{
+    for (const auto& launch : Launches(argv)) {
+        if (launch.device != device) continue;
+        for (const auto& proof : proofs) {
+            if (proof.nonce >= launch.start && uint64_t{proof.nonce} - launch.start < launch.attempts) return proof;
+        }
+        break;
+    }
+    BOOST_FAIL("no proof lies in " << device << "'s first launch");
+    return {};
 }
 
 bool Solve(const std::vector<unsigned char>& pre, uint32_t start, uint32_t attempts,
@@ -293,9 +336,9 @@ BOOST_AUTO_TEST_CASE(accepted_proof_cancels_the_other_card)
 {
     Fixture f;
     const std::vector<unsigned char> pre(64, 0xCD);
-    const Proof proof = CpuProofs(pre, 1).front();
+    const auto proofs = BlockProofs(pre, 2);
     const std::string marker = f.File("qs-multi-accepted-marker", "");
-    f.Configure(SolvedScript(proof, 300), "append " + marker + "\nsleep 50\nloop\n");
+    f.Configure(FoundScript(proofs, 300), "append " + marker + "\nsleep 50\nloop\n");
     cuckatoo::Cycle cycle{}; uint32_t nonce{0};
     const auto before = std::chrono::steady_clock::now();
     BOOST_REQUIRE(Solve(pre, 0, 1U << 20, cycle, nonce));
@@ -310,25 +353,29 @@ BOOST_AUTO_TEST_CASE(rejected_cycle_does_not_cancel_the_other_card)
 {
     Fixture f;
     const std::vector<unsigned char> pre(64, 0xCD);
-    const auto proofs = CpuProofs(pre, 2);
-    f.Configure(SolvedScript(proofs[0]), SolvedScript(proofs[1], 200));
+    const auto proofs = BlockProofs(pre, 2, 2);
+    const std::vector<Proof> rejected{proofs[0], proofs[2]};
+    const std::vector<Proof> accepted{proofs[1], proofs[3]};
+    const std::string argv = f.Configure(FoundScript(rejected), FoundScript(accepted, 200));
     cuckatoo::Cycle cycle{}; uint32_t nonce{0};
     BOOST_REQUIRE(Solve(pre, 0, 1U << 20, cycle, nonce,
-                        [&](const cuckatoo::Cycle&, uint32_t candidate) { return candidate == proofs[1].nonce; }));
-    BOOST_CHECK_EQUAL(nonce, proofs[1].nonce);
+                        [&](const cuckatoo::Cycle&, uint32_t candidate) {
+                            return candidate == accepted[0].nonce || candidate == accepted[1].nonce;
+                        }));
+    BOOST_CHECK_EQUAL(nonce, FirstLaunchProof(argv, DEVICE_B, accepted).nonce);
 }
 
 BOOST_AUTO_TEST_CASE(bad_proof_benches_that_card_and_the_other_continues)
 {
     Fixture f;
     const std::vector<unsigned char> pre(64, 0xCD);
-    const Proof proof = CpuProofs(pre, 1).front();
+    const auto proofs = BlockProofs(pre, 2);
     cuckatoo::Cycle bad{};
     for (size_t i{0}; i < bad.size(); ++i) bad[i] = 1000 + i;
-    f.Configure("echo nonce=7\necho " + CycleLine(bad) + "\nexit 0\n", SolvedScript(proof, 200));
+    const std::string argv = f.Configure("echo nonce=7\necho " + CycleLine(bad) + "\nexit 0\n", FoundScript(proofs, 200));
     cuckatoo::Cycle cycle{}; uint32_t nonce{0}; cuckatoo::GpuSolveStatus status{};
     BOOST_REQUIRE(Solve(pre, 0, 1U << 20, cycle, nonce, {}, {}, {}, false, &status));
-    BOOST_CHECK_EQUAL(nonce, proof.nonce);
+    BOOST_CHECK_EQUAL(nonce, FirstLaunchProof(argv, DEVICE_B, proofs).nonce);
     BOOST_CHECK(status == cuckatoo::GpuSolveStatus::kSolved);
     const auto stats = cuckatoo::GetGpuDeviceStats();
     const auto a = std::find_if(stats.begin(), stats.end(), [](const auto& row) { return row.device == DEVICE_A; });
@@ -337,12 +384,35 @@ BOOST_AUTO_TEST_CASE(bad_proof_benches_that_card_and_the_other_continues)
     BOOST_CHECK(a->last_status == cuckatoo::GpuSolveStatus::kSolverError);
 }
 
-BOOST_AUTO_TEST_CASE(faulted_card_is_benched_and_the_other_continues)
+// F-526: a valid proof for a nonce outside the block the card was given is not
+// one the coordinator handed out. It is never offered to accept, and the card is
+// benched with a solver error.
+BOOST_AUTO_TEST_CASE(proof_outside_the_given_block_is_never_accepted)
 {
     Fixture f;
     const std::vector<unsigned char> pre(64, 0xCD);
     const Proof proof = CpuProofs(pre, 1).front();
-    const std::string argv = f.Configure("exit 5\n", SolvedScript(proof, 200));
+    SetEnv("CUCKATOO_GPU_DEVICES", DEVICE_A);
+    f.Configure("echo nonce=" + Number(proof.nonce) + "\necho " + CycleLine(proof.cycle) + "\nexit 0\n", "exit 0\n");
+    bool offered{false};
+    cuckatoo::Cycle cycle{}; uint32_t nonce{0}; cuckatoo::GpuSolveStatus status{};
+    BOOST_CHECK(!Solve(pre, proof.nonce + 1, BLOCK, cycle, nonce,
+                       [&](const cuckatoo::Cycle&, uint32_t) { offered = true; return true; },
+                       {}, {}, false, &status));
+    BOOST_CHECK(!offered);
+    const auto stats = cuckatoo::GetGpuDeviceStats();
+    const auto row = std::find_if(stats.begin(), stats.end(), [](const auto& value) { return value.device == DEVICE_A; });
+    BOOST_REQUIRE(row != stats.end());
+    BOOST_CHECK(row->state == cuckatoo::GpuDeviceState::kFaulted);
+    BOOST_CHECK(row->last_status == cuckatoo::GpuSolveStatus::kSolverError);
+}
+
+BOOST_AUTO_TEST_CASE(faulted_card_is_benched_and_the_other_continues)
+{
+    Fixture f;
+    const std::vector<unsigned char> pre(64, 0xCD);
+    const auto proofs = BlockProofs(pre, 2);
+    const std::string argv = f.Configure("exit 5\n", FoundScript(proofs, 200));
     cuckatoo::Cycle cycle{}; uint32_t nonce{0};
     BOOST_REQUIRE(Solve(pre, 0, 1U << 20, cycle, nonce));
     size_t a{0};
@@ -385,9 +455,9 @@ BOOST_AUTO_TEST_CASE(callbacks_are_never_called_concurrently)
 {
     Fixture f;
     const std::vector<unsigned char> pre(64, 0xCD);
-    const auto proofs = CpuProofs(pre, 2);
-    f.Configure("echo progress=1\n" + SolvedScript(proofs[0], 50),
-                "echo progress=2\n" + SolvedScript(proofs[1], 50));
+    const auto proofs = BlockProofs(pre, 2);
+    f.Configure("echo progress=1\n" + FoundScript(proofs, 50),
+                "echo progress=2\n" + FoundScript(proofs, 50));
     std::atomic<int> active{0};
     std::atomic<bool> overlap{false};
     std::atomic<bool> saw_a{false};
@@ -401,8 +471,9 @@ BOOST_AUTO_TEST_CASE(callbacks_are_never_called_concurrently)
     BOOST_CHECK(Solve(pre, 0, 128, cycle, nonce,
                       [&](const cuckatoo::Cycle&, uint32_t candidate) {
                           enter();
-                          if (candidate == proofs[0].nonce) return saw_a.exchange(true);
-                          if (candidate == proofs[1].nonce) return saw_b.exchange(true);
+                          // Each block's proof is reported once; the second one seen wins.
+                          if (candidate == proofs[0].nonce) { saw_a = true; return saw_b.load(); }
+                          if (candidate == proofs[1].nonce) { saw_b = true; return saw_a.load(); }
                           return false;
                       },
                       [&](uint32_t) { enter(); }, [&] { enter(); return false; }));
@@ -487,7 +558,11 @@ BOOST_FIXTURE_TEST_CASE(block_mining_passes_the_target_as_the_accept_predicate, 
     }
 
     Fixture f;
-    const std::string argv = f.Configure(SolvedScript(*rejected, 50), SolvedScript(*accepted, 200));
+    // Both cards know both proofs and report each only inside their own range,
+    // so the result doesn't depend on which card claims which block.
+    BOOST_TEST_MESSAGE("rejected " << rejected->nonce << " accepted " << accepted->nonce);
+    const std::string script = FoundScript({*rejected, *accepted}, 20);
+    const std::string argv = f.Configure(script, script);
     uint64_t max_tries{4096};
     BOOST_REQUIRE(node::SolveBlockPoW(*m_node.chainman, block, max_tries,
                                       /*cpu_fallback=*/false));
@@ -542,7 +617,11 @@ BOOST_FIXTURE_TEST_CASE(vault_transfer_passes_the_target_as_the_accept_predicate
     }
 
     Fixture f;
-    const std::string argv = f.Configure(SolvedScript(*rejected, 50), SolvedScript(*accepted, 200));
+    // Both cards know both proofs and report each only inside their own range,
+    // so the result doesn't depend on which card claims which block.
+    BOOST_TEST_MESSAGE("rejected " << rejected->nonce << " accepted " << accepted->nonce);
+    const std::string script = FoundScript({*rejected, *accepted}, 20);
+    const std::string argv = f.Configure(script, script);
     const auto error = vault::GrindTransactionPow(*vault, transaction, charged_bytes, *anchor_height);
     BOOST_REQUIRE(!error);
     BOOST_CHECK_EQUAL(transaction.nPowNonce, accepted->nonce);

@@ -3308,19 +3308,18 @@ BOOST_AUTO_TEST_CASE(agent_allotment_passes_the_target_as_the_accept_predicate)
         }
         return out;
     };
-    const fs::path rejected_script{m_path_root / "agent-rejected.stub"};
-    const fs::path accepted_script{m_path_root / "agent-accepted.stub"};
+    // Both cards know both proofs and report each only inside the range they
+    // were given (the stub's "found"), so the result doesn't depend on which
+    // card claims which block.
+    const fs::path solve_script{m_path_root / "agent-solve.stub"};
     const fs::path listing_script{m_path_root / "agent-listing.stub"};
     const fs::path device_map{m_path_root / "agent-devices.map"};
     const fs::path argv_log{m_path_root / "agent-argv.log"};
+    BOOST_TEST_MESSAGE("rejected " << rejected_nonce << " accepted " << baseline->transaction.nPowNonce);
     {
-        std::ofstream out{rejected_script};
-        out << "sleep 50\necho nonce=" << rejected_nonce << "\necho " << cycle_line(rejected) << "\nexit 0\n";
-    }
-    {
-        std::ofstream out{accepted_script};
-        out << "sleep 200\necho nonce=" << baseline->transaction.nPowNonce << "\necho "
-            << cycle_line(baseline->transaction.nCycle) << "\nexit 0\n";
+        std::ofstream out{solve_script};
+        out << "sleep 20\nfound " << rejected_nonce << " " << cycle_line(rejected) << "\nfound "
+            << baseline->transaction.nPowNonce << " " << cycle_line(baseline->transaction.nCycle) << "\nexit 0\n";
     }
     {
         std::ofstream out{listing_script};
@@ -3329,11 +3328,11 @@ BOOST_AUTO_TEST_CASE(agent_allotment_passes_the_target_as_the_accept_predicate)
     }
     {
         std::ofstream out{device_map};
-        out << "pci:0000:01:00.0\t" << fs::PathToString(rejected_script) << "\n"
-            << "pci:0000:04:00.0\t" << fs::PathToString(accepted_script) << "\n";
+        out << "pci:0000:01:00.0\t" << fs::PathToString(solve_script) << "\n"
+            << "pci:0000:04:00.0\t" << fs::PathToString(solve_script) << "\n";
     }
     SetEnvVar("CUCKATOO_GPU_SOLVER", SOLVER_STUB_PATH);
-    SetEnvVar("QS_SOLVER_STUB_SCRIPT", fs::PathToString(rejected_script).c_str());
+    SetEnvVar("QS_SOLVER_STUB_SCRIPT", fs::PathToString(solve_script).c_str());
     SetEnvVar("QS_SOLVER_STUB_LISTING", fs::PathToString(listing_script).c_str());
     SetEnvVar("QS_SOLVER_STUB_DEVICE_SCRIPTS", fs::PathToString(device_map).c_str());
     SetEnvVar("QS_SOLVER_STUB_ARGV_APPEND", fs::PathToString(argv_log).c_str());

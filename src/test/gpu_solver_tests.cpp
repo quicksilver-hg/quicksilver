@@ -25,9 +25,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 BOOST_AUTO_TEST_SUITE(gpu_solver_tests)
@@ -313,10 +315,40 @@ BOOST_AUTO_TEST_CASE(parses_well_formed_output)
 
     unsigned char pre[96] = {0};
     cuckatoo::Cycle out{}; uint32_t nonce = 0;
-    BOOST_REQUIRE(cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, kStubDevice, 0, 10, out, nonce));
+    // [0, 64): the stub's nonce 42 must lie in the range it was given (F-526).
+    BOOST_REQUIRE(cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, kStubDevice, 0, 64, out, nonce));
     BOOST_CHECK_EQUAL(nonce, 42u);
     BOOST_CHECK_EQUAL(out[0], 1u);
     BOOST_CHECK_EQUAL(out[cuckatoo::PROOFSIZE - 1], (uint32_t)cuckatoo::PROOFSIZE);
+}
+
+// A helper is given [start, start + attempts). A nonce it reports outside that
+// range is not one this call handed out (F-526), so it is a solver error, never
+// a solve, at either edge and at the top of the nonce space.
+BOOST_AUTO_TEST_CASE(nonce_outside_the_given_range_is_a_solver_error)
+{
+    EnvGuard g;
+    set_solver(write_scripted_stub("qs_stub_out_of_range", {"nonce=42", cycle_line(1)}, 0));
+    unsigned char pre[96] = {0};
+    cuckatoo::Cycle out{}; uint32_t nonce = 0;
+    for (const auto& [start, attempts] : {std::pair<uint32_t, uint32_t>{0, 42}, {43, 10}}) {
+        cuckatoo::GpuSolveStatus status{};
+        BOOST_CHECK(!cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, kStubDevice, start, attempts, out, nonce,
+                                             {}, {}, &status));
+        BOOST_CHECK(status == cuckatoo::GpuSolveStatus::kSolverError);
+    }
+    cuckatoo::GpuSolveStatus status{};
+    BOOST_REQUIRE(cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, kStubDevice, 42, 1, out, nonce, {}, {}, &status));
+    BOOST_CHECK_EQUAL(nonce, 42u);
+    BOOST_CHECK(status == cuckatoo::GpuSolveStatus::kSolved);
+
+    constexpr uint32_t top{std::numeric_limits<uint32_t>::max()};
+    static_assert(top == 4294967295U);
+    set_solver(write_scripted_stub("qs_stub_top_of_range", {"nonce=4294967295", cycle_line(1)}, 0));
+    BOOST_REQUIRE(cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, kStubDevice, top, 1, out, nonce, {}, {}, &status));
+    BOOST_CHECK_EQUAL(nonce, top);
+    BOOST_CHECK(!cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, kStubDevice, top - 1, 1, out, nonce, {}, {}, &status));
+    BOOST_CHECK(status == cuckatoo::GpuSolveStatus::kSolverError);
 }
 
 BOOST_AUTO_TEST_CASE(streams_progress_heartbeats)
@@ -328,7 +360,7 @@ BOOST_AUTO_TEST_CASE(streams_progress_heartbeats)
     std::vector<uint32_t> progress;
     unsigned char pre[96] = {0};
     cuckatoo::Cycle out{}; uint32_t nonce = 0;
-    BOOST_REQUIRE(cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, kStubDevice, 0, 10, out, nonce, [&](uint32_t seen_nonce) {
+    BOOST_REQUIRE(cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, kStubDevice, 0, 64, out, nonce, [&](uint32_t seen_nonce) {
         progress.push_back(seen_nonce);
     }));
     BOOST_REQUIRE_EQUAL(progress.size(), 2U);
@@ -536,7 +568,7 @@ BOOST_AUTO_TEST_CASE(watchdog_survives_slow_but_progressing_solver)
 
     unsigned char pre[96] = {0};
     cuckatoo::Cycle out{}; uint32_t nonce = 0;
-    BOOST_REQUIRE(cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, kStubDevice, 0, 10, out, nonce));
+    BOOST_REQUIRE(cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, kStubDevice, 0, 64, out, nonce));
     BOOST_CHECK_EQUAL(nonce, 42u);    // NOT killed; parsed the eventual result
     BOOST_CHECK_EQUAL(out[0], 1u);
 }
@@ -805,7 +837,7 @@ BOOST_AUTO_TEST_CASE(the_solver_path_is_never_interpreted_by_a_shell)
     unsigned char pre[96] = {0};
     cuckatoo::Cycle out{}; uint32_t nonce = 0;
     auto status{cuckatoo::GpuSolveStatus::kNoCycle};
-    const bool ok = cuckatoo::GpuSolveBytes(pre, sizeof(pre), 28, kStubDevice, 0, 10, out, nonce, {}, {}, &status);
+    const bool ok = cuckatoo::GpuSolveBytes(pre, sizeof(pre), 28, kStubDevice, 0, 64, out, nonce, {}, {}, &status);
 
     BOOST_CHECK_MESSAGE(ok, "the solver staged at a path containing a space and an `&` never "
                             "produced a cycle; status " << static_cast<int>(status));
@@ -825,7 +857,7 @@ BOOST_AUTO_TEST_CASE(the_solver_path_is_never_interpreted_by_a_shell)
     BOOST_CHECK_EQUAL(got[2], "28");
     BOOST_CHECK_EQUAL(got[3], std::string(2 * sizeof(pre), '0'));
     BOOST_CHECK_EQUAL(got[4], "0");
-    BOOST_CHECK_EQUAL(got[5], "10");
+    BOOST_CHECK_EQUAL(got[5], "64");
 
     std::remove(argv_out.c_str());
     std::remove(nasty.c_str());

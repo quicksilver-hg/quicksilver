@@ -85,6 +85,21 @@ std::vector<std::string> ReadLines(const char* path)
 }
 
 //! True and sets `rest` when `line` is `<verb> <rest>`.
+// Locale-independent, like ParseInt: the stub only ever sees decimal nonces.
+unsigned long long ParseU64(const char* text)
+{
+    unsigned long long value{0};
+    for (; *text >= '0' && *text <= '9'; ++text) value = value * 10 + static_cast<unsigned>(*text - '0');
+    return value;
+}
+
+std::string Decimal(unsigned long long value)
+{
+    std::string out;
+    do { out.insert(out.begin(), static_cast<char>('0' + value % 10)); value /= 10; } while (value != 0);
+    return out;
+}
+
 bool Directive(const std::string& line, const char* verb, std::string& rest)
 {
     const size_t n{std::strlen(verb)};
@@ -192,6 +207,44 @@ int main(int argc, char* argv[])
         } else if (Directive(line, "append", rest)) {
             std::ofstream marker{rest, std::ios::binary | std::ios::app};
             marker << "x";
+        } else if (Directive(line, "found", rest)) {
+            // "found NONCE CYCLE-LINE" lines are the proofs this helper can find.
+            // At the first one reached it reports the lowest NONCE inside the
+            // range this launch was given, and exits as a helper does on its first
+            // cycle: a real helper scans upward, so it never skips a lower proof.
+            // With none in range it goes on past them. A fixed "echo nonce="
+            // stands for a helper that ignores its range.
+            if (argc != 7) {
+                std::cerr << "solver stub: 'found' needs a solve argv" << std::endl;
+                return kMisconfigured;
+            }
+            // argv: --device ID EDGEBITS PREPOW START ATTEMPTS (gpu_solver.cpp solver_argv).
+            const unsigned long long start{ParseU64(argv[5])};
+            const unsigned long long attempts{ParseU64(argv[6])};
+            const std::string* best{nullptr};
+            unsigned long long best_nonce{0};
+            size_t next{i};
+            for (; next < lines.size(); ++next) {
+                std::string proof;
+                if (!Directive(lines[next], "found", proof)) break;
+                if (proof.find(' ') == std::string::npos) {
+                    std::cerr << "solver stub: 'found' needs a nonce and a cycle line" << std::endl;
+                    return kMisconfigured;
+                }
+                const unsigned long long nonce{ParseU64(proof.c_str())};
+                if (nonce >= start && nonce - start < attempts && (!best || nonce < best_nonce)) {
+                    best = &lines[next];
+                    best_nonce = nonce;
+                }
+            }
+            if (best) {
+                const std::string reply{"nonce=" + Decimal(best_nonce) + "\n" + best->substr(best->find(' ', 6) + 1) + "\n"};
+                std::fputs(reply.c_str(), stdout);
+                std::fflush(stdout);
+                return 0;
+            }
+            i = next;
+            continue;
         } else if (Directive(line, "loop", rest)) {
             i = 0;
             continue;
