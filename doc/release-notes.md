@@ -49,6 +49,23 @@ Notable changes
   node that cannot reach Tor needs an explicit peer configured with `-addnode`,
   `-connect`, or `-seednode`; see `doc/bootstrapping.md`.
 
+Changes in 0.1.5
+================
+
+- Transfers work from an encrypted vault in the desktop. In 0.1.4 and earlier
+  the vault locked again before the transfer was signed, so every transfer
+  failed with "Signing transaction failed". If signing does fail now, the
+  message says why.
+- Consensus can be turned on or off for each network in Settings > Options >
+  Network. Turning it off takes effect when the client restarts; turning it on
+  opens the consensus review first.
+- With consensus off, the Network page says the computer is not connected to
+  any network.
+- GPU mining: when several cards are chosen, they now all solve at the same
+  time, and the first accepted proof stops the others. A card that fails is set
+  aside and the others carry on. Settings still shows one mining rate; a rate
+  for each card comes in a later release.
+
 Changes in 0.1.4
 ================
 
