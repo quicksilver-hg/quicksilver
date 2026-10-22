@@ -60,12 +60,22 @@ struct BlockAndHeaderTipInfo
 
 //! Snapshot of the background mining role for GUI/RPC consumers.
 struct MiningStatus {
+    struct Device {
+        std::string id;
+        std::string name;
+        std::string state;
+        std::optional<double> attempts_per_second;
+        std::string last_error;
+    };
+    std::vector<Device> devices;
     bool active{false};
     std::string address;                 //!< payout address (empty if never started)
     std::string payout_script;           //!< payout script, lowercase hex (empty if never started)
     int64_t blocks_found{0};
     CAmount coins_minted_session{0};
-    //! Solver attempts per second over the trailing 120 s, NOT a session average:
+    //! Sum of measured solving-card rates when available; otherwise solver
+    //! attempts per second over the trailing 120 s (including processor mining).
+    //! This is NOT a session average:
     //! the average could not distinguish a card that died an hour in from one that
     //! never stopped, and it read low for as long as the arming/spawn dead time was
     //! a meaningful share of the session. Unset means no attempt has been observed
@@ -90,7 +100,7 @@ struct MiningStatus {
     //! ~1.6 s on the P104-100 reference card, so the first one lands seconds after
     //! arming.
     uint64_t graphs_attempted{0};
-    bool solver_ok{true};                //!< false when the last solver attempt faulted
+    bool solver_ok{true};                //!< false while a card is faulted, or when the last solver attempt faulted
     std::string last_solver_error;       //!< empty when solver_ok
     //! The fault is "no solver configured" rather than a solver that ran and failed.
     //! last_solver_error is written for quicksilver-daemon and names the -cuckatoosolver

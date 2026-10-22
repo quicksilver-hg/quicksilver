@@ -4,10 +4,13 @@
 
 #include <qt/gpudevicelist.h>
 #include <qt/gpusituation.h>
+#include <crypto/cuckatoo/multi_device.h>
+#include <crypto/cuckatoo/gpu_solver.h>
 
 #include <QCheckBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -23,6 +26,10 @@ GpuDeviceList::GpuDeviceList(QWidget* parent) : QWidget(parent), m_layout(new QV
 {
     m_layout->setContentsMargins(0, 0, 0, 0);
     m_layout->addWidget(m_state);
+    auto* refresh = new QTimer(this);
+    refresh->setInterval(1000);
+    connect(refresh, &QTimer::timeout, this, &GpuDeviceList::refreshRows);
+    refresh->start();
 }
 
 void GpuDeviceList::clearRows()
@@ -99,9 +106,23 @@ void GpuDeviceList::setMode(Mode mode)
 
 void GpuDeviceList::refreshRows()
 {
+    const auto stats = cuckatoo::GetGpuDeviceStats();
     for (Row& row : m_rows) {
         row.check->setEnabled(m_mode == Mode::kChoose && !row.missing && row.device.status == cuckatoo::DeviceStatus::kOk);
-        row.state->setText(row.missing ? gpusituation::MissingRowState() : gpusituation::RowState(row.device, m_mode == Mode::kAutomatic ? gpusituation::RowMode::kAutomatic : gpusituation::RowMode::kChoose, row.check->isChecked()));
+        QString state{row.missing ? gpusituation::MissingRowState() : gpusituation::RowState(row.device, m_mode == Mode::kAutomatic ? gpusituation::RowMode::kAutomatic : gpusituation::RowMode::kChoose, row.check->isChecked())};
+        const bool chosen = !row.missing && row.device.status == cuckatoo::DeviceStatus::kOk &&
+            (m_mode == Mode::kAutomatic ? !row.integrated : m_mode == Mode::kChoose && row.check->isChecked());
+        if (chosen) {
+            const auto it = std::find_if(stats.begin(), stats.end(), [&row](const auto& item) { return item.device == row.device.id; });
+            if (it != stats.end()) {
+                if (it->state == cuckatoo::GpuDeviceState::kFaulted) {
+                    state = tr("Faulted: %1").arg(QString::fromStdString(cuckatoo::SolverFault(it->last_status, false).value_or("")));
+                } else if (it->mean_seconds_per_graph > 0) {
+                    state = tr("In use, %1 s per graph").arg(it->mean_seconds_per_graph, 0, 'f', 1);
+                }
+            }
+        }
+        row.state->setText(state);
     }
 }
 

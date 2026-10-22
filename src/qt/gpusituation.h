@@ -30,6 +30,7 @@ std::optional<StartupNotice> StartupNoticeFor(const cuckatoo::GpuDiscovery& disc
 struct SendNote { QString text; bool processor_fallback; };
 SendNote SendNoteFor(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox);
 bool CardWillWork(const std::optional<cuckatoo::GpuDiscovery>& discovery);
+QString FaultedCardDetails(const std::optional<cuckatoo::GpuDiscovery>& discovery);
 QString SlotOf(const std::string& id);
 } // namespace gpusituation
 

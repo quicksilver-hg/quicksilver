@@ -597,9 +597,16 @@ static RPCHelpMan getminingstatus()
             {RPCResult::Type::STR_HEX, "payout_script", "Payout script in use, hex (empty if never started)"},
             {RPCResult::Type::NUM, "blocks_found", "Blocks mined this session"},
             {RPCResult::Type::STR_AMOUNT, "coins_minted_session", "Coins minted this session (" + CURRENCY_UNIT + ")"},
-            {RPCResult::Type::NUM, "attempts_per_second", /*optional=*/true, "Cuckatoo graphs solved per second over the trailing " + util::ToString(node::AttemptRateWindow::WINDOW_SECONDS) + " seconds. This is the rate now, not a session average, so it falls away when a solver stops and recovers when one comes back. Omitted entirely while no attempt has been observed this session -- that state is unknown, not zero, and a caller must not substitute one"},
+            {RPCResult::Type::NUM, "attempts_per_second", /*optional=*/true, "Sum of measured rates for solving cards when available; otherwise Cuckatoo graphs attempted per second over the trailing " + util::ToString(node::AttemptRateWindow::WINDOW_SECONDS) + " seconds, including processor mining. This is the rate now, not a session average. Omitted while no rate or attempt has been measured -- unknown, not zero"},
+            {RPCResult::Type::ARR, "devices", "Cards with recorded solver activity", {{RPCResult::Type::OBJ, "", "", {
+                {RPCResult::Type::STR, "id", "Card device id"},
+                {RPCResult::Type::STR, "name", "Card name from discovery (empty when absent from the listing)"},
+                {RPCResult::Type::STR, "state", "idle, solving, or faulted"},
+                {RPCResult::Type::NUM, "attempts_per_second", /*optional=*/true, "Graphs per second while solving with a measured rate; omitted otherwise"},
+                {RPCResult::Type::STR, "last_error", "Solver fault sentence (empty unless faulted)"},
+            }}}},
             {RPCResult::Type::NUM, "graphs_attempted", "Cuckatoo graphs attempted this session. The session total the rate deliberately is not: it is what separates a solver that has never produced anything from one that has gone quiet. Read it and solver_ok together"},
-            {RPCResult::Type::BOOL, "solver_ok", "Whether the last solver attempt completed without a fault"},
+            {RPCResult::Type::BOOL, "solver_ok", "False while a graphics card is faulted, or when the last solver attempt faulted; true otherwise"},
             {RPCResult::Type::STR, "last_solver_error", "What the solver failed with (empty when solver_ok)"},
             {RPCResult::Type::NUM_TIME, "last_block_time", "UNIX epoch time of the last mined block (0 if none)"},
             {RPCResult::Type::NUM, "elapsed_seconds", "Seconds since the mining role started (0 if inactive)"},
@@ -626,6 +633,17 @@ static RPCHelpMan getminingstatus()
     // reading (an armed miner whose solver has stopped) and must not be produced
     // by a miner that simply has not finished its first graph yet.
     if (st.attempts_per_second) obj.pushKV("attempts_per_second", *st.attempts_per_second);
+    UniValue devices(UniValue::VARR);
+    for (const auto& device : st.devices) {
+        UniValue item(UniValue::VOBJ);
+        item.pushKV("id", device.id);
+        item.pushKV("name", device.name);
+        item.pushKV("state", device.state);
+        if (device.attempts_per_second) item.pushKV("attempts_per_second", *device.attempts_per_second);
+        item.pushKV("last_error", device.last_error);
+        devices.push_back(std::move(item));
+    }
+    obj.pushKV("devices", std::move(devices));
     obj.pushKV("graphs_attempted", st.graphs_attempted);
     obj.pushKV("solver_ok", st.solver_ok);
     obj.pushKV("last_solver_error", st.last_solver_error);

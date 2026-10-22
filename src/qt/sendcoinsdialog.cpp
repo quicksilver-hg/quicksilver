@@ -715,18 +715,9 @@ void SendCoinsDialog::confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<Vault
         return;
     }
 
-    auto* box = new QMessageBox{QMessageBox::Warning, tr("Slower transfer preparation"),
-                    tr("Graphics acceleration is not ready, so Quicksilver will use this computer's processor."),
-                    QMessageBox::NoButton, this};
-    box->setObjectName(QStringLiteral("cpuFallbackSendWarning"));
-    box->setInformativeText(tr("This may take many minutes. The transfer screen will stay responsive, and you can stop the work at any time."));
-    auto* suppress_warning{new QCheckBox(tr("Don't warn me again"), box)};
-    suppress_warning->setObjectName(QStringLiteral("cpuFallbackDontWarnAgain"));
-    box->setCheckBox(suppress_warning);
-    QPushButton* cancel_button{box->addButton(QMessageBox::Cancel)};
-    QPushButton* proceed_button{box->addButton(tr("Use processor"), QMessageBox::AcceptRole)};
-    proceed_button->setObjectName(QStringLiteral("cpuFallbackProceedButton"));
-    box->setDefaultButton(cancel_button);
+    auto* box = createCpuFallbackWarning(this, m_gpu_discovery);
+    auto* suppress_warning = box->findChild<QCheckBox*>(QStringLiteral("cpuFallbackDontWarnAgain"));
+    auto* proceed_button = box->findChild<QPushButton*>(QStringLiteral("cpuFallbackProceedButton"));
     auto pending = std::make_shared<std::unique_ptr<VaultModelTransaction>>(std::move(transaction));
     connect(box, &QMessageBox::finished, this, [this, box, proceed_button, suppress_warning, pending, coin_control, unlock]() {
         const bool proceed = box->clickedButton() == proceed_button;
@@ -743,6 +734,25 @@ void SendCoinsDialog::confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<Vault
         });
     });
     GUIUtil::ShowModalDialogAsynchronously(box);
+}
+
+QMessageBox* SendCoinsDialog::createCpuFallbackWarning(QWidget* parent, const std::optional<cuckatoo::GpuDiscovery>& discovery)
+{
+    auto* box = new QMessageBox{QMessageBox::Warning, tr("Slower transfer preparation"),
+                    tr("Graphics acceleration is not ready, so Quicksilver will use this computer's processor."),
+                    QMessageBox::NoButton, parent};
+    box->setObjectName(QStringLiteral("cpuFallbackSendWarning"));
+    box->setInformativeText(tr("This may take many minutes. The transfer screen will stay responsive, and you can stop the work at any time."));
+    const QString fault_details{gpusituation::FaultedCardDetails(discovery)};
+    if (!fault_details.isEmpty()) box->setDetailedText(fault_details);
+    auto* suppress_warning{new QCheckBox(tr("Don't warn me again"), box)};
+    suppress_warning->setObjectName(QStringLiteral("cpuFallbackDontWarnAgain"));
+    box->setCheckBox(suppress_warning);
+    QPushButton* cancel_button{box->addButton(QMessageBox::Cancel)};
+    QPushButton* proceed_button{box->addButton(tr("Use processor"), QMessageBox::AcceptRole)};
+    proceed_button->setObjectName(QStringLiteral("cpuFallbackProceedButton"));
+    box->setDefaultButton(cancel_button);
+    return box;
 }
 
 void SendCoinsDialog::startAsyncSendPrepare(std::unique_ptr<VaultModelTransaction> transaction, CCoinControl coin_control, std::shared_ptr<VaultModel::UnlockContext> unlock)

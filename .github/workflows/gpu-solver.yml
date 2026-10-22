@@ -3,10 +3,12 @@
 # file COPYING or https://opensource.org/license/mit/.
 
 # Compiles the standalone CUDA helper (qsgpusolve-cuda and qsgpucalibrate).
-# This workflow also runs the OpenCL helper on PoCL.
-# This is its own workflow, not a job in ci.yml: slice DH owns ci.yml in
-# this batch (F-422, F-419). Hosted runners have no GPU, so the CUDA job
-# only compiles.
+# This workflow also runs the OpenCL helper on PoCL, on one CPU device and
+# on two at once. The two-device solve is steps in opencl-pocl rather than
+# its own job: a second job would repeat the build, and that build is
+# already most of this job's time.
+# This is its own workflow, not a job in ci.yml (F-422, F-419). Hosted
+# runners have no GPU, so the CUDA job only compiles.
 
 name: GPU solver
 on:
@@ -64,12 +66,13 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             build-essential cmake pkgconf libevent-dev libboost-dev libsqlite3-dev \
-            ocl-icd-libopencl1 pocl-opencl-icd clinfo
+            ocl-icd-libopencl1 pocl-opencl-icd clinfo jq
       - name: Build the helper and the unit tests
         run: |
           set -euo pipefail
           cmake -B build -DBUILD_GUI=OFF -DBUILD_DAEMON=ON -DBUILD_TESTS=ON -DWITH_ZMQ=OFF
-          cmake --build build --target qsgpusolve-opencl qsgpusolve-opencl-e19 test_quicksilver -j"$(nproc)"
+          cmake --build build --target qsgpusolve-opencl qsgpusolve-opencl-e19 test_quicksilver \
+            quicksilver-daemon quicksilver-cli -j"$(nproc)"
       - name: List devices and pick the PoCL CPU device
         run: |
           set -euo pipefail
@@ -86,6 +89,90 @@ jobs:
             2>&1 | tee tests.log
           if grep -q "QS_OPENCL_TEST_DEVICE unset" tests.log; then
             echo "the parity gate skipped; it must run here" >&2
+            exit 1
+          fi
+      - name: Solve on two PoCL CPU devices (must run, not skip)
+        env:
+          POCL_DEVICES: pthread pthread
+        run: |
+          set -euo pipefail
+          build/bin/qsgpusolve-opencl --list-devices | tee listing-two.txt
+          ids=$(awk '/ type=cpu / && / status=ok / { for (i = 1; i <= NF; ++i) if ($i ~ /^id=/) { sub(/^id=/, "", $i); print $i } }' listing-two.txt)
+          count=$(printf '%s\n' "$ids" | grep -c . || true)
+          if [ "$count" -lt 2 ]; then
+            echo "need two healthy CPU devices, got ${count:-0}" >&2
+            exit 1
+          fi
+          one=$(printf '%s\n' "$ids" | sed -n 1p)
+          two=$(printf '%s\n' "$ids" | sed -n 2p)
+          if [ -z "$one" ] || [ -z "$two" ] || [ "$one" = "$two" ]; then
+            echo "device ids are missing or not distinct" >&2
+            exit 1
+          fi
+          export QS_OPENCL_TWO_DEVICES="${one},${two}"
+          build/bin/test_quicksilver --log_level=test_suite \
+            --run_test=opencl_two_device_tests \
+            2>&1 | tee two-device.log
+          if grep -q "QS_OPENCL_TWO_DEVICES unset" two-device.log; then
+            echo "the two-device solve skipped; it must run here" >&2
+            exit 1
+          fi
+      - name: getminingstatus reports both PoCL devices solving (isolated publictest node)
+        env:
+          POCL_DEVICES: pthread pthread
+        run: |
+          set -euo pipefail
+          build/bin/qsgpusolve-opencl --list-devices | tee listing-node.txt
+          ids=$(awk '/ type=cpu / && / status=ok / { for (i = 1; i <= NF; ++i) if ($i ~ /^id=/) { sub(/^id=/, "", $i); print $i } }' listing-node.txt)
+          one=$(printf '%s\n' "$ids" | sed -n 1p)
+          two=$(printf '%s\n' "$ids" | sed -n 2p)
+          if [ -z "$one" ] || [ -z "$two" ] || [ "$one" = "$two" ]; then
+            echo "need two distinct healthy CPU devices" >&2
+            exit 1
+          fi
+          # Sandbox blocks need no cycle (fBlockPowNoCycle), so no solver would run there;
+          # publictest is E28 with real cycles, and the node mines from height 0 alone.
+          # The node keeps only type=gpu cards; PoCL's stand-ins are type=cpu. The shim
+          # relabels the listing only; every solve execs the real E28 helper.
+          shim="${RUNNER_TEMP:-/tmp}/qsgpusolve-shim"
+          real="$PWD/build/bin/qsgpusolve-opencl"
+          cat > "$shim" <<'SHIM'
+          #!/bin/sh
+          real=@REAL@
+          if [ "$1" = --list-devices ]; then
+            out=$("$real" --list-devices); rc=$?
+            printf '%s\n' "$out" | sed 's/ type=cpu / type=gpu /'
+            exit "$rc"
+          fi
+          exec "$real" "$@"
+          SHIM
+          sed -i "s|@REAL@|'$real'|" "$shim"
+          chmod 755 "$shim"
+          datadir=$(mktemp -d)
+          cli=(build/bin/quicksilver-cli -publictest "-datadir=$datadir")
+          # No peers: no seeds, no outbound, no listening, no onion service.
+          # One E28 graph on two PoCL devices sharing the runner's cores is silent for
+          # 40 s or more, past the 30 s default watchdog.
+          build/bin/quicksilver-daemon -publictest "-datadir=$datadir" -daemon -connect=0 -dnsseed=0 \
+            -fixedseeds=0 -listen=0 -listenonion=0 -discover=0 -natpmp=0 -cuckatoosolvertimeout=180 \
+            -minescript=6a "-cuckatoosolver=$shim" "-cuckatoodevice=$one" "-cuckatoodevice=$two"
+          trap '"${cli[@]}" stop > /dev/null 2>&1 || true' EXIT
+          "${cli[@]}" -rpcwait -rpcwaittimeout=60 startmining
+          ok=0
+          for _ in $(seq 1 300); do
+            "${cli[@]}" getminingstatus > status.json
+            if jq -e --arg a "$one" --arg b "$two" \
+              '[.devices[] | select((.id == $a or .id == $b) and .state == "solving" and (.attempts_per_second // 0) > 0)] | length == 2' \
+              status.json > /dev/null; then
+              ok=1
+              break
+            fi
+            sleep 1
+          done
+          jq '{attempts_per_second, devices}' status.json
+          if [ "$ok" -ne 1 ]; then
+            echo "both devices did not report solving with a rate within 300 s" >&2
+            grep -v "advanced tip" "$datadir/publictest/debug.log" | tail -n 60 >&2 || true
             exit 1
           fi
       - name: No OpenCL loader means exit 4, cleanly

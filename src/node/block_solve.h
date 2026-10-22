@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 class CBlock;
 class ChainstateManager;
@@ -36,7 +37,8 @@ bool SolveBlockPoW(ChainstateManager& chainman, CBlock& block, uint64_t& max_tri
                    bool cpu_fallback = true,
                    const std::function<bool()>& abandon = {},
                    const std::function<void()>& on_attempt = {},
-                   cuckatoo::GpuSolveStatus* out_status = nullptr);
+                   cuckatoo::GpuSolveStatus* out_status = nullptr,
+                   std::vector<cuckatoo::GpuDeviceFault>* out_faults = nullptr);
 
 //! Policy: may the block miner fall back to the CPU solver at this graph size?
 //!

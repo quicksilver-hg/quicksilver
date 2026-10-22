@@ -36,12 +36,14 @@ bool SolveBlockPoW(ChainstateManager& chainman, CBlock& block, uint64_t& max_tri
                    bool cpu_fallback,
                    const std::function<bool()>& abandon,
                    const std::function<void()>& on_attempt,
-                   cuckatoo::GpuSolveStatus* out_status)
+                   cuckatoo::GpuSolveStatus* out_status,
+                   std::vector<cuckatoo::GpuDeviceFault>* out_faults)
 {
     // Every early return below must leave the caller with a defined status: the
     // abandon guard, and the sandbox fBlockPowNoCycle branch, both return before
     // any solver is reached. Neither is a fault, so kNoCycle is the right answer.
     if (out_status) *out_status = cuckatoo::GpuSolveStatus::kNoCycle;
+    if (out_faults) out_faults->clear();
 
     // Checked before the trivial-PoW branch below, so the sandbox path honours it
     // too -- and so the wiring is testable where no real sweep ever runs.
@@ -134,6 +136,7 @@ bool SolveBlockPoW(ChainstateManager& chainman, CBlock& block, uint64_t& max_tri
                            fault.device, cuckatoo::GpuSolveStatusName(fault.status));
             }
         }
+        if (out_faults) *out_faults = gpu_faults;
         if (discarded_cycles > warned_discarded) {
             LogWarning(HgLog::FORGE,
                        "degraded reason=solver-cycle-failed-verify count=%u edgebits=%d fix=none-work-continues\n",

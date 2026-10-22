@@ -11,6 +11,7 @@
 #include <consensus/amount.h>
 #include <crypto/cuckatoo/gpu_devices.h>
 #include <crypto/cuckatoo/gpu_solver.h>
+#include <crypto/cuckatoo/multi_device.h>
 #include <interfaces/mining.h>
 #include <interfaces/node.h>
 #include <key_io.h>
@@ -33,14 +34,17 @@
 #include <boost/test/unit_test.hpp>
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #ifndef WIN32
@@ -276,6 +280,150 @@ BOOST_AUTO_TEST_CASE(build_mining_status_maps_fields)
     // miner whose card has died, which is the reading this field exists to give.
     BOOST_CHECK(!st.attempts_per_second.has_value());
     BOOST_CHECK_CLOSE(st.congestion_multiplier, 1.0, 0.001);
+}
+
+BOOST_AUTO_TEST_CASE(mining_status_reports_seeded_card_rates_and_faults)
+{
+    auto mining = interfaces::MakeMining(m_node);
+    MiningService svc(*m_node.chainman, *mining);
+    cuckatoo::SetGpuDeviceStatsForTesting({
+        {"pci:0000:04:00.0", cuckatoo::GpuDeviceState::kSolving, cuckatoo::GpuSolveStatus::kNoCycle, 5, 2.0},
+        {"pci:0000:05:00.0", cuckatoo::GpuDeviceState::kSolving, cuckatoo::GpuSolveStatus::kNoCycle, 5, 4.0},
+    });
+    const auto running = node::BuildMiningStatus(svc, *m_node.chainman);
+    BOOST_REQUIRE_EQUAL(running.devices.size(), 2U);
+    BOOST_CHECK_EQUAL(running.devices[0].id, "pci:0000:04:00.0");
+    BOOST_CHECK_EQUAL(running.devices[0].state, "solving");
+    BOOST_REQUIRE(running.devices[0].attempts_per_second);
+    BOOST_CHECK_CLOSE(*running.devices[0].attempts_per_second, 0.5, 0.001);
+    BOOST_REQUIRE(running.devices[1].attempts_per_second);
+    BOOST_CHECK_CLOSE(*running.devices[1].attempts_per_second, 0.25, 0.001);
+    BOOST_REQUIRE(running.attempts_per_second);
+    BOOST_CHECK_CLOSE(*running.attempts_per_second, 0.75, 0.001);
+
+    cuckatoo::SetGpuDeviceStatsForTesting({
+        {"pci:0000:04:00.0", cuckatoo::GpuDeviceState::kFaulted, cuckatoo::GpuSolveStatus::kDeviceFault, 5, 2.0},
+        {"pci:0000:05:00.0", cuckatoo::GpuDeviceState::kIdle, cuckatoo::GpuSolveStatus::kNoCycle, 5, 4.0},
+    });
+    const auto stopped = node::BuildMiningStatus(svc, *m_node.chainman);
+    BOOST_CHECK_EQUAL(stopped.devices[0].state, "faulted");
+    BOOST_CHECK(!stopped.devices[0].attempts_per_second);
+    BOOST_CHECK(!stopped.devices[0].last_error.empty());
+    BOOST_CHECK_EQUAL(stopped.devices[1].state, "idle");
+    BOOST_CHECK(stopped.devices[1].last_error.empty());
+    BOOST_CHECK(!stopped.attempts_per_second); // no active card rate or CPU attempt
+    cuckatoo::ResetGpuDeviceStatsForTesting();
+    BOOST_CHECK(node::BuildMiningStatus(svc, *m_node.chainman).devices.empty());
+}
+
+BOOST_AUTO_TEST_CASE(solver_health_follows_the_card_table_between_windows)
+{
+    // F-534: a card faults mid-window, long before the window returns and is
+    // recorded; and a reported card fault clears once the next window has the
+    // card solving again. Faults that aren't a card's stay with the window.
+    auto mining = interfaces::MakeMining(m_node);
+    MiningService svc(*m_node.chainman, *mining);
+    const std::string card{"pci:0000:04:00.0"};
+    const auto sentence = *cuckatoo::SolverFault(cuckatoo::GpuSolveStatus::kDeviceFault, false);
+
+    cuckatoo::SetGpuDeviceStatsForTesting({
+        {card, cuckatoo::GpuDeviceState::kFaulted, cuckatoo::GpuSolveStatus::kDeviceFault, 5, 2.0},
+        {"pci:0000:05:00.0", cuckatoo::GpuDeviceState::kSolving, cuckatoo::GpuSolveStatus::kNoCycle, 5, 4.0},
+    });
+    BOOST_REQUIRE(svc.GetStatus().solver_ok); // nothing reported yet
+    const auto mid_window = node::BuildMiningStatus(svc, *m_node.chainman);
+    BOOST_CHECK(!mid_window.solver_ok);
+    BOOST_CHECK_EQUAL(mid_window.last_solver_error, card + " (" + card + "): " + sentence);
+
+    svc.RecordSolverOutcome(cuckatoo::GpuSolveStatus::kNoCycle, false, {{card, cuckatoo::GpuSolveStatus::kDeviceFault}});
+    cuckatoo::SetGpuDeviceStatsForTesting({
+        {card, cuckatoo::GpuDeviceState::kSolving, cuckatoo::GpuSolveStatus::kNoCycle, 5, 2.0},
+        {"pci:0000:05:00.0", cuckatoo::GpuDeviceState::kSolving, cuckatoo::GpuSolveStatus::kNoCycle, 5, 4.0},
+    });
+    BOOST_REQUIRE(!svc.GetStatus().solver_ok); // the window that faulted is still the last reported
+    const auto next_window = node::BuildMiningStatus(svc, *m_node.chainman);
+    BOOST_CHECK(next_window.solver_ok);
+    BOOST_CHECK(next_window.last_solver_error.empty());
+
+    svc.RecordSolverOutcome(cuckatoo::GpuSolveStatus::kNoSolver, false, {});
+    const auto no_solver = node::BuildMiningStatus(svc, *m_node.chainman);
+    BOOST_CHECK(!no_solver.solver_ok);
+    BOOST_CHECK_EQUAL(no_solver.last_solver_error, svc.GetStatus().last_solver_error);
+    cuckatoo::ResetGpuDeviceStatsForTesting();
+}
+
+BOOST_AUTO_TEST_CASE(one_faulted_stub_card_makes_solver_unhealthy_until_recovery)
+{
+    auto mining = interfaces::MakeMining(m_node);
+    MiningService svc(*m_node.chainman, *mining);
+    const std::string tag = ProcessIdTag();
+    const std::string listing = TempPath("ey-listing-" + tag);
+    const std::string first = TempPath("ey-first-" + tag);
+    const std::string second = TempPath("ey-second-" + tag);
+    const std::string mapping = TempPath("ey-map-" + tag);
+    const std::string launched = TempPath("ey-launched-" + tag);
+    struct Restore {
+        std::string solver, script, listed, mapped, devices;
+        std::array<std::string, 5> files;
+        ~Restore()
+        {
+            if (solver.empty()) UnsetSolverEnv(); else SetSolverEnv(solver);
+            for (const auto& [name, value] : std::array<std::pair<const char*, std::string>, 4>{{
+                {"QS_SOLVER_STUB_SCRIPT", script}, {"QS_SOLVER_STUB_LISTING", listed},
+                {"QS_SOLVER_STUB_DEVICE_SCRIPTS", mapped}, {"CUCKATOO_GPU_DEVICES", devices}}}) {
+                if (value.empty()) UnsetEnvVar(name); else SetEnvVar(name, value);
+            }
+            cuckatoo::ResetGpuDiscoveryForTesting();
+            cuckatoo::ResetGpuDeviceStatsForTesting();
+            for (const auto& file : files) static_cast<void>(std::remove(file.c_str()));
+        }
+    } restore{EnvOrEmpty("CUCKATOO_GPU_SOLVER"), EnvOrEmpty("QS_SOLVER_STUB_SCRIPT"),
+              EnvOrEmpty("QS_SOLVER_STUB_LISTING"), EnvOrEmpty("QS_SOLVER_STUB_DEVICE_SCRIPTS"),
+              EnvOrEmpty("CUCKATOO_GPU_DEVICES"), {listing, first, second, mapping, launched}};
+    const auto write = [](const std::string& path, const std::string& body) {
+        std::ofstream out{path};
+        out << body;
+        BOOST_REQUIRE(out.good());
+    };
+    write(listing,
+          "echo device backend=stub id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=First Card\n"
+          "echo device backend=stub id=pci:0000:05:00.0 type=gpu integrated=0 mem=0 status=ok name=Second Card\nexit 0\n");
+    // Two blocks, and Second Card holds its block until First Card has launched: First Card always gets the other
+    // block. With one block, or no wait, Second Card could take all the work and First Card never fault.
+    static_cast<void>(std::remove(launched.c_str()));
+    write(first, "append " + launched + "\nexit 5\n");
+    write(second, "await " + launched + "\necho progress=1\nexit 0\n");
+    write(mapping, "pci:0000:04:00.0\t" + first + "\npci:0000:05:00.0\t" + second + "\n");
+    SetSolverEnv(SOLVER_STUB_PATH);
+    SetEnvVar("QS_SOLVER_STUB_SCRIPT", first);
+    SetEnvVar("QS_SOLVER_STUB_LISTING", listing);
+    SetEnvVar("QS_SOLVER_STUB_DEVICE_SCRIPTS", mapping);
+    SetEnvVar("CUCKATOO_GPU_DEVICES", "pci:0000:04:00.0,pci:0000:05:00.0");
+    cuckatoo::ResetGpuDiscoveryForTesting();
+
+    const std::array<unsigned char, 80> pre{};
+    cuckatoo::Cycle cycle{};
+    uint32_t nonce{0};
+    const auto run = [&] {
+        return cuckatoo::MultiDeviceSolveBytes(pre.data(), pre.size(), 19, 0, 128,
+                                               cycle, nonce, {}, {}, {});
+    };
+    const auto faulted = run();
+    BOOST_REQUIRE_EQUAL(faulted.faults.size(), 1U);
+    // F-534: the card is faulted in the stats table before any window is reported.
+    const auto unreported = node::BuildMiningStatus(svc, *m_node.chainman);
+    BOOST_CHECK(!unreported.solver_ok);
+    BOOST_CHECK(unreported.last_solver_error.starts_with("First Card (pci:0000:04:00.0): "));
+    svc.RecordSolverOutcome(faulted.status, false, faulted.faults);
+    BOOST_CHECK(!svc.GetStatus().solver_ok);
+    BOOST_CHECK(svc.GetStatus().last_solver_error.starts_with("First Card (pci:0000:04:00.0): "));
+
+    write(first, "echo progress=1\nexit 0\n");
+    const auto recovered = run();
+    BOOST_CHECK(recovered.faults.empty());
+    svc.RecordSolverOutcome(recovered.status, false, recovered.faults);
+    BOOST_CHECK(svc.GetStatus().solver_ok);
+    BOOST_CHECK(svc.GetStatus().last_solver_error.empty());
 }
 
 BOOST_AUTO_TEST_CASE(mining_status_reports_runtime_solver_after_setting_change)

@@ -82,6 +82,7 @@ public:
     void showSendWorkNotesForTesting(const SendWorkNotes& notes) { showSendWorkNotes(notes); }
     static QString sendWorkResourceTextForTesting(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox);
     static bool cpuFallbackWarningRequiredForTesting(bool slow_network, bool card_will_work, bool warning_enabled);
+    static QMessageBox* createCpuFallbackWarning(QWidget* parent, const std::optional<cuckatoo::GpuDiscovery>& discovery);
 
 public Q_SLOTS:
     void clear();

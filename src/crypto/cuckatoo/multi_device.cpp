@@ -98,6 +98,16 @@ void ResetGpuDeviceStatsForTesting()
     g_stats.clear();
 }
 
+void SetGpuDeviceStatsForTesting(std::vector<GpuDeviceStats> rows)
+{
+    std::lock_guard<std::mutex> lock{g_stats_mutex};
+    g_stats.clear();
+    for (auto& row : rows) {
+        const std::string id = row.device;
+        g_stats[id].public_stats = std::move(row);
+    }
+}
+
 MultiDeviceResult MultiDeviceSolveBytes(const unsigned char* prepow, size_t len,
                                         uint8_t edgebits, uint32_t start_nonce,
                                         uint32_t max_attempts, Cycle& out,

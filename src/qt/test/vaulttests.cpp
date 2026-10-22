@@ -33,6 +33,8 @@
 #include <qt/desktoplaunchpage.h>
 #include <qt/fittingscrollarea.h>
 #include <qt/gpusituation.h>
+#include <crypto/cuckatoo/gpu_solver.h>
+#include <crypto/cuckatoo/multi_device.h>
 #include <qt/minemintpage.h>
 #include <qt/miningmodel.h>
 #include <qt/networkpage.h>
@@ -4686,6 +4688,37 @@ void VaultTests::cpuFallbackWarningFollowsDiscovery()
     page.showSendWorkNotesForTesting(ready);
     QVERIFY(warning->isHidden());
     QCOMPARE(notes->text(), ready.intro + QLatin1Char('\n') + ready.acceleration);
+}
+
+void VaultTests::faultedCardsShowSendWarningDetails()
+{
+    const auto discovery = Discover({
+        QStringLiteral("device backend=stub id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=First Card"),
+        QStringLiteral("device backend=stub id=pci:0000:05:00.0 type=gpu integrated=0 mem=0 status=ok name=Second Card")});
+    QVERIFY(gpusituation::CardWillWork(discovery));
+    cuckatoo::SetGpuDeviceStatsForTesting({
+        {"pci:0000:04:00.0", cuckatoo::GpuDeviceState::kFaulted, cuckatoo::GpuSolveStatus::kDeviceFault},
+        {"pci:0000:05:00.0", cuckatoo::GpuDeviceState::kFaulted, cuckatoo::GpuSolveStatus::kTimedOut},
+    });
+    QVERIFY(!gpusituation::CardWillWork(discovery));
+    QVERIFY(SendCoinsDialog::cpuFallbackWarningRequiredForTesting(true, gpusituation::CardWillWork(discovery), true));
+    std::unique_ptr<QMessageBox> box{SendCoinsDialog::createCpuFallbackWarning(nullptr, discovery)};
+    box->show();
+    QVERIFY(box->isVisible());
+    QCOMPARE(box->objectName(), QStringLiteral("cpuFallbackSendWarning"));
+    const QString expected = QStringLiteral("First Card (slot 04:00.0): %1\nSecond Card (slot 05:00.0): %2")
+        .arg(QString::fromStdString(cuckatoo::SolverFault(cuckatoo::GpuSolveStatus::kDeviceFault, false).value()),
+             QString::fromStdString(cuckatoo::SolverFault(cuckatoo::GpuSolveStatus::kTimedOut, false).value()));
+    QCOMPARE(box->detailedText(), expected);
+    box->close();
+
+    cuckatoo::SetGpuDeviceStatsForTesting({
+        {"pci:0000:04:00.0", cuckatoo::GpuDeviceState::kFaulted, cuckatoo::GpuSolveStatus::kDeviceFault},
+        {"pci:0000:05:00.0", cuckatoo::GpuDeviceState::kSolving, cuckatoo::GpuSolveStatus::kNoCycle},
+    });
+    QVERIFY(gpusituation::CardWillWork(discovery));
+    QVERIFY(!SendCoinsDialog::cpuFallbackWarningRequiredForTesting(true, gpusituation::CardWillWork(discovery), true));
+    cuckatoo::ResetGpuDeviceStatsForTesting();
 }
 
 void VaultTests::transferSummaryTracksAmountsAgainstSpendable()

@@ -264,6 +264,45 @@ std::vector<Proof> BlockProofs(const std::vector<unsigned char>& pre, uint32_t b
     return out;
 }
 
+std::string FreshPath(Fixture& fixture, const std::string& stem)
+{
+    const std::string path = TempPath(stem);
+    std::remove(path.c_str());
+    fixture.files.push_back(path);
+    return path;
+}
+
+// Creates `path` once `device` is faulted. B must not answer before that: the
+// coordinator records the fault only after A's process has exited, and an
+// accepted proof from B before then cancels A and drops the unread fault.
+struct ReleaseOnFault {
+    std::atomic<bool> stop{false};
+    std::thread thread;
+    ReleaseOnFault(const std::string& device, const std::string& path)
+        : thread([this, device, path] {
+              while (!stop.load(std::memory_order_relaxed)) {
+                  const auto stats = cuckatoo::GetGpuDeviceStats();
+                  const auto row = std::find_if(stats.begin(), stats.end(), [&](const auto& value) { return value.device == device; });
+                  if (row != stats.end() && row->state == cuckatoo::GpuDeviceState::kFaulted) {
+                      std::ofstream out{path};
+                      out << "x";
+                      return;
+                  }
+                  std::this_thread::sleep_for(std::chrono::milliseconds{5});
+              }
+          }) {}
+    ~ReleaseOnFault()
+    {
+        stop.store(true, std::memory_order_relaxed);
+        if (thread.joinable()) thread.join();
+    }
+};
+
+std::string AfterLaunch(const std::string& launched, const std::string& released, const std::string& rest)
+{
+    return "await " + launched + "\nawait " + released + "\n" + rest;
+}
+
 // The proof among `proofs` that lies in `device`'s first launch.
 Proof FirstLaunchProof(const std::string& argv, const std::string& device, const std::vector<Proof>& proofs)
 {
@@ -372,7 +411,15 @@ BOOST_AUTO_TEST_CASE(bad_proof_benches_that_card_and_the_other_continues)
     const auto proofs = BlockProofs(pre, 2);
     cuckatoo::Cycle bad{};
     for (size_t i{0}; i < bad.size(); ++i) bad[i] = 1000 + i;
-    const std::string argv = f.Configure("echo nonce=7\necho " + CycleLine(bad) + "\nexit 0\n", FoundScript(proofs, 200));
+    // A appends `launched` as it starts. B waits for that, then for `released`,
+    // which appears only once A is faulted. A leading sleep used to let B solve
+    // first and cancel A (F-527).
+    const std::string launched = FreshPath(f, "qs-multi-bad-launched");
+    const std::string released = FreshPath(f, "qs-multi-bad-released");
+    const std::string argv = f.Configure(
+        "append " + launched + "\necho nonce=7\necho " + CycleLine(bad) + "\nexit 0\n",
+        AfterLaunch(launched, released, FoundScript(proofs)));
+    ReleaseOnFault gate{DEVICE_A, released};
     cuckatoo::Cycle cycle{}; uint32_t nonce{0}; cuckatoo::GpuSolveStatus status{};
     BOOST_REQUIRE(Solve(pre, 0, 1U << 20, cycle, nonce, {}, {}, {}, false, &status));
     BOOST_CHECK_EQUAL(nonce, FirstLaunchProof(argv, DEVICE_B, proofs).nonce);
@@ -412,7 +459,12 @@ BOOST_AUTO_TEST_CASE(faulted_card_is_benched_and_the_other_continues)
     Fixture f;
     const std::vector<unsigned char> pre(64, 0xCD);
     const auto proofs = BlockProofs(pre, 2);
-    const std::string argv = f.Configure("exit 5\n", FoundScript(proofs, 200));
+    const std::string launched = FreshPath(f, "qs-multi-fault-launched");
+    const std::string released = FreshPath(f, "qs-multi-fault-released");
+    const std::string argv = f.Configure(
+        "append " + launched + "\nexit 5\n",
+        AfterLaunch(launched, released, FoundScript(proofs)));
+    ReleaseOnFault gate{DEVICE_A, released};
     cuckatoo::Cycle cycle{}; uint32_t nonce{0};
     BOOST_REQUIRE(Solve(pre, 0, 1U << 20, cycle, nonce));
     size_t a{0};

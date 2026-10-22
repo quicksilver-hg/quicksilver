@@ -149,6 +149,7 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
     gpusituation::RunDiscovery(cuckatoo::kBundledHelperEdgeBits, this, [this](const cuckatoo::GpuDiscovery& discovery) {
         m_gpu_discovery = discovery;
         populateGpuDevices();
+        if (ui->gpuSolverPath->text().trimmed().isEmpty()) validateGpuSolverPath();
     });
 
     /* Tray and close live on Display. macOS has no tray here, so hide the
@@ -526,7 +527,19 @@ void OptionsDialog::validateGpuSolverPath()
     if (path.isEmpty()) {
         m_gpu_solver_check = HelperCheck::kUnchecked;
         m_gpu_solver_valid = true;
-        ui->gpuSolverStatusLabel->setText(tr("Using Quicksilver's graphics helper."));
+        if (m_gpu_discovery && m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kNoHelper) {
+#ifdef Q_OS_WIN
+            constexpr bool windows{true};
+#else
+            constexpr bool windows{false};
+#endif
+            auto missing = *m_gpu_discovery;
+            missing.situation = cuckatoo::GpuSituation::kHelperMissing;
+            const auto notice = gpusituation::StartupNoticeFor(missing, windows, {});
+            ui->gpuSolverStatusLabel->setText(notice->headline + QStringLiteral("<br>") + notice->informative);
+        } else {
+            ui->gpuSolverStatusLabel->setText(tr("Using Quicksilver's graphics helper."));
+        }
         updateOkButtonState();
         return;
     }
@@ -598,8 +611,17 @@ void OptionsDialog::populateGpuDevices()
     if (m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kListed && !m_gpu_discovery->listing.devices.empty()) {
         const QStringList chosen{model ? model->getOption(OptionsModel::GpuDevices).toStringList() : QStringList{}};
         m_gpu_device_list->setDevices(*m_gpu_discovery, chosen, model ? model->getGpuDeviceNames() : QMap<QString, QString>{});
-    } else if (m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kListed ||
-               m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kNoHelper) {
+    } else if (m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kNoHelper) {
+#ifdef Q_OS_WIN
+        constexpr bool windows{true};
+#else
+        constexpr bool windows{false};
+#endif
+        auto missing = *m_gpu_discovery;
+        missing.situation = cuckatoo::GpuSituation::kHelperMissing;
+        const auto notice = gpusituation::StartupNoticeFor(missing, windows, {});
+        m_gpu_device_list->setListingState(notice->headline + QStringLiteral("<br>") + notice->informative);
+    } else if (m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kListed) {
         m_gpu_device_list->setListingState(tr("No graphics cards were found."));
     } else {
         m_gpu_device_list->setListingState(tr("Quicksilver couldn't list this computer's graphics cards. See the debug log."));

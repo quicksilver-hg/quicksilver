@@ -10,6 +10,7 @@
 #include <consensus/params.h>
 #include <crypto/cuckatoo/cuckatoo.h>
 #include <crypto/cuckatoo/gpu_solver.h>
+#include <crypto/cuckatoo/multi_device.h>
 #include <interfaces/mining.h>
 #include <interfaces/types.h>
 #include <key_io.h>
@@ -181,6 +182,32 @@ std::optional<double> MiningService::RecentAttemptRate() const
     return m_rate.Rate(Now<SteadySeconds>());
 }
 
+namespace {
+//! "First Card (pci:0000:04:00.0): <SolverFault sentence>", the card by name when discovery lists it.
+std::string CardFaultText(const cuckatoo::GpuDiscovery& discovery, const std::string& id, cuckatoo::GpuSolveStatus status)
+{
+    const auto card = std::find_if(discovery.listing.devices.begin(), discovery.listing.devices.end(),
+                                   [&id](const auto& device) { return device.id == id; });
+    const std::string name = card == discovery.listing.devices.end() ? id : card->name;
+    return name + " (" + id + "): " + cuckatoo::SolverFault(status, false).value_or("");
+}
+} // namespace
+
+void MiningService::RecordSolverOutcome(cuckatoo::GpuSolveStatus status, bool cpu_fallback,
+                                        const std::vector<cuckatoo::GpuDeviceFault>& gpu_faults)
+{
+    auto fault = cuckatoo::SolverFault(status, cpu_fallback);
+    if (!gpu_faults.empty()) {
+        const auto& first = gpu_faults.front();
+        fault = CardFaultText(cuckatoo::DiscoverGpus(m_chainman.GetConsensus().nEdgeBits), first.device, first.status);
+    }
+    LOCK(m_stats_mutex);
+    m_status.solver_ok = !fault.has_value();
+    m_status.last_solver_error = fault.value_or("");
+    m_status.solver_fault_from_card = !gpu_faults.empty();
+    m_status.solver_missing = cuckatoo::SolverMissing(status, cpu_fallback);
+}
+
 void MiningService::Run(CScript payout_script)
 {
     // Session snapshot (address/start_time/counters) is initialized in Start()
@@ -255,6 +282,7 @@ void MiningService::Run(CScript payout_script)
 
             uint64_t budget = 4096;
             cuckatoo::GpuSolveStatus solver_status{cuckatoo::GpuSolveStatus::kNoCycle};
+            std::vector<cuckatoo::GpuDeviceFault> gpu_faults;
             bool template_changed{false};
             const bool solved = node::SolveBlockPoW(
                 m_chainman, block, budget, cpu_fallback,
@@ -272,17 +300,11 @@ void MiningService::Run(CScript payout_script)
                     m_attempts.fetch_add(1, std::memory_order_relaxed);
                     m_rate.Record(Now<SteadySeconds>());
                 },
-                /*out_status=*/&solver_status);
+                /*out_status=*/&solver_status, /*out_faults=*/&gpu_faults);
 
             // Publish the solver's health every window, not only on failure: a
             // card that comes back must clear the error it left behind.
-            {
-                const auto fault = cuckatoo::SolverFault(solver_status, cpu_fallback);
-                LOCK(m_stats_mutex);
-                m_status.solver_ok = !fault.has_value();
-                m_status.last_solver_error = fault.value_or("");
-                m_status.solver_missing = cuckatoo::SolverMissing(solver_status, cpu_fallback);
-            }
+            RecordSolverOutcome(solver_status, cpu_fallback, gpu_faults);
 
             if (solved) {
                 auto block_ptr = std::make_shared<const CBlock>(block);
@@ -328,6 +350,34 @@ interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateM
     out.blocks_found = s.blocks_found;
     out.coins_minted_session = s.coins_minted_session;
     out.attempts_per_second = svc.RecentAttemptRate();
+    const auto stats = cuckatoo::GetGpuDeviceStats();
+    if (!stats.empty()) {
+        const auto discovery = cuckatoo::DiscoverGpus(chainman.GetConsensus().nEdgeBits);
+        double total_rate{0.0};
+        bool have_rate{false};
+        for (const auto& stat : stats) {
+            interfaces::MiningStatus::Device device;
+            device.id = stat.device;
+            const auto card = std::find_if(discovery.listing.devices.begin(), discovery.listing.devices.end(),
+                                           [&stat](const auto& found) { return found.id == stat.device; });
+            if (card != discovery.listing.devices.end()) device.name = card->name;
+            switch (stat.state) {
+            case cuckatoo::GpuDeviceState::kIdle: device.state = "idle"; break;
+            case cuckatoo::GpuDeviceState::kSolving: device.state = "solving"; break;
+            case cuckatoo::GpuDeviceState::kFaulted: device.state = "faulted"; break;
+            }
+            if (stat.state == cuckatoo::GpuDeviceState::kSolving && stat.mean_seconds_per_graph > 0) {
+                device.attempts_per_second = 1.0 / stat.mean_seconds_per_graph;
+                total_rate += *device.attempts_per_second;
+                have_rate = true;
+            }
+            if (stat.state == cuckatoo::GpuDeviceState::kFaulted) {
+                device.last_error = cuckatoo::SolverFault(stat.last_status, false).value_or("");
+            }
+            out.devices.push_back(std::move(device));
+        }
+        if (have_rate) out.attempts_per_second = total_rate;
+    }
     out.last_block_time = s.last_block_time;
     out.elapsed_seconds = elapsed;
     // Report the bridge this process can actually launch. The persisted option
@@ -338,6 +388,23 @@ interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateM
     out.graphs_attempted = s.attempts;
     out.solver_ok = s.solver_ok;
     out.last_solver_error = s.last_solver_error;
+    // F-534: a card's health is read from the stats table, which marks it faulted
+    // the moment its helper fails. The window it faulted in is only recorded when
+    // the whole window returns (4096 attempts, a new template or a cancel), which
+    // on one card left mining can be a long time; and the next window has the card
+    // solving again well before that window is recorded. Faults that aren't a
+    // card's (no solver, processor refused) are still the window's.
+    const auto faulted_card = std::find_if(stats.begin(), stats.end(), [](const auto& stat) {
+        return stat.state == cuckatoo::GpuDeviceState::kFaulted;
+    });
+    if (faulted_card != stats.end()) {
+        out.solver_ok = false;
+        out.last_solver_error = CardFaultText(cuckatoo::DiscoverGpus(chainman.GetConsensus().nEdgeBits),
+                                              faulted_card->device, faulted_card->last_status);
+    } else if (s.solver_fault_from_card && !stats.empty()) {
+        out.solver_ok = true;
+        out.last_solver_error.clear();
+    }
     out.solver_missing = s.solver_missing;
     // Idle has no arming snapshot. The struct default is true, which made an
     // unarmed node with no solver and processor mining off read as CPU. Ask

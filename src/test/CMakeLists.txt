@@ -173,7 +173,7 @@ target_link_libraries(test_quicksilver
 if(QS_BUILD_GPU_HELPER)
   target_sources(test_quicksilver PRIVATE opencl_api_tests.cpp)
   target_sources(test_quicksilver PRIVATE opencl_devices_tests.cpp)
-  target_sources(test_quicksilver PRIVATE opencl_helper_tests.cpp opencl_parity_tests.cpp)
+  target_sources(test_quicksilver PRIVATE opencl_helper_tests.cpp opencl_parity_tests.cpp opencl_two_device_tests.cpp)
   target_link_libraries(test_quicksilver qsgpu_opencl_devices qsgpu_opencl_loader)
   target_compile_definitions(test_quicksilver PRIVATE
     QSGPUSOLVE_OPENCL_PATH="$<TARGET_FILE:qsgpusolve-opencl>"
@@ -267,6 +267,9 @@ set_property(TEST gpu_parity_tests APPEND PROPERTY
 )
 set_property(TEST opencl_parity_tests APPEND PROPERTY
   SKIP_REGULAR_EXPRESSION "QS_OPENCL_TEST_DEVICE unset"
+)
+set_property(TEST opencl_two_device_tests APPEND PROPERTY
+  SKIP_REGULAR_EXPRESSION "QS_OPENCL_TWO_DEVICES unset"
 )
 
 install_binary_component(test_quicksilver DEVELOPER_TOOL)

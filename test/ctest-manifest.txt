@@ -16,8 +16,9 @@
 # not-coverage means CMAKE_BUILD_TYPE is not Coverage (secp256k1's guard).
 # fuzz currently adds no CTest names. tests guards enable_testing().
 # Skip policies: never; gpu-unset (CUCKATOO_GPU_SOLVER absent, including no
-# empty-value exemption); opencl-unset (QS_OPENCL_TEST_DEVICE absent); msvc
-# (MSVC compiler or MSVC simulation ABI).
+# empty-value exemption); opencl-unset (QS_OPENCL_TEST_DEVICE absent);
+# opencl-two-unset (QS_OPENCL_TWO_DEVICES absent); msvc (MSVC compiler or
+# MSVC simulation ABI).
 # Results may cover a targeted subset; every reported test is checked.
 #
 addrman_tests  tests  never  -
@@ -100,6 +101,7 @@ opencl_api_tests  tests,gpu-helper  never  -
 opencl_devices_tests  tests,gpu-helper  never  -
 opencl_helper_tests  tests,gpu-helper  never  -
 opencl_parity_tests  tests,gpu-helper  opencl-unset  QS_OPENCL_TEST_DEVICE is unset; set it to a device id from qsgpusolve-opencl --list-devices to run parity.
+opencl_two_device_tests  tests,gpu-helper  opencl-two-unset  QS_OPENCL_TWO_DEVICES is unset; set it to two device ids from qsgpusolve-opencl --list-devices to run the two-device solve.
 orphanage_tests  tests  never  -
 outputtype_tests  tests  never  -
 pcp_tests  tests  never  -

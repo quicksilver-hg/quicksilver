@@ -182,6 +182,7 @@ src/test/opencl_api_tests.cpp
 src/test/opencl_devices_tests.cpp
 src/test/opencl_helper_tests.cpp
 src/test/opencl_parity_tests.cpp
+src/test/opencl_two_device_tests.cpp
 src/test/lockdirstub.cpp
 src/test/mining_anchor_tests.cpp
 src/test/mining_service_tests.cpp

@@ -7,12 +7,15 @@
 
 #include <common/args.h>
 #include <crypto/cuckatoo/gpu_devices.h>
+#include <crypto/cuckatoo/gpu_solver.h>
+#include <crypto/cuckatoo/multi_device.h>
 #include <qt/quicksilver.h>
 #include <qt/createvaultdialog.h>
 #include <qt/clientmodel.h>
 #include <qt/coincontroldialog.h>
 #include <qt/guiutil.h>
 #include <qt/optionsdialog.h>
+#include <qt/gpudevicelist.h>
 #include <qt/platformstyle.h>
 #include <qt/quicksilverunits.h>
 #include <qt/quicksilverstyle.h>
@@ -72,6 +75,7 @@ void OptionTests::init()
     gArgs.LockSettings([](common::Settings& settings) { settings.rw_settings.erase("cuckatoodevice"); });
     QSettings().remove(QStringLiteral("gpu_device_names"));
     cuckatoo::ResetGpuDiscoveryForTesting();
+    cuckatoo::ResetGpuDeviceStatsForTesting();
 }
 
 void OptionTests::leftoverQSettingsKeysAreIgnored()
@@ -377,6 +381,10 @@ void OptionTests::gpuCardsListAndModes()
     OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
     auto* list = dialog.findChild<QWidget*>(QStringLiteral("gpuDeviceList")); QVERIFY(list);
     QTRY_VERIFY_WITH_TIMEOUT(list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_04_00_0")), 30000);
+    auto* helper_status = dialog.findChild<QLabel*>(QStringLiteral("gpuSolverStatusLabel")); QVERIFY(helper_status);
+    QCOMPARE(helper_status->text(), QStringLiteral("Using Quicksilver's graphics helper."));
+    QMetaObject::invokeMethod(&dialog, "validateGpuSolverPath");
+    QCOMPARE(helper_status->text(), QStringLiteral("Using Quicksilver's graphics helper."));
     const auto state = [&](const char* id) { return list->findChild<QLabel*>(QString::fromLatin1(id) + QStringLiteral("_state"))->text(); };
     QCOMPARE(state("gpuDevice_pci_0000_04_00_0"), /*W-D5*/ QStringLiteral("In use"));
     QCOMPARE(state("gpuDevice_pci_0000_00_02_0"), /*W-D6*/ QStringLiteral("Not used: built-in graphics"));
@@ -386,6 +394,62 @@ void OptionTests::gpuCardsListAndModes()
     QTest::mouseClick(dialog.findChild<QPushButton*>(QStringLiteral("okButton")), Qt::LeftButton);
     QCOMPARE(options.getOption(OptionsModel::GpuDevices).toStringList(), QStringList{QStringLiteral("pci:0000:04:00.0")});
     QCOMPARE(options.getGpuDeviceNames().value(QStringLiteral("pci:0000:04:00.0")), QStringLiteral("AMD Radeon RX 480"));
+}
+
+void OptionTests::gpuCardStatsRefresh()
+{
+    PointDiscoveryAtStub(WriteListing({
+        QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480") }));
+    OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
+    auto* list = dialog.findChild<GpuDeviceList*>(QStringLiteral("gpuDeviceList")); QVERIFY(list);
+    auto* state = list->findChild<QLabel*>(QStringLiteral("gpuDevice_pci_0000_04_00_0_state"));
+    QTRY_VERIFY_WITH_TIMEOUT((state = list->findChild<QLabel*>(QStringLiteral("gpuDevice_pci_0000_04_00_0_state"))), 30000);
+    QCOMPARE(state->text(), QStringLiteral("In use"));
+
+    cuckatoo::SetGpuDeviceStatsForTesting({
+        {"pci:0000:04:00.0", cuckatoo::GpuDeviceState::kSolving, cuckatoo::GpuSolveStatus::kNoCycle, 5, 2.4},
+    });
+    list->refreshRows();
+    QCOMPARE(state->text(), QStringLiteral("In use, 2.4 s per graph"));
+    cuckatoo::SetGpuDeviceStatsForTesting({
+        {"pci:0000:04:00.0", cuckatoo::GpuDeviceState::kFaulted, cuckatoo::GpuSolveStatus::kDeviceFault, 5, 2.4},
+    });
+    list->refreshRows();
+    QCOMPARE(state->text(), QStringLiteral("Faulted: %1").arg(QString::fromStdString(
+        cuckatoo::SolverFault(cuckatoo::GpuSolveStatus::kDeviceFault, false).value())));
+    cuckatoo::ResetGpuDeviceStatsForTesting();
+}
+
+void OptionTests::missingBundledHelperIsNamed()
+{
+    struct RestoreBundled {
+        QByteArray value{qgetenv("CUCKATOO_GPU_BUNDLED")};
+        ~RestoreBundled()
+        {
+            if (value.isEmpty()) qunsetenv("CUCKATOO_GPU_BUNDLED");
+            else qputenv("CUCKATOO_GPU_BUNDLED", value);
+            cuckatoo::ResetGpuDiscoveryForTesting();
+        }
+    } restore;
+    qunsetenv("CUCKATOO_GPU_BUNDLED");
+    cuckatoo::ResetGpuDiscoveryForTesting();
+    OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
+    auto* status = dialog.findChild<QLabel*>(QStringLiteral("gpuSolverStatusLabel")); QVERIFY(status);
+    auto* list = dialog.findChild<GpuDeviceList*>(QStringLiteral("gpuDeviceList")); QVERIFY(list);
+    const QString headline = QStringLiteral("Quicksilver's graphics helper isn't installed.");
+    QTRY_VERIFY_WITH_TIMEOUT(status->text().contains(headline), 30000);
+    QVERIFY(list->findChild<QLabel*>()->text().contains(headline));
+#ifdef Q_OS_WIN
+    const QString advice = QStringLiteral("Reinstall Quicksilver.");
+#else
+    const QString advice = QStringLiteral("Install it with <i>sudo apt install quicksilver-gpu</i>.");
+#endif
+    QVERIFY(status->text().contains(advice));
+    QVERIFY(list->findChild<QLabel*>()->text().contains(advice));
+    QMetaObject::invokeMethod(&dialog, "validateGpuSolverPath");
+    QVERIFY(status->text().contains(headline));
 }
 
 void OptionTests::tickingBuiltInGraphicsAsksFirst()

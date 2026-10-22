@@ -23,6 +23,10 @@
 //   sleep <ms>      sleep for <ms> milliseconds
 //   append <path>   append one byte to <path>, so a parent can watch a process
 //                   that writes nothing to stdout still be alive
+//   await <path>    poll until <path> exists, so one card can wait until
+//                   another has reached that point. Gives up after 4 s and
+//                   exits non-zero, so a marker that never appears cannot
+//                   hang the suite
 //   loop            jump back to the first directive (runs forever)
 //   exit <code>     exit with <code>
 //
@@ -33,6 +37,8 @@
 // what the bridge delivered rather than infer it. QS_SOLVER_STUB_ARGV_APPEND
 // appends one tab-separated invocation per spawn, allowing concurrent launches
 // to be recorded without changing the original overwrite contract.
+
+#include <util/fs.h>
 
 #include <chrono>
 #include <cstdio>
@@ -57,6 +63,34 @@ namespace {
 //! mistaken for a solver reporting something about a graph. No test expects it.
 constexpr int kMisconfigured{70};
 
+//! Upper bound for `await`. Long enough that a loaded scheduler can still
+//! start the card that writes the marker, short enough that a missing marker
+//! fails the test instead of hanging it.
+constexpr int kAwaitBoundMs{4000};
+
+//! An environment variable as UTF-8, empty when unset. Paths in the stub are UTF-8 throughout: on Windows the
+//! narrow getenv goes through the ANSI code page and mangles a path outside it (the functional test runner's
+//! folder name carries non-ASCII characters on purpose), so the variable is read wide.
+std::string Env(const char* name)
+{
+#ifdef WIN32
+    const wchar_t* value{_wgetenv(std::wstring(name, name + std::strlen(name)).c_str())};
+    return value ? fs::path{std::wstring{value}}.utf8string() : std::string{};
+#else
+    const char* value{std::getenv(name)};
+    return value ? std::string{value} : std::string{};
+#endif
+}
+
+bool PathExists(const std::string& path)
+{
+#ifdef WIN32
+    return GetFileAttributesW(fs::PathFromString(path).wstring().c_str()) != INVALID_FILE_ATTRIBUTES;
+#else
+    return access(path.c_str(), F_OK) == 0;
+#endif
+}
+
 //! Locale-free decimal parse, stopping at the first non-digit. The C library's
 //! integer-parsing helpers all honour LC_NUMERIC and are banned tree-wide
 //! (test/lint/lint-locale-dependence.py); a stub reading its own directives has
@@ -71,10 +105,10 @@ int ParseInt(const std::string& text)
     return value;
 }
 
-std::vector<std::string> ReadLines(const char* path)
+std::vector<std::string> ReadLines(const std::string& path)
 {
     std::vector<std::string> lines;
-    std::ifstream in{path};
+    std::ifstream in{fs::PathFromString(path)};
     if (!in) return lines;
     std::string line;
     while (std::getline(in, line)) {
@@ -110,10 +144,10 @@ bool Directive(const std::string& line, const char* verb, std::string& rest)
     return true;
 }
 
-bool AppendLaunchRecord(const char* path, const std::string& record)
+bool AppendLaunchRecord(const std::string& path, const std::string& record)
 {
 #ifdef WIN32
-    const HANDLE file{CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    const HANDLE file{CreateFileW(fs::PathFromString(path).wstring().c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                   nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr)};
     if (file == INVALID_HANDLE_VALUE) {
         std::cerr << "solver stub: could not open launch record " << path << std::endl;
@@ -127,7 +161,7 @@ bool AppendLaunchRecord(const char* path, const std::string& record)
     }
     if (!CloseHandle(file)) ok = false;
 #else
-    const int file{open(path, O_WRONLY | O_APPEND | O_CREAT, 0644)};
+    const int file{open(path.c_str(), O_WRONLY | O_APPEND | O_CREAT, 0644)};
     if (file == -1) {
         std::cerr << "solver stub: could not open launch record " << path << std::endl;
         return false;
@@ -145,11 +179,11 @@ bool AppendLaunchRecord(const char* path, const std::string& record)
 
 int main(int argc, char* argv[])
 {
-    if (const char* argv_out{std::getenv("QS_SOLVER_STUB_ARGV")}) {
-        std::ofstream out{argv_out, std::ios::binary};
+    if (const std::string argv_out{Env("QS_SOLVER_STUB_ARGV")}; !argv_out.empty()) {
+        std::ofstream out{fs::PathFromString(argv_out), std::ios::binary};
         for (int i = 1; i < argc; ++i) out << argv[i] << "\n";
     }
-    if (const char* argv_out{std::getenv("QS_SOLVER_STUB_ARGV_APPEND")}) {
+    if (const std::string argv_out{Env("QS_SOLVER_STUB_ARGV_APPEND")}; !argv_out.empty()) {
         std::string record;
         for (int i = 1; i < argc; ++i) {
             if (i != 1) record += '\t';
@@ -158,30 +192,28 @@ int main(int argc, char* argv[])
         record += '\n';
         if (!AppendLaunchRecord(argv_out, record)) return kMisconfigured;
     }
-    const char* script{std::getenv("QS_SOLVER_STUB_SCRIPT")};
+    std::string script{Env("QS_SOLVER_STUB_SCRIPT")};
     if (argc == 2 && std::strcmp(argv[1], "--list-devices") == 0) {
-        const char* listing{std::getenv("QS_SOLVER_STUB_LISTING")};
-        if (!listing || listing[0] == '\0') {
+        const std::string listing{Env("QS_SOLVER_STUB_LISTING")};
+        if (listing.empty()) {
             std::puts("device backend=stub id=pci:0000:01:00.0 type=gpu integrated=0 mem=0 status=ok name=Stub graphics card");
             return 0;
         }
         script = listing;
     }
     if (argc >= 3 && std::strcmp(argv[1], "--device") == 0) {
-        if (const char* map_path{std::getenv("QS_SOLVER_STUB_DEVICE_SCRIPTS")}) {
+        if (const std::string map_path{Env("QS_SOLVER_STUB_DEVICE_SCRIPTS")}; !map_path.empty()) {
             const std::vector<std::string> mappings{ReadLines(map_path)};
             const std::string prefix{std::string{argv[2]} + "\t"};
             for (const std::string& mapping : mappings) {
                 if (mapping.rfind(prefix, 0) == 0) {
-                    static std::string selected;
-                    selected = mapping.substr(prefix.size());
-                    script = selected.c_str();
+                    script = mapping.substr(prefix.size());
                     break;
                 }
             }
         }
     }
-    if (!script || script[0] == '\0') {
+    if (script.empty()) {
         std::cerr << "solver stub: QS_SOLVER_STUB_SCRIPT is unset" << std::endl;
         return kMisconfigured;
     }
@@ -205,8 +237,21 @@ int main(int argc, char* argv[])
         } else if (Directive(line, "sleep", rest)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(ParseInt(rest)));
         } else if (Directive(line, "append", rest)) {
-            std::ofstream marker{rest, std::ios::binary | std::ios::app};
+            std::ofstream marker{fs::PathFromString(rest), std::ios::binary | std::ios::app};
             marker << "x";
+        } else if (Directive(line, "await", rest)) {
+            if (rest.empty()) {
+                std::cerr << "solver stub: await needs a path" << std::endl;
+                return kMisconfigured;
+            }
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{kAwaitBoundMs};
+            while (!PathExists(rest)) {
+                if (std::chrono::steady_clock::now() >= deadline) {
+                    std::cerr << "solver stub: await timed out for " << rest << std::endl;
+                    return kMisconfigured;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds{10});
+            }
         } else if (Directive(line, "found", rest)) {
             // "found NONCE CYCLE-LINE" lines are the proofs this helper can find.
             // At the first one reached it reports the lowest NONCE inside the

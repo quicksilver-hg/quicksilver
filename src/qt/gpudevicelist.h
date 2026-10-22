@@ -26,13 +26,13 @@ public:
     QStringList tickedIds() const;
     QMap<QString, QString> tickedNames() const;
     void setChecked(const QString& id, bool checked);
+    void refreshRows();
 Q_SIGNALS:
     void changed();
     void integratedChecked(const QString& id);
 private:
     struct Row { QString id; QString name; bool integrated; bool missing; QCheckBox* check; QLabel* state; cuckatoo::GpuDevice device; };
     void clearRows();
-    void refreshRows();
     QVBoxLayout* m_layout;
     QLabel* m_state;
     QList<Row> m_rows;

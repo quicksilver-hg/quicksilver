@@ -26,6 +26,8 @@ struct GpuDeviceStats {
 //! Thread-safe snapshot used by phase 2 reporting consumers.
 std::vector<GpuDeviceStats> GetGpuDeviceStats();
 void ResetGpuDeviceStatsForTesting();
+//! Replace the process-wide stats table with deterministic rows in tests only.
+void SetGpuDeviceStatsForTesting(std::vector<GpuDeviceStats> rows);
 
 struct MultiDeviceResult {
     bool solved{false};

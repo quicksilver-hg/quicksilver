@@ -34,6 +34,8 @@ private Q_SLOTS:
     void gpuSolverDialogRejectsInvalidPath();
     void gpuDevicesSettingRoundTrips();
     void gpuCardsListAndModes();
+    void gpuCardStatsRefresh();
+    void missingBundledHelperIsNamed();
     void tickingBuiltInGraphicsAsksFirst();
     void missingChosenCardKeepsItsName();
     void cpuOnlyHidesTheList();

@@ -3,6 +3,8 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <qt/gpusituation.h>
+#include <crypto/cuckatoo/gpu_solver.h>
+#include <crypto/cuckatoo/multi_device.h>
 
 #include <QCoreApplication>
 #include <QMetaObject>
@@ -10,6 +12,7 @@
 #include <QPointer>
 
 #include <thread>
+#include <algorithm>
 
 namespace gpusituation {
 
@@ -144,7 +147,23 @@ SendNote SendNoteFor(const std::optional<cuckatoo::GpuDiscovery>& discovery, boo
 
 bool CardWillWork(const std::optional<cuckatoo::GpuDiscovery>& discovery)
 {
-    return discovery && (discovery->situation == cuckatoo::GpuSituation::kReady || discovery->situation == cuckatoo::GpuSituation::kPartial);
+    if (!discovery || (discovery->situation != cuckatoo::GpuSituation::kReady && discovery->situation != cuckatoo::GpuSituation::kPartial)) return false;
+    return FaultedCardDetails(discovery).isEmpty();
+}
+
+QString FaultedCardDetails(const std::optional<cuckatoo::GpuDiscovery>& discovery)
+{
+    if (!discovery || discovery->selection.use.empty()) return {};
+    const auto stats = cuckatoo::GetGpuDeviceStats();
+    QStringList lines;
+    for (const auto& card : discovery->selection.use) {
+        const auto it = std::find_if(stats.begin(), stats.end(), [&card](const auto& item) { return item.device == card.id; });
+        if (it == stats.end() || it->state != cuckatoo::GpuDeviceState::kFaulted) return {};
+        lines.push_back(QObject::tr("%1 (slot %2): %3")
+            .arg(QString::fromStdString(card.name), SlotOf(card.id),
+                 QString::fromStdString(cuckatoo::SolverFault(it->last_status, false).value_or(""))));
+    }
+    return lines.join(QLatin1Char('\n'));
 }
 
 } // namespace gpusituation

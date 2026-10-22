@@ -89,6 +89,7 @@ private Q_SLOTS:
     void gpuSituationWordingIsExact();
     void discoveryRunsOffTheGuiThread();
     void cpuFallbackWarningFollowsDiscovery();
+    void faultedCardsShowSendWarningDetails();
     void transferPageShowsItsFormAndTransmitButtonTogether();
     void transferCoinControlQuantityAndBytesUseSeparateRows();
     void coinControlDialogQuantityAndBytesUseSeparateRows();

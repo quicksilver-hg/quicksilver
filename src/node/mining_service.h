@@ -6,6 +6,7 @@
 #define QUICKSILVER_NODE_MINING_SERVICE_H
 
 #include <consensus/amount.h>
+#include <crypto/cuckatoo/cuckatoo.h>
 #include <interfaces/node.h>
 #include <script/script.h>
 #include <sync.h>
@@ -90,6 +91,9 @@ struct MiningStatus {
     //! nothing else for seven hours; these two fields are what names the failure.
     bool solver_ok{true};
     std::string last_solver_error;
+    //! True when that fault was a card's (the window returned gpu_faults), so
+    //! BuildMiningStatus may clear it once the stats table has no faulted card (F-534).
+    bool solver_fault_from_card{false};
     //! True when the fault is specifically "no solver is configured", as opposed to a
     //! solver that ran and failed. The message alone cannot carry this: it is written
     //! for quicksilver-daemon and names -cuckatoosolver, a flag a GUI user has no way to set.
@@ -139,6 +143,10 @@ public:
     //! Solver attempts per second over the trailing window, or nullopt when no
     //! attempt has been observed this session. See AttemptRateWindow.
     std::optional<double> RecentAttemptRate() const;
+    //! Publish one completed solve window, including faults hidden by another card's success.
+    void RecordSolverOutcome(cuckatoo::GpuSolveStatus status, bool cpu_fallback,
+                             const std::vector<cuckatoo::GpuDeviceFault>& gpu_faults)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_stats_mutex);
 
 private:
     void Run(CScript payout_script) EXCLUSIVE_LOCKS_REQUIRED(!m_stats_mutex);

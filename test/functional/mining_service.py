@@ -5,6 +5,8 @@
 """Test the opt-in background mining control plane (SP1a)."""
 
 import time
+import os
+from pathlib import Path
 from decimal import Decimal
 
 from test_framework.address import address_to_scriptpubkey
@@ -27,7 +29,7 @@ class MiningServiceTest(QuicksilverTestFramework):
         self.log.info("Inactive status before starting")
         st = node.getminingstatus()
         for key in ("active", "address", "payout_script", "blocks_found", "coins_minted_session",
-                    "graphs_attempted", "solver_ok",
+                    "graphs_attempted", "devices", "solver_ok",
                     "last_solver_error", "last_block_time", "elapsed_seconds",
                     "congestion_multiplier", "template_height",
                     "template_transactions"):
@@ -67,6 +69,7 @@ class MiningServiceTest(QuicksilverTestFramework):
 
         self.wait_until(lambda: node.getminingstatus()["blocks_found"] >= 3, timeout=30)
         node.stopmining()
+
         st = node.getminingstatus()
         assert_equal(st["active"], False)
         assert_equal(st["payout_script"], address_to_scriptpubkey(addr).hex())
@@ -203,6 +206,45 @@ class MiningServiceTest(QuicksilverTestFramework):
         explicit = node.startmining(addr)
         assert_equal(explicit["address"], addr)
         assert_equal(explicit["payout_script"], address_to_scriptpubkey(addr).hex())
+        node.stopmining()
+
+        self.log.info("Two stub cards each publish a device rate")
+        self.stop_node(0)
+        node.chain = "publictest"
+        node.replace_in_config([("sandbox=", "publictest="), ("[sandbox]", "[publictest]")])
+        stub = Path(node.binary).with_name("test_solver_stub" + Path(node.binary).suffix)
+        assert stub.exists(), stub
+        test_dir = node.datadir_path
+        listing = test_dir / "ey-listing"
+        script = test_dir / "ey-solver-script"
+        mapping = test_dir / "ey-device-scripts"
+        ids = ("pci:0000:04:00.0", "pci:0000:05:00.0")
+        listing.write_text("\n".join(
+            f"echo device backend=stub id={card} type=gpu integrated=0 mem=0 status=ok name=Test Card {i}"
+            for i, card in enumerate(ids)) + "\nexit 0\n", encoding="utf8")
+        script.write_text("echo progress=1\nsleep 100\necho progress=2\nloop\n", encoding="utf8")
+        mapping.write_text("".join(f"{card}\t{script}\n" for card in ids), encoding="utf8")
+        env = os.environ.copy()
+        env.update({"QS_SOLVER_STUB_SCRIPT": str(script),
+                    "QS_SOLVER_STUB_LISTING": str(listing), "QS_SOLVER_STUB_DEVICE_SCRIPTS": str(mapping)})
+        # -prune: on a first start the node warns on stderr when the disk can't hold the whole publictest chain
+        # (128 GB), which this case never downloads; pruned, the check asks for 550 MB.
+        self.start_node(0, extra_args=["-maxconnections=0", "-prune=550", "-minescript=6a", f"-cuckatoosolver={stub}",
+                                       *(f"-cuckatoodevice={card}" for card in ids)], env=env)
+        node.startmining()
+        def both_measured():
+            devices = {item["id"]: item for item in node.getminingstatus()["devices"]}
+            return all(card in devices and devices[card]["state"] == "solving" and
+                       devices[card].get("attempts_per_second", 0) > 0 for card in ids)
+        self.wait_until(both_measured, timeout=5)
+        status = node.getminingstatus()
+        devices = {item["id"]: item for item in status["devices"]}
+        assert_equal(set(devices), set(ids))
+        for i, card in enumerate(ids):
+            assert_equal(devices[card]["state"], "solving")
+            assert_equal(devices[card]["name"], f"Test Card {i}")
+            assert devices[card]["attempts_per_second"] > 0
+        assert abs(status["attempts_per_second"] - sum(devices[card]["attempts_per_second"] for card in ids)) < 1e-9
         node.stopmining()
 
 
