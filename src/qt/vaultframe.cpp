@@ -79,7 +79,7 @@ VaultFrame::VaultFrame(const PlatformStyle* _platformStyle, QWidget* parent)
     connect(m_consensus_review_page, &ConsensusReviewPage::continueRequested, this, &VaultFrame::acceptConsensusAndShowStatus);
     connect(m_consensus_review_page, &ConsensusReviewPage::declined, this, [this] {
         if (!m_consensus_enabled) setConsensusEnabled(false);
-        gotoLaunchPage();
+        Q_EMIT homeRequested();
     });
     vaultStack->addWidget(m_consensus_review_page);
 

@@ -167,7 +167,11 @@ OptionsModel::OptionsModel(interfaces::Node& node, QObject *parent) :
 
 void OptionsModel::addOverriddenOption(const std::string &option)
 {
-    strOverriddenByCommandLine += QString::fromStdString(option) + "=" + QString::fromStdString(gArgs.GetArg(option, "")) + " ";
+    for (const std::string& value : gArgs.GetArgs(option)) {
+        strOverriddenByCommandLine += QString::fromStdString(option);
+        if (!value.empty()) strOverriddenByCommandLine += QStringLiteral("=") + QString::fromStdString(value);
+        strOverriddenByCommandLine += QLatin1Char(' ');
+    }
 }
 
 // Writes all missing QSettings with their default values

@@ -27,6 +27,14 @@
 //                   another has reached that point. Gives up after 4 s and
 //                   exits non-zero, so a marker that never appears cannot
 //                   hang the suite
+//   hold <path>     take an exclusive OS lock on <path> and never release it,
+//                   so that the lock becoming free is the KERNEL's statement
+//                   that this process has exited -- not a marker the stub
+//                   wrote some time before exiting. A parent that must order
+//                   itself strictly after this stub's exit waits for the lock
+//                   (F-531's test does; `append` then `exit` cannot give that
+//                   order, since the marker is visible while the stub is still
+//                   alive)
 //   loop            jump back to the first directive (runs forever)
 //   exit <code>     exit with <code>
 //
@@ -55,6 +63,7 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <sys/file.h>
 #include <unistd.h>
 #endif
 
@@ -88,6 +97,33 @@ bool PathExists(const std::string& path)
     return GetFileAttributesW(fs::PathFromString(path).wstring().c_str()) != INVALID_FILE_ATTRIBUTES;
 #else
     return access(path.c_str(), F_OK) == 0;
+#endif
+}
+
+//! Take an exclusive lock on `path` and keep it for the rest of this process's
+//! life. Deliberately leaks the descriptor/handle: the lock must outlive every
+//! other teardown step, and the kernel drops it when the process dies, however
+//! it dies. That is the whole point -- see the `hold` directive.
+bool HoldLock(const std::string& path)
+{
+    // `loop` brings the directive list round again, so a held path must be a
+    // no-op the second time: re-locking it from a second descriptor in this
+    // same process would fail (flock) or block (CreateFileW share 0).
+    static std::vector<std::string> held;
+    for (const std::string& path_held : held) {
+        if (path_held == path) return true;
+    }
+    held.push_back(path);
+#ifdef WIN32
+    // Share mode 0: any other opener fails with ERROR_SHARING_VIOLATION until
+    // this handle is closed, which for a leaked handle is process exit.
+    const HANDLE file{CreateFileW(fs::PathFromString(path).wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
+                                  0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr)};
+    return file != INVALID_HANDLE_VALUE;
+#else
+    const int fd{open(path.c_str(), O_RDWR | O_CREAT, 0644)};
+    if (fd == -1) return false;
+    return flock(fd, LOCK_EX | LOCK_NB) == 0;
 #endif
 }
 
@@ -251,6 +287,15 @@ int main(int argc, char* argv[])
                     return kMisconfigured;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds{10});
+            }
+        } else if (Directive(line, "hold", rest)) {
+            if (rest.empty()) {
+                std::cerr << "solver stub: hold needs a path" << std::endl;
+                return kMisconfigured;
+            }
+            if (!HoldLock(rest)) {
+                std::cerr << "solver stub: could not lock " << rest << std::endl;
+                return kMisconfigured;
             }
         } else if (Directive(line, "found", rest)) {
             // "found NONCE CYCLE-LINE" lines are the proofs this helper can find.

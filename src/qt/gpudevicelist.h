@@ -23,6 +23,7 @@ public:
     void setDevices(const cuckatoo::GpuDiscovery& discovery, const QStringList& chosen, const QMap<QString, QString>& names);
     void setListingState(const QString& text);
     void setMode(Mode mode);
+    void setMiningActive(bool active);
     QStringList tickedIds() const;
     QMap<QString, QString> tickedNames() const;
     void setChecked(const QString& id, bool checked);
@@ -37,6 +38,7 @@ private:
     QLabel* m_state;
     QList<Row> m_rows;
     Mode m_mode{Mode::kAutomatic};
+    bool m_mining_active{false};
 };
 
 #endif // QUICKSILVER_QT_GPUDEVICELIST_H

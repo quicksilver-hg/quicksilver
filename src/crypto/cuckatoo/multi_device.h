@@ -7,7 +7,9 @@
 #include <crypto/cuckatoo/cuckatoo.h>
 #include <crypto/cuckatoo/gpu_devices.h>
 
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -28,6 +30,13 @@ std::vector<GpuDeviceStats> GetGpuDeviceStats();
 void ResetGpuDeviceStatsForTesting();
 //! Replace the process-wide stats table with deterministic rows in tests only.
 void SetGpuDeviceStatsForTesting(std::vector<GpuDeviceStats> rows);
+
+//! Test-only clock seam for the stats table. mean_seconds_per_graph is the gap
+//! between progress heartbeats, so with the real steady_clock a case can only
+//! bound it -- and a bound on how much wall-clock time passed is what R3 forbids
+//! and F-532 was raised for. An injected clock makes the mean arithmetic the
+//! case chose, and the assertion exact. Pass {} to restore steady_clock.
+void SetGpuStatsClockForTesting(std::function<std::chrono::steady_clock::time_point()> clock);
 
 struct MultiDeviceResult {
     bool solved{false};

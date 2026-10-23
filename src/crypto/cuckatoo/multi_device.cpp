@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -31,6 +32,15 @@ struct MutableStats {
 
 std::mutex g_stats_mutex;
 std::map<std::string, MutableStats> g_stats;
+//! Guarded by g_stats_mutex; empty means the real clock. See
+//! SetGpuStatsClockForTesting in the header.
+std::function<std::chrono::steady_clock::time_point()> g_stats_clock;
+
+//! The stats table's idea of now. Call with g_stats_mutex held.
+std::chrono::steady_clock::time_point StatsNow()
+{
+    return g_stats_clock ? g_stats_clock() : std::chrono::steady_clock::now();
+}
 
 bool ProofValidForNonce(const unsigned char* prepow, size_t len, uint8_t edgebits,
                         const Cycle& cycle, uint32_t nonce)
@@ -52,15 +62,15 @@ void SetState(const std::string& device, GpuDeviceState state, GpuSolveStatus st
     entry.public_stats.state = state;
     entry.public_stats.last_status = status;
     if (state == GpuDeviceState::kSolving) {
-        entry.last_progress = std::chrono::steady_clock::now();
+        entry.last_progress = StatsNow();
         entry.have_progress_time = true;
     }
 }
 
 void RecordProgress(const std::string& device)
 {
-    const auto now = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lock{g_stats_mutex};
+    const auto now = StatsNow();
     auto& entry = g_stats[device];
     entry.public_stats.device = device;
     entry.public_stats.state = GpuDeviceState::kSolving;
@@ -96,6 +106,12 @@ void ResetGpuDeviceStatsForTesting()
 {
     std::lock_guard<std::mutex> lock{g_stats_mutex};
     g_stats.clear();
+}
+
+void SetGpuStatsClockForTesting(std::function<std::chrono::steady_clock::time_point()> clock)
+{
+    std::lock_guard<std::mutex> lock{g_stats_mutex};
+    g_stats_clock = std::move(clock);
 }
 
 void SetGpuDeviceStatsForTesting(std::vector<GpuDeviceStats> rows)

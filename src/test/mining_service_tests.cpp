@@ -413,10 +413,14 @@ BOOST_AUTO_TEST_CASE(one_faulted_stub_card_makes_solver_unhealthy_until_recovery
     // F-534: the card is faulted in the stats table before any window is reported.
     const auto unreported = node::BuildMiningStatus(svc, *m_node.chainman);
     BOOST_CHECK(!unreported.solver_ok);
-    BOOST_CHECK(unreported.last_solver_error.starts_with("First Card (pci:0000:04:00.0): "));
+    std::string rows;
+    for (const auto& device : unreported.devices) rows += " [" + device.id + " '" + device.name + "' " + device.state + " '" + device.last_error + "']";
+    BOOST_CHECK_MESSAGE(unreported.last_solver_error.starts_with("First Card (pci:0000:04:00.0): "),
+                        "last_solver_error '" << unreported.last_solver_error << "', fault " << faulted.faults.front().device << ", rows" << rows);
     svc.RecordSolverOutcome(faulted.status, false, faulted.faults);
     BOOST_CHECK(!svc.GetStatus().solver_ok);
-    BOOST_CHECK(svc.GetStatus().last_solver_error.starts_with("First Card (pci:0000:04:00.0): "));
+    BOOST_CHECK_MESSAGE(svc.GetStatus().last_solver_error.starts_with("First Card (pci:0000:04:00.0): "),
+                        "last_solver_error '" << svc.GetStatus().last_solver_error << "'");
 
     write(first, "echo progress=1\nexit 0\n");
     const auto recovered = run();

@@ -83,7 +83,10 @@ MineMintPage::MineMintPage(QWidget* parent)
     m_payout_edit->setPlaceholderText(tr("Address to use when mining starts"));
     m_payout_edit->setToolTip(tr("Press Start to use this address for newly mined coins."));
     m_payout_edit->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    connect(m_payout_edit, &QLineEdit::textChanged, this, [this] { if (m_payout_value) renderPayout(); });
+    connect(m_payout_edit, &QLineEdit::textChanged, this, [this] {
+        if (m_payout_value) renderPayout();
+        if (m_start_button) refreshStartAvailability();
+    });
     m_new_address_button = new QPushButton(tr("Use new"), payout_panel);
     m_new_address_button->setObjectName(QStringLiteral("newAddressButton"));
     m_new_address_button->setProperty("class", QStringLiteral("benchQuiet"));
@@ -151,6 +154,11 @@ MineMintPage::MineMintPage(QWidget* parent)
     controls->addWidget(m_configure_solver_button);
     controls->addStretch();
     state.body->addLayout(controls);
+    m_start_reason = new QLabel(this);
+    m_start_reason->setObjectName(QStringLiteral("startMiningReason"));
+    m_start_reason->setProperty("class", QStringLiteral("benchNote"));
+    m_start_reason->setWordWrap(true);
+    state.body->addWidget(m_start_reason);
     root->addWidget(group);
     root->addStretch();
 
@@ -159,6 +167,7 @@ MineMintPage::MineMintPage(QWidget* parent)
     connect(m_new_address_button, &QPushButton::clicked, this, &MineMintPage::newAddressRequested);
     connect(m_configure_solver_button, &QPushButton::clicked, this, &MineMintPage::solverSettingsRequested);
     connect(isolation_button, &QPushButton::clicked, this, &MineMintPage::networkHelpRequested);
+    setAddressHelperAvailable(false);
 }
 
 void MineMintPage::handleStartClicked()
@@ -301,7 +310,7 @@ void MineMintPage::setStatus(const interfaces::MiningStatus& s)
     m_configure_solver_button->setVisible(rows.show_configure_solver);
     m_congestion_value->setText(QString::number(s.congestion_multiplier, 'f', 2) + QStringLiteral("×"));
     m_stop_button->setEnabled(s.active);
-    m_start_button->setEnabled(!s.active);
+    refreshStartAvailability();
 }
 
 void MineMintPage::setDisplayUnit(QuicksilverUnit unit)
@@ -330,4 +339,18 @@ void MineMintPage::setAddressHelperAvailable(bool available)
 {
     m_new_address_button->setEnabled(available);
     m_new_address_button->setToolTip(available ? QString() : tr("Open a vault to create a fresh payout address."));
+    refreshStartAvailability();
+}
+
+void MineMintPage::refreshStartAvailability()
+{
+    if (!m_start_button || !m_start_reason) return;
+    const bool missing_address = payoutAddress().isEmpty();
+    m_start_button->setEnabled(!m_active && !missing_address);
+    m_start_reason->setText(!m_active && missing_address
+        ? (m_new_address_button->isEnabled()
+            ? tr("Enter a payout address, or press Use new.")
+            : tr("Enter a payout address, or open a vault and press Use new."))
+        : QString());
+    m_start_reason->setVisible(!m_start_reason->text().isEmpty());
 }

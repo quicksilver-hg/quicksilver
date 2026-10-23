@@ -90,6 +90,7 @@ Q_SIGNALS:
     void openVaultButtonClicked();
     void message(const QString& title, const QString& message, unsigned int style);
     void currentVaultSet();
+    void homeRequested();
     void consensusStateChanged(bool enabled);
     void networkRestartRequested(const QString& chain_token, const QString& network_name);
     void privacyRequested(bool privacy);

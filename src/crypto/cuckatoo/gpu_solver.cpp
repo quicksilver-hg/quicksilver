@@ -247,9 +247,29 @@ bool GpuSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
     std::string pending_progress;
     char rbuf[8192];
     bool killed = false;
+    // Set when cancel arrived but the child had already exited on its own: from
+    // then on the loop only drains the pipe to EOF, and the exit-code mapping
+    // below decides the outcome.
+    bool reap_exited_child = false;
     int waited_ms = 0;
     for (;;) {
-        if (cancel && cancel()) { child->KillGroup(); killed = true; break; }
+        if (!reap_exited_child && cancel && cancel()) {
+            // F-531: with several cards the coordinator cancels the losers the
+            // moment one card's proof is accepted, and a card that faulted in
+            // that same slice has ALREADY exited. Reporting it cancelled throws
+            // away the only record of the fault -- its exit code -- and the
+            // worker then books a faulted card as idle. A child that is already
+            // gone is reaped and reported by what it exited with; one still
+            // running is killed and reported cancelled, as before. Exited() does
+            // not block, so this costs a still-running child nothing.
+            if (child->Exited()) {
+                reap_exited_child = true;
+            } else {
+                child->KillGroup();
+                killed = true;
+                break;
+            }
+        }
         const int remaining = timeout_ms - waited_ms;
         const int slice = remaining < kCancelPollSliceMs ? remaining : kCancelPollSliceMs;
         size_t got = 0;
@@ -267,6 +287,15 @@ bool GpuSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
     if (!pending_progress.empty()) dispatch_progress_line(pending_progress, progress);
 
     if (killed) {
+        // F-542: Exited() can say "still running" for a child that has in fact
+        // already exited. On Windows a process's handles are closed before its
+        // process object is signalled, so a card that faulted as another card
+        // won can be killed here a moment after it left. Its own exit code
+        // survives the kill: one we killed reads -1 (POSIX) or 1 (Windows), never
+        // 4 or 5, so either of those is the helper's own report of a dead card.
+        const int exit_code = child->Wait();
+        if (exit_code == 4) { report(GpuSolveStatus::kNoGpuDevice); return false; }
+        if (exit_code == 5) { report(GpuSolveStatus::kDeviceFault); return false; }
         report(cancel && cancel() ? GpuSolveStatus::kCancelled : GpuSolveStatus::kTimedOut);
         return false;
     }

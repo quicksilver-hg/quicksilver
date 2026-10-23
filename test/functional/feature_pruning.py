@@ -172,6 +172,11 @@ class PruneTest(QuicksilverTestFramework):
         # Create stale blocks in manageable sized chunks
         self.log.info("Mine 24 (stale) blocks on Node 1, followed by 25 (main chain) block reorg from Node 0, for 12 rounds")
 
+        # The large blocks node 0 just mined may still be on their way to node 1. Node 1
+        # must hold them before the first round cuts it off: a block arriving while it
+        # mines moves its tip, and its next block then extends a branch that is no longer
+        # its best, which submitblock reports as "inconclusive" (F-541).
+        self.sync_blocks(self.nodes[0:3])
         for _ in range(12):
             # Disconnect node 0 so it can mine a longer reorg chain without knowing about node 1's soon-to-be-stale chain
             # Node 2 stays connected, so it hears about the stale blocks and then reorg's when node0 reconnects

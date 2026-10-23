@@ -156,6 +156,7 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
             updateVaultStatus();
             refreshBenchChrome();
         });
+        connect(vaultFrame, &VaultFrame::homeRequested, this, &QuicksilverGUI::gotoHomePage);
         m_consensus_enabled = vaultFrame->consensusEnabled();
         connect(vaultFrame, &VaultFrame::consensusStateChanged, this, &QuicksilverGUI::setConsensusEnabled);
         connect(vaultFrame, &VaultFrame::networkRestartRequested, this, &QuicksilverGUI::confirmNetworkRestart);
@@ -1318,6 +1319,7 @@ void QuicksilverGUI::removeAllVaults()
         return;
     setVaultActionsEnabled(false);
     vaultFrame->removeAllVaults();
+    gotoHomePage();
 }
 
 void QuicksilverGUI::markConsensusInitializationFailed()
@@ -1410,7 +1412,7 @@ void QuicksilverGUI::beginConsensusActivation()
             // not going to start.
             if (vaultFrame) {
                 vaultFrame->revertConsensusOptIn();
-                vaultFrame->gotoLaunchPage();
+                gotoHomePage();
             }
             return;
         }

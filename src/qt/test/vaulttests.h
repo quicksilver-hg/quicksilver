@@ -56,6 +56,7 @@ private Q_SLOTS:
     void aboutDialogLinksSourceOnce();
     void mineMintPageNamesAnArmedMinerWithNoPermittedSolver();
     void mineMintPageRefusesToPresentIsolatedMiningAsSuccess();
+    void mineMintStartRequiresPayoutAddress();
     void mineMintPageShowsARawScriptPayout();
     void mineMintPageNamesAnIdleNodeWithNothingPermitted();
     void networkPageFormatsStatus();

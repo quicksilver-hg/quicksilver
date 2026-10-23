@@ -203,9 +203,7 @@ helper lists cards by their order, as `opencl:0:0`, `opencl:0:1` and so on. Two
 cards of the same model look the same in the list, and a card chosen by its id
 can become a different card when a card is added or removed.
 
-Every graphics card except built-in graphics is used by default. Quicksilver
-0.1.3 solves on one of the chosen cards at a time: the one whose id comes
-first, which can be the card driving your display. Choose cards in Settings >
+Every graphics card except built-in graphics is used by default, and Quicksilver solves on all the chosen cards at once. Choose cards in Settings >
 Options > Hardware > Graphics cards, or at startup with `-cuckatoodevice`, using
 the id the helper lists:
 

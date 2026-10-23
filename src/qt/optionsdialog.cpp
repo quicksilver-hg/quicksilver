@@ -134,6 +134,12 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
     connect(ui->gpuModeChoose, &QRadioButton::toggled, this, &OptionsDialog::updateGpuMode);
     connect(ui->gpuModeCpu, &QRadioButton::toggled, this, &OptionsDialog::updateGpuMode);
     connect(m_gpu_device_list, &GpuDeviceList::changed, this, [this] { showRestartWarning(); });
+    auto* mining_status_timer = new QTimer(this);
+    mining_status_timer->setInterval(1000);
+    connect(mining_status_timer, &QTimer::timeout, this, [this] {
+        m_gpu_device_list->setMiningActive(m_client_model && m_client_model->node().miningStatus().active);
+    });
+    mining_status_timer->start();
     connect(m_gpu_device_list, &GpuDeviceList::integratedChecked, this, [this](const QString& id) {
         auto* box = new QMessageBox(QMessageBox::Question, tr("Use built-in graphics?"),
                                     tr("Your screen may respond slowly while transfers are being prepared."),
@@ -243,6 +249,7 @@ OptionsDialog::~OptionsDialog()
 void OptionsDialog::setClientModel(ClientModel* client_model)
 {
     m_client_model = client_model;
+    m_gpu_device_list->setMiningActive(m_client_model && m_client_model->node().miningStatus().active);
 }
 
 bool OptionsDialog::savedConsensusEnabled() const
@@ -295,8 +302,15 @@ void OptionsDialog::setModel(OptionsModel *_model)
         ui->overriddenByCommandLineLabel->setText(strLabel);
 
         mapper->setModel(_model);
+        m_gpu_solver_command_line = _model->node().isSettingIgnored("cuckatoosolver");
         setMapper();
         mapper->toFirst();
+        if (m_gpu_solver_command_line) {
+            ui->gpuSolverPath->setText(QString::fromStdString(gArgs.GetArg("-cuckatoosolver", "")));
+            ui->gpuSolverPath->setReadOnly(true);
+            ui->gpuSolverPath->setToolTip(tr("Set by -cuckatoosolver on the command line."));
+            ui->gpuSolverBrowseButton->setEnabled(false);
+        }
 
         const QStringList devices{_model->getOption(OptionsModel::GpuDevices).toStringList()};
         // Compare without QList::operator==. MSVC's checked iterator deprecates
@@ -429,7 +443,7 @@ void OptionsDialog::setMapper()
     mapper->addMapping(ui->quicksilverAtStartup, OptionsModel::StartAtStartup);
     mapper->addMapping(ui->threadsScriptVerif, OptionsModel::ThreadsScriptVerif);
     mapper->addMapping(ui->databaseCache, OptionsModel::DatabaseCache);
-    mapper->addMapping(ui->gpuSolverPath, OptionsModel::GpuSolverPath);
+    if (!m_gpu_solver_command_line) mapper->addMapping(ui->gpuSolverPath, OptionsModel::GpuSolverPath);
     mapper->addMapping(ui->allowCpuBlockMining, OptionsModel::AllowCpuBlockMining);
     mapper->addMapping(ui->prune, OptionsModel::Prune);
     mapper->addMapping(ui->pruneSize, OptionsModel::PruneSize);
@@ -523,6 +537,14 @@ void OptionsDialog::validateGpuSolverPath()
     stopGpuSolverProbe();
     const QString path = ui->gpuSolverPath->text().trimmed();
     ui->gpuSolverStatusLabel->setStyleSheet(QString());
+
+    if (m_gpu_solver_command_line) {
+        m_gpu_solver_check = HelperCheck::kUnchecked;
+        m_gpu_solver_valid = true;
+        ui->gpuSolverStatusLabel->setText(tr("Using the graphics helper set on the command line: %1").arg(path));
+        updateOkButtonState();
+        return;
+    }
 
     if (path.isEmpty()) {
         m_gpu_solver_check = HelperCheck::kUnchecked;

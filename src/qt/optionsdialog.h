@@ -110,6 +110,7 @@ private:
     std::optional<cuckatoo::GpuDiscovery> m_gpu_discovery;
     bool m_proxy_valid{true};
     bool m_gpu_solver_valid{true};
+    bool m_gpu_solver_command_line{false};
     //! What the node is doing now. The checkbox itself shows the saved setting.
     bool m_consensus_running{false};
     bool m_consensus_opt_in{false};

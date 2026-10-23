@@ -13,9 +13,12 @@
 #include <boost/test/unit_test.hpp>
 
 #ifdef WIN32
+#include <windows.h>   // CreateFileA, for the stub-exit lock probe
 #include <process.h>   // _getpid
 #define getpid _getpid
 #else
+#include <fcntl.h>     // open
+#include <sys/file.h>  // flock
 #include <sys/stat.h>  // chmod
 #include <unistd.h>    // getpid
 #endif
@@ -270,6 +273,43 @@ std::string stub_marker_forever(const std::string& name, const std::string& mark
 
 void set_timeout_env(const char* secs) {
     set_env("CUCKATOO_GPU_TIMEOUT", secs);
+}
+
+// True while some other process holds the stub's `hold` lock on `path`. The
+// kernel drops that lock when the holder dies, so this going false is the one
+// statement that the stub process has EXITED -- as opposed to `marker_size`
+// above, which only says it is still alive. A marker the stub writes and then
+// exits cannot express the difference: the marker is visible for as long as the
+// stub takes to leave main(). F-531's order needs the exact moment.
+bool stub_holds_lock(const std::string& path) {
+#ifdef WIN32
+    const HANDLE probe{CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
+    if (probe == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_SHARING_VIOLATION;
+    CloseHandle(probe);
+    return false;
+#else
+    const int fd{open(path.c_str(), O_RDWR)};
+    if (fd == -1) return false;
+    const bool held{flock(fd, LOCK_EX | LOCK_NB) != 0};
+    close(fd);
+    return held;
+#endif
+}
+
+// Block until the stub that took `path` is gone; false if it was still there
+// when the bound ran out, so a stub that never ran fails the case instead of
+// hanging the suite. The bound is never reached in the ordering this is used
+// for. It returns rather than asserting because its caller is the bridge's own
+// cancel callback: a Boost assertion throws, and an exception unwinding through
+// GpuSolveBytes would leave the child process behind.
+[[nodiscard]] bool wait_for_stub_exit(const std::string& path) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{20};
+    while (stub_holds_lock(path)) {
+        if (std::chrono::steady_clock::now() >= deadline) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    return true;
 }
 struct EnvGuard {
     EnvGuard() { cuckatoo::ResetGpuDiscoveryForTesting(); }
@@ -685,6 +725,52 @@ BOOST_AUTO_TEST_CASE(cancel_interrupts_a_silent_solver_both_platforms,
                         "have to sit out the no-progress window");
     BOOST_CHECK_MESSAGE(status == cuckatoo::GpuSolveStatus::kCancelled,
                         "expected kCancelled, got status " << static_cast<int>(status));
+}
+
+// F-531: when cancel arrives the bridge used to kill the group and report
+// kCancelled without ever reading the child's exit status. A card that had
+// ALREADY faulted and exited -- the ordinary case once another card's proof is
+// accepted and every loser is cancelled in the same slice -- therefore came back
+// kCancelled, and its fault vanished: no exit code, no kDeviceFault, nothing for
+// the coordinator to bench the card on.
+//
+// The order is exact, not timed. The stub takes an OS lock it never releases,
+// prints one progress line, and exits 5. The cancel callback the bridge itself
+// calls returns false until that line has been dispatched, then blocks until the
+// lock is free -- which only the stub's exit can make true -- and only then says
+// "cancel". So the bridge is guaranteed to see cancel with an already-exited
+// child, which is the whole defect.
+BOOST_AUTO_TEST_CASE(cancel_after_the_child_exited_reports_its_exit_code,
+                     *boost::unit_test::timeout(60))
+{
+    EnvGuard g;
+    const std::string lock = tmp_path("qs_stub_f531_lock");
+    std::remove(lock.c_str());
+    set_solver(write_script("qs_stub_f531", "hold " + lock + "\n" + echo_stmt("progress=1"), 5));
+    set_timeout_env("3600");  // the watchdog must not be what ends this
+
+    std::atomic<bool> saw_progress{false};
+    std::atomic<bool> child_exited{false};
+    unsigned char pre[96] = {0};
+    cuckatoo::Cycle out{}; uint32_t nonce = 0;
+    auto status{cuckatoo::GpuSolveStatus::kSolved};
+    const bool ok = cuckatoo::GpuSolveBytes(
+        pre, sizeof(pre), 28, kStubDevice, 0, 10, out, nonce,
+        [&](uint32_t) { saw_progress.store(true); },
+        [&] {
+            if (!saw_progress.load()) return false;
+            child_exited.store(wait_for_stub_exit(lock));
+            return true;
+        },
+        &status);
+
+    BOOST_CHECK(!ok);
+    BOOST_CHECK_MESSAGE(child_exited.load(), "the stub never gave up its lock, so cancel did not "
+                                             "arrive at an exited child and the case proved nothing");
+    BOOST_CHECK_MESSAGE(status == cuckatoo::GpuSolveStatus::kDeviceFault,
+                        "a child that had already exited 5 when cancel arrived must be reported "
+                        "kDeviceFault, not by the cancel; got status " << static_cast<int>(status));
+    std::remove(lock.c_str());
 }
 
 // The no-progress watchdog must exist on both platforms. Windows had none at all:

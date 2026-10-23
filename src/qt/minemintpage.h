@@ -63,6 +63,7 @@ private:
     void refreshIsolationState();
     void renderMinted();
     void renderPayout();
+    void refreshStartAvailability();
 
     QWidget* m_isolation_panel{nullptr};
     QLabel* m_isolation_banner{nullptr};
@@ -80,6 +81,7 @@ private:
     QLineEdit* m_payout_edit{nullptr};
     QPushButton* m_new_address_button{nullptr};
     QPushButton* m_start_button{nullptr};
+    QLabel* m_start_reason{nullptr};
     QPushButton* m_stop_button{nullptr};
     //! -1 until a client model reports one, so a page with no node behind it does
     //! not accuse the user of being offline.

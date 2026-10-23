@@ -32,8 +32,10 @@ private Q_SLOTS:
     void integerGetArgBug();
     void gpuSolverSettingPersistsAndRequiresRestart();
     void gpuSolverDialogRejectsInvalidPath();
+    void commandLineGraphicsHelperIsShown();
     void gpuDevicesSettingRoundTrips();
     void gpuCardsListAndModes();
+    void sameNamedCardsShowTheirIds();
     void gpuCardStatsRefresh();
     void missingBundledHelperIsNamed();
     void tickingBuiltInGraphicsAsksFirst();

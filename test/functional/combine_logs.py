@@ -80,23 +80,30 @@ def read_logs(tmp_dir):
     Delegates to generator function get_log_events() to provide individual log events
     for each of the input log files."""
 
-    # Find out what the folder is called that holds node 0's debug.log file
-    debug_logs = list(pathlib.Path(tmp_dir).glob('node0/**/debug.log'))
-    match len(debug_logs):
-        case 0:
-            chain = 'sandbox'  # fallback to sandbox
-        case 1:
-            chain = re.search(r'node0/(.+?)/debug\.log$', debug_logs[0].as_posix()).group(1)
-        case _:
-            raise RuntimeError('Max one debug.log is supported, found several:\n\t' +
-                               '\n\t'.join(map(str, debug_logs)))
+    # Find out what the folder(s) are called that hold node 0's debug.log files.
+    # A test that drives a node on more than one chain leaves one debug.log per
+    # chain in the same datadir. Refusing those, as this used to, is why a red
+    # CI job for such a test printed nothing but this script's own traceback --
+    # the node log the failure was in never reached the job output (F-539).
+    chains = []
+    for debug_log in sorted(pathlib.Path(tmp_dir).glob('node0/**/debug.log')):
+        match = re.search(r'node0/(.+?)/debug\.log$', debug_log.as_posix())
+        if match:
+            chains.append(match.group(1))
+    if not chains:
+        chains = ['sandbox']  # fallback to sandbox
 
     files = [("test", "%s/test_framework.log" % tmp_dir)]
-    for i in itertools.count():
-        logfile = "{}/node{}/{}/debug.log".format(tmp_dir, i, chain)
-        if not os.path.isfile(logfile):
-            break
-        files.append(("node%d" % i, logfile))
+    for chain in chains:
+        for i in itertools.count():
+            logfile = "{}/node{}/{}/debug.log".format(tmp_dir, i, chain)
+            if not os.path.isfile(logfile):
+                break
+            # With one chain the source is the node and the output is byte for
+            # byte what it always was. With several, the chain is part of the
+            # source, so every line says which chain it came from.
+            source = "node%d" % i if len(chains) == 1 else "node%d/%s" % (i, chain)
+            files.append((source, logfile))
 
     return heapq.merge(*[get_log_events(source, f) for source, f in files])
 
@@ -178,14 +185,20 @@ def get_log_events(source, logfile):
         print("File %s could not be opened. Continuing without it." % logfile, file=sys.stderr)
 
 
+def source_color(colors, source):
+    """The colour for a source. Keyed on the node, so that a multi-chain source
+    ("node0/publictest") still gets the colour its node would have had alone."""
+    return colors[source.rstrip().split('/')[0]]
+
+
 def print_logs_plain(log_events, colors):
     """Renders the iterator of log events into text."""
     for event in log_events:
         lines = event.event.splitlines()
-        print("{0} {1: <5} {2} {3}".format(colors[event.source.rstrip()], event.source, lines[0], colors["reset"]))
+        print("{0} {1: <5} {2} {3}".format(source_color(colors, event.source), event.source, lines[0], colors["reset"]))
         if len(lines) > 1:
             for line in lines[1:]:
-                print("{0}{1}{2}".format(colors[event.source.rstrip()], line, colors["reset"]))
+                print("{0}{1}{2}".format(source_color(colors, event.source), line, colors["reset"]))
 
 
 def print_logs_html(log_events):

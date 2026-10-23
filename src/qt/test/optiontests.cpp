@@ -386,7 +386,7 @@ void OptionTests::gpuCardsListAndModes()
     QMetaObject::invokeMethod(&dialog, "validateGpuSolverPath");
     QCOMPARE(helper_status->text(), QStringLiteral("Using Quicksilver's graphics helper."));
     const auto state = [&](const char* id) { return list->findChild<QLabel*>(QString::fromLatin1(id) + QStringLiteral("_state"))->text(); };
-    QCOMPARE(state("gpuDevice_pci_0000_04_00_0"), /*W-D5*/ QStringLiteral("In use"));
+    QCOMPARE(state("gpuDevice_pci_0000_04_00_0"), /*W-D5*/ QStringLiteral("Chosen"));
     QCOMPARE(state("gpuDevice_pci_0000_00_02_0"), /*W-D6*/ QStringLiteral("Not used: built-in graphics"));
     QCOMPARE(state("gpuDevice_pci_0000_05_00_0"), /*W-D7*/ QStringLiteral("Can't be used: its driver couldn't run Quicksilver's graphics code"));
     dialog.findChild<QRadioButton*>(QStringLiteral("gpuModeChoose"))->click();
@@ -394,6 +394,59 @@ void OptionTests::gpuCardsListAndModes()
     QTest::mouseClick(dialog.findChild<QPushButton*>(QStringLiteral("okButton")), Qt::LeftButton);
     QCOMPARE(options.getOption(OptionsModel::GpuDevices).toStringList(), QStringList{QStringLiteral("pci:0000:04:00.0")});
     QCOMPARE(options.getGpuDeviceNames().value(QStringLiteral("pci:0000:04:00.0")), QStringLiteral("AMD Radeon RX 480"));
+}
+
+void OptionTests::commandLineGraphicsHelperIsShown()
+{
+    const QString path{QStringLiteral("/opt/quicksilver/custom-helper")};
+    gArgs.LockSettings([&](common::Settings& settings) {
+        settings.command_line_options["cuckatoosolver"] = {UniValue(path.toStdString())};
+        settings.command_line_options["cuckatoodevice"] = {UniValue("pci:0000:03:00.0"), UniValue("pci:0000:04:00.0")};
+        settings.command_line_options["server"] = {UniValue("")};
+    });
+    OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
+    auto* field = dialog.findChild<QLineEdit*>(QStringLiteral("gpuSolverPath"));
+    auto* status = dialog.findChild<QLabel*>(QStringLiteral("gpuSolverStatusLabel"));
+    QVERIFY(field);
+    QVERIFY(status);
+    QCOMPARE(field->text(), path);
+    QVERIFY(field->isReadOnly());
+    QCOMPARE(field->toolTip(), QStringLiteral("Set by -cuckatoosolver on the command line."));
+    QCOMPARE(status->text(), QStringLiteral("Using the graphics helper set on the command line: %1").arg(path));
+    const QString overrides = options.getOverriddenByCommandLine();
+    QVERIFY(overrides.contains(QStringLiteral("-cuckatoodevice=pci:0000:03:00.0")));
+    QVERIFY(overrides.contains(QStringLiteral("-cuckatoodevice=pci:0000:04:00.0")));
+    QVERIFY(overrides.contains(QStringLiteral("-server ")));
+    QVERIFY(!overrides.contains(QStringLiteral("-server=")));
+}
+
+void OptionTests::sameNamedCardsShowTheirIds()
+{
+    PointDiscoveryAtStub(WriteListing({
+        QStringLiteral("device backend=opencl id=pci:0000:03:00.0 type=gpu integrated=0 mem=0 status=ok name=Radeon RX 580"),
+        QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=Radeon RX 580"),
+        QStringLiteral("device backend=opencl id=pci:0000:05:00.0 type=gpu integrated=0 mem=0 status=ok name=Unique card") }));
+    OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
+    auto* list = dialog.findChild<GpuDeviceList*>(QStringLiteral("gpuDeviceList")); QVERIFY(list);
+    auto* first = list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_03_00_0"));
+    QTRY_VERIFY_WITH_TIMEOUT((first = list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_03_00_0"))), 30000);
+    QCOMPARE(first->text(), QStringLiteral("Radeon RX 580 (pci:0000:03:00.0)"));
+    QCOMPARE(list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_04_00_0"))->text(), QStringLiteral("Radeon RX 580 (pci:0000:04:00.0)"));
+    QCOMPARE(list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_05_00_0"))->text(), QStringLiteral("Unique card"));
+    auto* tabs = dialog.findChild<QTabWidget*>(QStringLiteral("tabWidget"));
+    QVERIFY(tabs);
+    tabs->setCurrentWidget(dialog.findChild<QWidget*>(QStringLiteral("tabHardware")));
+    dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+    dialog.resize(1366, 768);
+    QApplication::processEvents();
+    QVERIFY2(first->width() >= first->sizeHint().width(), qPrintable(QStringLiteral("dialog=%1x%2 list=%3 group=%4 checkbox=%5 hint=%6")
+        .arg(dialog.width()).arg(dialog.height()).arg(list->width())
+        .arg(dialog.findChild<QGroupBox*>(QStringLiteral("gpuCardsGroup"))->width())
+        .arg(first->width()).arg(first->sizeHint().width())));
+    QVERIFY(first->height() >= first->sizeHint().height());
 }
 
 void OptionTests::gpuCardStatsRefresh()
@@ -405,19 +458,29 @@ void OptionTests::gpuCardStatsRefresh()
     auto* list = dialog.findChild<GpuDeviceList*>(QStringLiteral("gpuDeviceList")); QVERIFY(list);
     auto* state = list->findChild<QLabel*>(QStringLiteral("gpuDevice_pci_0000_04_00_0_state"));
     QTRY_VERIFY_WITH_TIMEOUT((state = list->findChild<QLabel*>(QStringLiteral("gpuDevice_pci_0000_04_00_0_state"))), 30000);
-    QCOMPARE(state->text(), QStringLiteral("In use"));
+    QCOMPARE(state->text(), QStringLiteral("Chosen"));
 
     cuckatoo::SetGpuDeviceStatsForTesting({
         {"pci:0000:04:00.0", cuckatoo::GpuDeviceState::kSolving, cuckatoo::GpuSolveStatus::kNoCycle, 5, 2.4},
     });
     list->refreshRows();
+    QCOMPARE(state->text(), QStringLiteral("Chosen"));
+    list->setMiningActive(true);
     QCOMPARE(state->text(), QStringLiteral("In use, 2.4 s per graph"));
+    cuckatoo::ResetGpuDeviceStatsForTesting();
+    list->refreshRows();
+    QCOMPARE(state->text(), QStringLiteral("In use"));
+    cuckatoo::SetGpuDeviceStatsForTesting({
+        {"pci:0000:04:00.0", cuckatoo::GpuDeviceState::kSolving, cuckatoo::GpuSolveStatus::kNoCycle, 5, 2.4},
+    });
     cuckatoo::SetGpuDeviceStatsForTesting({
         {"pci:0000:04:00.0", cuckatoo::GpuDeviceState::kFaulted, cuckatoo::GpuSolveStatus::kDeviceFault, 5, 2.4},
     });
     list->refreshRows();
     QCOMPARE(state->text(), QStringLiteral("Faulted: %1").arg(QString::fromStdString(
         cuckatoo::SolverFault(cuckatoo::GpuSolveStatus::kDeviceFault, false).value())));
+    list->setMiningActive(false);
+    QCOMPARE(state->text(), QStringLiteral("Chosen"));
     cuckatoo::ResetGpuDeviceStatsForTesting();
 }
 
@@ -473,7 +536,7 @@ void OptionTests::tickingBuiltInGraphicsAsksFirst()
     QPushButton* use{nullptr};
     for (QAbstractButton* button : box->buttons()) if (button->text() == /*W-D16*/ QStringLiteral("Use built-in graphics")) use = qobject_cast<QPushButton*>(button);
     QVERIFY(use); use->click(); QTRY_VERIFY(hd->isChecked());
-    QCOMPARE(list->findChild<QLabel*>(QStringLiteral("gpuDevice_pci_0000_00_02_0_state"))->text(), /*W-D5*/ QStringLiteral("In use"));
+    QCOMPARE(list->findChild<QLabel*>(QStringLiteral("gpuDevice_pci_0000_00_02_0_state"))->text(), /*W-D5*/ QStringLiteral("Chosen"));
     QTest::mouseClick(dialog.findChild<QPushButton*>(QStringLiteral("okButton")), Qt::LeftButton);
     QVERIFY(options.getOption(OptionsModel::GpuDevices).toStringList().contains(QStringLiteral("pci:0000:00:02.0")));
     QCOMPARE(options.getGpuDeviceNames().value(QStringLiteral("pci:0000:00:02.0")), QStringLiteral("Intel(R) HD Graphics 4600"));

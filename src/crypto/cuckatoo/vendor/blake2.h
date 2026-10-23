@@ -136,9 +136,13 @@ extern "C" {
   } blake2xb_state;
 
   /* Padded structs result in a compile-time error */
+  /* Quicksilver delta: the comparison is cast to int before the division. In C++
+     its type is bool, and dividing by a bool is MSVC C4804 at /W1 -- a build
+     failure under /WX (F-518). The cast changes nothing else: a padded struct
+     still divides by zero and still fails to compile, in C and in C++. */
   enum {
-    BLAKE2_DUMMY_1 = 1/(sizeof(blake2s_param) == BLAKE2S_OUTBYTES),
-    BLAKE2_DUMMY_2 = 1/(sizeof(blake2b_param) == BLAKE2B_OUTBYTES)
+    BLAKE2_DUMMY_1 = 1/(int)(sizeof(blake2s_param) == BLAKE2S_OUTBYTES),
+    BLAKE2_DUMMY_2 = 1/(int)(sizeof(blake2b_param) == BLAKE2B_OUTBYTES)
   };
 
   /* Streaming API */

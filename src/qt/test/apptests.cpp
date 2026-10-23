@@ -1862,6 +1862,12 @@ void AppTests::consensusOffOptionsTickOpensReview()
     QVERIFY(!frame->consensusEnabled());
     auto* stack = window->findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
     QVERIFY(stack);
+    QAction* network = window->findChild<QAction*>(QStringLiteral("networkAction"));
+    QVERIFY(network);
+    network->setEnabled(true);
+    network->trigger();
+    QVERIFY(network->isChecked());
+    QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("networkPage"));
 
     QAction* options = PreferencesAction(window);
     QVERIFY(options && options->isEnabled());
@@ -1886,6 +1892,12 @@ void AppTests::consensusOffOptionsTickOpensReview()
     QVERIFY(!QSettings().value(QStringLiteral("Desktop/ConsensusEnabled"), false).toBool());
     QVERIFY(!frame->consensusEnabled());
     QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("desktopLaunchPage"));
+    QAction* home = window->findChild<QAction*>(QStringLiteral("homeBootstrapAction"));
+    QLabel* breadcrumb = window->findChild<QLabel*>(QStringLiteral("benchBreadcrumb"));
+    QVERIFY(home);
+    QVERIFY(breadcrumb);
+    QVERIFY(home->isChecked());
+    QVERIFY(breadcrumb->text().endsWith(QStringLiteral(" / HOME")));
 }
 
 void AppTests::consensusOnOptionsUntickWaitsForRestart()
@@ -2226,6 +2238,17 @@ void AppTests::networkPageOpensWithConsensusOff()
     QVERIFY(!review->isHidden());
     review->click();
     QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
+    QAction* home = window->findChild<QAction*>(QStringLiteral("homeBootstrapAction"));
+    QAction* network = window->findChild<QAction*>(QStringLiteral("networkAction"));
+    QLabel* breadcrumb = window->findChild<QLabel*>(QStringLiteral("benchBreadcrumb"));
+    QVERIFY(home);
+    QVERIFY(network);
+    QVERIFY(breadcrumb);
+    network->setChecked(true);
+    stack->currentWidget()->findChild<QPushButton*>(QStringLiteral("consensusDeclineButton"))->click();
+    QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("desktopLaunchPage"));
+    QVERIFY(home->isChecked());
+    QVERIFY(breadcrumb->text().endsWith(QStringLiteral(" / HOME")));
 
     frame->gotoLaunchPage();
     QPushButton* home_consensus = window->findChild<QPushButton*>(QStringLiteral("launchConsensusCardButton"));

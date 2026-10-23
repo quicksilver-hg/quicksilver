@@ -58,12 +58,19 @@ void GpuDeviceList::setDevices(const cuckatoo::GpuDiscovery& discovery, const QS
     for (const auto& device : discovery.listing.devices) if (device.type == "gpu") devices.push_back(device);
     std::sort(devices.begin(), devices.end(), [](const auto& a, const auto& b) { return cuckatoo::DeviceIdLess(a.id, b.id); });
 
+    QMap<QString, int> name_counts;
+    for (const auto& device : devices) ++name_counts[QString::fromStdString(device.name)];
+    for (const QString& id : chosen) {
+        if (id == QStringLiteral("cpu")) continue;
+        const bool found = std::any_of(devices.begin(), devices.end(), [&id](const auto& device) { return QString::fromStdString(device.id) == id; });
+        if (!found) ++name_counts[names.value(id, id)];
+    }
     QStringList seen;
-    const auto add = [this](const QString& id, const QString& name, bool integrated, bool missing, const cuckatoo::GpuDevice& device, bool ticked) {
+    const auto add = [this, &name_counts](const QString& id, const QString& name, bool integrated, bool missing, const cuckatoo::GpuDevice& device, bool ticked) {
         auto* line = new QWidget(this);
         auto* layout = new QHBoxLayout(line);
         layout->setContentsMargins(0, 0, 0, 0);
-        auto* check = new QCheckBox(name, line);
+        auto* check = new QCheckBox(name_counts.value(name) > 1 ? QStringLiteral("%1 (%2)").arg(name, id) : name, line);
         const QString object{QStringLiteral("gpuDevice_") + ObjectSuffix(id)};
         check->setObjectName(object);
         check->setChecked(ticked);
@@ -104,6 +111,12 @@ void GpuDeviceList::setMode(Mode mode)
     refreshRows();
 }
 
+void GpuDeviceList::setMiningActive(bool active)
+{
+    m_mining_active = active;
+    refreshRows();
+}
+
 void GpuDeviceList::refreshRows()
 {
     const auto stats = cuckatoo::GetGpuDeviceStats();
@@ -112,7 +125,8 @@ void GpuDeviceList::refreshRows()
         QString state{row.missing ? gpusituation::MissingRowState() : gpusituation::RowState(row.device, m_mode == Mode::kAutomatic ? gpusituation::RowMode::kAutomatic : gpusituation::RowMode::kChoose, row.check->isChecked())};
         const bool chosen = !row.missing && row.device.status == cuckatoo::DeviceStatus::kOk &&
             (m_mode == Mode::kAutomatic ? !row.integrated : m_mode == Mode::kChoose && row.check->isChecked());
-        if (chosen) {
+        if (chosen && !m_mining_active) state = tr("Chosen");
+        if (chosen && m_mining_active) {
             const auto it = std::find_if(stats.begin(), stats.end(), [&row](const auto& item) { return item.device == row.device.id; });
             if (it != stats.end()) {
                 if (it->state == cuckatoo::GpuDeviceState::kFaulted) {

@@ -706,9 +706,10 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     MineMintPage* mineMintPage = qobject_cast<MineMintPage*>(vaultView.currentWidget());
     QVERIFY(mineMintPage);
     QCOMPARE(mineMintPage->objectName(), QStringLiteral("mineMintPage"));
-    // SP3: the page is now live. With the model wired and the role idle, Start is
-    // enabled (you can start), Stop is disabled (nothing to stop), and the status
+    // SP3: the page is now live. With an address and the role idle, Start is
+    // enabled, Stop is disabled, and the status
     // label reflects the polled state rather than the scaffold placeholder.
+    mineMintPage->setPayoutAddress(QStringLiteral("hg1qexample"));
     QVERIFY(mineMintPage->findChild<QPushButton*>(QStringLiteral("startMiningButton"))->isEnabled());
     QVERIFY(!mineMintPage->findChild<QPushButton*>(QStringLiteral("stopMiningButton"))->isEnabled());
     QCOMPARE(mineMintPage->findChild<QLabel*>(QStringLiteral("miningStatusValue"))->text(), QStringLiteral("Idle"));
@@ -3232,6 +3233,34 @@ void VaultTests::mineMintPageNamesAnArmedMinerWithNoPermittedSolver()
 //! this page looks the same either way -- solver working, graphs climbing, blocks
 //! found. On the Windows walk the page reported a mined coin while the node had
 //! never connected to anything, and nothing on it said so.
+void VaultTests::mineMintStartRequiresPayoutAddress()
+{
+    MineMintPage page;
+    auto* start = page.findChild<QPushButton*>(QStringLiteral("startMiningButton"));
+    auto* reason = page.findChild<QLabel*>(QStringLiteral("startMiningReason"));
+    QVERIFY(start);
+    QVERIFY(reason);
+    QVERIFY(!start->isEnabled());
+    QCOMPARE(reason->text(), QStringLiteral("Enter a payout address, or open a vault and press Use new."));
+    page.resize(1366, 768);
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+    QVERIFY(reason->height() >= reason->heightForWidth(reason->width()));
+    QVERIFY(reason->mapTo(&page, QPoint(0, reason->height())).y() <= page.height());
+
+    page.setAddressHelperAvailable(true);
+    QVERIFY(!start->isEnabled());
+    QCOMPARE(reason->text(), QStringLiteral("Enter a payout address, or press Use new."));
+
+    page.setPayoutAddress(QStringLiteral("hg1qexample"));
+    QVERIFY(start->isEnabled());
+    QCOMPARE(reason->text(), QString());
+    page.setPayoutAddress(QString());
+    QVERIFY(!start->isEnabled());
+    page.setAddressHelperAvailable(false);
+    QCOMPARE(reason->text(), QStringLiteral("Enter a payout address, or open a vault and press Use new."));
+}
+
 void VaultTests::mineMintPageRefusesToPresentIsolatedMiningAsSuccess()
 {
     MineMintPage page;
@@ -3414,7 +3443,8 @@ void VaultTests::mineMintPageNamesAnIdleNodeWithNothingPermitted()
     QVERIFY(solver_settings_spy.isValid());
     configure->click();
     QCOMPARE(solver_settings_spy.count(), 1);
-    // Still idle: Start is the control, Stop stays disabled.
+    // Still idle: Start is available once a payout address is entered.
+    page.setPayoutAddress(QStringLiteral("hg1qexample"));
     QVERIFY(page.findChild<QPushButton*>(QStringLiteral("startMiningButton"))->isEnabled());
     QVERIFY(!page.findChild<QPushButton*>(QStringLiteral("stopMiningButton"))->isEnabled());
 }
