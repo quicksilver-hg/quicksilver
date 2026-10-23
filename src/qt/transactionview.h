@@ -64,12 +64,14 @@ public:
 
 protected:
     void changeEvent(QEvent* e) override;
+    void showEvent(QShowEvent* event) override;
 
 private:
     VaultModel *model{nullptr};
     TransactionFilterProxy *transactionProxyModel{nullptr};
     //! Home's reading of the rows (F-451), over the filtered, sorted ones.
     LedgerRows* m_ledger_rows{nullptr};
+    bool m_column_fit_pending{false};
     QTableView *transactionView{nullptr};
 
     QComboBox *dateWidget;
@@ -111,6 +113,7 @@ private Q_SLOTS:
     //! Give Date and Type their content, Amount exactly its figures, and the
     //! rest to Label.
     void fitColumns();
+    void scheduleColumnFit();
 
 Q_SIGNALS:
     void doubleClicked(const QModelIndex&);

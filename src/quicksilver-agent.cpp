@@ -1233,7 +1233,6 @@ static int SignBundle(const ArgsManager& args)
     tfm::format(std::cout, "change_amount_cinnabar=%s\n", util::ToString(signed_spend->change_amount));
     tfm::format(std::cout, "policy_result=%s\n", agent::AllotmentPolicyResultCodeString(signed_spend->policy_check.code));
     tfm::format(std::cout, "proved=%s\n", prove ? "true" : "false");
-    tfm::format(std::cout, "anchor_height=%s\n", util::ToString(signed_spend->transaction.nAnchorHeight));
     tfm::format(std::cout, "anchor_hash=%s\n", client.HeaderTip().GetBlockHash().ToString());
     PrintTransaction(signed_spend->transaction);
     DataStream psqt_stream;

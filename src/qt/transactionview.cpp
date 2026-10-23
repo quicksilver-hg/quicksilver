@@ -39,6 +39,7 @@
 #include <QPoint>
 #include <QScrollBar>
 #include <QSettings>
+#include <QShowEvent>
 #include <QPointer>
 #include <QPushButton>
 #include <QTableView>
@@ -226,11 +227,11 @@ void TransactionView::setModel(VaultModel *_model)
         transactionView->sortByColumn(TransactionTableModel::Date, Qt::DescendingOrder);
         transactionView->horizontalHeader()->setSectionResizeMode(TransactionTableModel::ToAddress, QHeaderView::Stretch);
         for (const auto& signal : {&QAbstractItemModel::rowsInserted, &QAbstractItemModel::rowsRemoved}) {
-            connect(m_ledger_rows, signal, this, &TransactionView::fitColumns);
+            connect(m_ledger_rows, signal, this, &TransactionView::scheduleColumnFit);
         }
-        connect(m_ledger_rows, &QAbstractItemModel::modelReset, this, &TransactionView::fitColumns);
-        connect(m_ledger_rows, &QAbstractItemModel::dataChanged, this, &TransactionView::fitColumns);
-        fitColumns();
+        connect(m_ledger_rows, &QAbstractItemModel::modelReset, this, &TransactionView::scheduleColumnFit);
+        connect(m_ledger_rows, &QAbstractItemModel::dataChanged, this, &TransactionView::scheduleColumnFit);
+        scheduleColumnFit();
 
         if (_model->getOptionsModel() && !m_third_party_actions)
         {
@@ -256,6 +257,25 @@ void TransactionView::setModel(VaultModel *_model)
             }
         }
     }
+}
+
+void TransactionView::scheduleColumnFit()
+{
+    // A catch-up burst inserts every row in one event-loop turn. Measuring all
+    // columns after every insert walks the growing ledger repeatedly. A hidden
+    // Ledger page needs one fit when it is shown, not one for every Home update.
+    if (!isVisible() || m_column_fit_pending) return;
+    m_column_fit_pending = true;
+    QTimer::singleShot(0, this, [this] {
+        m_column_fit_pending = false;
+        if (isVisible()) fitColumns();
+    });
+}
+
+void TransactionView::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    scheduleColumnFit();
 }
 
 void TransactionView::fitColumns()

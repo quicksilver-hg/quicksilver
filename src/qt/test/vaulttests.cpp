@@ -6778,12 +6778,12 @@ void VaultTests::homeLedgerKeepsALabelAtFloor()
     auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext scoped_context(m_node, test.m_node);
-    // The same labelled reward as homeAndLedgerReadTransactionsAlike. The
-    // label is longer than the reference so the column can meet its minimum
-    // and still be narrower than the text.
+    // Start with the same labelled reward as homeAndLedgerReadTransactionsAlike.
+    // The longer label is chosen after Home has its actual font and width.
     test.CreateAndProcessBlock({}, GetScriptForDestination(WitnessV0KeyHash(test.coinbaseKey.GetPubKey())));
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
-    const QString long_label = QStringLiteral("household-budget-02-plus-a-purpose-too-long-for-the-column");
+    const QString reference = QStringLiteral("household-budget-02");
+    QString long_label = reference;
     {
         LOCK(vault->cs_vault);
         vault->SetAddressBook(CTxDestination{WitnessV0KeyHash(test.coinbaseKey.GetPubKey())}, long_label.toStdString(), vault::AddressPurpose::RECEIVE);
@@ -6845,6 +6845,31 @@ void VaultTests::homeLedgerKeepsALabelAtFloor()
         return false;
     };
     QVERIFY2(settle(), "Home's layout did not settle at 1366x768");
+    QFont label_font = home_table->font();
+    const QVariant font_role = label_index.data(Qt::FontRole);
+    if (font_role.canConvert<QFont>()) label_font = font_role.value<QFont>();
+    const QFontMetrics metrics(label_font);
+    // A column in this window cannot exceed the window's measured width.
+    // Grow the same purpose until even that upper bound cannot hold it.
+    const int column_ceiling = window.width();
+    while (metrics.horizontalAdvance(long_label) <= column_ceiling) {
+        long_label += QStringLiteral("-plus-a-purpose-too-long-for-the-column");
+    }
+    {
+        LOCK(vault->cs_vault);
+        QVERIFY(vault->SetAddressBook(CTxDestination{WitnessV0KeyHash(test.coinbaseKey.GetPubKey())}, long_label.toStdString(), vault::AddressPurpose::RECEIVE));
+    }
+    QTRY_COMPARE(label_index.data(Qt::DisplayRole).toString(), long_label);
+    QVERIFY2(settle(), "Home's layout did not settle after the label changed");
+    const int long_advance = metrics.horizontalAdvance(long_label);
+    const QRect screen = window.screen()->availableGeometry();
+    QStringList widths;
+    for (int column = 0; column < home_table->horizontalHeader()->count(); ++column) {
+        widths << QStringLiteral("%1:%2").arg(column).arg(home_table->columnWidth(column));
+    }
+    qWarning("F-521 screen=%dx%d window=%dx%d label_advance=%d column_ceiling=%d viewport=%d columns=%s",
+             screen.width(), screen.height(), window.width(), window.height(), long_advance,
+             column_ceiling, home_table->viewport()->width(), qPrintable(widths.join(QLatin1Char(','))));
     // The first word-wrapped note on Home painted shorter than its own width
     // needs, or empty when none is.
     const auto short_note = [&]() -> QString {
@@ -6865,15 +6890,12 @@ void VaultTests::homeLedgerKeepsALabelAtFloor()
         return false;
     };
     if (real_fonts && sized(1366, 768)) {
-        QFont label_font = home_table->font();
-        const QVariant font_role = label_index.data(Qt::FontRole);
-        if (font_role.canConvert<QFont>()) label_font = font_role.value<QFont>();
-        const QFontMetrics metrics(label_font);
+        QVERIFY2(long_advance > column_ceiling,
+                 qPrintable(QStringLiteral("premise: label advance %1 px, column can reach %2 px")
+                                .arg(long_advance).arg(column_ceiling)));
         QAbstractItemView* cells = home_table;
-        const int long_advance = metrics.horizontalAdvance(long_label);
         const int content = cells->sizeHintForColumn(TransactionTableModel::ToAddress);
         const int pad = content > long_advance ? content - long_advance : 0;
-        const QString reference = QStringLiteral("household-budget-02");
         const int minimum = metrics.horizontalAdvance(reference) + pad;
         // At 1366x768, on first show and again after the window has been
         // wider: Type shown, Label at its minimum or more, the rest at their

@@ -3,9 +3,16 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #include <crypto/cuckatoo/gpu/opencl_devices.h>
 
+#include <util/fs.h>
+#include <util/strencodings.h>
+
 #include <algorithm>
 #include <cstdio>
+#include <fstream>
 #include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 namespace qsgpu {
@@ -50,6 +57,66 @@ std::string FallbackId(size_t platform, size_t device)
     char out[64];
     std::snprintf(out, sizeof(out), "opencl:%zu:%zu", platform, device);
     return out;
+}
+
+bool IsHex(std::string_view text)
+{
+    return !text.empty() && std::all_of(text.begin(), text.end(), [](unsigned char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    });
+}
+
+// The render minor a node name carries: "renderD128" -> 128. Nodes are named for their
+// DRM minor, so this orders them the way their names do, without assuming a width.
+bool RenderNodeMinor(std::string_view name, unsigned long& minor)
+{
+    constexpr std::string_view prefix{"renderD"};
+    if (name.size() <= prefix.size() || name.compare(0, prefix.size(), prefix) != 0) return false;
+    const std::string_view digits{name.substr(prefix.size())};
+    if (digits.empty() || !std::all_of(digits.begin(), digits.end(), [](unsigned char c) { return c >= '0' && c <= '9'; })) return false;
+    // strtoul is locale-dependent and the lint forbids it; ToIntegral is not, and it
+    // also requires the whole view to parse. The digits are checked above, so the only
+    // way this fails is a minor too large for the type -- which is not a render node.
+    const auto parsed = ToIntegral<unsigned long>(digits);
+    if (!parsed) return false;
+    minor = *parsed;
+    return true;
+}
+
+std::string SlotNameFromUevent(const fs::path& uevent)
+{
+    std::ifstream stream{uevent};
+    if (!stream) return {};
+    constexpr std::string_view key{"PCI_SLOT_NAME="};
+    std::string line;
+    while (std::getline(stream, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
+        if (line.compare(0, key.size(), key) == 0) return line.substr(key.size());
+    }
+    return {};
+}
+
+// Whether this platform's devices can be paired with the render nodes one for one. The
+// bar is deliberately high: a mapping that can name the wrong card would send a
+// transfer's work to a card the user did not choose (F-514).
+bool MapsOntoRenderNodes(const std::vector<ListedDevice>& devices, size_t first,
+                         const std::vector<RenderNode>& nodes)
+{
+    const size_t count = devices.size() - first;
+    if (count == 0 || count != nodes.size()) return false;
+    for (size_t i{0}; i < nodes.size(); ++i) {
+        // Every node must carry an address, and no two may carry the same one.
+        if (nodes[i].pci_id.empty()) return false;
+        for (size_t j{0}; j < i; ++j) if (nodes[i].pci_id == nodes[j].pci_id) return false;
+    }
+    for (size_t i{first}; i < devices.size(); ++i) {
+        // Only cards have render nodes: a CPU device (PoCL in CI) keeps its index id.
+        if (devices[i].fields.type != "gpu") return false;
+        // A slot address from the driver is the better answer, and a platform where only
+        // some devices answered says nothing about which node the others are.
+        if (devices[i].fields.id != devices[i].enumeration_id) return false;
+    }
+    return true;
 }
 } // namespace
 
@@ -98,7 +165,53 @@ std::string CompileAndProbe(const OpenClApi& api, const ListedDevice& listed)
     return result;
 }
 
-std::vector<ListedDevice> EnumerateDevices(const OpenClApi& api, bool probe)
+std::string PciIdFromSlotName(std::string_view slot_name)
+{
+    // sysfs writes exactly dddd:bb:dd.f, lowercase hex.
+    if (slot_name.size() != 12 || slot_name[4] != ':' || slot_name[7] != ':' || slot_name[10] != '.') return {};
+    if (!IsHex(slot_name.substr(0, 4)) || !IsHex(slot_name.substr(5, 2)) || !IsHex(slot_name.substr(8, 2)) || !IsHex(slot_name.substr(11, 1))) return {};
+    std::string out{"pci:"};
+    out += slot_name;
+    for (char& c : out) if (c >= 'A' && c <= 'F') c = static_cast<char>(c - 'A' + 'a');
+    return out;
+}
+
+std::vector<RenderNode> ScanRenderNodes(const DrmPaths& paths)
+{
+    std::error_code error;
+    fs::directory_iterator entries{fs::PathFromString(paths.dev_dri), error};
+    if (error) return {};
+    std::vector<std::pair<unsigned long, RenderNode>> found;
+    for (const auto& entry : entries) {
+        const std::string name{fs::PathToString(entry.path().filename())};
+        unsigned long minor{0};
+        if (!RenderNodeMinor(name, minor)) continue;
+        const fs::path uevent{fs::PathFromString(paths.sys_class_drm) / fs::u8path(name) / "device" / "uevent"};
+        found.emplace_back(minor, RenderNode{name, PciIdFromSlotName(SlotNameFromUevent(uevent))});
+    }
+    std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::vector<RenderNode> nodes;
+    nodes.reserve(found.size());
+    for (auto& [minor, node] : found) nodes.push_back(std::move(node));
+    return nodes;
+}
+
+const ListedDevice* SelectListedDevice(const std::vector<ListedDevice>& listed, const std::string& device)
+{
+    if (device.empty()) {
+        const auto first_gpu = std::find_if(listed.begin(), listed.end(), [](const ListedDevice& candidate) { return candidate.fields.type == "gpu"; });
+        return first_gpu == listed.end() ? nullptr : &*first_gpu;
+    }
+    // Either id selects the card: the printed one, or the enumeration-order one a choice
+    // saved under an older listing carries. The two cannot collide -- one starts "pci:",
+    // the other "opencl:" -- so one pass is enough.
+    for (const auto& candidate : listed) {
+        if (candidate.fields.id == device || candidate.enumeration_id == device) return &candidate;
+    }
+    return nullptr;
+}
+
+std::vector<ListedDevice> EnumerateDevices(const OpenClApi& api, bool probe, const std::vector<RenderNode>& render_nodes)
 {
     cl::Uint platform_count{0};
     const cl::Int platform_rc = api.GetPlatformIDs(0, nullptr, &platform_count);
@@ -115,8 +228,9 @@ std::vector<ListedDevice> EnumerateDevices(const OpenClApi& api, bool probe)
         if (count_rc != cl::kSuccess) continue;
         std::vector<cl::DeviceId> devices(device_count);
         if (api.GetDeviceIDs(platforms[pi], cl::kDeviceTypeAll, device_count, devices.data(), nullptr) != cl::kSuccess) continue;
+        const size_t platform_first{result.size()};
         for (size_t di{0}; di < devices.size(); ++di) {
-            ListedDevice listed{platforms[pi], devices[di], {}};
+            ListedDevice listed{platforms[pi], devices[di], {}, {}};
             auto& fields = listed.fields;
             fields.backend = "opencl";
             cl::DeviceType type{0};
@@ -131,7 +245,8 @@ std::vector<ListedDevice> EnumerateDevices(const OpenClApi& api, bool probe)
                 std::string board_name = GetString(api, listed.device, cl::kDeviceBoardNameAmd);
                 if (!board_name.empty()) fields.name = std::move(board_name);
             }
-            fields.id = FallbackId(pi, di);
+            listed.enumeration_id = FallbackId(pi, di);
+            fields.id = listed.enumeration_id;
             if (HasExtension(extensions, "cl_khr_pci_bus_info")) {
                 cl::PciBusInfoKhr pci{};
                 if (Get(api, listed.device, cl::kDevicePciBusInfoKhr, pci)) fields.id = FormatPciId(pci.pci_domain, pci.pci_bus, pci.pci_device, pci.pci_function);
@@ -165,6 +280,9 @@ std::vector<ListedDevice> EnumerateDevices(const OpenClApi& api, bool probe)
                 fields.status = "ok";
             }
             result.push_back(std::move(listed));
+        }
+        if (MapsOntoRenderNodes(result, platform_first, render_nodes)) {
+            for (size_t i{platform_first}; i < result.size(); ++i) result[i].fields.id = render_nodes[i - platform_first].pci_id;
         }
     }
     return result;

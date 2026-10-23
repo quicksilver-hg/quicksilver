@@ -98,7 +98,7 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "qsgpusolve-opencl: %s\n", error.c_str());
             return qsgpu::kExitNoDevice;
         }
-        for (const auto& device : qsgpu::EnumerateDevices(*api, true)) {
+        for (const auto& device : qsgpu::EnumerateDevices(*api, true, qsgpu::ScanRenderNodes())) {
             std::printf("%s\n", qsgpu::FormatListingLine(device.fields).c_str());
         }
         return qsgpu::kExitOk;
@@ -124,11 +124,9 @@ int main(int argc, char** argv)
     std::string error;
     const auto api = qsgpu::LoadOpenCl(error);
     if (!api) { std::fprintf(stderr, "qsgpusolve-opencl: %s\n", error.c_str()); return qsgpu::kExitNoDevice; }
-    const auto devices = qsgpu::EnumerateDevices(*api, false);
-    const auto selected = std::find_if(devices.begin(), devices.end(), [&](const qsgpu::ListedDevice& candidate) {
-        return device.empty() ? candidate.fields.type == "gpu" : candidate.fields.id == device;
-    });
-    if (selected == devices.end()) {
+    const auto devices = qsgpu::EnumerateDevices(*api, false, qsgpu::ScanRenderNodes());
+    const qsgpu::ListedDevice* selected = qsgpu::SelectListedDevice(devices, device);
+    if (selected == nullptr) {
         std::fprintf(stderr, "qsgpusolve-opencl: device %s not found\n", device.empty() ? "<first GPU>" : device.c_str());
         return qsgpu::kExitNoDevice;
     }
