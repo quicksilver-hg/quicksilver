@@ -144,6 +144,10 @@ QString TransactionDesc::toHTML(interfaces::Node& node, interfaces::Vault& vault
             strHTML += GUIUtil::HtmlEscape(name) + " ";
         strHTML += GUIUtil::HtmlEscape(strAddress) + "<br>";
     }
+    const auto transfer_note = wtx.value_map.find("quicksilver_transfer_note");
+    if (transfer_note != wtx.value_map.end() && !transfer_note->second.empty())
+        strHTML += "<b>" + tr("Transfer Note") + ":</b> " + GUIUtil::HtmlEscape(transfer_note->second, true) +
+                   "<br><small>" + tr("For your records only — it is not sent with the transfer.") + "</small><br>";
 
     //
     // Amount

@@ -25,6 +25,16 @@ void VaultModelTransaction::setWtx(const CTransactionRef& newTx)
     wtx = newTx;
 }
 
+const QString& VaultModelTransaction::getTransferNote() const
+{
+    return m_transfer_note;
+}
+
+void VaultModelTransaction::setTransferNote(const QString& note)
+{
+    m_transfer_note = note;
+}
+
 CAmount VaultModelTransaction::getTotalTransactionAmount() const
 {
     CAmount totalTransactionAmount = 0;

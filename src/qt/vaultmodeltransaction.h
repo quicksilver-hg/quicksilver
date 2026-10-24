@@ -12,6 +12,7 @@
 #include <consensus/amount.h>
 
 #include <QObject>
+#include <QString>
 
 class SendCoinsRecipient;
 
@@ -25,12 +26,15 @@ public:
 
     CTransactionRef& getWtx();
     void setWtx(const CTransactionRef&);
+    const QString& getTransferNote() const;
+    void setTransferNote(const QString& note);
 
     CAmount getTotalTransactionAmount() const;
 
 private:
     QList<SendCoinsRecipient> recipients;
     CTransactionRef wtx;
+    QString m_transfer_note;
 };
 
 #endif // QUICKSILVER_QT_VAULTMODELTRANSACTION_H

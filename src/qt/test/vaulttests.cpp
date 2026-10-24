@@ -225,6 +225,9 @@ public:
     int try_get_coin_calls{0};
     int create_calls{0};
     int commit_calls{0};
+    std::vector<interfaces::VaultValueMap> committed_value_maps;
+    std::vector<interfaces::VaultOrderForm> committed_order_forms;
+    std::optional<interfaces::VaultTx> details_tx;
     int set_address_calls{0};
     std::optional<bilingual_str> commit_error;
     //! Set by the test so createTransaction can observe the model that is driving it.
@@ -306,10 +309,12 @@ public:
         cancel_requested_during_create = tx_proof_cancel && tx_proof_cancel();
         return util::Error{Untranslated("unsupported")};
     }
-    util::Result<void> commitTransaction(CTransactionRef, interfaces::VaultValueMap, interfaces::VaultOrderForm) override
+    util::Result<void> commitTransaction(CTransactionRef, interfaces::VaultValueMap value_map, interfaces::VaultOrderForm order_form) override
     {
         ++commit_calls;
         if (commit_error) return util::Error{*commit_error};
+        committed_value_maps.push_back(std::move(value_map));
+        committed_order_forms.push_back(std::move(order_form));
         return {};
     }
     bool transactionCanBeAbandoned(const uint256&) override { return false; }
@@ -319,7 +324,16 @@ public:
     std::set<interfaces::VaultTx> getVaultTxs() override { return {}; }
     bool tryGetTxStatus(const uint256&, interfaces::VaultTxStatus&, int&, int64_t&) override { return false; }
     bool spendsUnconfirmedChange(const CTransaction&) override { return false; }
-    bool tryGetVaultTxDetails(const uint256&, interfaces::VaultTx&, interfaces::VaultTxStatus&, interfaces::VaultOrderForm&, bool&, int&) override { return false; }
+    bool tryGetVaultTxDetails(const uint256&, interfaces::VaultTx& tx, interfaces::VaultTxStatus& status, interfaces::VaultOrderForm& order_form, bool& in_relaypool, int& num_blocks) override
+    {
+        if (!details_tx) return false;
+        tx = *details_tx;
+        status = {};
+        order_form = committed_order_forms.empty() ? interfaces::VaultOrderForm{} : committed_order_forms.back();
+        in_relaypool = false;
+        num_blocks = 0;
+        return true;
+    }
     std::optional<common::PSQTError> fillPSQT(int, bool, bool, size_t*, PartiallySignedQuicksilverTransaction&, bool&) override { return {}; }
     interfaces::VaultBalances getBalances() override
     {
@@ -4056,6 +4070,52 @@ void VaultTests::consensusCancelDoesNotShowStarting()
 {
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    {
+        VaultFrame route(platform_style.get(), nullptr);
+        QStackedWidget* stack = route.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+        QVERIFY(stack);
+        route.gotoNetworkPage();
+        auto* network = qobject_cast<NetworkPage*>(stack->currentWidget());
+        QVERIFY(network);
+        auto* review = network->findChild<QPushButton*>(QStringLiteral("reviewConsensusButton"));
+        QVERIFY(review);
+        QVERIFY(!review->isHidden());
+        review->click();
+        QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
+        QCOMPARE(stack->currentWidget()->findChild<QLabel*>(QStringLiteral("consensusReviewTitle"))->text(), QStringLiteral("Consensus is optional"));
+        auto* enable = stack->currentWidget()->findChild<QPushButton*>(QStringLiteral("consensusContinueButton"));
+        QVERIFY(enable);
+        enable->click();
+        QVERIFY(route.consensusEnabled());
+        QCOMPARE(stack->currentWidget(), network);
+        QVERIFY(!review->isHidden());
+        network->showStartFailed();
+        QVERIFY(review->isHidden());
+        network->showTorMissing();
+        QVERIFY(review->isHidden());
+        network->showInitializing();
+        QVERIFY(!review->isHidden());
+        network->setPeerCount(0);
+        QVERIFY(!review->isHidden());
+        review->click();
+        QCOMPARE(stack->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
+        auto* title = stack->currentWidget()->findChild<QLabel*>(QStringLiteral("consensusReviewTitle"));
+        QVERIFY(title);
+        QCOMPARE(title->text(), QStringLiteral("Consensus is enabled"));
+        auto* back = stack->currentWidget()->findChild<QPushButton*>(QStringLiteral("consensusDeclineButton"));
+        auto* status = stack->currentWidget()->findChild<QPushButton*>(QStringLiteral("consensusContinueButton"));
+        QVERIFY(back && status);
+        QCOMPARE(back->text(), QStringLiteral("Back to home"));
+        QCOMPARE(status->text(), QStringLiteral("Show node status"));
+        status->click();
+        QCOMPARE(stack->currentWidget(), network);
+        route.gotoConsensusReviewPage();
+        QSignalSpy home_spy(&route, &VaultFrame::homeRequested);
+        QVERIFY(home_spy.isValid());
+        back->click();
+        QCOMPARE(home_spy.count(), 1);
+    }
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     VaultFrame frame(platform_style.get(), nullptr);
     QObject::connect(&frame, &VaultFrame::consensusStateChanged, &frame, [&frame](bool enabled) {
         // Models the synchronous "Not now" path in QuicksilverGUI's handover
@@ -4353,12 +4413,19 @@ void VaultTests::vaultModelReturnsSendFailureReasonWithoutShowingIt()
     QVERIFY(entry);
     entry->findChild<QValidatedLineEdit*>(QStringLiteral("payTo"))->setText(recipients.front().address);
     entry->findChild<QuicksilverAmountField*>(QStringLiteral("payAmount"))->setValue(COIN);
+    auto* note_edit = send_dialog.findChild<QLineEdit*>(QStringLiteral("transferNote"));
+    QVERIFY(note_edit);
+    note_edit->setText(QStringLiteral("Retain in this vault"));
 
     QSignalSpy prepare_finished(&send_dialog, &SendCoinsDialog::sendPreparationFinishedForTesting);
+    QString prepared_note;
+    QObject::connect(&send_dialog, &SendCoinsDialog::sendPreparationFinishedForTesting,
+                     &send_dialog, [&](int, const QString&) { prepared_note = send_dialog.currentTransferNoteForTesting(); });
     QSignalSpy dialog_messages(&send_dialog, &SendCoinsDialog::message);
     QVERIFY(QMetaObject::invokeMethod(&send_dialog, "sendButtonClicked", Q_ARG(bool, false)));
     QVERIFY(prepare_finished.wait(3000));
     QCOMPARE(prepare_finished.count(), 1);
+    QCOMPARE(prepared_note, QStringLiteral("Retain in this vault"));
     const QList<QVariant> prepare_result = prepare_finished.takeFirst();
     QCOMPARE(prepare_result.at(0).toInt(), static_cast<int>(VaultModel::TransactionCreationFailed));
     QCOMPARE(prepare_result.at(1).toString(), QStringLiteral("unsupported"));
@@ -4391,20 +4458,66 @@ void VaultTests::vaultModelReturnsCommitFailureWithoutEmittingSendSuccess()
         QString::fromStdString(EncodeDestination(WitnessV0KeyHash(key.GetPubKey()))),
         QStringLiteral("rejected recipient"),
         COIN,
-        QString{}));
+        QStringLiteral("URI message")));
     VaultModelTransaction transaction(recipients);
     CMutableTransaction mutable_tx;
     mutable_tx.vout.emplace_back(COIN, GetScriptForDestination(WitnessV0KeyHash(key.GetPubKey())));
     transaction.setWtx(MakeTransactionRef(std::move(mutable_tx)));
 
-    QSignalSpy sent(&vault_model, &VaultModel::coinsSent);
+    std::vector<QByteArray> broadcast_bytes;
+    QObject::connect(&vault_model, &VaultModel::coinsSent, &vault_model,
+                     [&](VaultModel*, SendCoinsRecipient, const QByteArray& bytes) { broadcast_bytes.push_back(bytes); });
     const VaultModel::SendCoinsReturn status{vault_model.sendCoins(transaction)};
 
     QCOMPARE(status.status, VaultModel::TransactionCommitFailed);
     QCOMPARE(status.reason, QStringLiteral("Transaction is invalid by consensus rules: tx-pow-invalid"));
     QCOMPARE(vault_ptr->commit_calls, 1);
     QCOMPARE(vault_ptr->set_address_calls, 0);
-    QCOMPARE(sent.count(), 0);
+    QVERIFY(broadcast_bytes.empty());
+
+    // The same transaction bytes leave the model whether or not the sender
+    // keeps a local note. URI messages retain their separate order-form path.
+    vault_ptr->commit_error.reset();
+    VaultModelTransaction without_note(recipients);
+    without_note.setWtx(transaction.getWtx());
+    QCOMPARE(vault_model.sendCoins(without_note).status, VaultModel::OK);
+    QCOMPARE(vault_ptr->committed_value_maps.size(), size_t{1});
+    QVERIFY(vault_ptr->committed_value_maps.back().empty());
+    QCOMPARE(vault_ptr->committed_order_forms.back().size(), size_t{1});
+    QCOMPARE(vault_ptr->committed_order_forms.back().front().first, std::string("Message"));
+    QCOMPARE(vault_ptr->committed_order_forms.back().front().second, std::string("URI message"));
+
+    VaultModelTransaction with_note(recipients);
+    with_note.setWtx(transaction.getWtx());
+    with_note.setTransferNote(QStringLiteral("Private <note> & reminder"));
+    QCOMPARE(vault_model.sendCoins(with_note).status, VaultModel::OK);
+    QCOMPARE(vault_ptr->committed_value_maps.back().at("quicksilver_transfer_note"), std::string("Private <note> & reminder"));
+    QCOMPARE(vault_ptr->committed_order_forms.back().front().second, std::string("URI message"));
+    QCOMPARE(broadcast_bytes.size(), size_t{2});
+    QVERIFY2(broadcast_bytes.at(0) == broadcast_bytes.at(1), "serialized transaction bytes changed when only the local transfer note changed");
+
+    interfaces::VaultTx details{};
+    details.tx = transaction.getWtx();
+    details.credit = COIN;
+    details.is_coinbase = false;
+    details.value_map.emplace("message", "older metadata");
+    TransactionRecord record{details.tx->GetHash(), 0, TransactionRecord::RecvFromOther, "", 0, COIN};
+    vault_ptr->details_tx = details;
+    const QString old_details = TransactionDesc::toHTML(m_node, vault_model.vault(), &record, QuicksilverUnit::HG);
+    QVERIFY(!old_details.contains(QStringLiteral("Transfer Note")));
+    details.value_map = vault_ptr->committed_value_maps.back();
+    details.value_map.emplace("message", "older metadata");
+    vault_ptr->details_tx = details;
+    const QString noted_details = TransactionDesc::toHTML(m_node, vault_model.vault(), &record, QuicksilverUnit::HG);
+    QVERIFY(noted_details.contains(QStringLiteral("<b>Transfer Note:</b> Private &lt;note&gt; &amp; reminder")));
+    QVERIFY(noted_details.contains(QStringLiteral("For your records only — it is not sent with the transfer.")));
+    QCOMPARE(noted_details.count(QStringLiteral("<b>Message:</b>")), 2);
+    QVERIFY(noted_details.contains(QStringLiteral("older metadata")));
+    QVERIFY(noted_details.contains(QStringLiteral("URI message")));
+    QVERIFY(noted_details.indexOf(QStringLiteral("<b>Transfer Note:</b>")) < noted_details.indexOf(QStringLiteral("<b>Net amount:</b>")));
+    details.value_map.erase("quicksilver_transfer_note");
+    vault_ptr->details_tx = details;
+    QCOMPARE(TransactionDesc::toHTML(m_node, vault_model.vault(), &record, QuicksilverUnit::HG), old_details);
 }
 
 //! Cancelling has to reach the grind, not merely disown its answer. The generation
@@ -5479,6 +5592,8 @@ void VaultTests::transferRecipientsAreCompactRows()
     QCOMPARE(amount_key->text(), QStringLiteral("Amount ") + unit);
     QCOMPARE(amount_key->property("class").toString(), QStringLiteral("benchKey"));
     QCOMPARE(first->findChild<QLabel*>(QStringLiteral("recipientLabelKey"))->property("class").toString(), QStringLiteral("benchKey"));
+    QCOMPARE(first->findChild<QLabel*>(QStringLiteral("recipientLabelKey"))->text(), QStringLiteral("Address Label"));
+    QCOMPARE(first->findChild<QLineEdit*>(QStringLiteral("addAsLabel"))->placeholderText(), QStringLiteral("Address Label"));
     // The second line starts under the address.
     QCOMPARE(amount_key->mapTo(first, QPoint(0, 0)).x(), first->findChild<QWidget*>(QStringLiteral("payTo"))->mapTo(first, QPoint(0, 0)).x());
     QVERIFY2(first->height() <= 80, qPrintable(QStringLiteral("a recipient is %1 px tall").arg(first->height())));
@@ -5492,6 +5607,7 @@ void VaultTests::transferRecipientsAreCompactRows()
     SendCoinsEntry* second = dialog.addEntry();
     QCoreApplication::processEvents();
     QCOMPARE(index_of(second), QStringLiteral("2"));
+    QCOMPARE(dialog.findChildren<QLineEdit*>(QStringLiteral("transferNote")).size(), 1);
     QVERIFY(QMetaObject::invokeMethod(first, "deleteClicked"));
     QCoreApplication::processEvents();
     QCOMPARE(entries().size(), 1);
@@ -6568,6 +6684,20 @@ void VaultTests::transferRecipientAreaFitsItsRow()
         const auto fits = [&](const QString& stage, bool across = true) {
             settle();
             const QString where = QStringLiteral("%1x%2 %3").arg(size.width()).arg(size.height()).arg(stage);
+            auto* note_key = dialog.findChild<QLabel*>(QStringLiteral("transferNoteKey"));
+            auto* note_field = dialog.findChild<QLineEdit*>(QStringLiteral("transferNote"));
+            auto* note_hint = dialog.findChild<QLabel*>(QStringLiteral("transferNoteHint"));
+            QVERIFY(note_key && note_field && note_hint);
+            QCOMPARE(note_key->text(), QStringLiteral("Transfer Note"));
+            QCOMPARE(note_hint->text(), QStringLiteral("For your records only — it is not sent with the transfer."));
+            for (QWidget* note_widget : {static_cast<QWidget*>(note_key), static_cast<QWidget*>(note_field), static_cast<QWidget*>(note_hint)}) {
+                QVERIFY2(note_widget->isVisibleTo(&dialog), qPrintable(where));
+                const QRect seen(note_widget->mapTo(&dialog, QPoint{}), note_widget->size());
+                QVERIFY2(dialog.rect().contains(seen),
+                         qPrintable(QStringLiteral("%1: %2 at %3,%4 %5x%6 outside the Transfer page %7x%8")
+                                        .arg(where, note_widget->objectName()).arg(seen.x()).arg(seen.y())
+                                        .arg(seen.width()).arg(seen.height()).arg(dialog.width()).arg(dialog.height())));
+            }
             QVERIFY2(!rows().isEmpty(), qPrintable(where));
             QVERIFY2(!area->verticalScrollBar()->isVisible(),
                      qPrintable(QStringLiteral("%1: vertical bar shown, viewport %2 px for contents %3 px")

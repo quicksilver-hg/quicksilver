@@ -94,7 +94,7 @@ SendCoinsEntry::SendCoinsEntry(const PlatformStyle *_platformStyle, QWidget *par
     ui->horizontalLayoutAmount->setParent(nullptr);
     amount_line->addLayout(ui->horizontalLayoutAmount);
     amount_line->addSpacing(2 * SPACING);
-    auto* label_key = new QLabel(tr("Label"), this);
+    auto* label_key = new QLabel(tr("Address Label"), this);
     label_key->setObjectName(QStringLiteral("recipientLabelKey"));
     label_key->setProperty("class", QStringLiteral("benchKey"));
     label_key->setBuddy(ui->addAsLabel);

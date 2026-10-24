@@ -43,6 +43,7 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
+#include <QLineEdit>
 #include <QLocale>
 #include <QVBoxLayout>
 #include <QPointer>
@@ -198,6 +199,11 @@ SendCoinsDialog::~SendCoinsDialog()
     delete ui;
 }
 
+QString SendCoinsDialog::currentTransferNoteForTesting() const
+{
+    return m_current_transaction ? m_current_transaction->getTransferNote() : QString{};
+}
+
 bool SendCoinsDialog::prepareTransactionForAsync(std::unique_ptr<VaultModelTransaction>& transaction, CCoinControl& coin_control)
 {
     QList<SendCoinsRecipient> recipients;
@@ -253,6 +259,7 @@ bool SendCoinsDialog::prepareTransactionForAsync(std::unique_ptr<VaultModelTrans
 
     fNewRecipientAllowed = false;
     transaction = std::make_unique<VaultModelTransaction>(recipients);
+    transaction->setTransferNote(m_transfer_note->text());
     return true;
 }
 
@@ -433,6 +440,7 @@ void SendCoinsDialog::finishSendFlow(bool send_failure)
 {
     if (!send_failure) {
         accept();
+        m_transfer_note->clear();
         m_coin_control->UnSelectAll();
         coinControlUpdateLabels();
     }
@@ -542,6 +550,7 @@ void SendCoinsDialog::finishSendPrepare(std::unique_ptr<VaultModelTransaction> t
 void SendCoinsDialog::setSendControlsEnabled(bool enabled)
 {
     ui->entries->setEnabled(enabled);
+    m_transfer_note->setEnabled(enabled);
     ui->addButton->setEnabled(enabled);
     ui->clearButton->setEnabled(enabled);
     ui->sendButton->setEnabled(enabled);
@@ -850,6 +859,7 @@ void SendCoinsDialog::clear()
     m_coin_control->UnSelectAll();
     ui->checkBoxCoinControlChange->setChecked(false);
     ui->lineEditCoinControlChange->clear();
+    m_transfer_note->clear();
     coinControlUpdateLabels();
 
     // Remove entries until only one left
@@ -939,7 +949,8 @@ QWidget *SendCoinsDialog::setupTabChain(QWidget *prev)
             prev = entry->setupTabChain(prev);
         }
     }
-    QWidget::setTabOrder(prev, ui->sendButton);
+    QWidget::setTabOrder(prev, m_transfer_note);
+    QWidget::setTabOrder(m_transfer_note, ui->sendButton);
     QWidget::setTabOrder(ui->sendButton, ui->clearButton);
     QWidget::setTabOrder(ui->clearButton, ui->addButton);
     return ui->addButton;
@@ -1336,6 +1347,20 @@ void SendCoinsDialog::createTransferSummary()
     }
     more->addStretch();
     body->addLayout(more);
+
+    auto* note_key = new QLabel(tr("Transfer Note"), recipients);
+    note_key->setObjectName(QStringLiteral("transferNoteKey"));
+    note_key->setProperty("class", QStringLiteral("benchKey"));
+    m_transfer_note = new QLineEdit(recipients);
+    m_transfer_note->setObjectName(QStringLiteral("transferNote"));
+    note_key->setBuddy(m_transfer_note);
+    auto* note_hint = new QLabel(tr("For your records only — it is not sent with the transfer."), recipients);
+    note_hint->setObjectName(QStringLiteral("transferNoteHint"));
+    note_hint->setProperty("class", QStringLiteral("benchNote"));
+    note_hint->setWordWrap(true);
+    body->addWidget(note_key);
+    body->addWidget(m_transfer_note);
+    body->addWidget(note_hint);
 
     // The rule belongs to the inputs line, and hides with it when coin
     // control features are off.

@@ -130,10 +130,10 @@
       <string>Enter a label for this address to add it to the list of used addresses</string>
      </property>
      <property name="accessibleName">
-      <string>Label</string>
+      <string>Address Label</string>
      </property>
      <property name="placeholderText">
-      <string>Label</string>
+      <string>Address Label</string>
      </property>
     </widget>
    </item>

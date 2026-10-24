@@ -256,7 +256,11 @@ VaultModel::SendCoinsReturn VaultModel::sendCoins(VaultModelTransaction& transac
         }
 
         auto& newTx = transaction.getWtx();
-        const auto committed{vault().commitTransaction(newTx, /*value_map=*/{}, std::move(vOrderForm))};
+        interfaces::VaultValueMap value_map;
+        if (!transaction.getTransferNote().isEmpty()) {
+            value_map.emplace("quicksilver_transfer_note", transaction.getTransferNote().toStdString());
+        }
+        const auto committed{vault().commitTransaction(newTx, std::move(value_map), std::move(vOrderForm))};
         if (!committed) {
             return SendCoinsReturn(TransactionCommitFailed, QString::fromStdString(util::ErrorString(committed).translated));
         }

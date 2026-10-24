@@ -417,6 +417,7 @@ void VaultFrame::gotoNetworkPage()
 
 void VaultFrame::gotoConsensusReviewPage()
 {
+    updateConsensusState();
     vaultStack->setCurrentWidget(m_consensus_review_page);
 }
 

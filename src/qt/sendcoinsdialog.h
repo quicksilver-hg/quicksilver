@@ -33,6 +33,7 @@ namespace Ui {
 
 QT_BEGIN_NAMESPACE
 class QLabel;
+class QLineEdit;
 class QShowEvent;
 class QUrl;
 QT_END_NAMESPACE
@@ -70,6 +71,7 @@ public:
     quint64 currentSolveGeneration() const { return m_solve_generation; }
     void bumpSolveGeneration();
     bool acceptSolveResult(quint64 gen) const { return gen == m_solve_generation; }
+    QString currentTransferNoteForTesting() const;
     //! What the summary says about preparing a transfer: the notes, then how
     //! the proof will be computed. When the processor takes over, that last
     //! line is a warning and the page sets it apart (F-453).
@@ -119,6 +121,7 @@ private:
     QLabel* m_summary_spendable{nullptr};
     QLabel* m_summary_remaining{nullptr};
     QLabel* m_summary_flag{nullptr};
+    QLineEdit* m_transfer_note{nullptr};
     //! The processor-fallback line, in the warning tone (F-453).
     QLabel* m_acceleration_warning{nullptr};
     const PlatformStyle *platformStyle;

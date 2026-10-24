@@ -40,6 +40,7 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -1169,7 +1170,26 @@ void OptionTests::displayTabHasNoDeadFontChoiceAndAlignsItsFields()
     QWidget* unit = dialog.findChild<QWidget*>(QStringLiteral("unit"));
     QWidget* urls = dialog.findChild<QWidget*>(QStringLiteral("thirdPartyTxUrls"));
     QVERIFY(unit && urls);
-    QCOMPARE(unit->mapTo(display, QPoint{}).x(), urls->mapTo(display, QPoint{}).x());
+    struct SettleLog {
+        QElapsedTimer timer;
+        QWidget* unit;
+        QWidget* urls;
+        QWidget* display;
+        //! Stamped when the columns agree. Read at destruction so an early
+        //! return still logs, but measured here: the checks after this one
+        //! wait too, and their time is not settle time.
+        qint64 settled_ms{-1};
+        ~SettleLog()
+        {
+            qInfo() << "Display layout settle ms" << (settled_ms >= 0 ? settled_ms : timer.elapsed())
+                    << (settled_ms >= 0 ? "" : "(never settled)")
+                    << "unit x" << unit->mapTo(display, QPoint{}).x()
+                    << "URLs x" << urls->mapTo(display, QPoint{}).x();
+        }
+    } settle_log{{}, unit, urls, display};
+    settle_log.timer.start();
+    QTRY_COMPARE(unit->mapTo(display, QPoint{}).x(), urls->mapTo(display, QPoint{}).x());
+    settle_log.settled_ms = settle_log.timer.elapsed();
 
     QVERIFY2(!dialog.findChild<QWidget*>(QStringLiteral("tabWindow")), "the Window tab was merged into Display");
 #ifndef Q_OS_MACOS
@@ -1179,7 +1199,7 @@ void OptionTests::displayTabHasNoDeadFontChoiceAndAlignsItsFields()
         QVERIFY2(display->isAncestorOf(box), name);
     }
     QWidget* tray = dialog.findChild<QWidget*>(QStringLiteral("showTrayIcon"));
-    QVERIFY(tray->mapTo(display, QPoint{}).y() < unit->mapTo(display, QPoint{}).y());
+    QTRY_VERIFY(tray->mapTo(display, QPoint{}).y() < unit->mapTo(display, QPoint{}).y());
 #endif
 }
 

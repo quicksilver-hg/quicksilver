@@ -463,7 +463,7 @@ void NetworkPage::showInitializing()
     m_sync_value->setText(tr("Waiting for consensus"));
     m_bootstrap_diagnosis->setVisible(false);
     setNodeControlsEnabled(false);
-    setReviewConsensusVisible(false);
+    setReviewConsensusVisible(true);
 }
 
 void NetworkPage::showStartFailed()
@@ -523,5 +523,5 @@ void NetworkPage::setPeerCount(int peers)
     applyTorSetupAdvice(OnionProxyConfigured());
     refreshBootstrapDiagnosis(peers);
     setNodeControlsEnabled(true);
-    setReviewConsensusVisible(false);
+    setReviewConsensusVisible(true);
 }
