@@ -271,6 +271,7 @@ void MiningService::Run(CScript payout_script)
             m_status.template_transactions = static_cast<int64_t>(block.vtx.size()) - 1;
         }
 
+        bool no_gpu_device{false};
         while (m_active.load() && !m_interrupt.load() && !m_chainman.m_interrupt) {
             {
                 LOCK(::cs_main);
@@ -306,6 +307,11 @@ void MiningService::Run(CScript payout_script)
             // card that comes back must clear the error it left behind.
             RecordSolverOutcome(solver_status, cpu_fallback, gpu_faults);
 
+            if (solver_status == cuckatoo::GpuSolveStatus::kNoGpuDevice && !cpu_fallback) {
+                no_gpu_device = true;
+                break;
+            }
+
             if (solved) {
                 auto block_ptr = std::make_shared<const CBlock>(block);
                 if (m_chainman.ProcessNewBlock(block_ptr, /*force_processing=*/true,
@@ -327,6 +333,14 @@ void MiningService::Run(CScript payout_script)
             const auto tip_now = m_mining.getTip();
             if (template_changed || (tip_now && tip_now->hash != parent) ||
                 m_mining.getTransactionsUpdated() != template_pool_updates) break;
+        }
+        // A missing card ends this template's work. Wait on the connected tip
+        // so a new block wakes the miner immediately; otherwise retry after a
+        // bounded pause, including a fresh device listing on the next window.
+        if (no_gpu_device && m_active.load() && !m_interrupt.load() && !m_chainman.m_interrupt) {
+            for (int second = 0; second < 5 && m_active.load() && !m_interrupt.load() && !m_chainman.m_interrupt; ++second) {
+                if (m_mining.waitTipChanged(parent, std::chrono::seconds(1)).hash != parent) break;
+            }
         }
     }
 

@@ -15,6 +15,7 @@
 #include <interfaces/mining.h>
 #include <interfaces/node.h>
 #include <key_io.h>
+#include <logging.h>
 #include <node/block_solve.h>
 #include <node/types.h>
 #include <primitives/block.h>
@@ -36,11 +37,13 @@
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -210,7 +213,11 @@ bool WaitUntil(const std::function<bool()>& done, std::chrono::milliseconds budg
 }
 } // namespace
 
-BOOST_FIXTURE_TEST_SUITE(mining_service_tests, TestChain100Setup)
+struct MiningServiceTestSetup : TestChain100Setup {
+    MiningServiceTestSetup() { cuckatoo::ResetGpuDeviceStatsForTesting(); }
+};
+
+BOOST_FIXTURE_TEST_SUITE(mining_service_tests, MiningServiceTestSetup)
 
 BOOST_AUTO_TEST_CASE(mines_and_reports_session_subsidy)
 {
@@ -259,6 +266,107 @@ BOOST_AUTO_TEST_CASE(inactive_status_is_empty)
     BOOST_CHECK_EQUAL(st.blocks_found, 0);
     BOOST_CHECK_EQUAL(st.coins_minted_session, 0);
     BOOST_CHECK(st.address.empty());
+}
+
+BOOST_AUTO_TEST_CASE(no_usable_card_waits_for_tip_and_resumes_on_change)
+{
+    // Count actual template passes while replacing only the tip wait. The
+    // worker must reach that wait after one no-device window, and a tip signal
+    // must start another pass without waiting for the one-second timeout.
+    class ObservedMining final : public interfaces::Mining {
+        interfaces::Mining& m_real;
+        std::mutex m_mutex;
+        std::condition_variable m_cv;
+        bool m_wake{false};
+        unsigned int m_templates{0};
+        unsigned int m_waits{0};
+    public:
+        explicit ObservedMining(interfaces::Mining& real) : m_real(real) {}
+        bool isTestChain() override { return m_real.isTestChain(); }
+        bool isInitialBlockDownload() override { return m_real.isInitialBlockDownload(); }
+        std::optional<interfaces::BlockRef> getTip() override { return m_real.getTip(); }
+        unsigned int getTransactionsUpdated() override { return m_real.getTransactionsUpdated(); }
+        interfaces::BlockRef waitTipChanged(uint256 tip, MillisecondsDouble timeout) override
+        {
+            std::unique_lock lock{m_mutex};
+            ++m_waits;
+            m_cv.notify_all();
+            m_cv.wait_for(lock, timeout, [&] { return m_wake; });
+            const bool changed = m_wake;
+            m_wake = false;
+            lock.unlock();
+            auto result = m_real.getTip().value();
+            if (changed) result.hash = uint256{};
+            return result;
+        }
+        std::unique_ptr<interfaces::BlockTemplate> createNewBlock(const node::BlockCreateOptions& options) override
+        {
+            auto block = m_real.createNewBlock(options);
+            std::lock_guard lock{m_mutex};
+            ++m_templates;
+            m_cv.notify_all();
+            return block;
+        }
+        void Wake() { std::lock_guard lock{m_mutex}; m_wake = true; m_cv.notify_all(); }
+        bool WaitFor(unsigned int templates, unsigned int waits, std::chrono::milliseconds limit)
+        {
+            std::unique_lock lock{m_mutex};
+            return m_cv.wait_for(lock, limit, [&] { return m_templates >= templates && m_waits >= waits; });
+        }
+        unsigned int Templates() { std::lock_guard lock{m_mutex}; return m_templates; }
+    };
+
+    auto real = interfaces::MakeMining(m_node);
+    BOOST_REQUIRE(real);
+    ObservedMining mining{*real};
+    Consensus::Params& params = const_cast<Consensus::Params&>(Params().GetConsensus());
+    const std::string listing = TempPath("f545-empty-" + ProcessIdTag());
+    struct Restore {
+        Consensus::Params& params;
+        uint8_t edge_bits;
+        bool no_cycle;
+        std::string solver, script, path;
+        ~Restore()
+        {
+            params.nEdgeBits = edge_bits;
+            params.fBlockPowNoCycle = no_cycle;
+            if (solver.empty()) UnsetSolverEnv(); else SetSolverEnv(solver);
+            if (script.empty()) UnsetEnvVar("QS_SOLVER_STUB_LISTING"); else SetEnvVar("QS_SOLVER_STUB_LISTING", script);
+            cuckatoo::ResetGpuDiscoveryForTesting();
+            std::remove(path.c_str());
+        }
+    } restore{params, params.nEdgeBits, params.fBlockPowNoCycle,
+              EnvOrEmpty("CUCKATOO_GPU_SOLVER"), EnvOrEmpty("QS_SOLVER_STUB_LISTING"), listing};
+    params.nEdgeBits = 28;
+    params.fBlockPowNoCycle = false;
+    std::ofstream{listing} << "exit 0\n";
+    SetSolverEnv(SOLVER_STUB_PATH);
+    SetEnvVar("QS_SOLVER_STUB_LISTING", listing);
+    cuckatoo::ResetGpuDiscoveryForTesting();
+
+    const CScript payout = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
+    MiningService svc(*m_node.chainman, mining);
+    std::atomic<unsigned int> stalled_windows{0};
+    const auto log_connection = LogInstance().PushBackCallback([&](const std::string& line) {
+        if (line.find("stalled reason=no-gpu-device") != std::string::npos) {
+            stalled_windows.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+    BOOST_REQUIRE(svc.Start(payout, "test-payout"));
+    const bool waiting = mining.WaitFor(1, 1, std::chrono::seconds{3});
+    const unsigned int before = mining.Templates();
+    std::this_thread::sleep_for(std::chrono::milliseconds{100});
+    const unsigned int passes_before_wake = stalled_windows.load(std::memory_order_relaxed);
+    mining.Wake();
+    const bool resumed = mining.WaitFor(2, 1, std::chrono::milliseconds{500});
+    svc.Interrupt();
+    mining.Wake();
+    svc.Stop();
+    LogInstance().DeleteCallback(log_connection);
+    BOOST_CHECK_MESSAGE(waiting, "no-device window did not enter the tip wait");
+    BOOST_CHECK_LE(before, 1U);
+    BOOST_CHECK_LE(passes_before_wake, 1U);
+    BOOST_CHECK_MESSAGE(resumed, "tip signal did not start a new template within 500 ms");
 }
 
 BOOST_AUTO_TEST_CASE(build_mining_status_maps_fields)

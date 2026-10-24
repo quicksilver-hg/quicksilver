@@ -59,5 +59,9 @@ struct GpuDiscovery {
 };
 GpuDiscovery DiscoverGpus(uint8_t edgebits);
 void ResetGpuDiscoveryForTesting();
+//! Shorten the listing limit DiscoverGpus passes to ListDevices, so a test can
+//! reach kTimedOut without sleeping out kListingLimit. ResetGpuDiscoveryForTesting
+//! restores the default.
+void SetListingLimitForTesting(std::chrono::milliseconds limit);
 } // namespace cuckatoo
 #endif // QUICKSILVER_CRYPTO_CUCKATOO_GPU_DEVICES_H

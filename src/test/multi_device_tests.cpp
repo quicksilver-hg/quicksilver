@@ -672,10 +672,19 @@ BOOST_AUTO_TEST_CASE(cancel_stops_every_worker)
     const std::string argv = f.Configure("sleep 5000\nexit 0\n", "sleep 5000\nexit 0\n");
     cuckatoo::Cycle cycle{}; uint32_t nonce{0};
     const auto started = std::chrono::steady_clock::now();
+    std::atomic<std::chrono::steady_clock::rep> cancelled{0};
     BOOST_CHECK(!Solve(pre, 0, 1000, cycle, nonce, {}, {}, [&] {
-        return std::chrono::steady_clock::now() - started > std::chrono::milliseconds{300};
+        const auto now = std::chrono::steady_clock::now();
+        if (Launches(argv).size() == 2U || now - started > std::chrono::seconds{30}) {
+            auto unset = std::chrono::steady_clock::rep{0};
+            cancelled.compare_exchange_strong(unset, now.time_since_epoch().count());
+            return true;
+        }
+        return false;
     }));
-    BOOST_CHECK_LT(std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count(), 1.0);
+    BOOST_REQUIRE_NE(cancelled.load(), 0);
+    const auto cancelled_at = std::chrono::steady_clock::time_point{std::chrono::steady_clock::duration{cancelled.load()}};
+    BOOST_CHECK_LT(std::chrono::duration<double>(std::chrono::steady_clock::now() - cancelled_at).count(), 1.0);
     BOOST_CHECK_EQUAL(Launches(argv).size(), 2U);
 }
 

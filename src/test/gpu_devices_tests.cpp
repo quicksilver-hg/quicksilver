@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #include <crypto/cuckatoo/gpu_devices.h>
 #include <boost/test/unit_test.hpp>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -82,6 +83,62 @@ BOOST_AUTO_TEST_CASE(listing_exit_timeout_and_cache)
     SetEnv("QS_SOLVER_STUB_LISTING", Script("qs-list-slow", "sleep 60000\n")); BOOST_CHECK(ListDevices(SOLVER_STUB_PATH, std::chrono::milliseconds{100}).outcome == ListOutcome::kTimedOut);
     const std::string mark{Tmp("qs-list-count")}; std::remove(mark.c_str()); SetEnv("QS_SOLVER_STUB_LISTING", Script("qs-list-counted", "append " + mark + "\necho " + RX + "\nexit 0\n")); SetEnv("CUCKATOO_GPU_SOLVER", SOLVER_STUB_PATH);
     BOOST_CHECK(DiscoverGpus(28).situation == GpuSituation::kReady); BOOST_CHECK(DiscoverGpus(28).situation == GpuSituation::kReady); std::ifstream m(mark, std::ios::binary|std::ios::ate); BOOST_CHECK_EQUAL(static_cast<long>(m.tellg()), 1L);
+}
+BOOST_AUTO_TEST_CASE(failed_listing_retries_and_keeps_stable_outcomes_cached)
+{
+    Guard g;
+    const std::string mark{Tmp("qs-list-retry-failed")};
+    const std::string script{Tmp("qs-list-retry-failed-script")};
+    std::remove(mark.c_str());
+    SetEnv("CUCKATOO_GPU_SOLVER", SOLVER_STUB_PATH);
+    SetEnv("QS_SOLVER_STUB_LISTING", script);
+    std::ofstream{script} << "append " << mark << "\nexit 5\n";
+    BOOST_CHECK(DiscoverGpus(28).listing.outcome == ListOutcome::kFailed);
+    std::ofstream{script} << "append " << mark << "\necho " << RX << "\nexit 0\n";
+    BOOST_CHECK(DiscoverGpus(28).situation == GpuSituation::kReady);
+    std::ifstream count(mark, std::ios::binary | std::ios::ate);
+    BOOST_CHECK_EQUAL(static_cast<long>(count.tellg()), 2L);
+    std::remove(script.c_str());
+    std::remove(mark.c_str());
+
+    ResetGpuDiscoveryForTesting();
+    const std::string stable_mark{Tmp("qs-list-retry-stable")};
+    const std::string stable_script{Tmp("qs-list-retry-stable-script")};
+    std::remove(stable_mark.c_str());
+    std::ofstream{stable_script} << "append " << stable_mark << "\nexit 4\n";
+    SetEnv("QS_SOLVER_STUB_LISTING", stable_script);
+    BOOST_CHECK(DiscoverGpus(28).listing.outcome == ListOutcome::kNoLoader);
+    BOOST_CHECK(DiscoverGpus(28).listing.outcome == ListOutcome::kNoLoader);
+    std::ifstream stable_count(stable_mark, std::ios::binary | std::ios::ate);
+    BOOST_CHECK_EQUAL(static_cast<long>(stable_count.tellg()), 1L);
+    std::remove(stable_script.c_str());
+    std::remove(stable_mark.c_str());
+
+    ResetGpuDiscoveryForTesting();
+    Unset("CUCKATOO_GPU_SOLVER");
+    Unset("CUCKATOO_GPU_BUNDLED");
+    BOOST_CHECK(DiscoverGpus(28).listing.outcome == ListOutcome::kNoHelper);
+    BOOST_CHECK(DiscoverGpus(28).listing.outcome == ListOutcome::kNoHelper);
+}
+BOOST_AUTO_TEST_CASE(timed_out_listing_retries)
+{
+    Guard g;
+    const std::string mark{Tmp("qs-list-retry-timeout")};
+    const std::string script{Tmp("qs-list-retry-timeout-script")};
+    std::remove(mark.c_str());
+    SetEnv("CUCKATOO_GPU_SOLVER", SOLVER_STUB_PATH);
+    SetEnv("QS_SOLVER_STUB_LISTING", script);
+    // The limit is injected so this case proves the retry without sleeping out
+    // the real kListingLimit; Guard's ResetGpuDiscoveryForTesting restores it.
+    SetListingLimitForTesting(std::chrono::milliseconds{150});
+    std::ofstream{script} << "append " << mark << "\nsleep 60000\n";
+    BOOST_CHECK(DiscoverGpus(28).listing.outcome == ListOutcome::kTimedOut);
+    std::ofstream{script} << "append " << mark << "\necho " << RX << "\nexit 0\n";
+    BOOST_CHECK(DiscoverGpus(28).situation == GpuSituation::kReady);
+    std::ifstream count(mark, std::ios::binary | std::ios::ate);
+    BOOST_CHECK_EQUAL(static_cast<long>(count.tellg()), 2L);
+    std::remove(script.c_str());
+    std::remove(mark.c_str());
 }
 BOOST_AUTO_TEST_CASE(listing_timeout_kills_the_helper)
 {

@@ -16,6 +16,8 @@ std::mutex g_mutex;
 // A detached GUI discovery thread can still be listing during process teardown.
 // Keep the cache alive so that thread can never touch a destroyed map.
 auto* g_cache = new std::map<std::string, GpuDiscovery>;
+//! Guarded by g_mutex. Tests shorten this; production always uses kListingLimit.
+std::chrono::milliseconds g_listing_limit{kListingLimit};
 
 std::string Trim(std::string_view text)
 {
@@ -223,11 +225,27 @@ GpuDiscovery DiscoverGpus(uint8_t edgebits)
     const std::string key = helper.value_or("") + "\n" + (configured ? configured : "");
     if (const auto found = g_cache->find(key); found != g_cache->end()) return found->second;
     GpuDiscovery result; result.helper = helper; result.choice = DeviceChoiceFromEnv();
-    result.listing = helper ? ListDevices(*helper) : DeviceListing{};
+    result.listing = helper ? ListDevices(*helper, g_listing_limit) : DeviceListing{};
     result.selection = SelectDevices(result.listing.devices, result.choice);
     result.situation = ClassifySituation(result.listing, result.choice, result.selection);
-    g_cache->emplace(key, result); return result;
+    // A transient helper failure may recover without an application restart.
+    // Keep stable outcomes cached, including absent helpers and loaders.
+    if (result.listing.outcome != ListOutcome::kFailed && result.listing.outcome != ListOutcome::kTimedOut) {
+        g_cache->emplace(key, result);
+    }
+    return result;
 }
 
-void ResetGpuDiscoveryForTesting() { std::lock_guard<std::mutex> lock{g_mutex}; g_cache->clear(); }
+void ResetGpuDiscoveryForTesting()
+{
+    std::lock_guard<std::mutex> lock{g_mutex};
+    g_cache->clear();
+    g_listing_limit = kListingLimit;
+}
+
+void SetListingLimitForTesting(std::chrono::milliseconds limit)
+{
+    std::lock_guard<std::mutex> lock{g_mutex};
+    g_listing_limit = limit;
+}
 } // namespace cuckatoo
