@@ -8,6 +8,8 @@
 #include <crypto/cuckatoo/gpu_devices.h>
 #include <crypto/cuckatoo/multi_device.h>
 
+#include <test/util/gpucardtables.h>
+
 #include <boost/test/unit_test.hpp>
 
 #include <algorithm>
@@ -152,7 +154,7 @@ void RunBothDevices(const std::vector<std::string>&)
 #endif
 } // namespace
 
-BOOST_AUTO_TEST_SUITE(opencl_two_device_tests)
+BOOST_FIXTURE_TEST_SUITE(opencl_two_device_tests, GpuCardTablesTestSetup)
 
 BOOST_AUTO_TEST_CASE(both_devices_run_a_block, *boost::unit_test::precondition(two_devices_named))
 {

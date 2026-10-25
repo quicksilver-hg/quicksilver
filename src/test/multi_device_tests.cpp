@@ -10,6 +10,7 @@
 #include <node/block_solve.h>
 #include <pow.h>
 #include <primitives/block.h>
+#include <test/util/gpucardtables.h>
 #include <test/util/setup_common.h>
 #include <validation.h>
 #include <vault/spend.h>
@@ -40,7 +41,7 @@
 #include <tuple>
 #include <vector>
 
-BOOST_AUTO_TEST_SUITE(multi_device_tests)
+BOOST_FIXTURE_TEST_SUITE(multi_device_tests, GpuCardTablesTestSetup)
 
 namespace {
 constexpr const char* DEVICE_A{"pci:0000:01:00.0"};
@@ -176,13 +177,10 @@ std::vector<Proof> CpuProofs(const std::vector<unsigned char>& pre, size_t count
     return out;
 }
 
-struct Fixture {
+// The env the stub reads is this suite's own business; both card tables are the
+// shared fixture's (F-555).
+struct Fixture : GpuCardTablesTestSetup {
     std::vector<std::string> files;
-    Fixture()
-    {
-        cuckatoo::ResetGpuDiscoveryForTesting();
-        cuckatoo::ResetGpuDeviceStatsForTesting();
-    }
     ~Fixture()
     {
         for (const char* name : {"CUCKATOO_GPU_SOLVER", "CUCKATOO_GPU_BUNDLED",
@@ -190,8 +188,6 @@ struct Fixture {
                                  "QS_SOLVER_STUB_SCRIPT", "QS_SOLVER_STUB_LISTING",
                                  "QS_SOLVER_STUB_DEVICE_SCRIPTS",
                                  "QS_SOLVER_STUB_ARGV_APPEND"}) UnsetEnv(name);
-        cuckatoo::ResetGpuDiscoveryForTesting();
-        cuckatoo::ResetGpuDeviceStatsForTesting();
         for (const auto& file : files) std::remove(file.c_str());
     }
 
@@ -227,6 +223,33 @@ struct Fixture {
         SetEnv("CUCKATOO_GPU_TIMEOUT", "5");
         cuckatoo::ResetGpuDiscoveryForTesting();
         return argv;
+    }
+};
+
+// The stub env the F-555 isolation pair needs, taken back however the case ends --
+// including through a BOOST_REQUIRE throw. The pair is about what the two card tables
+// carry between cases, so the env and the files it names must NOT be what leaks.
+// The discovery cache is keyed on the helper path and CUCKATOO_GPU_DEVICES, so a case
+// that sets the same env reaches the same entry whether or not the env survived.
+struct StubEnvGuard {
+    const std::string listing{TempPath("qs-f555-listing")};
+    const std::string argv{TempPath("qs-f555-argv")};
+    StubEnvGuard()
+    {
+        WriteFile(listing, std::string{"echo device backend=stub id="} + DEVICE_A +
+                               " type=gpu integrated=0 mem=0 status=ok name=First\nexit 0\n");
+        std::remove(argv.c_str());
+        SetEnv("CUCKATOO_GPU_SOLVER", SOLVER_STUB_PATH);
+        SetEnv("QS_SOLVER_STUB_LISTING", listing);
+        SetEnv("QS_SOLVER_STUB_ARGV_APPEND", argv);
+        UnsetEnv("CUCKATOO_GPU_DEVICES");
+    }
+    ~StubEnvGuard()
+    {
+        for (const char* name : {"CUCKATOO_GPU_SOLVER", "QS_SOLVER_STUB_LISTING",
+                                 "QS_SOLVER_STUB_ARGV_APPEND"}) UnsetEnv(name);
+        std::remove(listing.c_str());
+        std::remove(argv.c_str());
     }
 };
 
@@ -880,6 +903,40 @@ BOOST_FIXTURE_TEST_CASE(vault_transfer_passes_the_target_as_the_accept_predicate
     BOOST_CHECK(std::any_of(launches.begin(), launches.end(), [](const auto& launch) {
         return launch.device == DEVICE_B;
     }));
+}
+
+// F-555: the two card tables are process-global, so what one case leaves in them
+// the next case reads. These two cases are the proof that the suite fixture clears
+// both: the first deliberately leaves a faulted row and a cached listing behind --
+// no Fixture here, that is the point -- and the second, which runs straight after
+// it, must see neither. F-550 was exactly this shape, read as an intermittent in
+// CI for three sightings.
+BOOST_AUTO_TEST_CASE(a_case_can_leave_a_faulted_row_and_a_cached_listing_behind)
+{
+    StubEnvGuard stub;
+    cuckatoo::SetGpuDeviceStatsForTesting({{DEVICE_A, cuckatoo::GpuDeviceState::kFaulted,
+                                            cuckatoo::GpuSolveStatus::kDeviceFault, 3, 0.5}});
+    const auto discovery = cuckatoo::DiscoverGpus(19);
+    BOOST_REQUIRE(discovery.listing.outcome == cuckatoo::ListOutcome::kListed);
+
+    // Both tables are left dirty on purpose, for the case below.
+    const auto stats = cuckatoo::GetGpuDeviceStats();
+    BOOST_REQUIRE_EQUAL(stats.size(), 1U);
+    BOOST_CHECK(stats[0].state == cuckatoo::GpuDeviceState::kFaulted);
+    BOOST_CHECK_EQUAL(ReadLines(stub.argv).size(), 1U);  // the helper was listed once
+}
+
+BOOST_AUTO_TEST_CASE(the_next_case_sees_both_card_tables_clean)
+{
+    // The same discovery key as the case above (helper path plus CUCKATOO_GPU_DEVICES),
+    // so a surviving cache entry would answer here without the helper.
+    StubEnvGuard stub;
+    BOOST_CHECK(cuckatoo::GetGpuDeviceStats().empty());
+    const auto discovery = cuckatoo::DiscoverGpus(19);
+    BOOST_REQUIRE(discovery.listing.outcome == cuckatoo::ListOutcome::kListed);
+    // One spawn here is the discovery cache having been cleared: a kept entry is a
+    // map lookup and spawns nothing.
+    BOOST_CHECK_EQUAL(ReadLines(stub.argv).size(), 1U);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

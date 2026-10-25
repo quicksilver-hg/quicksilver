@@ -12,13 +12,15 @@
 #include <crypto/cuckatoo/cuckatoo.h>
 #include <crypto/cuckatoo/gpu_solver.h>
 
+#include <test/util/gpucardtables.h>
+
 #include <boost/test/unit_test.hpp>
 
 #include <array>
 #include <cstdlib>
 #include <vector>
 
-BOOST_AUTO_TEST_SUITE(gpu_parity_tests)
+BOOST_FIXTURE_TEST_SUITE(gpu_parity_tests, GpuCardTablesTestSetup)
 
 namespace {
 // Build a representative variable-length per-tx preimage (NOT a block pre-pow): 96 bytes,

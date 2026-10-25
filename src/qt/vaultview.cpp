@@ -65,6 +65,7 @@ VaultView::VaultView(VaultModel* vault_model, const PlatformStyle* _platformStyl
     });
 
     mineMintPage = new MineMintPage(this);
+    mineMintPage->setPayoutVault(vaultModel->getVaultName());
     mineMintPage->setDisplayUnit(vaultModel->getOptionsModel()->getDisplayUnit());
     connect(vaultModel->getOptionsModel(), &OptionsModel::displayUnitChanged, mineMintPage, &MineMintPage::setDisplayUnit);
 
@@ -148,9 +149,11 @@ void VaultView::setClientModel(ClientModel *_clientModel)
         connect(miningModel, &MiningModel::miningError, this, [this](const QString& m){
             Q_EMIT message(tr("Mining"), m, CClientUIInterface::MSG_ERROR);
         });
-        mineMintPage->setPayoutAddress(miningModel->freshPayoutAddress()); // prefill
         miningModel->refresh();
     }
+
+    mineMintPage->setSavedPayoutAddress(_clientModel
+        ? QString::fromStdString(_clientModel->node().configuredMiningPayoutAddress()) : QString());
 
     if (_clientModel) {
         auto refresh_network = [this]{

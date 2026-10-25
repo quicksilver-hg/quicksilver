@@ -293,7 +293,10 @@ NetworkPage::NetworkPage(ChainType active_chain, QWidget* parent)
     m_review_consensus_button->setObjectName(QStringLiteral("reviewConsensusButton"));
     m_review_consensus_button->setVisible(false);
     connect(m_review_consensus_button, &QPushButton::clicked, this, &NetworkPage::reviewConsensusRequested);
-    group_layout->addWidget(m_review_consensus_button);
+    auto* review_row = new QHBoxLayout();
+    review_row->addWidget(m_review_consensus_button);
+    review_row->addStretch();
+    group_layout->addLayout(review_row);
     root->addWidget(group);
 
     buildAddPeerSection(root);

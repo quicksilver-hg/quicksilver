@@ -166,6 +166,9 @@ void VaultFrame::setClientModel(ClientModel *_clientModel)
 {
     this->clientModel = _clientModel;
 
+    m_mining_page->setSavedPayoutAddress(_clientModel
+        ? QString::fromStdString(_clientModel->node().configuredMiningPayoutAddress()) : QString());
+
     for (auto i = mapVaultViews.constBegin(); i != mapVaultViews.constEnd(); ++i) {
         i.value()->setClientModel(_clientModel);
     }

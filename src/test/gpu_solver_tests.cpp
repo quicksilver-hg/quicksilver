@@ -10,6 +10,8 @@
 #include <crypto/cuckatoo/gpu_solver.h>
 #include <primitives/block.h>
 
+#include <test/util/gpucardtables.h>
+
 #include <boost/test/unit_test.hpp>
 
 #ifdef WIN32
@@ -35,7 +37,7 @@
 #include <utility>
 #include <vector>
 
-BOOST_AUTO_TEST_SUITE(gpu_solver_tests)
+BOOST_FIXTURE_TEST_SUITE(gpu_solver_tests, GpuCardTablesTestSetup)
 
 namespace {
 constexpr const char* kStubDevice{"pci:0000:01:00.0"};

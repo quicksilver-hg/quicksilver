@@ -92,6 +92,9 @@ bool CuckatooVerify(const Cycle& cycle, const Keys& keys, uint8_t edgebits);
 //! reads the same as a run of hard graphs. This layer has no logging, so the count is
 //! reported out like GpuSolveStatus and the node decides what to do with it.
 //! `gpu_faults`, when non-null, receives each chosen card benched during this call.
+//! `gpu_discovery`, when non-null, receives DescribeDiscovery() of the discovery this
+//! call made, so a caller that must explain a no-device window does not discover again
+//! to describe it (F-554).
 bool CuckatooSolve(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint8_t edgebits,
                    uint32_t start_nonce, uint32_t max_attempts,
                    Cycle& out, uint32_t& out_nonce, bool cpu_fallback = true,
@@ -100,7 +103,8 @@ bool CuckatooSolve(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint8_
                    GpuSolveStatus* gpu_status = nullptr,
                    uint32_t* discarded_cycles = nullptr,
                    const SolverAcceptPredicate& accept = {},
-                   std::vector<GpuDeviceFault>* gpu_faults = nullptr);
+                   std::vector<GpuDeviceFault>* gpu_faults = nullptr,
+                   std::string* gpu_discovery = nullptr);
 
 //! Mining only — variable-length pre-image grinder. Sweeps start_nonce ..
 //! start_nonce+max_attempts-1, writing each nonce as the trailing 4 LE bytes of a
@@ -122,6 +126,9 @@ bool CuckatooSolve(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint8_
 //! reads the same as a run of hard graphs. This layer has no logging, so the count is
 //! reported out like GpuSolveStatus and the node decides what to do with it.
 //! `gpu_faults`, when non-null, receives each chosen card benched during this call.
+//! `gpu_discovery`, when non-null, receives DescribeDiscovery() of the discovery this
+//! call made, so a caller that must explain a no-device window does not discover again
+//! to describe it (F-554).
 bool CuckatooSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
                         uint32_t start_nonce, uint32_t max_attempts,
                         Cycle& out, uint32_t& out_nonce, bool cpu_fallback = true,
@@ -130,7 +137,8 @@ bool CuckatooSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebit
                         GpuSolveStatus* gpu_status = nullptr,
                         uint32_t* discarded_cycles = nullptr,
                         const SolverAcceptPredicate& accept = {},
-                        std::vector<GpuDeviceFault>* gpu_faults = nullptr);
+                        std::vector<GpuDeviceFault>* gpu_faults = nullptr,
+                        std::string* gpu_discovery = nullptr);
 
 //! Where the solver's F-265 capture line goes (graph.hpp). The solver cannot reach
 //! the logger, so the node installs a sink that writes to debug.log (F-414, owner

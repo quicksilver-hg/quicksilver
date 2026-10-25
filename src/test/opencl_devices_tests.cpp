@@ -29,6 +29,16 @@ FakeDeviceInfo g_device;
 // Only for the several-device cases; when it is empty the fakes answer for g_device alone.
 std::vector<FakeDeviceInfo> g_devices;
 int g_board_queries{0};
+// How many platforms the fake loader reports. Every platform enumerates the same
+// devices, which is the shape F-544 is about: two loaders over one set of cards.
+int g_platforms{1};
+
+//! Report several platforms for one case, and put the count back however the case ends:
+//! a BOOST_REQUIRE failure throws, and a leaked count would reach the next case.
+struct PlatformCountGuard {
+    explicit PlatformCountGuard(int count) { g_platforms = count; }
+    ~PlatformCountGuard() { g_platforms = 1; }
+};
 
 const FakeDeviceInfo& DeviceAt(qsgpu::cl::DeviceId device)
 {
@@ -61,8 +71,13 @@ qsgpu::cl::Int ReturnString(const std::string& value, size_t size, void* out, si
 
 qsgpu::cl::Int QS_CL_API_CALL GetPlatformIDs(qsgpu::cl::Uint count, qsgpu::cl::PlatformId* platforms, qsgpu::cl::Uint* count_out)
 {
-    if (count_out) *count_out = 1;
-    if (platforms && count > 0) platforms[0] = reinterpret_cast<qsgpu::cl::PlatformId>(1);
+    const qsgpu::cl::Uint total = static_cast<qsgpu::cl::Uint>(g_platforms);
+    if (count_out) *count_out = total;
+    if (platforms) {
+        for (qsgpu::cl::Uint i = 0; i < count && i < total; ++i) {
+            platforms[i] = reinterpret_cast<qsgpu::cl::PlatformId>(static_cast<uintptr_t>(i) + 1);
+        }
+    }
     return qsgpu::cl::kSuccess;
 }
 
@@ -448,6 +463,35 @@ BOOST_AUTO_TEST_CASE(a_saved_choice_selects_its_card_by_either_id)
 
     BOOST_CHECK(qsgpu::SelectListedDevice(listed, "pci:0000:09:00.0") == nullptr);
     BOOST_CHECK(qsgpu::SelectListedDevice(listed, "opencl:0:7") == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(two_slot_silent_platforms_over_one_card_list_keep_their_enumeration_ids)
+{
+    // F-544: the render-node mapping is decided per platform, but the id namespace is
+    // global. Two platforms that each enumerate the same slot-silent cards each map onto
+    // the one render-node list, so both would print the same pci: ids -- and
+    // SelectListedDevice would then hand -cuckatoodevice the first match rather than the
+    // platform the user meant. A duplicate id refuses the mapping for every platform:
+    // every device keeps its enumeration id, which is the pre-F-514 answer and names
+    // exactly one device.
+    PlatformCountGuard platforms{2};
+    g_devices = {NoExtensionGpu(), NoExtensionGpu()};
+    const auto listed = qsgpu::EnumerateDevices(FakeApi(), false, {kNode128, kNode129});
+    BOOST_REQUIRE_EQUAL(listed.size(), 4U);
+    std::vector<std::string> ids;
+    for (const auto& device : listed) {
+        BOOST_CHECK_EQUAL(device.fields.id, device.enumeration_id);
+        ids.push_back(device.fields.id);
+    }
+    BOOST_CHECK_EQUAL(ids[0], "opencl:0:0");
+    BOOST_CHECK_EQUAL(ids[1], "opencl:0:1");
+    BOOST_CHECK_EQUAL(ids[2], "opencl:1:0");
+    BOOST_CHECK_EQUAL(ids[3], "opencl:1:1");
+    // Every printed id names one card: that is the property the refusal protects.
+    for (size_t i{0}; i < ids.size(); ++i) {
+        for (size_t j{0}; j < i; ++j) BOOST_CHECK(ids[i] != ids[j]);
+        BOOST_CHECK(qsgpu::SelectListedDevice(listed, ids[i]) == &listed[i]);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -355,6 +355,10 @@ public:
         if (!m_context->mining_service) return util::Error{Untranslated("Mining service unavailable")};
         return node::StartMining(*m_context->mining_service, payout_address);
     }
+    std::string configuredMiningPayoutAddress() override
+    {
+        return args().IsArgSet("-minescript") ? std::string{} : args().GetArg("-mineaddress", "");
+    }
     void stopMining() override
     {
         if (m_context->mining_service) m_context->mining_service->Stop();

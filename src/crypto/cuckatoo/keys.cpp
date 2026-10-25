@@ -6,7 +6,7 @@
 
 #include <cstring>
 
-#include "blake2_prelude.h"          // self-guarded extern "C"; owns MSVC C4804
+#include "blake2_prelude.h"          // self-guarded extern "C"; the tree's one blake2.h include
 #include <compat/endian.h>           // htole64_internal — the tree's single portable endian impl
 
 namespace cuckatoo {

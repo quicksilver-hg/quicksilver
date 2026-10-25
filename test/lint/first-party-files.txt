@@ -193,6 +193,7 @@ src/test/solverstub.cpp
 src/test/torstub.cpp
 src/test/txpow_tests.cpp
 src/test/txwork_ranking_tests.cpp
+src/test/util/gpucardtables.h
 src/tor/bundled_tor.cpp
 src/tor/bundled_tor.h
 src/util/process/contained_child.cpp

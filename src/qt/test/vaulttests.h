@@ -52,6 +52,10 @@ private Q_SLOTS:
     void coinControlMarksUnconfirmedChange();
     void mineMintPageRendersStatus();
     void minePageSeparatesDraftPayoutAndHealthNote();
+    void openingVaultDoesNotReplacePayoutOrMintAddress();
+    void payoutDraftPersistsPerVaultOnlyOnUserAction();
+    void savedPayoutRequiresConfiguredAddress();
+    void reviewConsensusButtonKeepsNaturalWidth();
     void aboutDialogWrapsAtWords();
     void aboutDialogLinksSourceOnce();
     void mineMintPageNamesAnArmedMinerWithNoPermittedSolver();

@@ -17,6 +17,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSettings>
 #include <QVariant>
 #include <QVBoxLayout>
 
@@ -90,8 +91,13 @@ MineMintPage::MineMintPage(QWidget* parent)
     m_new_address_button = new QPushButton(tr("Use new"), payout_panel);
     m_new_address_button->setObjectName(QStringLiteral("newAddressButton"));
     m_new_address_button->setProperty("class", QStringLiteral("benchQuiet"));
+    m_saved_address_button = new QPushButton(tr("Use saved"), payout_panel);
+    m_saved_address_button->setObjectName(QStringLiteral("savedAddressButton"));
+    m_saved_address_button->setProperty("class", QStringLiteral("benchQuiet"));
+    m_saved_address_button->setVisible(false);
     payout_row->addWidget(m_payout_edit, 1);
     payout_row->addWidget(m_new_address_button);
+    payout_row->addWidget(m_saved_address_button);
     payout.body->addLayout(payout_row);
     root->addWidget(payout_panel);
 
@@ -165,6 +171,12 @@ MineMintPage::MineMintPage(QWidget* parent)
     connect(m_start_button, &QPushButton::clicked, this, &MineMintPage::handleStartClicked);
     connect(m_stop_button, &QPushButton::clicked, this, &MineMintPage::stopRequested);
     connect(m_new_address_button, &QPushButton::clicked, this, &MineMintPage::newAddressRequested);
+    connect(m_saved_address_button, &QPushButton::clicked, this, [this] {
+        setPayoutAddress(m_saved_payout_address);
+    });
+    connect(m_payout_edit, &QLineEdit::textEdited, this, [this] {
+        if (!m_payout_setting_key.isEmpty()) QSettings().setValue(m_payout_setting_key, m_payout_edit->text());
+    });
     connect(m_configure_solver_button, &QPushButton::clicked, this, &MineMintPage::solverSettingsRequested);
     connect(isolation_button, &QPushButton::clicked, this, &MineMintPage::networkHelpRequested);
     setAddressHelperAvailable(false);
@@ -333,7 +345,23 @@ void MineMintPage::renderPayout()
 }
 
 QString MineMintPage::payoutAddress() const { return m_payout_edit->text().trimmed(); }
-void MineMintPage::setPayoutAddress(const QString& a) { m_payout_edit->setText(a); }
+void MineMintPage::setPayoutAddress(const QString& a)
+{
+    m_payout_edit->setText(a);
+    if (!m_payout_setting_key.isEmpty()) QSettings().setValue(m_payout_setting_key, a);
+}
+
+void MineMintPage::setPayoutVault(const QString& vault_name)
+{
+    m_payout_setting_key = QStringLiteral("Mining/PayoutAddress/") + QString::fromLatin1(vault_name.toUtf8().toHex());
+    m_payout_edit->setText(QSettings().value(m_payout_setting_key).toString());
+}
+
+void MineMintPage::setSavedPayoutAddress(const QString& address)
+{
+    m_saved_payout_address = address;
+    m_saved_address_button->setVisible(!address.isEmpty());
+}
 
 void MineMintPage::setAddressHelperAvailable(bool available)
 {

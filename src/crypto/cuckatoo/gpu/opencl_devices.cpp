@@ -118,6 +118,38 @@ bool MapsOntoRenderNodes(const std::vector<ListedDevice>& devices, size_t first,
     }
     return true;
 }
+
+// Apply the render-node addresses to every platform that maps onto them, or to none.
+// F-544: the mapping is decided per platform, but the ids it prints are global. Two
+// slot-silent platforms over the same cards each map onto the one node list, so both
+// would be given the same pci: ids and SelectListedDevice would hand -cuckatoodevice
+// the first match rather than the platform the user meant. A printed id that can name
+// the wrong card is worse than a less precise one -- the bar MapsOntoRenderNodes sets
+// above -- so on a collision every platform keeps its enumeration id, which is the
+// answer this code gave before F-514.
+void ApplyRenderNodeIds(std::vector<ListedDevice>& devices, const std::vector<size_t>& mapped,
+                        const std::vector<RenderNode>& nodes)
+{
+    std::vector<std::string> proposed;
+    proposed.reserve(devices.size());
+    for (const auto& device : devices) proposed.push_back(device.fields.id);
+    std::vector<bool> from_node(devices.size(), false);
+    for (const size_t first : mapped) {
+        for (size_t i{0}; i < nodes.size(); ++i) {
+            proposed[first + i] = nodes[i].pci_id;
+            from_node[first + i] = true;
+        }
+    }
+    // Only a duplicate the mapping would create refuses it. Ids a driver reported for
+    // itself are not this code's to arbitrate: two slot-reporting platforms over the
+    // same cards collided that way before F-514 too.
+    for (size_t i{0}; i < proposed.size(); ++i) {
+        for (size_t j{0}; j < i; ++j) {
+            if (proposed[i] == proposed[j] && (from_node[i] || from_node[j])) return;
+        }
+    }
+    for (size_t i{0}; i < devices.size(); ++i) devices[i].fields.id = proposed[i];
+}
 } // namespace
 
 const char* ProbeKernelSource() { return "__kernel void qs_probe(void) {}"; }
@@ -221,6 +253,9 @@ std::vector<ListedDevice> EnumerateDevices(const OpenClApi& api, bool probe, con
     if (api.GetPlatformIDs(platform_count, platforms.data(), nullptr) != cl::kSuccess) return {};
 
     std::vector<ListedDevice> result;
+    // Where each mapping platform's devices start. The addresses go on after every
+    // platform has been enumerated, because a duplicate id refuses all of them (F-544).
+    std::vector<size_t> mapped_platforms;
     for (size_t pi{0}; pi < platforms.size(); ++pi) {
         cl::Uint device_count{0};
         const cl::Int count_rc = api.GetDeviceIDs(platforms[pi], cl::kDeviceTypeAll, 0, nullptr, &device_count);
@@ -281,10 +316,9 @@ std::vector<ListedDevice> EnumerateDevices(const OpenClApi& api, bool probe, con
             }
             result.push_back(std::move(listed));
         }
-        if (MapsOntoRenderNodes(result, platform_first, render_nodes)) {
-            for (size_t i{platform_first}; i < result.size(); ++i) result[i].fields.id = render_nodes[i - platform_first].pci_id;
-        }
+        if (MapsOntoRenderNodes(result, platform_first, render_nodes)) mapped_platforms.push_back(platform_first);
     }
+    ApplyRenderNodeIds(result, mapped_platforms, render_nodes);
     return result;
 }
 } // namespace qsgpu

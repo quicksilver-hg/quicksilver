@@ -42,6 +42,7 @@
 #include <streams.h>
 #include <test/util/mining.h>
 #include <test/util/random.h>
+#include <test/util/gpucardtables.h>
 #include <test/util/setup_common.h>
 #include <tinyformat.h>
 #include <uint256.h>
@@ -73,7 +74,9 @@ namespace {
 constexpr uint32_t TEST_HEADER_STORE_MAGIC{0x47415351};
 constexpr uint32_t TEST_HEADER_STORE_VERSION{1};
 
-struct AgentHeaderChainTestingSetup : public BasicTestingSetup {
+// GpuCardTablesTestSetup: this suite reaches the global card tables through the
+// solver seams, and every suite that touches them resets them (F-555).
+struct AgentHeaderChainTestingSetup : public BasicTestingSetup, public GpuCardTablesTestSetup {
     AgentHeaderChainTestingSetup()
         : BasicTestingSetup{ChainType::SANDBOX}
     {

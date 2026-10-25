@@ -229,6 +229,7 @@ public:
     std::vector<interfaces::VaultOrderForm> committed_order_forms;
     std::optional<interfaces::VaultTx> details_tx;
     int set_address_calls{0};
+    int new_mining_destination_calls{0};
     std::optional<bilingual_str> commit_error;
     //! Set by the test so createTransaction can observe the model that is driving it.
     VaultModel* vault_model_under_test{nullptr};
@@ -276,7 +277,11 @@ public:
         return false;
     }
     std::string getVaultName() override { return "poll-marker-vault"; }
-    util::Result<CTxDestination> getNewDestination(const OutputType, const std::string&) override { return CTxDestination{}; }
+    util::Result<CTxDestination> getNewDestination(const OutputType, const std::string& label) override
+    {
+        if (label == "mining") ++new_mining_destination_calls;
+        return CTxDestination{};
+    }
     bool getPubKey(const CScript&, const CKeyID&, CPubKey&) override { return false; }
     SigningResult signMessage(const std::string&, const PKHash&, std::string&) override { return SigningResult::PRIVATE_KEY_NOT_AVAILABLE; }
     bool isSpendable(const CTxDestination&) override { return false; }
@@ -3015,6 +3020,150 @@ void VaultTests::minePageSeparatesDraftPayoutAndHealthNote()
     QVERIFY(health->width() > page.width() / 2);
     QCOMPARE(page.findChild<QPushButton*>(QStringLiteral("startMiningButton"))->height(),
              page.findChild<QPushButton*>(QStringLiteral("stopMiningButton"))->height());
+}
+
+void VaultTests::openingVaultDoesNotReplacePayoutOrMintAddress()
+{
+    const QString payout_key = QStringLiteral("Mining/PayoutAddress/") + QString::fromLatin1(QStringLiteral("poll-marker-vault").toUtf8().toHex());
+    QSettings().remove(payout_key);
+    TestChain100Setup test;
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    ClientModel client(m_node, &options);
+    auto vault = std::make_unique<PollMarkerVault>();
+    PollMarkerVault* vault_ptr = vault.get();
+    VaultModel model(std::move(vault), m_node, &options, style.get());
+    VaultView view(&model, style.get(), nullptr);
+    auto* page = view.findChild<MineMintPage*>(QStringLiteral("mineMintPage"));
+    QVERIFY(page);
+    page->setPayoutAddress(QStringLiteral("hg1quserdraft"));
+    const int minted_before = vault_ptr->new_mining_destination_calls;
+    view.setClientModel(&client);
+    QCOMPARE(page->payoutAddress(), QStringLiteral("hg1quserdraft"));
+    QCOMPARE(vault_ptr->new_mining_destination_calls, minted_before);
+    view.setClientModel(nullptr);
+    QSettings().remove(payout_key);
+}
+
+void VaultTests::payoutDraftPersistsPerVaultOnlyOnUserAction()
+{
+    const QString vault_a = QStringLiteral("f549-payout-%1-a").arg(QCoreApplication::applicationPid());
+    const QString vault_b = QStringLiteral("f549-payout-%1-b").arg(QCoreApplication::applicationPid());
+    const auto key = [](const QString& name) -> QString {
+        return QStringLiteral("Mining/PayoutAddress/") + QString::fromLatin1(name.toUtf8().toHex());
+    };
+    QSettings().remove(key(vault_a));
+    QSettings().remove(key(vault_b));
+
+    MineMintPage page;
+    page.setPayoutVault(vault_a);
+    QCOMPARE(page.payoutAddress(), QString());
+    QVERIFY(!QSettings().contains(key(vault_a))); // attaching must not write
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+    auto* edit = page.findChild<QLineEdit*>(QStringLiteral("payoutEdit"));
+    QVERIFY(edit);
+    edit->setFocus();
+    QTest::keyClicks(edit, QStringLiteral("hg1quser"));
+    QCOMPARE(QSettings().value(key(vault_a)).toString(), QStringLiteral("hg1quser"));
+
+    MineMintPage reopened;
+    reopened.setPayoutVault(vault_a);
+    QCOMPARE(reopened.payoutAddress(), QStringLiteral("hg1quser"));
+    reopened.setStatus(interfaces::MiningStatus{});
+    QCOMPARE(QSettings().value(key(vault_a)).toString(), QStringLiteral("hg1quser"));
+
+    MineMintPage other;
+    other.setPayoutVault(vault_b);
+    QCOMPARE(other.payoutAddress(), QString());
+    other.setStatus(interfaces::MiningStatus{});
+    QVERIFY(!QSettings().contains(key(vault_b)));
+
+    QTest::keyClick(edit, Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(edit, Qt::Key_Backspace);
+    QCOMPARE(QSettings().value(key(vault_a)).toString(), QString());
+    QSettings().remove(key(vault_a));
+    QSettings().remove(key(vault_b));
+}
+
+void VaultTests::savedPayoutRequiresConfiguredAddress()
+{
+    MineMintPage page;
+    auto* saved = page.findChild<QPushButton*>(QStringLiteral("savedAddressButton"));
+    QVERIFY(saved);
+    {
+        TestChain100Setup test;
+        ScopedNodeContext context(m_node, test.m_node);
+        const QString address = QString::fromStdString(m_node.configuredMiningPayoutAddress());
+        QCOMPARE(address, QString());
+        page.setSavedPayoutAddress(address);
+        QVERIFY(saved->isHidden());
+    }
+    {
+        TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-minescript=6a"}}};
+        ScopedNodeContext context(m_node, test.m_node);
+        const QString address = QString::fromStdString(m_node.configuredMiningPayoutAddress());
+        QCOMPARE(address, QString());
+        page.setSavedPayoutAddress(address);
+        QVERIFY(saved->isHidden());
+    }
+    {
+        TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-mineaddress=hg1qsaved"}}};
+        auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+        test.m_node.vault_loader = vault_loader.get();
+        ScopedNodeContext context(m_node, test.m_node);
+        const QString address = QString::fromStdString(m_node.configuredMiningPayoutAddress());
+        QCOMPARE(address, QStringLiteral("hg1qsaved"));
+        page.setSavedPayoutAddress(address);
+        QVERIFY(!saved->isHidden());
+        saved->click();
+        QCOMPARE(page.payoutAddress(), address);
+
+        std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+        OptionsModel options(m_node);
+        bilingual_str error;
+        QVERIFY(options.Init(error));
+        ClientModel client(m_node, &options);
+        VaultModel model(std::make_unique<PollMarkerVault>(), m_node, &options, style.get());
+        VaultView view(&model, style.get(), nullptr);
+        auto* view_page = view.findChild<MineMintPage*>(QStringLiteral("mineMintPage"));
+        QVERIFY(view_page);
+        auto* view_saved = view_page->findChild<QPushButton*>(QStringLiteral("savedAddressButton"));
+        QVERIFY(view_saved->isHidden());
+        view.setClientModel(&client);
+        QVERIFY(!view_saved->isHidden());
+        view_saved->click();
+        QCOMPARE(view_page->payoutAddress(), address);
+        view.setClientModel(nullptr);
+        QSettings().remove(QStringLiteral("Mining/PayoutAddress/") + QString::fromLatin1(QStringLiteral("poll-marker-vault").toUtf8().toHex()));
+    }
+}
+
+void VaultTests::reviewConsensusButtonKeepsNaturalWidth()
+{
+    NetworkPage page;
+    page.setPeerCount(1); // the common running state
+    page.resize(900, 700);
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+    auto* panel = page.findChild<QFrame*>(QStringLiteral("networkConnectivityPanel"));
+    auto* button = page.findChild<QPushButton*>(QStringLiteral("reviewConsensusButton"));
+    QVERIFY(panel && button);
+    QVERIFY(button->isVisible());
+    // The property F-553 fixed is exactly this: the stretch beside the button leaves it
+    // its own width. Half the panel is the symptom's bound, not the fix's -- a button
+    // stretched to 440 px of a 900 px panel would pass that and still be the defect.
+    QVERIFY2(button->width() == button->sizeHint().width(),
+             qPrintable(QStringLiteral("button %1 px, sizeHint %2 px, panel %3 px")
+                            .arg(button->width()).arg(button->sizeHint().width()).arg(panel->width())));
+    QVERIFY2(button->width() < panel->width() / 2,
+             qPrintable(QStringLiteral("button %1 px, panel %2 px").arg(button->width()).arg(panel->width())));
 }
 
 void VaultTests::aboutDialogWrapsAtWords()

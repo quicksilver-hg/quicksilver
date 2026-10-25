@@ -2,6 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #include <crypto/cuckatoo/gpu_devices.h>
+#include <test/util/gpucardtables.h>
+
 #include <boost/test/unit_test.hpp>
 #include <chrono>
 #include <cstdio>
@@ -45,7 +47,7 @@ std::string Script(const char* name, const std::string& content) {
 }
 } // namespace
 
-BOOST_AUTO_TEST_SUITE(gpu_devices_tests)
+BOOST_FIXTURE_TEST_SUITE(gpu_devices_tests, GpuCardTablesTestSetup)
 BOOST_AUTO_TEST_CASE(parse_name_is_rest_of_line)
 {
     auto d = ParseDeviceLine(RX); BOOST_REQUIRE(d); BOOST_CHECK_EQUAL(d->mem, 8589934592ULL); BOOST_CHECK_EQUAL(d->name, "AMD Radeon RX 480 Graphics (radeonsi, polaris10)");

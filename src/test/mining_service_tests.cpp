@@ -23,6 +23,7 @@
 #include <rpc/server.h>
 #include <script/script.h>
 #include <test/util/logging.h>
+#include <test/util/gpucardtables.h>
 #include <test/util/setup_common.h>
 #include <test/util/txrelaypool.h>
 #include <univalue.h>
@@ -213,8 +214,9 @@ bool WaitUntil(const std::function<bool()>& done, std::chrono::milliseconds budg
 }
 } // namespace
 
-struct MiningServiceTestSetup : TestChain100Setup {
-    MiningServiceTestSetup() { cuckatoo::ResetGpuDeviceStatsForTesting(); }
+// F-550's stats reset, now on the shared fixture so the discovery cache is
+// cleared too, and without losing the chain this suite needs (F-555).
+struct MiningServiceTestSetup : TestChain100Setup, GpuCardTablesTestSetup {
 };
 
 BOOST_FIXTURE_TEST_SUITE(mining_service_tests, MiningServiceTestSetup)
@@ -1309,6 +1311,94 @@ BOOST_AUTO_TEST_CASE(concurrent_start_stop_does_not_terminate)
     BOOST_CHECK(svc.IsActive());
     svc.Stop();
     BOOST_CHECK(!svc.IsActive());
+}
+
+BOOST_AUTO_TEST_CASE(a_no_device_solve_window_lists_the_cards_once)
+{
+    // F-554: MultiDeviceSolveBytes discovers the cards at the top of every solve
+    // attempt and still holds the result when it returns kNoGpuDevice. The warn-once
+    // branch in SolveBlockPoW used to call DiscoverGpus a second time purely to build
+    // its diagnostic line, describing a discovery made microseconds earlier. Free while
+    // every outcome was cached; since F-546 stopped caching kFailed and kTimedOut it is
+    // a second helper process on exactly the path where the helper is broken, and it is
+    // why the retry cadence was 24-25 listings a minute rather than 12.
+    //
+    // The count below is the number of --list-devices spawns the helper records during
+    // ONE solve window, and it must be one. The window is one window because max_tries
+    // is 1, and the listing is never cached because the stub exits non-zero (kFailed),
+    // so every DiscoverGpus call really does spawn the helper.
+    Consensus::Params& params = const_cast<Consensus::Params&>(Params().GetConsensus());
+    const std::string tag{ProcessIdTag()};
+    const std::string listing{TempPath("f554-listing-" + tag + ".stub")};
+    const std::string spawns{TempPath("f554-spawns-" + tag + ".txt")};
+    static_cast<void>(std::remove(spawns.c_str()));
+
+    const bool had_devices{std::getenv("CUCKATOO_GPU_DEVICES") != nullptr};
+    struct TestStateRestorer {
+        Consensus::Params& params;
+        const bool block_pow_no_cycle;
+        const uint8_t edge_bits;
+        const std::string solver;
+        const std::string devices;
+        const bool had_devices;
+        const std::string listing;
+        const std::string spawns;
+        ~TestStateRestorer()
+        {
+            params.fBlockPowNoCycle = block_pow_no_cycle;
+            params.nEdgeBits = edge_bits;
+            SetSolverEnv(solver);
+            if (had_devices) SetEnvVar("CUCKATOO_GPU_DEVICES", devices);
+            else UnsetEnvVar("CUCKATOO_GPU_DEVICES");
+            UnsetEnvVar("QS_SOLVER_STUB_LISTING");
+            UnsetEnvVar("QS_SOLVER_STUB_ARGV_APPEND");
+            cuckatoo::ResetGpuDiscoveryForTesting();
+            static_cast<void>(std::remove(listing.c_str()));
+            static_cast<void>(std::remove(spawns.c_str()));
+        }
+    } restore{params, params.fBlockPowNoCycle, params.nEdgeBits, EnvOrEmpty("CUCKATOO_GPU_SOLVER"),
+              EnvOrEmpty("CUCKATOO_GPU_DEVICES"), had_devices, listing, spawns};
+
+    // Edge bits 28 keeps the CPU fallback out of this window (cpu_fallback=false below
+    // does too), and fBlockPowNoCycle=false is what makes the real solver path run.
+    params.fBlockPowNoCycle = false;
+    params.nEdgeBits = 28;
+    {
+        std::ofstream out{listing};
+        BOOST_REQUIRE(out);
+        out << "exit 1\n";  // a failing listing: kFailed, and F-546 does not cache it
+        BOOST_REQUIRE(out);
+    }
+
+    auto mining = interfaces::MakeMining(m_node);
+    BOOST_REQUIRE(mining);
+    const CScript payout = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
+    auto tmpl = mining->createNewBlock(node::BlockCreateOptions{.coinbase_output_script = payout});
+    BOOST_REQUIRE(tmpl);
+    CBlock block = tmpl->getBlock();
+
+    // Armed only now, so nothing the template build did is counted.
+    SetSolverEnv(SOLVER_STUB_PATH);
+    SetEnvVar("QS_SOLVER_STUB_LISTING", listing);
+    SetEnvVar("QS_SOLVER_STUB_ARGV_APPEND", spawns);
+    UnsetEnvVar("CUCKATOO_GPU_DEVICES");
+    cuckatoo::ResetGpuDiscoveryForTesting();
+
+    uint64_t budget = 1;  // one solve window
+    auto status = cuckatoo::GpuSolveStatus::kSolved;
+    const bool solved = node::SolveBlockPoW(*m_node.chainman, block, budget, /*cpu_fallback=*/false,
+                                            /*abandon=*/{}, /*on_attempt=*/{}, &status);
+    BOOST_CHECK(!solved);
+    // The diagnostic the duplicate discovery existed to build is on this path and
+    // nowhere else, so the status is what proves the window reached it.
+    BOOST_CHECK(status == cuckatoo::GpuSolveStatus::kNoGpuDevice);
+
+    size_t listings{0};
+    std::ifstream recorded{spawns};
+    for (std::string line; std::getline(recorded, line);) {
+        if (TrimAscii(line) == "--list-devices") ++listings;
+    }
+    BOOST_CHECK_EQUAL(listings, 1U);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

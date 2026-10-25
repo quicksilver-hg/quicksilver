@@ -47,6 +47,9 @@ public:
     void setPeerCount(int peers);
     QString payoutAddress() const;
     void setPayoutAddress(const QString& address);
+    //! The draft belongs to the named vault. Restoring it never writes settings.
+    void setPayoutVault(const QString& vault_name);
+    void setSavedPayoutAddress(const QString& address);
     void setAddressHelperAvailable(bool available);
 
 Q_SIGNALS:
@@ -80,6 +83,9 @@ private:
     QLabel* m_congestion_value{nullptr};
     QLineEdit* m_payout_edit{nullptr};
     QPushButton* m_new_address_button{nullptr};
+    QPushButton* m_saved_address_button{nullptr};
+    QString m_saved_payout_address;
+    QString m_payout_setting_key;
     QPushButton* m_start_button{nullptr};
     QLabel* m_start_reason{nullptr};
     QPushButton* m_stop_button{nullptr};

@@ -1151,6 +1151,14 @@ void OptionTests::gpuSolverBrowseDoesNotNestEventLoop()
 
 void OptionTests::displayTabHasNoDeadFontChoiceAndAlignsItsFields()
 {
+    // F-552/F-548: the shipping app sets the base style to Fusion at startup
+    // (QuicksilverStyle::Apply, quicksilver.cpp:324), but test_main never does, so
+    // without this the case measures the Display tab under the native platform style
+    // the app replaces. On Windows that style's metrics put the columns 134 px apart
+    // and the case never settled; the alignment it asserts was always correct in the
+    // app. The two sibling slots at :987 and :1007 already apply it for this reason.
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
     OptionsModel options{m_node};
     bilingual_str error;
     QVERIFY(options.Init(error));

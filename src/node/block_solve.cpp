@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <chrono>
 #include <set>
+#include <string>
 
 namespace node {
 
@@ -119,6 +120,9 @@ bool SolveBlockPoW(ChainstateManager& chainman, CBlock& block, uint64_t& max_tri
         cuckatoo::Cycle cyc{};
         uint32_t won = 0;
         std::vector<cuckatoo::GpuDeviceFault> gpu_faults;
+        // Filled by the discovery the solve attempt itself made; see the warn-once
+        // branch below, which used to re-discover just to describe it (F-554).
+        std::string gpu_discovery;
         const auto accept = [&](const cuckatoo::Cycle& candidate_cycle, uint32_t candidate_nonce) {
             CBlockHeader candidate{block.GetBlockHeader()};
             candidate.nNonce = candidate_nonce;
@@ -128,7 +132,8 @@ bool SolveBlockPoW(ChainstateManager& chainman, CBlock& block, uint64_t& max_tri
         const bool solved = cuckatoo::CuckatooSolve(pre, cparams.nEdgeBits, block.nNonce, budget,
                                                     cyc, won, cpu_fallback,
                                                     progress, cancel, &gpu_status,
-                                                    &discarded_cycles, accept, &gpu_faults);
+                                                    &discarded_cycles, accept, &gpu_faults,
+                                                    &gpu_discovery);
         for (const auto& fault : gpu_faults) {
             if (warned_faulted_devices.insert(fault.device).second) {
                 LogWarning(HgLog::FORGE,
@@ -145,7 +150,10 @@ bool SolveBlockPoW(ChainstateManager& chainman, CBlock& block, uint64_t& max_tri
         }
         if (!warned_no_device && gpu_status == cuckatoo::GpuSolveStatus::kNoGpuDevice) {
             warned_no_device = true;
-            LogInfo(HgLog::FORGE, "%s\n", cuckatoo::DescribeDiscovery(cuckatoo::DiscoverGpus(cparams.nEdgeBits)));
+            // The attempt above discovered the cards and handed the description back:
+            // discovering again to print it spawned a second helper process on exactly
+            // the path where the helper is broken (F-554).
+            LogInfo(HgLog::FORGE, "%s\n", gpu_discovery);
             LogWarning(HgLog::FORGE,
                        "stalled reason=no-gpu-device edgebits=%d fix=check-opencl-driver-with-clinfo-or-set--cuckatoodevice-or--allowcpumining\n",
                        cparams.nEdgeBits);

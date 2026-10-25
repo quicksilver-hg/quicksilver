@@ -264,6 +264,9 @@ public:
     //! Start the opt-in background mining role on an explicit payout address.
     virtual util::Result<void> startMining(const std::string& payout_address) = 0;
 
+    //! Address configured for mining before or after Start; empty for a raw-script payout.
+    virtual std::string configuredMiningPayoutAddress() = 0;
+
     //! Stop the background mining role (no-op if inactive).
     virtual void stopMining() = 0;
 

@@ -134,6 +134,7 @@ MultiDeviceResult MultiDeviceSolveBytes(const unsigned char* prepow, size_t len,
 {
     MultiDeviceResult result;
     const GpuDiscovery discovery = DiscoverGpus(edgebits);
+    result.discovery = DescribeDiscovery(discovery);
     const auto& devices = discovery.selection.use;
     result.had_devices = !devices.empty();
     if (devices.empty()) {

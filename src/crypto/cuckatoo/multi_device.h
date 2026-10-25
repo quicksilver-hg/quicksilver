@@ -44,6 +44,13 @@ struct MultiDeviceResult {
     bool had_devices{false};
     GpuSolveStatus status{GpuSolveStatus::kNoCycle};
     std::vector<GpuDeviceFault> faults;
+    //! DescribeDiscovery() of the discovery this call made, for the node's no-device
+    //! diagnostic. Carrying it out is what keeps a window to ONE discovery: the
+    //! diagnostic used to call DiscoverGpus again to describe a discovery made
+    //! microseconds earlier, which was a map lookup until F-546 stopped caching a
+    //! failed listing and made it a second helper process (F-554). Formatting is
+    //! pure, so filling it always costs a string, never a listing.
+    std::string discovery;
 };
 
 //! Coordinate one helper process per selected card over disjoint 64-graph blocks.

@@ -111,13 +111,15 @@ bool CuckatooSolve(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint8_
                    const SolverCancelCallback& cancel,
                    GpuSolveStatus* gpu_status, uint32_t* discarded_cycles,
                    const SolverAcceptPredicate& accept,
-                   std::vector<GpuDeviceFault>* gpu_faults)
+                   std::vector<GpuDeviceFault>* gpu_faults,
+                   std::string* gpu_discovery)
 {
     const MultiDeviceResult gpu = MultiDeviceSolveBytes(prepow.data(), prepow.size(), edgebits,
                                                          start_nonce, max_attempts, out, out_nonce,
                                                          accept, progress, cancel);
     if (gpu_status) *gpu_status = gpu.status;
     if (gpu_faults) *gpu_faults = gpu.faults;
+    if (gpu_discovery) *gpu_discovery = gpu.discovery;
     if (gpu.solved) return true;
     if (!cpu_fallback || (gpu.had_devices && !gpu.all_benched)) return false;
     if (cancel && cancel()) return false;  // cancelled during the GPU attempt: do not start a CPU sweep
@@ -146,13 +148,15 @@ bool CuckatooSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebit
                         const SolverCancelCallback& cancel,
                         GpuSolveStatus* gpu_status, uint32_t* discarded_cycles,
                         const SolverAcceptPredicate& accept,
-                        std::vector<GpuDeviceFault>* gpu_faults)
+                        std::vector<GpuDeviceFault>* gpu_faults,
+                        std::string* gpu_discovery)
 {
     const MultiDeviceResult gpu = MultiDeviceSolveBytes(prepow, len, edgebits, start_nonce,
                                                          max_attempts, out, out_nonce, accept,
                                                          progress, cancel);
     if (gpu_status) *gpu_status = gpu.status;
     if (gpu_faults) *gpu_faults = gpu.faults;
+    if (gpu_discovery) *gpu_discovery = gpu.discovery;
     if (gpu.solved) return true;
     if (!cpu_fallback || (gpu.had_devices && !gpu.all_benched)) return false;
     if (cancel && cancel()) return false;  // cancelled during the GPU attempt: do not start a CPU sweep

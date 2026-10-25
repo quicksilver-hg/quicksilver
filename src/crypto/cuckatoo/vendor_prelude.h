@@ -24,7 +24,7 @@
 #include <chrono>
 #include <ctime>
 
-#include "blake2_prelude.h"    // extern "C" blake2b decls; owns the MSVC C4804 sandwich
+#include "blake2_prelude.h"    // extern "C" blake2b decls; the tree's one blake2.h include
 #include "vendor/siphash.hpp"  // global ::siphash_keys (inline methods)
 
 #endif // QUICKSILVER_CRYPTO_CUCKATOO_VENDOR_PRELUDE_H
