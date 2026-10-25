@@ -27,7 +27,27 @@ constexpr uint64_t CHAIN_STATE_SIZE_GB{26};
 const QString ARCHIVAL_TOTAL{QStringLiteral("154 GB per year")};
 const QString CHAIN_STATE{QStringLiteral("26 GB per year")};
 const QString PRUNE_WINDOW{QStringLiteral("2 GB recent-block window")};
+const QString UNMEASURED_COPY{QStringLiteral("Transfers require proof-of-work. Enabling consensus records up to 2 GB of blockchain data and is not required to use a vault.")};
+const QString LAUNCH_MEASURED_COPY{QStringLiteral("Transfers spend proof-of-work. With default pruning, consensus keeps a 2 GB recent-block window and grows the chain state by about 26 GB per year; keeping full history grows total storage by about 154 GB per year. Consensus is never required just to use the vault.")};
+const QString REVIEW_MEASURED_COPY{QStringLiteral("Default pruning keeps a 2 GB recent-block window while chain state grows by about 26 GB per year. Keeping full history grows total storage by about 154 GB per year instead.")};
 } // namespace
+
+void StorageCostsTests::launchPageUsesUnmeasuredNetworkCopy()
+{
+    const std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate(QStringLiteral("other"))};
+    DesktopLaunchPage page(style.get(), 0, 0, nullptr);
+    auto* cost = page.findChild<QLabel*>(QStringLiteral("desktopLaunchCostCopy"));
+    QVERIFY(cost);
+    QCOMPARE(cost->text(), UNMEASURED_COPY);
+}
+
+void StorageCostsTests::consensusReviewUsesUnmeasuredNetworkCopy()
+{
+    ConsensusReviewPage page(0, 0, nullptr);
+    auto* cost = page.findChild<QLabel*>(QStringLiteral("consensusStorageCostValue"));
+    QVERIFY(cost);
+    QCOMPARE(cost->text(), UNMEASURED_COPY);
+}
 
 //! F-126: this screen hardcoded "152 GB per year" while the intro dialog next door
 //! derived 154 from the same two chainparams values. 152 is M5's measured total, which
@@ -43,6 +63,7 @@ void StorageCostsTests::launchPageQuotesTheDerivedArchivalTotal()
     QVERIFY(cost);
     const QString text = cost->text();
 
+    QCOMPARE(text, LAUNCH_MEASURED_COPY);
     QVERIFY(text.contains(PRUNE_WINDOW));
     QVERIFY(text.contains(CHAIN_STATE));
     QVERIFY(text.contains(ARCHIVAL_TOTAL));
@@ -57,6 +78,7 @@ void StorageCostsTests::consensusReviewQuotesTheDerivedArchivalTotal()
     QVERIFY(cost);
     const QString text = cost->text();
 
+    QCOMPARE(text, REVIEW_MEASURED_COPY);
     QVERIFY(text.contains(PRUNE_WINDOW));
     QVERIFY(text.contains(CHAIN_STATE));
     QVERIFY(text.contains(ARCHIVAL_TOTAL));

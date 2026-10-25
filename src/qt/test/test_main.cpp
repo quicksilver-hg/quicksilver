@@ -8,6 +8,7 @@
 #include <interfaces/init.h>
 #include <interfaces/node.h>
 #include <qt/quicksilver.h>
+#include <qt/quicksilverstyle.h>
 #include <qt/guiconstants.h>
 #include <qt/test/apptests.h>
 #include <qt/test/guiutiltests.h>
@@ -111,6 +112,7 @@ int main(int argc, char* argv[])
 
     {
         QuicksilverApplication app;
+        QuicksilverStyle::Apply(app);
         app.createNode(*init);
 
         struct TestClass {

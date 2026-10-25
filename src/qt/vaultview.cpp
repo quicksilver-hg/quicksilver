@@ -152,6 +152,8 @@ void VaultView::setClientModel(ClientModel *_clientModel)
         miningModel->refresh();
     }
 
+    mineMintPage->setAddressHelperAvailable(miningModel != nullptr);
+
     mineMintPage->setSavedPayoutAddress(_clientModel
         ? QString::fromStdString(_clientModel->node().configuredMiningPayoutAddress()) : QString());
 

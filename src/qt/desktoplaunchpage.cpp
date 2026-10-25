@@ -345,14 +345,16 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     m_cost_panel->setObjectName(QStringLiteral("desktopLaunchCostPanel"));
     auto* cost_layout = new QVBoxLayout(m_cost_panel);
     cost_layout->setContentsMargins(0, 0, 0, 0);
-    // Storage figures are derived, never written out: the archival total is the sum
-    // chainparams already publishes, so these two sentences cannot drift from the
-    // intro dialog's own arithmetic. See doc/design/chain-storage.md.
+    // When the chain publishes no estimate, avoid presenting zero as a measured
+    // yearly cost. Otherwise derive the archival total from chainparams, as the
+    // intro dialog does. See doc/design/chain-storage.md.
     auto* cost_copy = MakeNote(QStringLiteral("desktopLaunchCostCopy"), m_cost_panel);
-    cost_copy->setText(tr("Transfers spend proof-of-work. With default pruning, consensus keeps a %1 GB recent-block window and grows the chain state by about %2 GB per year; keeping full history grows total storage by about %3 GB per year. Consensus is never required just to use the vault.")
-                           .arg(DEFAULT_PRUNE_TARGET_GB)
-                           .arg(m_chain_state_size_gb)
-                           .arg(m_blockchain_size_gb + m_chain_state_size_gb));
+    cost_copy->setText(m_blockchain_size_gb == 0
+        ? tr("Transfers require proof-of-work. Enabling consensus records up to %1 GB of blockchain data and is not required to use a vault.").arg(DEFAULT_PRUNE_TARGET_GB)
+        : tr("Transfers spend proof-of-work. With default pruning, consensus keeps a %1 GB recent-block window and grows the chain state by about %2 GB per year; keeping full history grows total storage by about %3 GB per year. Consensus is never required just to use the vault.")
+              .arg(DEFAULT_PRUNE_TARGET_GB)
+              .arg(m_chain_state_size_gb)
+              .arg(m_blockchain_size_gb + m_chain_state_size_gb));
     cost_layout->addWidget(cost_copy);
     node.body->addWidget(m_cost_panel);
     m_consensus_button = MakeQuietButton(QStringLiteral("launchConsensusCardButton"), node.frame);
@@ -702,6 +704,10 @@ void DesktopLaunchPage::setChainTip(int height, const QDateTime& block_time)
         return;
     }
     m_node_height->setText(QString::number(height));
+    if (height == 0) {
+        m_node_last_block->setText(tr("None yet"));
+        return;
+    }
     if (!block_time.isValid()) {
         m_node_last_block->setText(none);
         return;

@@ -731,13 +731,14 @@ void TestModernShell(QuicksilverGUI* window)
     QVERIFY(launch->findChild<QFrame*>(QStringLiteral("launchMiningCard")));
     QLabel* launch_cost = launch->findChild<QLabel*>(QStringLiteral("desktopLaunchCostCopy"));
     QVERIFY(launch_cost);
-    // Sandbox publishes zero for both assumed sizes (chainparams.cpp), and this suite runs
-    // on sandbox, so a screen reading its figures from the active chain says "0 GB per
-    // year" here. That is the assertion: no hardcoded literal can render 0 on sandbox and
-    // 154 on mainnet, so this pins the wiring in VaultFrame that passes Params() through.
-    // The figures a real user reads are asserted in StorageCostsTests, at 128/26 injected.
-    QVERIFY(launch_cost->text().contains(QStringLiteral("2 GB recent-block window")));
-    QVERIFY(launch_cost->text().contains(QStringLiteral("0 GB per year")));
+    // Sandbox publishes no storage estimate (chainparams.cpp) and this suite runs on
+    // sandbox, so VaultFrame passes those zeros to the page and it must use the approved
+    // copy instead of quoting zero growth. This still pins the wiring, which is what the
+    // pre-F-562 assertion was for: any nonzero reaching the page selects the measured
+    // sentence instead and fails this compare. The figures a real user reads are asserted
+    // in StorageCostsTests, at 128/26 injected.
+    const QString sandbox_cost_copy = QStringLiteral("Transfers require proof-of-work. Enabling consensus records up to 2 GB of blockchain data and is not required to use a vault.");
+    QCOMPARE(launch_cost->text(), sandbox_cost_copy);
     QWidget* backup_panel = launch->findChild<QWidget*>(QStringLiteral("desktopLaunchBackupPanel"));
     QVERIFY(backup_panel);
     QVERIFY(backup_panel->isHidden());
@@ -763,9 +764,8 @@ void TestModernShell(QuicksilverGUI* window)
     QCOMPARE(consensus_review->findChild<QLabel*>(QStringLiteral("consensusReviewTitle"))->text(), QStringLiteral("Consensus is optional"));
     QLabel* consensus_storage = consensus_review->findChild<QLabel*>(QStringLiteral("consensusStorageCostValue"));
     QVERIFY(consensus_storage);
-    // Sandbox figures, for the reason given at the launch-page assertions above.
-    QVERIFY(consensus_storage->text().contains(QStringLiteral("2 GB recent-block window")));
-    QVERIFY(consensus_storage->text().contains(QStringLiteral("0 GB per year")));
+    // The same network estimate must select the same copy on Consensus.
+    QCOMPARE(consensus_storage->text(), sandbox_cost_copy);
     QPushButton* consensus_decline = consensus_review->findChild<QPushButton*>(QStringLiteral("consensusDeclineButton"));
     QVERIFY(consensus_decline);
     QPushButton* consensus_continue = consensus_review->findChild<QPushButton*>(QStringLiteral("consensusContinueButton"));

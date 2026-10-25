@@ -156,6 +156,24 @@ using vault::VaultContext;
 using vault::VaultDescriptor;
 using vault::VaultRescanReserver;
 
+void VaultTests::init()
+{
+    ResetGpuCardTables();
+}
+
+void VaultTests::gpuCardTablesPolluter()
+{
+    cuckatoo::SetGpuDeviceStatsForTesting({
+        {"f555-polluter", cuckatoo::GpuDeviceState::kFaulted, cuckatoo::GpuSolveStatus::kDeviceFault},
+    });
+    QCOMPARE(cuckatoo::GetGpuDeviceStats().size(), size_t{1});
+}
+
+void VaultTests::gpuCardTablesStartClean()
+{
+    QVERIFY(cuckatoo::GetGpuDeviceStats().empty());
+}
+
 namespace {
 QString Listing(const QStringList& lines)
 {
@@ -3051,6 +3069,61 @@ void VaultTests::openingVaultDoesNotReplacePayoutOrMintAddress()
     QSettings().remove(payout_key);
 }
 
+void VaultTests::vaultViewAddressHelperTracksMiningModel()
+{
+    TestChain100Setup test;
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    ClientModel client(m_node, &options);
+    VaultModel model(std::make_unique<PollMarkerVault>(), m_node, &options, style.get());
+    VaultView view(&model, style.get(), nullptr);
+    auto* button = view.findChild<QPushButton*>(QStringLiteral("newAddressButton"));
+    QVERIFY(button);
+    QVERIFY(!button->isEnabled());
+    view.setClientModel(&client);
+    QVERIFY(button->isEnabled());
+    QVERIFY(!button->toolTip().contains(QStringLiteral("Open a vault")));
+    view.setClientModel(nullptr);
+    QVERIFY(!button->isEnabled());
+}
+
+void VaultTests::noVaultPayoutDraftStaysSeparateFromVaultDraft()
+{
+    const QString no_vault_key = QStringLiteral("Mining/PayoutAddress/");
+    const QString vault_name = QStringLiteral("f558-vault");
+    const QString vault_key = no_vault_key + QString::fromLatin1(vault_name.toUtf8().toHex());
+    QSettings settings;
+    const QVariant previous_no_vault_draft = settings.value(no_vault_key);
+    settings.setValue(no_vault_key, QString());
+    settings.remove(vault_key);
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    {
+        VaultFrame frame(style.get(), nullptr);
+        auto* no_vault_page = frame.findChild<MineMintPage*>(QStringLiteral("mineMintPage"));
+        QVERIFY(no_vault_page);
+        no_vault_page->setPayoutAddress(QStringLiteral("hg1q-no-vault-draft"));
+        QCOMPARE(settings.value(no_vault_key).toString(), QStringLiteral("hg1q-no-vault-draft"));
+    }
+    {
+        VaultFrame reopened(style.get(), nullptr);
+        auto* no_vault_page = reopened.findChild<MineMintPage*>(QStringLiteral("mineMintPage"));
+        QVERIFY(no_vault_page);
+        QCOMPARE(no_vault_page->payoutAddress(), QStringLiteral("hg1q-no-vault-draft"));
+    }
+    MineMintPage vault_page;
+    vault_page.setPayoutVault(vault_name);
+    QVERIFY(vault_key != no_vault_key);
+    QCOMPARE(vault_page.payoutAddress(), QString());
+    QVERIFY(!settings.contains(vault_key));
+    settings.setValue(no_vault_key, previous_no_vault_draft);
+    settings.remove(vault_key);
+}
+
 void VaultTests::payoutDraftPersistsPerVaultOnlyOnUserAction()
 {
     const QString vault_a = QStringLiteral("f549-payout-%1-a").arg(QCoreApplication::applicationPid());
@@ -3745,6 +3818,23 @@ void VaultTests::devBuildBannerUsesTheWarningTone()
         QVERIFY(color != QuicksilverStyle::Color(Token::CinnabarSoft));
         QVERIFY(color != QuicksilverStyle::Color(Token::Vermilion));
     }
+}
+
+void VaultTests::genesisTipHasNoLastBlockAge()
+{
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    DesktopLaunchPage page(style.get(), 0, 0, nullptr);
+    auto* height = page.findChild<QLabel*>(QStringLiteral("homeNodeHeight"));
+    auto* last_block = page.findChild<QLabel*>(QStringLiteral("homeNodeLastBlock"));
+    QVERIFY(height && last_block);
+    page.setChainTip(-1, QDateTime());
+    QCOMPARE(height->text(), QStringLiteral("—"));
+    QCOMPARE(last_block->text(), QStringLiteral("—"));
+    page.setChainTip(0, QDateTime::fromSecsSinceEpoch(1750000000));
+    QCOMPARE(height->text(), QStringLiteral("0"));
+    QCOMPARE(last_block->text(), QStringLiteral("None yet"));
+    page.setChainTip(1, QDateTime::currentDateTime().addSecs(-3600));
+    QVERIFY(last_block->text().contains(QStringLiteral("ago")));
 }
 
 //! F-442 send-back 2, item 7: every window the Window menu opens takes the
@@ -5010,7 +5100,6 @@ void VaultTests::faultedCardsShowSendWarningDetails()
     });
     QVERIFY(gpusituation::CardWillWork(discovery));
     QVERIFY(!SendCoinsDialog::cpuFallbackWarningRequiredForTesting(true, gpusituation::CardWillWork(discovery), true));
-    cuckatoo::ResetGpuDeviceStatsForTesting();
 }
 
 void VaultTests::transferSummaryTracksAmountsAgainstSpendable()

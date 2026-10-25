@@ -14,6 +14,8 @@ class StorageCostsTests : public QObject
     Q_OBJECT
 
 private Q_SLOTS:
+    void launchPageUsesUnmeasuredNetworkCopy();
+    void consensusReviewUsesUnmeasuredNetworkCopy();
     void launchPageQuotesTheDerivedArchivalTotal();
     void consensusReviewQuotesTheDerivedArchivalTotal();
     void bothScreensAgreeWithIntroOnTheArchivalTotal();

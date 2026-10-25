@@ -56,10 +56,12 @@ ConsensusReviewPage::ConsensusReviewPage(uint64_t blockchain_size_gb, uint64_t c
         label->setText(value);
         label->setWordWrap(true);
     };
-    add_cost("consensusStorageCost", tr("Storage"), tr("Default pruning keeps a %1 GB recent-block window while chain state grows by about %2 GB per year. Keeping full history grows total storage by about %3 GB per year instead.")
-                                                      .arg(DEFAULT_PRUNE_TARGET_GB)
-                                                      .arg(m_chain_state_size_gb)
-                                                      .arg(m_blockchain_size_gb + m_chain_state_size_gb));
+    add_cost("consensusStorageCost", tr("Storage"), m_blockchain_size_gb == 0
+        ? tr("Transfers require proof-of-work. Enabling consensus records up to %1 GB of blockchain data and is not required to use a vault.").arg(DEFAULT_PRUNE_TARGET_GB)
+        : tr("Default pruning keeps a %1 GB recent-block window while chain state grows by about %2 GB per year. Keeping full history grows total storage by about %3 GB per year instead.")
+              .arg(DEFAULT_PRUNE_TARGET_GB)
+              .arg(m_chain_state_size_gb)
+              .arg(m_blockchain_size_gb + m_chain_state_size_gb));
     add_cost("consensusBackgroundCost", tr("Background work"), tr("Keeps a verifying process online and syncs with peers."));
     add_cost("consensusVaultCost", tr("Vault requirement"), tr("Not required for holding, requesting, or transferring quicksilver."));
     review.body->addWidget(rows_host);

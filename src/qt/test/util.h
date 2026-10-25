@@ -19,6 +19,7 @@
  */
 void ExpectModalWithoutNestedEventLoop(const char* class_name, const std::function<void()>& show_dialog);
 QString SolverProbeStubPath();
+void ResetGpuCardTables();
 
 /**
  * QuicksilverStyle::Apply replaces the base style as well as the palette and

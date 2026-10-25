@@ -22,6 +22,9 @@ class VaultTests : public QObject
     Q_OBJECT
 
 private Q_SLOTS:
+    void init();
+    void gpuCardTablesPolluter();
+    void gpuCardTablesStartClean();
     void agentAllotmentPageScrollsWithinLaptopViewport();
     void agentsPageHasNoSideScrollAt1200();
     void pagesKeepTheirTextInsidePanels();
@@ -53,6 +56,8 @@ private Q_SLOTS:
     void mineMintPageRendersStatus();
     void minePageSeparatesDraftPayoutAndHealthNote();
     void openingVaultDoesNotReplacePayoutOrMintAddress();
+    void vaultViewAddressHelperTracksMiningModel();
+    void noVaultPayoutDraftStaysSeparateFromVaultDraft();
     void payoutDraftPersistsPerVaultOnlyOnUserAction();
     void savedPayoutRequiresConfiguredAddress();
     void reviewConsensusButtonKeepsNaturalWidth();
@@ -69,6 +74,7 @@ private Q_SLOTS:
     void networkPageHidesTheManualTorRecipeWhenAProxyIsCarryingOnions();
     void nodeWindowSaysWhyEveryFieldReadsNotApplicable();
     void devBuildBannerUsesTheWarningTone();
+    void genesisTipHasNoLastBlockAge();
     void panelsMenuWindowsUseTheBenchGrammar();
     void menuDialogsUseTheBenchGrammar();
     void agentSpendRequestRefuseWaitsForARequest();

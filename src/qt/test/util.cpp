@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <qt/test/util.h>
+#include <test/util/gpucardtables.h>
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -24,6 +25,11 @@ QString SolverProbeStubPath()
     path += QStringLiteral(".exe");
 #endif
     return path;
+}
+
+void ResetGpuCardTables()
+{
+    GpuCardTablesTestSetup::Reset();
 }
 
 namespace {

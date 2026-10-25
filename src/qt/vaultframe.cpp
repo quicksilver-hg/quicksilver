@@ -90,6 +90,7 @@ VaultFrame::VaultFrame(const PlatformStyle* _platformStyle, QWidget* parent)
     vaultStack->addWidget(m_network_page);
 
     m_mining_page = new MineMintPage(vaultStack);
+    m_mining_page->setPayoutVault(QString());
     m_mining_page->setAddressHelperAvailable(false);
     connect(m_mining_page, &MineMintPage::networkHelpRequested, this, &VaultFrame::networkRequested);
     vaultStack->addWidget(m_mining_page);

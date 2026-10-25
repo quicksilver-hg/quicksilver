@@ -75,8 +75,7 @@ void OptionTests::init()
     for (const char* name : {"CUCKATOO_GPU_SOLVER", "QS_PROBE_STUB_LISTING", "QS_PROBE_STUB_EXIT", "QS_PROBE_STUB_SLEEP_MS", "CUCKATOO_GPU_DEVICES"}) qunsetenv(name);
     gArgs.LockSettings([](common::Settings& settings) { settings.rw_settings.erase("cuckatoodevice"); });
     QSettings().remove(QStringLiteral("gpu_device_names"));
-    cuckatoo::ResetGpuDiscoveryForTesting();
-    cuckatoo::ResetGpuDeviceStatsForTesting();
+    ResetGpuCardTables();
 }
 
 void OptionTests::leftoverQSettingsKeysAreIgnored()
@@ -482,7 +481,6 @@ void OptionTests::gpuCardStatsRefresh()
         cuckatoo::SolverFault(cuckatoo::GpuSolveStatus::kDeviceFault, false).value())));
     list->setMiningActive(false);
     QCOMPARE(state->text(), QStringLiteral("Chosen"));
-    cuckatoo::ResetGpuDeviceStatsForTesting();
 }
 
 void OptionTests::missingBundledHelperIsNamed()

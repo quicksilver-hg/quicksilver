@@ -10,9 +10,7 @@
 #include <QApplication>
 #include <QColor>
 #include <QDialogButtonBox>
-#include <QDir>
 #include <QFile>
-#include <QFileInfo>
 #include <QImage>
 #include <QPalette>
 #include <QProxyStyle>
@@ -43,6 +41,8 @@ void QuicksilverStyleTests::paletteTokens()
 
 void QuicksilverStyleTests::applySetsGlobalPaletteAndStylesheet()
 {
+    // The harness must start every class with the style the application ships.
+    QCOMPARE(qApp->property("quicksilverBaseStyle").toString(), QStringLiteral("Fusion"));
     QuicksilverStyle::Apply(*qApp);
 
     QCOMPARE(qApp->property("quicksilverBaseStyle").toString(), QStringLiteral("Fusion"));
@@ -94,19 +94,7 @@ void QuicksilverStyleTests::benchSheetRules()
     QVERIFY(sheet.contains(QStringLiteral("QFrame#benchStatusStrip")));
     QVERIFY(!sheet.contains(QStringLiteral("#FF8000"), Qt::CaseInsensitive));
 
-    // __FILE__ is remapped relative to src/, and ctest's working directory is the
-    // build tree, so the sibling path is not always openable as written.
-    QString gui_path = QFileInfo(QString::fromUtf8(__FILE__)).dir().filePath(QStringLiteral("../quicksilvergui.cpp"));
-    if (!QFileInfo::exists(gui_path)) {
-        QDir dir(QDir::current());
-        for (int i = 0; i < 8 && !QFileInfo::exists(gui_path); ++i) {
-            const QString beside = dir.filePath(QStringLiteral("qt/quicksilvergui.cpp"));
-            const QString under_src = dir.filePath(QStringLiteral("src/qt/quicksilvergui.cpp"));
-            if (QFileInfo::exists(beside)) gui_path = beside;
-            else if (QFileInfo::exists(under_src)) gui_path = under_src;
-            else if (!dir.cdUp()) break;
-        }
-    }
+    const QString gui_path = QStringLiteral(QS_QT_SOURCE_DIR "/quicksilvergui.cpp");
     QFile gui_source(gui_path);
     QVERIFY2(gui_source.open(QIODevice::ReadOnly | QIODevice::Text), qPrintable(gui_path));
     const QString source = QString::fromUtf8(gui_source.readAll());

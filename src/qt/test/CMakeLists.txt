@@ -20,6 +20,9 @@ add_executable(test_quicksilver-qt
   util.cpp
   ../../init/quicksilver.cpp
 )
+target_compile_definitions(test_quicksilver-qt PRIVATE
+  "QS_QT_SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/..\""
+)
 
 target_link_libraries(test_quicksilver-qt
   core_interface
