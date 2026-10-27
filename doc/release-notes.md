@@ -49,6 +49,50 @@ Notable changes
   node that cannot reach Tor needs an explicit peer configured with `-addnode`,
   `-connect`, or `-seednode`; see `doc/bootstrapping.md`.
 
+Changes in 0.1.6
+================
+
+- Behaviour change: the mining payout address is yours to set. Opening a vault
+  no longer creates a mining address. The address you enter is kept across
+  sessions, and the first time you mine you choose `Use new` or type your own.
+  On a vault that can mine, `Use new` is available instead of staying dead.
+- Mining no longer keeps a processor core busy when no graphics card can solve.
+  In 0.1.5 a box with no usable card retried a window at a time; it now backs
+  off, and reports that it has no usable card without starting the graphics
+  helper a second time.
+- Settings shows a measured rate for each chosen card. A card that has faulted
+  shows its fault in place of a rate. 0.1.5 showed one combined rate and said a
+  rate for each card would come later.
+- Card listing: a card whose driver reports no slot address is listed by its
+  render node's PCI address, so its id holds when the other card is absent; a
+  card whose render-node id would collide with another's is no longer named in
+  place of the wrong card; a listing that failed or timed out is retried rather
+  than cached until restart.
+- The Hardware and Mine pages say more about what they found. Start explains
+  why it cannot start, cards with the same name are told apart, a chosen card
+  reads `Chosen` until mining is running, and a graphics helper set on the
+  command line — or missing — is named.
+- The transfer screen names the address each label belongs to, and a note you
+  add stays in your vault instead of going out with the transfer. Network
+  offers `Review consensus` while consensus is running, not only while it is
+  off.
+- A node that has never seen a block says its last block is `None yet`,
+  instead of a date a year old.
+- Where no storage estimate is published, turning consensus on is described as
+  recording up to 2 GB, rather than about 0 GB per year.
+- Home handles a burst of new rows with much less delay. A hidden Ledger now
+  waits until it is shown to fit its columns, so a burst is fitted once rather
+  than once per row.
+- Quicksilver now says that its ledger is public. The receive page carries one
+  sentence where an address is prepared, and Getting Started explains that
+  anyone can look up an address and read the amounts it has sent and received,
+  that a transfer does not carry your name, and that a different receiving
+  address per person keeps those people from seeing each other's payments. The
+  Tor section says plainly that Tor hides the network path and not the ledger.
+- Getting Started's card-id paragraph is corrected: it still described the
+  listing behaviour that this release changed, and contradicted the example
+  beneath it.
+
 Changes in 0.1.5
 ================
 

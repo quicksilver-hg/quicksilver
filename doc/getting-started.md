@@ -85,6 +85,9 @@ configuration — no manual torrc or `-addnode`. On a measured first run against
 a short `publictest` chain this reached the seed about 65 seconds after the
 opt-in and the chain tip about 10 seconds after that.
 
+Tor hides the network path your node uses. It does not hide the ledger, which
+is public either way — see [The ledger is public](#the-ledger-is-public).
+
 **Before the opt-in a vault-only desktop can hold a vault and receive an
 address, but it has no validated chain to read balances or history from and no
 peer to broadcast a transfer to.** Enable Consensus for anything that depends
@@ -187,6 +190,14 @@ Stop the daemon cleanly, with the same network selection:
 ./build/bin/quicksilver-cli -publictest stop     # publictest
 ```
 
+## The ledger is public
+
+Quicksilver's ledger is public. Every transfer is recorded on it, so anyone can
+look up an address and read the amounts it has sent and received. Your name is
+not part of a transfer, but anyone who learns one of your addresses can read
+that address's history. Use **Generate receiving address** to give a different
+address to each person, so they cannot see each other's payments to you.
+
 ## Prepare to send
 
 Every non-sandbox transfer performs Cuckatoo proof-of-work before broadcast.
@@ -199,9 +210,10 @@ computer's processor, which can take many minutes per transfer.
 
 On Ubuntu 22.04, AMD cards run on the Mesa driver that the `quicksilver-gpu`
 package installs. That driver doesn't report which slot a card is in, so the
-helper lists cards by their order, as `opencl:0:0`, `opencl:0:1` and so on. Two
-cards of the same model look the same in the list, and a card chosen by its id
-can become a different card when a card is added or removed.
+helper reads the slot from the card's render node instead and lists it as
+`pci:0000:04:00.0`. An id found this way names the same card when another card
+is added or removed. Where a device has no render node — a processor device, for
+instance — the helper falls back to listing it by its order, as `opencl:0:0`.
 
 Every graphics card except built-in graphics is used by default, and Quicksilver solves on all the chosen cards at once. Choose cards in Settings >
 Options > Hardware > Graphics cards, or at startup with `-cuckatoodevice`, using

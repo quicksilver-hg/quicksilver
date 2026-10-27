@@ -1,10 +1,12 @@
-quicksilver (0.1.6-1) UNRELEASED; urgency=low
+quicksilver (0.1.6-1) unstable; urgency=low
 
-  * Development series after the 0.1.5 release. Not a release: the 0.1.5 tag
-    is what a release build identifies itself as, and this tree carries work
-    that has not been tagged.
+  * Quicksilver 0.1.6: the mining payout address is yours to set, mining backs
+    off instead of holding a processor core busy when no graphics card can
+    solve, and the transfer screen and a node that has never seen a block say
+    what they mean. Ubuntu 22.04, Ubuntu 24.04 and Windows x64, from public
+    tag v0.1.6.
 
- -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Thu, 22 Oct 2026 00:00:00 +0000
+ -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Mon, 26 Oct 2026 23:15:00 -0400
 
 quicksilver (0.1.5-1) unstable; urgency=low
 

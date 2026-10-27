@@ -663,11 +663,11 @@ BOOST_AUTO_TEST_CASE(mainnet_chaintxdata_bounds_guess_verification_progress)
     BOOST_CHECK_MESSAGE(data.nTime != 0, "F-425: mainnet ChainTxData.nTime is 0; sync progress reads 100%");
     BOOST_CHECK_MESSAGE(data.tx_count != 0, "F-425: mainnet ChainTxData.tx_count is 0; sync progress reads 100%");
     BOOST_CHECK_MESSAGE(data.dTxRate != 0.0, "F-425: mainnet ChainTxData.dTxRate is 0; sync progress reads 100%");
-    BOOST_CHECK_EQUAL(data.nTime, 1792606963);
-    BOOST_CHECK_EQUAL(data.tx_count, uint64_t{10832});
-    BOOST_CHECK_EQUAL(data.dTxRate, 0.003388326275694945);
+    BOOST_CHECK_EQUAL(data.nTime, 1793061783);
+    BOOST_CHECK_EQUAL(data.tx_count, uint64_t{12228});
+    BOOST_CHECK_EQUAL(data.dTxRate, 0.00328476778849612);
 
-    SetMockTime(1792606963);
+    SetMockTime(1793061783);
 
     CBlockIndex genesis;
     genesis.m_chain_tx_count = 1;
@@ -675,8 +675,8 @@ BOOST_AUTO_TEST_CASE(mainnet_chaintxdata_bounds_guess_verification_progress)
     const double genesis_progress = m_node.chainman->GuessVerificationProgress(&genesis);
 
     CBlockIndex at_reading;
-    at_reading.m_chain_tx_count = 10832;
-    at_reading.nTime = uint32_t{1792606963};
+    at_reading.m_chain_tx_count = 12228;
+    at_reading.nTime = uint32_t{1793061783};
     const double reading_progress = m_node.chainman->GuessVerificationProgress(&at_reading);
 
     SetMockTime(0s);

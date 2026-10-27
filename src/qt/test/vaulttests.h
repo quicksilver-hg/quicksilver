@@ -28,6 +28,7 @@ private Q_SLOTS:
     void agentAllotmentPageScrollsWithinLaptopViewport();
     void agentsPageHasNoSideScrollAt1200();
     void pagesKeepTheirTextInsidePanels();
+    void receivePageSaysTheLedgerIsPublic();
     void agentAllotmentSetupAsksToUnlock();
     void agentAllotmentStatusNeverPromisesEnforcementLater();
     void agentAllotmentStopAsksThenRefusesCosign();

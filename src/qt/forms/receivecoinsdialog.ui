@@ -74,6 +74,16 @@
           </property>
          </widget>
         </item>
+        <item row="3" column="2">
+         <widget class="QLabel" name="labelPublicLedger">
+          <property name="text">
+           <string>Transfers are recorded on a public ledger. Anyone who knows an address can read what it sent and received.</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
         <item row="4" column="0">
          <widget class="QLabel" name="label_2">
           <property name="toolTip">

@@ -1854,6 +1854,24 @@ void VaultTests::pagesKeepTheirTextInsidePanels()
     }
 }
 
+void VaultTests::receivePageSaysTheLedgerIsPublic()
+{
+    // F-568: nothing told a user their transfers are public. The receive page
+    // now says so in one reading (feedback: copy-must-have-one-reading), and
+    // doc/getting-started.md "The ledger is public" carries the long form.
+    // Wording ruled by the owner 2026-10-26; do not reword here.
+    const RestoreApplicationStyle restore;
+    QuicksilverStyle::Apply(*qApp);
+    QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+
+    ReceiveCoinsDialog page(platform_style.data());
+    QLabel* ledger = page.findChild<QLabel*>(QStringLiteral("labelPublicLedger"));
+    QVERIFY(ledger);
+    QCOMPARE(ledger->text(), QStringLiteral("Transfers are recorded on a public ledger. Anyone who knows an address can read what it sent and received."));
+    // Long enough to widen the page if it is ever left unwrapped.
+    QVERIFY(ledger->wordWrap());
+}
+
 void VaultTests::vaultTests()
 {
 #ifdef Q_OS_MACOS
