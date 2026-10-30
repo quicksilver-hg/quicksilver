@@ -25,6 +25,7 @@ enum class Warning {
     CLOCK_OUT_OF_SYNC,
     UNRELEASED_BUILD,
     FATAL_INTERNAL_ERROR,
+    HANDSHAKE_FAILURES,
 };
 
 /**

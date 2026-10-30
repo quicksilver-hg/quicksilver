@@ -515,8 +515,11 @@ void SendCoinsDialog::handleSendConfirmationFinished(int retval)
 
     if (broadcast) {
         const VaultModel::SendCoinsReturn status{model->sendCoins(*m_current_transaction)};
-        if (status.status == VaultModel::OK) {
+        if (status.status == VaultModel::OK || status.status == VaultModel::OkNotAcceptedYet) {
+            // The vault holds the transfer either way, so the page moves on to
+            // History; a transfer the node did not take yet also says so.
             Q_EMIT coinsSent(m_current_transaction->getWtx()->GetHash());
+            processSendCoinsReturn(status);
         } else {
             processSendCoinsReturn(status);
             send_failure = true;
@@ -637,7 +640,13 @@ QString SendCoinsDialog::sendWorkGraphsConfirmationText() const
     if (!m_current_transaction || !m_current_transaction->getWtx()) {
         return QString();
     }
-    const quint64 graphs_tried = static_cast<quint64>(m_current_transaction->getWtx()->nPowNonce) + 1;
+    return sendWorkGraphsConfirmationText(static_cast<quint64>(m_current_transaction->getWtx()->nPowNonce) + 1);
+}
+
+QString SendCoinsDialog::sendWorkGraphsConfirmationText(quint64 graphs_tried)
+{
+    // F-574: a proof found on the first graph reads "1 graph", as gpusituation.cpp does for "1 card".
+    if (graphs_tried == 1) return tr("Proof-of-work completed after 1 graph tried.");
     return tr("Proof-of-work completed after %1 graphs tried.").arg(QLocale().toString(graphs_tried));
 }
 
@@ -1063,6 +1072,14 @@ void SendCoinsDialog::processSendCoinsReturn(const VaultModel::SendCoinsReturn &
             ? tr("The transfer was rejected and was not saved to the vault.")
             : sendCoinsReturn.reason;
         msgParams.second = CClientUIInterface::MSG_ERROR;
+        break;
+    case VaultModel::OkNotAcceptedYet:
+        // A warning, not an error: the vault kept the transfer and offers it
+        // again. The client message box is plain text, so the signed lead
+        // sentence carries no bold here.
+        msgParams.first = sendCoinsReturn.reason == QLatin1String("relaypool full")
+            ? tr("Transfer saved, not sent yet. This node's relay pool is full, so it did not accept the transfer. Your vault will offer it again automatically. A transfer carrying more proof of work is more likely to be accepted.")
+            : tr("Transfer saved, not sent yet. This node did not accept it: %1. Your vault will offer it again automatically.").arg(sendCoinsReturn.reason);
         break;
     // included to prevent a compiler warning.
     case VaultModel::OK:

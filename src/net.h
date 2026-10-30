@@ -1125,6 +1125,9 @@ public:
     };
 
     void Interrupt() EXCLUSIVE_LOCKS_REQUIRED(!mutexMsgProc);
+    //! True from Interrupt() until the next Start(): the node is shutting down,
+    //! so a connection closing now is not the other side's doing.
+    bool IsInterrupted() const { return flagInterruptMsgProc; }
     bool GetNetworkActive() const { return fNetworkActive; };
     bool GetUseAddrmanOutgoing() const { return m_use_addrman_outgoing; };
     void SetNetworkActive(bool active);
@@ -1216,6 +1219,9 @@ public:
     bool AddConnection(const std::string& address, ConnectionType conn_type, bool use_v2transport) EXCLUSIVE_LOCKS_REQUIRED(!m_unused_i2p_sessions_mutex);
 
     size_t GetNodeCount(ConnectionDirection) const;
+    //! Peers that have completed the version handshake. Unlike GetNodeCount,
+    //! a socket still in its handshake (or on another network) is not counted.
+    size_t GetHandshakedNodeCount(ConnectionDirection) const;
     std::map<CNetAddr, LocalServiceInfo> getNetLocalAddresses() const;
     uint32_t GetMappedAS(const CNetAddr& addr) const;
     void GetNodeStats(std::vector<CNodeStats>& vstats) const;

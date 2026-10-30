@@ -18,6 +18,9 @@
 #include <key.h>
 #include <key_io.h>
 #include <node/context.h>
+#include <node/interface_ui.h>
+#include <node/mining_service.h>
+#include <interfaces/mining.h>
 #include <node/warnings.h>
 #include <outputtype.h>
 #include <psqt.h>
@@ -31,6 +34,7 @@
 #include <qt/coincontroldialog.h>
 #include <qt/addressbookpage.h>
 #include <qt/desktoplaunchpage.h>
+#include <qt/developeroptionstoggle.h>
 #include <qt/fittingscrollarea.h>
 #include <qt/gpusituation.h>
 #include <crypto/cuckatoo/gpu_solver.h>
@@ -224,6 +228,8 @@ public:
     std::vector<vault::AgentAllotmentRecord> agent_records;
     int cosign_calls{0};
     CTransactionRef cosign_result;
+    //! When set with cosign_result, the vault kept the spend but the node refused it for this reason.
+    std::optional<std::string> cosign_not_accepted_reason;
     bool crypted{false};
     //! Atomic: the transfer worker reads it while the GUI thread locks.
     std::atomic<bool> locked{false};
@@ -249,6 +255,10 @@ public:
     int set_address_calls{0};
     int new_mining_destination_calls{0};
     std::optional<bilingual_str> commit_error;
+    //! When set, createTransaction succeeds with this transaction.
+    CTransactionRef create_result;
+    //! When set, the commit keeps the transaction but the node refused it for this reason.
+    std::optional<std::string> commit_not_accepted_reason;
     //! Set by the test so createTransaction can observe the model that is driving it.
     VaultModel* vault_model_under_test{nullptr};
     bool in_flight_during_create{false};
@@ -282,10 +292,10 @@ public:
     std::string agentAllotmentPolicyRequest(const vault::AgentAllotmentRecord&, CAmount) override { return {}; }
     util::Result<vault::AgentAllotmentPolicyRequestMetadata> validateAgentAllotmentPolicyRequest(const std::string&) override { return util::Error{Untranslated("unsupported")}; }
     util::Result<vault::AgentAllotmentPolicyBundle> agentAllotmentPolicyBundle(const std::string&) override { return util::Error{Untranslated("unsupported")}; }
-    util::Result<CTransactionRef> cosignAgentAllotmentSpend(const std::string&) override
+    util::Result<interfaces::CosignOutcome> cosignAgentAllotmentSpend(const std::string&) override
     {
         ++cosign_calls;
-        if (cosign_result) return cosign_result;
+        if (cosign_result) return interfaces::CosignOutcome{cosign_result, {cosign_not_accepted_reason}};
         return util::Error{Untranslated(agent_records.at(0).stopped_time ?
             "This agent allotment is stopped. The vault no longer co-signs for it." : "backend refusal verbatim")};
     }
@@ -330,15 +340,16 @@ public:
         // transfer was in flight, which is what the close paths consult.
         in_flight_during_create = vault_model_under_test && vault_model_under_test->proofOfWorkInFlight();
         cancel_requested_during_create = tx_proof_cancel && tx_proof_cancel();
+        if (create_result) return create_result;
         return util::Error{Untranslated("unsupported")};
     }
-    util::Result<void> commitTransaction(CTransactionRef, interfaces::VaultValueMap value_map, interfaces::VaultOrderForm order_form) override
+    util::Result<interfaces::CommitOutcome> commitTransaction(CTransactionRef, interfaces::VaultValueMap value_map, interfaces::VaultOrderForm order_form) override
     {
         ++commit_calls;
         if (commit_error) return util::Error{*commit_error};
         committed_value_maps.push_back(std::move(value_map));
         committed_order_forms.push_back(std::move(order_form));
-        return {};
+        return interfaces::CommitOutcome{commit_not_accepted_reason};
     }
     bool transactionCanBeAbandoned(const uint256&) override { return false; }
     bool abandonTransaction(const uint256&) override { return false; }
@@ -726,7 +737,21 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QVERIFY(send_confirmation_text.contains(QStringLiteral("Sending uses proof-of-work")));
     QVERIFY(send_confirmation_text.contains(QStringLiteral("Nothing is deducted from the amount")));
     QVERIFY(send_confirmation_text.contains(QStringLiteral("Proof-of-work completed after")));
-    QVERIFY(send_confirmation_text.contains(QStringLiteral("graphs tried")));
+    // F-574: the line names the graphs this proof actually tried, singular for
+    // one. Sandbox's permissive transfer target usually solves on the first
+    // graph, which is how a plural-only "graphs tried" check passed on
+    // "1 graphs tried".
+    quint64 graphs_tried{0};
+    {
+        LOCK(vault->cs_vault);
+        const vault::CVaultTx* sent = vault->GetVaultTx(txid1);
+        QVERIFY(sent);
+        graphs_tried = static_cast<quint64>(sent->tx->nPowNonce) + 1;
+    }
+    QVERIFY(send_confirmation_text.contains(graphs_tried == 1 ? QStringLiteral("Proof-of-work completed after 1 graph tried.")
+                                                              : QStringLiteral("Proof-of-work completed after %1 graphs tried.").arg(QLocale().toString(graphs_tried))));
+    QCOMPARE(SendCoinsDialog::sendWorkGraphsConfirmationTextForTesting(1), QStringLiteral("Proof-of-work completed after 1 graph tried."));
+    QCOMPARE(SendCoinsDialog::sendWorkGraphsConfirmationTextForTesting(2), QStringLiteral("Proof-of-work completed after 2 graphs tried."));
     QVERIFY(send_work_progress->isHidden());
     uint256 txid2 = SendCoins(*vault.get(), sendCoinsDialog, PKHash(), 10 * COIN);
     QVERIFY(send_work_progress->isHidden());
@@ -3619,6 +3644,9 @@ void VaultTests::mineMintPageShowsARawScriptPayout()
     page.setStatus(st);
     QCOMPARE(payout->text(), rows.payout);
 
+    // While mining, the row names the script the miner reports. Stopped, a retained
+    // script is one Start will not use, so G1 5c marks it (signed spec change).
+    st.active = true;
     st.payout_script = "6a";
     rows = MineMintPage::statusTextForTesting(st);
     QCOMPARE(rows.payout, QStringLiteral("Raw script (provably unspendable)"));
@@ -3630,6 +3658,10 @@ void VaultTests::mineMintPageShowsARawScriptPayout()
     QCOMPARE(rows.payout, QStringLiteral("Raw script 51"));
     page.setStatus(st);
     QCOMPARE(payout->text(), rows.payout);
+
+    st.active = false;
+    page.setStatus(st);
+    QCOMPARE(payout->text(), QStringLiteral("Raw script 51 (last used, not applied)"));
 }
 
 //! Idle with nothing permitted used to read Solver: CPU, because the permit
@@ -4190,7 +4222,8 @@ void VaultTests::miningPollStopsWithTheClientModel()
 void VaultTests::networkPageHidesDeveloperNetworksOnMain()
 {
     // F-477: on the main network the panel describes that network alone; the
-    // developer networks wait behind a checkbox that is not kept between launches.
+    // developer networks wait behind a control that is not kept between launches.
+    // G1 5d: that control is the shared developer options toggle (signed spec change).
     NetworkPage page(ChainType::MAIN);
     QVERIFY(page.findChild<QLabel*>("developerNetworkBanner")->isHidden());
     QCOMPARE(page.findChild<QLabel*>("developerNetworkMainCardName")->text(), QString("Quicksilver"));
@@ -4199,17 +4232,18 @@ void VaultTests::networkPageHidesDeveloperNetworksOnMain()
     QCOMPARE(page.findChild<QLabel*>("developerNetworkMainCardState")->text(), QString("Current"));
     QVERIFY(!page.findChild<QPushButton*>("developerNetworkMainCardButton"));
 
-    QCheckBox* toggle = page.findChild<QCheckBox*>("developerNetworkToggle");
+    DeveloperOptionsToggle* toggle = page.findChild<DeveloperOptionsToggle*>("developerNetworkToggle");
     QWidget* developer_list = page.findChild<QWidget*>("developerNetworkList");
     QVERIFY(toggle);
     QVERIFY(developer_list);
-    QCOMPARE(toggle->text(), QString("Show developer networks"));
+    QCOMPARE(toggle->text(), QString::fromUtf8("+ Show developer options"));
     QVERIFY(toggle->isEnabled());
     QVERIFY(!toggle->isChecked());
     QVERIFY(developer_list->isHidden());
 
     toggle->click();
     QVERIFY(!developer_list->isHidden());
+    QCOMPARE(toggle->text(), QString::fromUtf8("\u2212 Hide developer options"));
     QCOMPARE(page.findChild<QPushButton*>("developerNetworkPublicTestCardButton")->text(), QString("Switch to Public Test"));
     QCOMPARE(page.findChild<QPushButton*>("developerNetworkSandboxCardButton")->text(), QString("Switch to Sandbox"));
     toggle->click();
@@ -4256,10 +4290,12 @@ void VaultTests::networkPageFormatsStatus()
     QVERIFY(!page.findChild<QLabel*>("developerNetworkMainCardToken"));
     QVERIFY(page.findChild<QLabel*>("developerNetworkMainCardDatadir")->text().startsWith(QString("Data folder: ")));
     // Running on the sandbox, the developer networks are shown and cannot be hidden.
-    QCheckBox* developer_toggle = page.findChild<QCheckBox*>("developerNetworkToggle");
+    DeveloperOptionsToggle* developer_toggle = page.findChild<DeveloperOptionsToggle*>("developerNetworkToggle");
     QVERIFY(developer_toggle);
     QVERIFY(developer_toggle->isChecked());
     QVERIFY(!developer_toggle->isEnabled());
+    QCOMPARE(developer_toggle->text(), QString::fromUtf8("\u2212 Hide developer options"));
+    QCOMPARE(developer_toggle->toolTip(), QString("Shown while Quicksilver runs on a developer network."));
     QVERIFY(!page.findChild<QWidget*>("developerNetworkList")->isHidden());
     QVERIFY(page.findChild<QLabel*>("developerNetworkPublicTestCardDatadir")->text().contains(QString("publictest")));
     QVERIFY(page.findChild<QLabel*>("developerNetworkSandboxCardDatadir")->text().contains(QString("sandbox")));
@@ -6509,7 +6545,13 @@ void VaultTests::signVerifyMessageRejectsNonBase58WithoutBitcoinVocabulary()
 
     CKey key = GenerateRandomKey();
     const QString bech32 = QString::fromStdString(EncodeDestination(WitnessV0KeyHash(key.GetPubKey())));
-    const QString expected = QStringLiteral("Message signing is only supported for Base58 addresses. Please check the address and try again.");
+    const QString script_hash = QString::fromStdString(EncodeDestination(ScriptHash(CScript() << OP_TRUE)));
+    // G1 7a/7b (signed spec change): the errors name the letter a key-hash address
+    // starts with, which is what a real one on this chain starts with.
+    const QString lead = QString::fromStdString(EncodeDestination(PKHash(key.GetPubKey()))).left(1);
+    QVERIFY(!script_hash.startsWith(lead));
+    const QString expected_sign = QStringLiteral("Message signing works only with Base58 addresses that start with %1. To get one, open Request and choose Base58 as the address type.").arg(lead);
+    const QString expected_verify = QStringLiteral("Message signatures can only be checked against Base58 addresses that start with %1, and this address does not.").arg(lead);
 
     // Signing needs a Base58 address, so the example in both address fields is one:
     // this chain's key-hash prefix and a key-hash length, with a checksum that fails.
@@ -6526,13 +6568,15 @@ void VaultTests::signVerifyMessageRejectsNonBase58WithoutBitcoinVocabulary()
         QVERIFY(!IsValidDestinationString(address));
     }
 
-    dialog.findChild<QValidatedLineEdit*>(QStringLiteral("addressIn_SM"))->setText(bech32);
-    dialog.findChild<QPushButton*>(QStringLiteral("signMessageButton_SM"))->click();
-    QCOMPARE(dialog.findChild<QLabel*>(QStringLiteral("statusLabel_SM"))->text(), expected);
+    for (const QString& address : {bech32, script_hash}) {
+        dialog.findChild<QValidatedLineEdit*>(QStringLiteral("addressIn_SM"))->setText(address);
+        dialog.findChild<QPushButton*>(QStringLiteral("signMessageButton_SM"))->click();
+        QCOMPARE(dialog.findChild<QLabel*>(QStringLiteral("statusLabel_SM"))->text(), expected_sign);
 
-    dialog.findChild<QValidatedLineEdit*>(QStringLiteral("addressIn_VM"))->setText(bech32);
-    dialog.findChild<QPushButton*>(QStringLiteral("verifyMessageButton_VM"))->click();
-    QCOMPARE(dialog.findChild<QLabel*>(QStringLiteral("statusLabel_VM"))->text(), expected);
+        dialog.findChild<QValidatedLineEdit*>(QStringLiteral("addressIn_VM"))->setText(address);
+        dialog.findChild<QPushButton*>(QStringLiteral("verifyMessageButton_VM"))->click();
+        QCOMPARE(dialog.findChild<QLabel*>(QStringLiteral("statusLabel_VM"))->text(), expected_verify);
+    }
 }
 
 void VaultTests::sendEntryAddressBookFillsDestinationWithoutNestedEventLoop()
@@ -7685,3 +7729,620 @@ void VaultTests::homeLedgerBurstCoalescesColumnFits()
     QCOMPARE(burst_snap.hidden, settled_snap.hidden);
     QCOMPARE(burst_snap.widths, settled_snap.widths);
 }
+
+// G-01 (slice FL)
+
+//! What the Transfer page did after Send, when the vault kept the transfer but
+//! this node did not accept it.
+struct KeptTransferShown {
+    QList<QList<QVariant>> messages;
+    int coins_sent{0};
+    int commit_calls{0};
+};
+
+//! Drive the Transfer page through Send and confirm with a vault that keeps the
+//! transaction and reports the node's refusal. The page itself, the model and
+//! the dialog are real; only the vault behind the interface is the double.
+static void SendTransferTheNodeRefused(interfaces::Node& node, const std::string& refusal, KeptTransferShown& shown)
+{
+    TestChain100Setup test;
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(node, test.m_node);
+
+    std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
+    auto vault = std::make_unique<PollMarkerVault>();
+    PollMarkerVault* vault_ptr = vault.get();
+    vault_ptr->balance = 2 * COIN;
+    vault_ptr->transaction_creation_available = true;
+    vault_ptr->commit_not_accepted_reason = refusal;
+
+    CKey key;
+    key.MakeNewKey(true);
+    const CTxDestination destination{WitnessV0KeyHash(key.GetPubKey())};
+    CMutableTransaction created;
+    created.vout.emplace_back(COIN, GetScriptForDestination(destination));
+    vault_ptr->create_result = MakeTransactionRef(std::move(created));
+
+    OptionsModel options_model(node);
+    bilingual_str error;
+    QVERIFY(options_model.Init(error));
+    VaultModel vault_model(std::move(vault), node, &options_model, platformStyle.get());
+
+    SendCoinsDialog send_dialog(platformStyle.get());
+    send_dialog.setModel(&vault_model);
+    QVBoxLayout* entries = send_dialog.findChild<QVBoxLayout*>(QStringLiteral("entries"));
+    QVERIFY(entries);
+    SendCoinsEntry* entry = qobject_cast<SendCoinsEntry*>(entries->itemAt(0)->widget());
+    QVERIFY(entry);
+    entry->findChild<QValidatedLineEdit*>(QStringLiteral("payTo"))->setText(QString::fromStdString(EncodeDestination(destination)));
+    entry->findChild<QuicksilverAmountField*>(QStringLiteral("payAmount"))->setValue(COIN);
+
+    QSignalSpy messages(&send_dialog, &SendCoinsDialog::message);
+    QObject scope;
+    QObject::connect(&send_dialog, &SendCoinsDialog::coinsSent, &scope, [&](const uint256&) { ++shown.coins_sent; });
+    QObject::connect(&send_dialog, &SendCoinsDialog::prepareSendConfirmationReadyForTesting, &scope, [&] {
+        QTimer::singleShot(0, &scope, [] { QVERIFY(ConfirmOpenSendDialog()); });
+    });
+    QVERIFY(QMetaObject::invokeMethod(&send_dialog, "sendButtonClicked", Q_ARG(bool, false)));
+    QTRY_COMPARE_WITH_TIMEOUT(vault_ptr->commit_calls, 1, 30000);
+    QTRY_COMPARE(messages.count(), 1);
+    shown.messages = messages;
+    shown.commit_calls = vault_ptr->commit_calls;
+}
+
+void VaultTests::transferSaysAFullPoolLeftItSavedNotSent()
+{
+    KeptTransferShown shown;
+    SendTransferTheNodeRefused(m_node, "relaypool full", shown);
+    if (QTest::currentTestFailed()) return;
+
+    // Signed 1a. The client message box is plain text, so the lead sentence
+    // keeps its words and loses its bold.
+    QCOMPARE(shown.messages.size(), 1);
+    QCOMPARE(shown.messages.at(0).at(1).toString(),
+             QStringLiteral("Transfer saved, not sent yet. This node's relay pool is full, so it did not accept the transfer. "
+                            "Your vault will offer it again automatically. "
+                            "A transfer carrying more proof of work is more likely to be accepted."));
+    QCOMPARE(shown.messages.at(0).at(2).toUInt(), static_cast<unsigned int>(CClientUIInterface::MSG_WARNING));
+    // The vault holds the transfer, so the page still moves on to History.
+    QCOMPARE(shown.coins_sent, 1);
+}
+
+void VaultTests::transferSaysARefusalLeftItSavedNotSent()
+{
+    KeptTransferShown shown;
+    SendTransferTheNodeRefused(m_node, "non-final", shown);
+    if (QTest::currentTestFailed()) return;
+
+    // Signed 1b, with the node's reason in place of %1.
+    QCOMPARE(shown.messages.size(), 1);
+    QCOMPARE(shown.messages.at(0).at(1).toString(),
+             QStringLiteral("Transfer saved, not sent yet. This node did not accept it: non-final. "
+                            "Your vault will offer it again automatically."));
+    QCOMPARE(shown.messages.at(0).at(2).toUInt(), static_cast<unsigned int>(CClientUIInterface::MSG_WARNING));
+    QCOMPARE(shown.coins_sent, 1);
+}
+
+void VaultTests::transferThroughARefusingNodeSaysSavedNotSent()
+{
+    // A real node and a real vault. Each transfer can only spend the previous
+    // one's unconfirmed change. An ancestor limit of two takes the first two
+    // and refuses the third (the pool's one-parent carve-out admits a second
+    // transaction at any limit, so it takes a third to be refused). That is a
+    // retryable refusal, so the vault keeps the transfer.
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1", "-limitancestorcount=2", "-vaultrejectlongchains=0"}}};
+    for (int i = 0; i < 5; ++i) {
+        test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+    }
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
+    MiniGUI mini_gui(m_node, platformStyle.get());
+    mini_gui.initModelForVault(m_node, vault, platformStyle.get());
+    SendCoinsDialog& sendCoinsDialog = mini_gui.sendCoinsDialog;
+    {
+        LOCK(vault->cs_vault);
+        const std::vector<vault::COutput> coins{vault::AvailableCoins(*vault).All()};
+        const vault::COutput* keep = &coins.front();
+        for (const vault::COutput& coin : coins) {
+            if (coin.txout.nValue > keep->txout.nValue) keep = &coin;
+        }
+        for (const vault::COutput& coin : coins) {
+            if (coin.outpoint != keep->outpoint) QVERIFY(vault->LockCoin(coin.outpoint));
+        }
+    }
+
+    QSignalSpy messages(&sendCoinsDialog, &SendCoinsDialog::message);
+    int coins_sent{0};
+    QObject scope;
+    QObject::connect(&sendCoinsDialog, &SendCoinsDialog::coinsSent, &scope, [&](const uint256&) { ++coins_sent; });
+
+    const uint256 parent_txid = SendCoins(*vault, sendCoinsDialog, PKHash(), COIN);
+    QVERIFY(!parent_txid.IsNull());
+    QVERIFY(m_node.context()->chain->isInRelayPool(parent_txid));
+    QCOMPARE(coins_sent, 1);
+    QCOMPARE(messages.count(), 0);
+
+    const uint256 child_txid = SendCoins(*vault, sendCoinsDialog, PKHash(), COIN);
+    QVERIFY(m_node.context()->chain->isInRelayPool(child_txid));
+    QCOMPARE(coins_sent, 2);
+    QCOMPARE(messages.count(), 0);
+
+    const uint256 grandchild_txid = SendCoins(*vault, sendCoinsDialog, PKHash(), COIN);
+    QVERIFY(!grandchild_txid.IsNull());
+    QVERIFY(!m_node.context()->chain->isInRelayPool(grandchild_txid));
+    QCOMPARE(WITH_LOCK(vault->cs_vault, return vault->mapVault.count(grandchild_txid)), size_t{1});
+    QTRY_COMPARE(messages.count(), 1);
+    QCOMPARE(messages.at(0).at(1).toString(),
+             QStringLiteral("Transfer saved, not sent yet. This node did not accept it: "
+                            "too-long-relaypool-chain, too many unconfirmed ancestors [limit: 2]. "
+                            "Your vault will offer it again automatically."));
+    QCOMPARE(messages.at(0).at(2).toUInt(), static_cast<unsigned int>(CClientUIInterface::MSG_WARNING));
+    QCOMPARE(coins_sent, 3);
+}
+
+void VaultTests::agentsPageSaysAKeptSpendIsSavedNotSent()
+{
+    AgentPageFixture f(m_node);
+    f.model->setClientModel(&f.client);
+    auto* cosign = f.get<QPushButton>("agentAllotmentSubmitSignedSpendButton");
+    auto* state = f.get<QLabel>("agentAllotmentCosignState");
+    f.vault->cosign_result = MakeTransactionRef(CMutableTransaction{});
+
+    // Signed 1c, pool full. The label is plain text, so the lead sentence has no bold.
+    // The page has no warning colour: a kept spend shows in its neutral style,
+    // neither the valid one nor the error one.
+    f.vault->cosign_not_accepted_reason = "relaypool full";
+    f.pasteAndReview();
+    cosign->click();
+    QCOMPARE(state->text(),
+             QStringLiteral("Spend saved, not sent yet. This node's relay pool is full, so it did not accept the spend. "
+                            "Your vault will offer it again automatically. "
+                            "A spend carrying more proof of work is more likely to be accepted."));
+    QCOMPARE(state->property("class").toString(), QStringLiteral("policyReviewReady"));
+
+    // Signed 1c, any other reason, in place of %1.
+    f.vault->cosign_not_accepted_reason = "non-final";
+    f.pasteAndReview();
+    cosign->click();
+    QCOMPARE(state->text(),
+             QStringLiteral("Spend saved, not sent yet. This node did not accept it: non-final. "
+                            "Your vault will offer it again automatically."));
+    QCOMPARE(state->property("class").toString(), QStringLiteral("policyReviewReady"));
+
+    // A spend the node accepted still shows its txid as before.
+    f.vault->cosign_not_accepted_reason.reset();
+    f.pasteAndReview();
+    cosign->click();
+    QCOMPARE(state->text(), QString::fromStdString(f.vault->cosign_result->GetHash().ToString()));
+    QCOMPARE(state->property("class").toString(), QStringLiteral("policyReviewValid"));
+    QCOMPARE(f.vault->cosign_calls, 3);
+}
+
+// G1 (slice FN)
+
+void VaultTests::mineUseLastOffersOnlyARetainedAddressWhileStopped()
+{
+    MineMintPage page;
+    auto* last = page.findChild<QPushButton*>(QStringLiteral("lastAddressButton"));
+    QVERIFY(last);
+    QCOMPARE(last->text(), QStringLiteral("Use last"));
+    QVERIFY(last->isHidden());
+
+    interfaces::MiningStatus st;
+    page.setStatus(st);
+    QVERIFY(last->isHidden()); // nothing retained
+
+    st.active = true;
+    st.address = "hg1qretained";
+    page.setStatus(st);
+    QVERIFY(last->isHidden()); // mining
+
+    st.active = false;
+    st.address.clear();
+    st.payout_script = "6a";
+    page.setStatus(st);
+    QVERIFY(last->isHidden()); // a retained script is not an address
+
+    st.payout_script.clear();
+    st.address = "hg1qretained";
+    page.setStatus(st);
+    QVERIFY(!last->isHidden());
+
+    // The Start hint names it only while it is shown and a vault can give a new address.
+    auto* reason = page.findChild<QLabel*>(QStringLiteral("startMiningReason"));
+    QVERIFY(reason);
+    QCOMPARE(reason->text(), QStringLiteral("Enter a payout address, or open a vault and press Use new."));
+    page.setAddressHelperAvailable(true);
+    QCOMPARE(reason->text(), QStringLiteral("Enter a payout address, or press Use last or Use new."));
+    st.address.clear();
+    page.setStatus(st);
+    QCOMPARE(reason->text(), QStringLiteral("Enter a payout address, or press Use new."));
+}
+
+void VaultTests::mineUseLastFillsAndStoresOnPress()
+{
+    const QString key = QStringLiteral("Mining/PayoutAddress/") + QString::fromLatin1(QByteArray("use-last-vault").toHex());
+    QSettings().remove(key);
+    MineMintPage page;
+    page.setPayoutVault(QStringLiteral("use-last-vault"));
+    interfaces::MiningStatus st;
+    st.address = "hg1qretained";
+    page.setStatus(st);
+    QCOMPARE(page.payoutAddress(), QString());
+    QVERIFY(!QSettings().contains(key));
+
+    page.findChild<QPushButton*>(QStringLiteral("lastAddressButton"))->click();
+    QCOMPARE(page.payoutAddress(), QStringLiteral("hg1qretained"));
+    QCOMPARE(QSettings().value(key).toString(), QStringLiteral("hg1qretained"));
+    QVERIFY(page.findChild<QPushButton*>(QStringLiteral("startMiningButton"))->isEnabled());
+    QSettings().remove(key);
+}
+
+void VaultTests::mineRetainedTargetIsMarkedNotApplied()
+{
+    MineMintPage page;
+    auto* payout = page.findChild<QLabel*>(QStringLiteral("payoutTargetValue"));
+    QVERIFY(payout);
+    interfaces::MiningStatus st;
+    page.setStatus(st);
+    QCOMPARE(payout->text(), QStringLiteral("Not set"));
+
+    st.address = "hg1qretained";
+    page.setStatus(st);
+    QCOMPARE(payout->text(), QStringLiteral("hg1qretained (last used, not applied)"));
+
+    st.address.clear();
+    st.payout_script = "6a";
+    page.setStatus(st);
+    QCOMPARE(payout->text(), QStringLiteral("Raw script (provably unspendable) (last used, not applied)"));
+
+    // A draft is what Start uses; while mining, the row is what the miner reports.
+    page.setPayoutAddress(QStringLiteral("hg1qdraft"));
+    QCOMPARE(payout->text(), QStringLiteral("hg1qdraft (applied on Start)"));
+    st.active = true;
+    st.address = "hg1qretained";
+    st.payout_script.clear();
+    page.setStatus(st);
+    QCOMPARE(payout->text(), QStringLiteral("hg1qretained"));
+}
+
+void VaultTests::mineRetainedTargetNeverFillsTheField()
+{
+    const QString key = QStringLiteral("Mining/PayoutAddress/") + QString::fromLatin1(QByteArray("retained-vault").toHex());
+    QSettings().remove(key);
+    MineMintPage page;
+    interfaces::MiningStatus st;
+    st.address = "hg1qretained";
+    page.setStatus(st);
+    page.setPayoutVault(QStringLiteral("retained-vault"));
+    page.setStatus(st);
+    st.active = true;
+    page.setStatus(st);
+    st.active = false;
+    page.setStatus(st);
+    QCOMPARE(page.payoutAddress(), QString());
+    QVERIFY(!QSettings().contains(key));
+    QVERIFY(!page.findChild<QPushButton*>(QStringLiteral("startMiningButton"))->isEnabled());
+}
+
+void VaultTests::developerOptionsToggleReadsBothTexts()
+{
+    DeveloperOptionsToggle toggle;
+    QCOMPARE(toggle.text(), QString::fromUtf8("+ Show developer options"));
+    QVERIFY(!toggle.isChecked());
+    QVERIFY(toggle.isEnabled());
+    toggle.click();
+    QCOMPARE(toggle.text(), QString::fromUtf8("− Hide developer options"));
+    toggle.click();
+    QCOMPARE(toggle.text(), QString::fromUtf8("+ Show developer options"));
+
+    toggle.setForcedOpen(QStringLiteral("why"));
+    QVERIFY(toggle.isChecked());
+    QVERIFY(!toggle.isEnabled());
+    QCOMPARE(toggle.toolTip(), QStringLiteral("why"));
+    QCOMPARE(toggle.text(), QString::fromUtf8("− Hide developer options"));
+    toggle.setForcedOpen(QString());
+    QVERIFY(toggle.isEnabled());
+    QCOMPARE(toggle.toolTip(), QString());
+}
+
+void VaultTests::mineDeveloperOptionsCollapsedUntilForcedOpen()
+{
+    const QString forced_tip{QStringLiteral("Shown while a custom mining script is configured or in use.")};
+    MineMintPage page;
+    auto* toggle = page.findChild<DeveloperOptionsToggle*>(QStringLiteral("mineDeveloperOptionsToggle"));
+    auto* section = page.findChild<QWidget*>(QStringLiteral("mineDeveloperOptions"));
+    auto* script = page.findChild<QValidatedLineEdit*>(QStringLiteral("payoutScriptEdit"));
+    QVERIFY(toggle && section && script);
+    QCOMPARE(page.findChild<QLabel*>(QStringLiteral("payoutScriptLabel"))->text(), QStringLiteral("Custom mining script"));
+    QVERIFY(section->isAncestorOf(script));
+    QCOMPARE(toggle->text(), QString::fromUtf8("+ Show developer options"));
+    QVERIFY(!toggle->isChecked());
+    QVERIFY(toggle->isEnabled());
+    QVERIFY(section->isHidden());
+    toggle->click();
+    QVERIFY(!section->isHidden());
+    QCOMPARE(toggle->text(), QString::fromUtf8("− Hide developer options"));
+    toggle->click();
+    QVERIFY(section->isHidden());
+
+    const auto expect_forced = [&] {
+        QVERIFY(toggle->isChecked());
+        QVERIFY(!toggle->isEnabled());
+        QVERIFY(!section->isHidden());
+        QCOMPARE(toggle->toolTip(), forced_tip);
+    };
+    // The conf sets minescript.
+    page.setSavedPayoutScript(QStringLiteral("6a"));
+    expect_forced();
+    page.setSavedPayoutScript(QString());
+    QVERIFY(toggle->isEnabled());
+    QCOMPARE(toggle->toolTip(), QString());
+    toggle->click();
+    QVERIFY(section->isHidden());
+
+    // The miner runs on a script.
+    interfaces::MiningStatus st;
+    st.active = true;
+    st.payout_script = "6a";
+    page.setStatus(st);
+    expect_forced();
+    st.active = false;
+    page.setStatus(st);
+    QVERIFY(toggle->isEnabled());
+    toggle->click();
+    QVERIFY(section->isHidden());
+    // Running on an address is not running on a script.
+    st.active = true;
+    st.address = "hg1qretained";
+    st.payout_script = "0014aa";
+    page.setStatus(st);
+    QVERIFY(toggle->isEnabled());
+    st = interfaces::MiningStatus{};
+    page.setStatus(st);
+
+    // The field holds text, valid or not: a hidden script is never what Start uses.
+    script->setText(QStringLiteral("6"));
+    expect_forced();
+    script->clear();
+    QVERIFY(toggle->isEnabled());
+}
+
+void VaultTests::mineScriptWinsOverTheAddressRow()
+{
+    MineMintPage page;
+    page.setAddressHelperAvailable(true);
+    page.setSavedPayoutAddress(QStringLiteral("hg1qsaved"));
+    interfaces::MiningStatus st;
+    st.address = "hg1qretained";
+    page.setStatus(st);
+    auto* script = page.findChild<QValidatedLineEdit*>(QStringLiteral("payoutScriptEdit"));
+    auto* address = page.findChild<QLineEdit*>(QStringLiteral("payoutEdit"));
+    auto* wins = page.findChild<QLabel*>(QStringLiteral("payoutScriptWinsNote"));
+    auto* start = page.findChild<QPushButton*>(QStringLiteral("startMiningButton"));
+    auto* reason = page.findChild<QLabel*>(QStringLiteral("startMiningReason"));
+    auto* payout = page.findChild<QLabel*>(QStringLiteral("payoutTargetValue"));
+    QVERIFY(script && address && wins && start && reason && payout);
+    QVERIFY(wins->isHidden());
+    QVERIFY(!start->isEnabled());
+
+    script->setText(QStringLiteral("6a"));
+    QCOMPARE(page.payoutScript(), QStringLiteral("6a"));
+    QVERIFY(!wins->isHidden());
+    QCOMPARE(wins->text(), QStringLiteral("Start uses the custom mining script."));
+    QVERIFY(!address->isEnabled());
+    for (const char* name : {"newAddressButton", "savedAddressButton", "lastAddressButton"}) {
+        QVERIFY2(!page.findChild<QPushButton*>(QString::fromLatin1(name))->isEnabled(), name);
+    }
+    QVERIFY(start->isEnabled());
+    QCOMPARE(reason->text(), QString());
+    QCOMPARE(payout->text(), QStringLiteral("Raw script (provably unspendable) (applied on Start)"));
+    script->setText(QStringLiteral("51"));
+    QCOMPARE(payout->text(), QStringLiteral("Raw script (applied on Start)"));
+
+    // Whatever the address field holds, the script is what Start sends.
+    page.setPayoutAddress(QStringLiteral("hg1qdraft"));
+    QSignalSpy address_spy(&page, &MineMintPage::startRequested);
+    QSignalSpy script_spy(&page, &MineMintPage::startScriptRequested);
+    page.setPeerCount(3);
+    start->click();
+    QCOMPARE(address_spy.count(), 0);
+    QCOMPARE(script_spy.count(), 1);
+    QCOMPARE(script_spy.at(0).at(0).toString(), QStringLiteral("51"));
+
+    script->clear();
+    QVERIFY(address->isEnabled());
+    QVERIFY(wins->isHidden());
+    QVERIFY(page.findChild<QPushButton*>(QStringLiteral("newAddressButton"))->isEnabled());
+    start->click();
+    QCOMPARE(address_spy.count(), 1);
+    QCOMPARE(address_spy.at(0).at(0).toString(), QStringLiteral("hg1qdraft"));
+    page.setPayoutAddress(QString());
+}
+
+void VaultTests::mineInvalidScriptDisablesStart()
+{
+    MineMintPage page;
+    page.setPayoutAddress(QStringLiteral("hg1qdraft"));
+    auto* script = page.findChild<QValidatedLineEdit*>(QStringLiteral("payoutScriptEdit"));
+    auto* start = page.findChild<QPushButton*>(QStringLiteral("startMiningButton"));
+    auto* reason = page.findChild<QLabel*>(QStringLiteral("startMiningReason"));
+    QVERIFY(script && start && reason);
+    QVERIFY(start->isEnabled());
+    const QString too_long{QString(QStringLiteral("00")).repeated(MAX_SCRIPT_SIZE + 1)};
+    for (const QString& bad : {QStringLiteral("6"), QStringLiteral("6g"), QStringLiteral("zz"), too_long}) {
+        script->setText(bad);
+        QVERIFY2(!script->isValid(), qPrintable(bad.left(8)));
+        QVERIFY2(!start->isEnabled(), qPrintable(bad.left(8)));
+        QCOMPARE(page.payoutScript(), QString());
+        QCOMPARE(reason->text(), QString()); // no sentence is signed for it
+        QVERIFY(page.findChild<QLabel*>(QStringLiteral("payoutScriptNote"))->isHidden());
+    }
+    script->setText(QString(QStringLiteral("00")).repeated(MAX_SCRIPT_SIZE));
+    QVERIFY(script->isValid());
+    QVERIFY(start->isEnabled());
+    script->clear();
+    QVERIFY(start->isEnabled());
+    page.setPayoutAddress(QString());
+}
+
+void VaultTests::mineScriptNoteNamesTheScript()
+{
+    MineMintPage page;
+    auto* script = page.findChild<QValidatedLineEdit*>(QStringLiteral("payoutScriptEdit"));
+    auto* note = page.findChild<QLabel*>(QStringLiteral("payoutScriptNote"));
+    auto* warning = page.findChild<QLabel*>(QStringLiteral("payoutScriptWarning"));
+    QVERIFY(script && note && warning);
+    QVERIFY(note->isHidden());
+    QVERIFY(warning->isHidden());
+
+    script->setText(QStringLiteral("6a"));
+    QCOMPARE(note->text(), QStringLiteral("Raw script (provably unspendable)"));
+    QVERIFY(!note->isHidden());
+    QVERIFY(warning->isHidden());
+
+    script->setText(QStringLiteral("6a0d666f756e64696e67206275726e"));
+    QCOMPARE(note->text(), QStringLiteral("Raw script (provably unspendable)"));
+    QVERIFY(warning->isHidden());
+
+    script->setText(QStringLiteral("51"));
+    QCOMPARE(note->text(), QStringLiteral("Raw script"));
+    QVERIFY(!warning->isHidden());
+    QCOMPARE(warning->text(), QStringLiteral("Anyone can spend coins mined to this script."));
+
+    // P2PK pays a key, not an address: it stays a script, and nobody else can spend it.
+    script->setText(QStringLiteral("210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ac"));
+    Q_EMIT script->editingFinished();
+    QCOMPARE(note->text(), QStringLiteral("Raw script"));
+    QVERIFY(warning->isHidden());
+    QCOMPARE(page.payoutAddress(), QString());
+}
+
+void VaultTests::mineAddressScriptMovesToThePayoutField()
+{
+    const QString key = QStringLiteral("Mining/PayoutAddress/") + QString::fromLatin1(QByteArray("script-vault").toHex());
+    QSettings().remove(key);
+    MineMintPage page;
+    page.setPayoutVault(QStringLiteral("script-vault"));
+    auto* script = page.findChild<QValidatedLineEdit*>(QStringLiteral("payoutScriptEdit"));
+    auto* note = page.findChild<QLabel*>(QStringLiteral("payoutScriptNote"));
+    auto* toggle = page.findChild<DeveloperOptionsToggle*>(QStringLiteral("mineDeveloperOptionsToggle"));
+    QVERIFY(script && note && toggle);
+
+    // The founding vault's payout script. On main it is QUPztCykMU4tbcLANCWonrtSUHk2awCazq;
+    // the test chain encodes the same key hash with its own prefix.
+    const QString hex{QStringLiteral("76a914557ca93bc44339abb34f44272987dfbb56017cf288ac")};
+    const std::vector<unsigned char> script_bytes{ParseHex(hex.toStdString())};
+    const std::vector<unsigned char> key_hash(script_bytes.begin() + 3, script_bytes.begin() + 23);
+    const auto encode = [&](const CChainParams& params) {
+        std::vector<unsigned char> payload{params.Base58Prefix(CChainParams::PUBKEY_ADDRESS)};
+        payload.insert(payload.end(), key_hash.begin(), key_hash.end());
+        return QString::fromStdString(EncodeBase58Check(payload));
+    };
+    QCOMPARE(encode(*CChainParams::Main()), QStringLiteral("QUPztCykMU4tbcLANCWonrtSUHk2awCazq"));
+    const QString expected{encode(Params())};
+
+    // Typing is not converted: only editingFinished is.
+    QTest::keyClicks(script, hex);
+    QCOMPARE(script->text(), hex);
+    QCOMPARE(page.payoutAddress(), QString());
+    QTest::keyClick(script, Qt::Key_Return);
+    QCOMPARE(page.payoutAddress(), expected);
+    QCOMPARE(QSettings().value(key).toString(), expected);
+    QCOMPARE(script->text(), QString());
+    QCOMPARE(note->text(), QStringLiteral("This script pays %1").arg(expected));
+    QVERIFY(!note->isHidden());
+    QVERIFY(toggle->isEnabled()); // no longer forced open by the script
+    QVERIFY(page.findChild<QPushButton*>(QStringLiteral("startMiningButton"))->isEnabled());
+
+    // 5h stays until the next edit of either field.
+    page.setStatus(interfaces::MiningStatus{});
+    QCOMPARE(note->text(), QStringLiteral("This script pays %1").arg(expected));
+    QTest::keyClick(page.findChild<QLineEdit*>(QStringLiteral("payoutEdit")), Qt::Key_End);
+    QTest::keyClick(page.findChild<QLineEdit*>(QStringLiteral("payoutEdit")), Qt::Key_Backspace);
+    QVERIFY(note->isHidden());
+    QSettings().remove(key);
+}
+
+void VaultTests::mineAnyoneCanSpendAddressScriptStaysAScript()
+{
+    MineMintPage page;
+    auto* script = page.findChild<QValidatedLineEdit*>(QStringLiteral("payoutScriptEdit"));
+    auto* note = page.findChild<QLabel*>(QStringLiteral("payoutScriptNote"));
+    auto* warning = page.findChild<QLabel*>(QStringLiteral("payoutScriptWarning"));
+    QVERIFY(script && note && warning);
+
+    // These decode to an address, but anyone can spend them: converting would hide 5j.
+    for (const QString& hex : {QStringLiteral("51024e73"),     // pay to anchor
+                               QStringLiteral("5202abcd")}) {  // unknown witness version
+        CTxDestination dest;
+        const std::vector<unsigned char> bytes{ParseHex(hex.toStdString())};
+        QVERIFY(ExtractDestination(CScript(bytes.begin(), bytes.end()), dest));
+        script->clear();
+        QTest::keyClicks(script, hex);
+        QTest::keyClick(script, Qt::Key_Return);
+        QCOMPARE(script->text(), hex);
+        QCOMPARE(page.payoutAddress(), QString());
+        QCOMPARE(page.payoutScript(), hex);
+        QCOMPARE(note->text(), QStringLiteral("Raw script"));
+        QVERIFY(!warning->isHidden());
+        QCOMPARE(warning->text(), QStringLiteral("Anyone can spend coins mined to this script."));
+    }
+}
+
+void VaultTests::mineSavedScriptNeedsConfiguredMinescript()
+{
+    MineMintPage page;
+    auto* saved = page.findChild<QPushButton*>(QStringLiteral("savedScriptButton"));
+    auto* script = page.findChild<QValidatedLineEdit*>(QStringLiteral("payoutScriptEdit"));
+    QVERIFY(saved && script);
+    QCOMPARE(saved->text(), QStringLiteral("Use saved"));
+    {
+        TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-mineaddress=hg1qsaved"}}};
+        ScopedNodeContext context(m_node, test.m_node);
+        const QString configured = QString::fromStdString(m_node.configuredMiningPayoutScript());
+        QCOMPARE(configured, QString());
+        page.setSavedPayoutScript(configured);
+        QVERIFY(saved->isHidden());
+    }
+    {
+        TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-minescript=6a"}}};
+        ScopedNodeContext context(m_node, test.m_node);
+        const QString configured = QString::fromStdString(m_node.configuredMiningPayoutScript());
+        QCOMPARE(configured, QStringLiteral("6a"));
+        page.setSavedPayoutScript(configured);
+        QVERIFY(!saved->isHidden());
+        QCOMPARE(script->text(), QString()); // offered, not filled
+        saved->click();
+        QCOMPARE(script->text(), QStringLiteral("6a"));
+        QCOMPARE(page.payoutScript(), QStringLiteral("6a"));
+        QCOMPARE(page.findChild<QLabel*>(QStringLiteral("payoutScriptNote"))->text(), QStringLiteral("Raw script (provably unspendable)"));
+    }
+}
+
+void VaultTests::mineStartWithScriptReachesTheScriptOverload()
+{
+    TestChain100Setup test;
+    auto mining = interfaces::MakeMining(test.m_node);
+    QVERIFY(mining);
+    test.m_node.mining_service = std::make_unique<node::MiningService>(*test.m_node.chainman, *mining);
+    ScopedNodeContext context(m_node, test.m_node);
+
+    MiningModel model(m_node, nullptr);
+    QSignalSpy errors(&model, &MiningModel::miningError);
+    model.startScript(QStringLiteral("6a"));
+    QCOMPARE(errors.count(), 0);
+    const interfaces::MiningStatus st{m_node.miningStatus()};
+    QVERIFY(st.active);
+    QCOMPARE(QString::fromStdString(st.payout_script), QStringLiteral("6a"));
+    QCOMPARE(QString::fromStdString(st.address), QString());
+    model.stop();
+    QVERIFY(!m_node.miningStatus().active);
+    test.m_node.mining_service.reset();
+}
+

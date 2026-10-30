@@ -128,6 +128,8 @@ src/qt/consensusreviewpage.cpp
 src/qt/consensusreviewpage.h
 src/qt/desktoplaunchpage.cpp
 src/qt/desktoplaunchpage.h
+src/qt/developeroptionstoggle.cpp
+src/qt/developeroptionstoggle.h
 src/qt/fittingscrollarea.cpp
 src/qt/fittingscrollarea.h
 src/qt/gpudevicelist.cpp
@@ -220,6 +222,8 @@ test/functional/feature_quicksilver_replace.py
 test/functional/feature_quicksilver_txpow_anchor.py
 test/functional/feature_quicksilver_txwork_pricing.py
 test/functional/mining_service.py
+test/functional/mining_zero_claim.py
+test/functional/p2p_handshake_failure_warning.py
 test/functional/p2p_txpow_anchor_no_ban.py
 test/functional/rpc_relaypool_names.py
 test/functional/rpc_signmessage.py

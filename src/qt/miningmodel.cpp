@@ -8,7 +8,9 @@
 #include <key_io.h>
 #include <outputtype.h>
 #include <qt/vaultmodel.h>
+#include <script/script.h>
 #include <util/result.h>
+#include <util/strencodings.h>
 
 MiningModel::MiningModel(interfaces::Node& node, VaultModel* vault_model, QObject* parent)
     : QObject(parent), m_node(node), m_vault_model(vault_model)
@@ -26,6 +28,16 @@ void MiningModel::refresh()
 void MiningModel::setVaultModel(VaultModel* vault_model)
 {
     m_vault_model = vault_model;
+}
+
+void MiningModel::startScript(const QString& script_hex)
+{
+    const std::vector<unsigned char> bytes{ParseHex(script_hex.toStdString())};
+    if (auto res = m_node.startMiningScript(CScript(bytes.begin(), bytes.end())); !res) {
+        Q_EMIT miningError(QString::fromStdString(util::ErrorString(res).original));
+        return;
+    }
+    refresh();
 }
 
 void MiningModel::start(const QString& address)

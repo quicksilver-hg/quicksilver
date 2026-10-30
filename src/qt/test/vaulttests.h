@@ -141,6 +141,25 @@ private Q_SLOTS:
     void notificationBurstPolicyCoalescesTransactions();
     void transactionBurstPostsOneImmediateNotification();
     void homeLedgerBurstCoalescesColumnFits();
+    // G-01 (slice FL)
+    void transferSaysAFullPoolLeftItSavedNotSent();
+    void transferSaysARefusalLeftItSavedNotSent();
+    void transferThroughARefusingNodeSaysSavedNotSent();
+    void agentsPageSaysAKeptSpendIsSavedNotSent();
+    // G1 (slice FN)
+    void mineUseLastOffersOnlyARetainedAddressWhileStopped();
+    void mineUseLastFillsAndStoresOnPress();
+    void mineRetainedTargetIsMarkedNotApplied();
+    void mineRetainedTargetNeverFillsTheField();
+    void developerOptionsToggleReadsBothTexts();
+    void mineDeveloperOptionsCollapsedUntilForcedOpen();
+    void mineScriptWinsOverTheAddressRow();
+    void mineInvalidScriptDisablesStart();
+    void mineScriptNoteNamesTheScript();
+    void mineAddressScriptMovesToThePayoutField();
+    void mineAnyoneCanSpendAddressScriptStaysAScript();
+    void mineSavedScriptNeedsConfiguredMinescript();
+    void mineStartWithScriptReachesTheScriptOverload();
 };
 
 #endif // QUICKSILVER_QT_TEST_VAULTTESTS_H

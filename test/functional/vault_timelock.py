@@ -49,6 +49,20 @@ class VaultLocktimeTest(QuicksilverTestFramework):
         assert_equal(node.getbalances()["mine"]["trusted"], balance_before)
         assert_equal(node.listunspent(maxconf=1), coin_before)
 
+        self.log.info("An accepted send carries no not-accepted warning")
+        accepted = node.send(outputs=[{address: 1}])
+        assert "warnings" not in accepted
+        assert accepted["txid"] in node.getrawrelaypool()
+
+        self.log.info("A send the node refuses as non-final is kept, and says so")
+        kept = node.send(outputs=[{address: 1}], locktime=node.getblockcount() + 100)
+        assert_equal(kept["warnings"], [
+            "Not accepted by this node yet (non-final). "
+            "The vault keeps the transaction and will resubmit it automatically."
+        ])
+        assert kept["txid"] not in node.getrawrelaypool()
+        assert kept["txid"] in [tx["txid"] for tx in node.listtransactions(count=100)]
+
 
 if __name__ == "__main__":
     VaultLocktimeTest(__file__).main()

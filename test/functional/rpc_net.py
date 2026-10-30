@@ -85,6 +85,7 @@ class NetTest(QuicksilverTestFramework):
         self.test_getpeerinfo()
         self.test_getnettotals()
         self.test_getnetworkinfo()
+        self.test_connection_attempts()
         self.test_addnode_getaddednodeinfo()
         self.test_service_flags()
         self.test_getnodeaddresses()
@@ -241,6 +242,33 @@ class NetTest(QuicksilverTestFramework):
 
         # Check dynamically generated networks list in getnetworkinfo help output.
         assert "(ipv4, ipv6, onion, i2p, cjdns)" in self.nodes[0].help("getnetworkinfo")
+
+    def test_connection_attempts(self):
+        self.log.info("Test that a connection still in its handshake is an attempt, not a peer")
+        node = self.nodes[0]
+        assert_equal(node.getnetworkinfo()['connection_attempts'], 0)
+
+        peer = node.add_p2p_connection(P2PInterface(), send_version=False, wait_for_verack=False)
+        self.wait_until(lambda: node.getnetworkinfo()['connection_attempts'] == 1)
+        info = node.getnetworkinfo()
+        assert_equal(info['connections'], 2)
+        assert_equal(info['connections_in'], 1)
+        assert_equal(info['connections_out'], 1)
+        assert_equal(node.getconnectioncount(), 2)
+
+        self.log.info("Test that the connection moves to the peer counts once its handshake completes")
+        peer.peer_connect_send_version(P2P_SERVICES)
+        peer.send_version()
+        peer.wait_for_verack()
+        self.wait_until(lambda: node.getconnectioncount() == 3)
+        info = node.getnetworkinfo()
+        assert_equal(info['connections'], 3)
+        assert_equal(info['connections_in'], 2)
+        assert_equal(info['connections_out'], 1)
+        assert_equal(info['connection_attempts'], 0)
+
+        node.disconnect_p2ps()
+        self.wait_until(lambda: node.getconnectioncount() == 2)
 
     def test_addnode_getaddednodeinfo(self):
         self.log.info("Test addnode and getaddednodeinfo")

@@ -2212,7 +2212,10 @@ CommitTransactionResult CVault::CommitTransaction(CTransactionRef tx, mapValue_t
         // transaction the caller deliberately built early.
         if (submission.error != node::TransactionError::CONSENSUS_INVALID) {
             VaultLogPrintf("submitted ok=0 reason=retryable error=%d detail=%s", static_cast<int>(submission.error), err_string);
-            return {};
+            CommitTransactionResult kept;
+            kept.not_accepted_error = submission.error;
+            kept.not_accepted_reason = std::move(err_string);
+            return kept;
         }
 
         // Consensus invalidity is a property of these bytes, so no later attempt
@@ -2224,7 +2227,10 @@ CommitTransactionResult CVault::CommitTransaction(CTransactionRef tx, mapValue_t
         if (auto removed{RemoveTxs(remove)}; !removed) {
             throw std::runtime_error(strprintf("%s: rejected transaction cleanup failed: %s", __func__, util::ErrorString(removed).original));
         }
-        return {submission.error, std::move(err_string)};
+        CommitTransactionResult refused;
+        refused.error = submission.error;
+        refused.reject_reason = std::move(err_string);
+        return refused;
     }
     return {};
 }

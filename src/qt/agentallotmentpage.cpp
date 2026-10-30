@@ -992,9 +992,21 @@ void AgentAllotmentPage::cosignAgentSpendRequest()
             reviewed != page->m_reviewed_request || reviewed != page->m_cosign_edit->toPlainText()) return;
         const auto result = model->cosignAgentAllotmentSpend(PastedSpendRequest(reviewed));
         page->m_reviewed_request.clear();
-        SetLabelClass(page->m_cosign_state, result ? QStringLiteral("policyReviewValid") : QStringLiteral("policyReviewError"));
-        page->m_cosign_state->setText(result ? QString::fromStdString((*result)->GetHash().ToString()) :
-            QString::fromStdString(util::ErrorString(result).original));
+        if (!result) {
+            SetLabelClass(page->m_cosign_state, QStringLiteral("policyReviewError"));
+            page->m_cosign_state->setText(QString::fromStdString(util::ErrorString(result).original));
+        } else if (const auto& reason{result->commit.not_accepted_reason}) {
+            // Kept, not sent yet: neither a success nor a failure, so the page's
+            // neutral style. The label is plain text, so the signed lead
+            // sentence carries no bold here.
+            SetLabelClass(page->m_cosign_state, QStringLiteral("policyReviewReady"));
+            page->m_cosign_state->setText(*reason == "relaypool full"
+                ? tr("Spend saved, not sent yet. This node's relay pool is full, so it did not accept the spend. Your vault will offer it again automatically. A spend carrying more proof of work is more likely to be accepted.")
+                : tr("Spend saved, not sent yet. This node did not accept it: %1. Your vault will offer it again automatically.").arg(QString::fromStdString(*reason)));
+        } else {
+            SetLabelClass(page->m_cosign_state, QStringLiteral("policyReviewValid"));
+            page->m_cosign_state->setText(QString::fromStdString(result->tx->GetHash().ToString()));
+        }
         page->updateCosignState();
         page->updateRecordedSetups();
     });

@@ -53,7 +53,7 @@ RPCHelpMan signmessage()
 
             const PKHash* pkhash = std::get_if<PKHash>(&dest);
             if (!pkhash) {
-                throw JSONRPCError(RPC_TYPE_ERROR, "Address does not refer to key");
+                throw JSONRPCError(RPC_TYPE_ERROR, strprintf("Message signing works only with Base58 key-hash addresses, which start with %s. Create one with getnewaddress \"\" base58.", Base58KeyHashLead()));
             }
 
             std::string signature;

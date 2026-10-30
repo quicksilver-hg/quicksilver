@@ -311,6 +311,16 @@ std::string EncodeDestination(const CTxDestination& dest)
     return std::visit(DestinationEncoder(Params()), dest);
 }
 
+std::string Base58KeyHashLead(const CChainParams& params)
+{
+    return std::visit(DestinationEncoder(params), CTxDestination{PKHash{}}).substr(0, 1);
+}
+
+std::string Base58KeyHashLead()
+{
+    return Base58KeyHashLead(Params());
+}
+
 CTxDestination DecodeDestination(const std::string& str, std::string& error_msg, std::vector<int>* error_locations)
 {
     return DecodeDestination(str, Params(), error_msg, error_locations);

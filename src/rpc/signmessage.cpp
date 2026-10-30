@@ -47,7 +47,7 @@ static RPCHelpMan verifymessage()
             case MessageVerificationResult::ERR_INVALID_ADDRESS:
                 throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address");
             case MessageVerificationResult::ERR_ADDRESS_NO_KEY:
-                throw JSONRPCError(RPC_TYPE_ERROR, "Address does not refer to key");
+                throw JSONRPCError(RPC_TYPE_ERROR, strprintf("Message signatures can only be checked against Base58 key-hash addresses, which start with %s.", Base58KeyHashLead()));
             case MessageVerificationResult::ERR_MALFORMED_SIGNATURE:
                 throw JSONRPCError(RPC_TYPE_ERROR, "Malformed base64 encoding");
             case MessageVerificationResult::ERR_PUBKEY_NOT_RECOVERED:

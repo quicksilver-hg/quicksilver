@@ -38,6 +38,7 @@ private Q_SLOTS:
     void sameNamedCardsShowTheirIds();
     void gpuCardStatsRefresh();
     void missingBundledHelperIsNamed();
+    void cardsHintNeedsACard();
     void tickingBuiltInGraphicsAsksFirst();
     void missingChosenCardKeepsItsName();
     void cpuOnlyHidesTheList();

@@ -247,6 +247,7 @@ VaultModel::SendCoinsReturn VaultModel::prepareTransaction(VaultModelTransaction
 VaultModel::SendCoinsReturn VaultModel::sendCoins(VaultModelTransaction& transaction)
 {
     QByteArray transaction_array; /* store serialized transaction */
+    std::optional<std::string> not_accepted_reason;
 
     {
         std::vector<std::pair<std::string, std::string>> vOrderForm;
@@ -264,6 +265,7 @@ VaultModel::SendCoinsReturn VaultModel::sendCoins(VaultModelTransaction& transac
         if (!committed) {
             return SendCoinsReturn(TransactionCommitFailed, QString::fromStdString(util::ErrorString(committed).translated));
         }
+        not_accepted_reason = committed->not_accepted_reason;
 
         DataStream ssTx;
         ssTx << TX_WITH_WITNESS(*newTx);
@@ -292,6 +294,7 @@ VaultModel::SendCoinsReturn VaultModel::sendCoins(VaultModelTransaction& transac
     }
 
     checkBalanceChanged(m_vault->getBalances()); // update balance immediately, otherwise there could be a short noticeable delay until pollBalanceChanged hits
+    if (not_accepted_reason) return SendCoinsReturn(OkNotAcceptedYet, QString::fromStdString(*not_accepted_reason));
     return SendCoinsReturn(OK);
 }
 
@@ -603,7 +606,7 @@ bool VaultModel::canCosignAgentAllotmentSpend() const
     return m_client_model && m_node.context() && m_node.context()->chainman;
 }
 
-util::Result<CTransactionRef> VaultModel::cosignAgentAllotmentSpend(const QString& psqt)
+util::Result<interfaces::CosignOutcome> VaultModel::cosignAgentAllotmentSpend(const QString& psqt)
 {
     if (!canCosignAgentAllotmentSpend()) {
         return util::Error{Untranslated("Turn on Consensus to co-sign: this desktop broadcasts the spend through its own node.")};

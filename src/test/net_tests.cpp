@@ -8,16 +8,20 @@
 #include <clientversion.h>
 #include <common/args.h>
 #include <compat/compat.h>
+#include <interfaces/node.h>
 #include <cstdint>
 #include <net.h>
 #include <net_processing.h>
 #include <netaddress.h>
 #include <netbase.h>
 #include <netmessagemaker.h>
+#include <node/interface_ui.h>
 #include <node/protocol_version.h>
+#include <node/warnings.h>
 #include <serialize.h>
 #include <span.h>
 #include <streams.h>
+#include <test/util/net.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <test/util/validation.h>
@@ -25,6 +29,7 @@
 #include <util/string.h>
 #include <validation.h>
 
+#include <boost/signals2/connection.hpp>
 #include <boost/test/unit_test.hpp>
 
 #include <algorithm>
@@ -148,6 +153,123 @@ BOOST_AUTO_TEST_CASE(cnode_simple_test)
     BOOST_CHECK(pnode4->IsInboundConn() == true);
     BOOST_CHECK(pnode4->m_inbound_onion == true);
     BOOST_CHECK_EQUAL(pnode4->ConnectedThroughNetwork(), Network::NET_ONION);
+}
+
+BOOST_AUTO_TEST_CASE(handshaked_node_count)
+{
+    // G-02: a socket whose handshake has not finished is not a peer. The
+    // handshaked count must leave it out, while GetNodeCount (slots,
+    // eviction, tracepoints) keeps counting every socket.
+    ConnmanTestMsg connman{0x1337, 0x1337, *m_node.addrman, *m_node.netgroupman, Params()};
+    in_addr ipv4Addr;
+    ipv4Addr.s_addr = 0xa0b0c001;
+    const CAddress addr{CService{ipv4Addr, 7777}, NODE_NETWORK};
+    NodeId id{0};
+    const auto make_node{[&](ConnectionType type) {
+        return new CNode{id++, /*sock=*/nullptr, addr, /*nKeyedNetGroupIn=*/0, /*nLocalHostNonceIn=*/0,
+                         CAddress{}, /*pszDest=*/"", type, /*inbound_onion=*/false};
+    }};
+
+    CNode* outbound_done{make_node(ConnectionType::OUTBOUND_FULL_RELAY)};
+    outbound_done->fSuccessfullyConnected = true;
+    connman.AddTestNode(*outbound_done);
+    connman.AddTestNode(*make_node(ConnectionType::INBOUND));
+
+    BOOST_CHECK_EQUAL(connman.GetNodeCount(ConnectionDirection::Both), 2U);
+    BOOST_CHECK_EQUAL(connman.GetHandshakedNodeCount(ConnectionDirection::Both), 1U);
+    BOOST_CHECK_EQUAL(connman.GetHandshakedNodeCount(ConnectionDirection::Out), 1U);
+    BOOST_CHECK_EQUAL(connman.GetHandshakedNodeCount(ConnectionDirection::In), 0U);
+
+    CNode* inbound_done{make_node(ConnectionType::INBOUND)};
+    inbound_done->fSuccessfullyConnected = true;
+    connman.AddTestNode(*inbound_done);
+    BOOST_CHECK_EQUAL(connman.GetNodeCount(ConnectionDirection::Both), 3U);
+    BOOST_CHECK_EQUAL(connman.GetHandshakedNodeCount(ConnectionDirection::Both), 2U);
+    BOOST_CHECK_EQUAL(connman.GetHandshakedNodeCount(ConnectionDirection::In), 1U);
+
+    // A peer that finished its handshake stays a peer while it is being
+    // disconnected, so connections + connection_attempts is the socket count.
+    inbound_done->fDisconnect = true;
+    BOOST_CHECK_EQUAL(connman.GetHandshakedNodeCount(ConnectionDirection::In), 1U);
+
+    connman.ClearTestNodes();
+}
+
+BOOST_AUTO_TEST_CASE(gui_peer_count_follows_handshakes)
+{
+    // G-02: every GUI peer count (status bar, Network page, Console, the Mine
+    // page's isolation banner) reads either the node interface or the count
+    // CConnman pushes to the UI. Both must be completed handshakes, and the
+    // push must fire when a handshake completes, not only when a socket opens.
+    auto& connman{static_cast<ConnmanTestMsg&>(*m_node.connman)};
+    CClientUIInterface ui;
+    connman.SetClientInterface(&ui);
+    std::vector<int> pushed;
+    auto subscription{ui.NotifyNumConnectionsChanged_connect([&pushed](int count) { pushed.push_back(count); })};
+    const auto node_interface{interfaces::MakeNode(m_node)};
+
+    in_addr ipv4Addr;
+    ipv4Addr.s_addr = 0xa0b0c001;
+    CNode* node{new CNode{/*id=*/0, /*sock=*/nullptr, CAddress{CService{ipv4Addr, 7777}, NODE_NETWORK},
+                          /*nKeyedNetGroupIn=*/0, /*nLocalHostNonceIn=*/0, CAddress{}, /*pszDest=*/"",
+                          ConnectionType::INBOUND, /*inbound_onion=*/false}};
+    connman.AddTestNode(*node);
+    connman.NotifyNumConnections();
+    BOOST_CHECK(pushed.empty());
+    BOOST_CHECK_EQUAL(node_interface->getNodeCount(ConnectionDirection::Both), 0U);
+
+    node->fSuccessfullyConnected = true;
+    connman.NotifyNumConnections();
+    BOOST_CHECK(pushed == std::vector<int>{1});
+    BOOST_CHECK_EQUAL(node_interface->getNodeCount(ConnectionDirection::Both), 1U);
+    BOOST_CHECK_EQUAL(node_interface->getNodeCount(ConnectionDirection::In), 1U);
+
+    subscription.disconnect();
+    connman.ClearTestNodes();
+    connman.NotifyNumConnections();
+    connman.SetClientInterface(nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(shutdown_is_not_a_handshake_failure)
+{
+    // G-02: StopNodes marks every node disconnected before deleting it, so an
+    // outbound connection still in its handshake at shutdown closes the same
+    // way one refused by another network does. Shutdown must not raise 2c.
+    in_addr ipv4Addr;
+    ipv4Addr.s_addr = 0xa0b0c001;
+    const CAddress addr{CService{ipv4Addr, 7777}, NODE_NETWORK};
+    const auto make_outbound{[&](NodeId id) {
+        return new CNode{id, /*sock=*/nullptr, addr, /*nKeyedNetGroupIn=*/0, /*nLocalHostNonceIn=*/0,
+                         CAddress{}, /*pszDest=*/"", ConnectionType::OUTBOUND_FULL_RELAY, /*inbound_onion=*/false};
+    }};
+
+    // The control: three outbound closes before the handshake, while running, raise it.
+    {
+        node::Warnings warnings;
+        ConnmanTestMsg connman{0x1337, 0x1337, *m_node.addrman, *m_node.netgroupman, Params()};
+        auto peerman{PeerManager::make(connman, *m_node.addrman, nullptr, *m_node.chainman, *m_node.relaypool, warnings, {})};
+        for (NodeId id{0}; id < 3; ++id) {
+            std::unique_ptr<CNode> node{make_outbound(id)};
+            peerman->InitializeNode(*node, NODE_NETWORK);
+            node->fDisconnect = true;
+            peerman->FinalizeNode(*node);
+        }
+        BOOST_CHECK(warnings.Unset(node::Warning::HANDSHAKE_FAILURES));
+    }
+
+    // Shutdown: the same three, torn down by Interrupt() and StopNodes().
+    node::Warnings warnings;
+    ConnmanTestMsg connman{0x1337, 0x1337, *m_node.addrman, *m_node.netgroupman, Params()};
+    auto peerman{PeerManager::make(connman, *m_node.addrman, nullptr, *m_node.chainman, *m_node.relaypool, warnings, {})};
+    connman.SetMsgProc(peerman.get());
+    for (NodeId id{0}; id < 3; ++id) {
+        CNode* node{make_outbound(id)};
+        peerman->InitializeNode(*node, NODE_NETWORK);
+        connman.AddTestNode(*node);
+    }
+    connman.Interrupt();
+    connman.StopNodes();
+    BOOST_CHECK(!warnings.Unset(node::Warning::HANDSHAKE_FAILURES));
 }
 
 BOOST_AUTO_TEST_CASE(cnetaddr_basic)

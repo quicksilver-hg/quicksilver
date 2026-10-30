@@ -36,15 +36,22 @@ std::vector<CRecipient> CreateRecipients(const std::vector<std::pair<CTxDestinat
     return recipients;
 }
 
+//! Signed 1d, for a transaction the vault kept but this node did not accept yet.
+static void PushNotAcceptedWarning(const CommitTransactionResult& committed, std::vector<bilingual_str>& warnings)
+{
+    if (committed.not_accepted_error == node::TransactionError::OK) return;
+    warnings.push_back(strprintf(_("Not accepted by this node yet (%s). The vault keeps the transaction and will resubmit it automatically."), committed.not_accepted_reason));
+}
+
 static UniValue FinishTransaction(const std::shared_ptr<CVault> pvault, const UniValue& options,
                                   const CMutableTransaction& rawTx,
                                   std::optional<uint64_t> estimated_pow_bytes = std::nullopt)
 {
-    std::vector<bilingual_str> unconfirmed_change_warnings;
+    std::vector<bilingual_str> warnings;
     {
         LOCK(pvault->cs_vault);
         if (vault::SpendsUnconfirmedChange(*pvault, rawTx.vin)) {
-            unconfirmed_change_warnings.emplace_back(_("This transfer spends change from an earlier transfer that has not confirmed yet. If that transfer is dropped, this one fails too and its work is lost. To avoid this, wait for the earlier transfer to confirm."));
+            warnings.emplace_back(_("This transfer spends change from an earlier transfer that has not confirmed yet. If that transfer is dropped, this one fails too and its work is lost. To avoid this, wait for the earlier transfer to confirm."));
         }
     }
 
@@ -185,12 +192,13 @@ static UniValue FinishTransaction(const std::shared_ptr<CVault> pvault, const Un
             if (!committed) {
                 throw JSONRPCTransactionError(committed.error, committed.reject_reason);
             }
+            PushNotAcceptedWarning(committed, warnings);
         } else {
             result.pushKV("hex", hex);
         }
     }
     result.pushKV("complete", complete);
-    ::PushWarnings(unconfirmed_change_warnings, result);
+    ::PushWarnings(warnings, result);
 
     return result;
 }

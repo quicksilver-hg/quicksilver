@@ -45,6 +45,11 @@ if(ENABLE_VAULT)
   )
 endif()
 
+if(WITH_DBUS)
+  # GUIUtilTests asserts that the suite cannot reach the session bus (F-572).
+  target_link_libraries(test_quicksilver-qt Qt5::DBus)
+endif()
+
 # A real executable the GPU-solver startup probe can actually start, for
 # OptionTests::gpuSolverSettingPersistsAndRequiresRestart. See
 # solverprobestub.cpp for why a script fixture cannot serve on Windows.

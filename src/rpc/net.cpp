@@ -58,7 +58,7 @@ const std::vector<std::string> TRANSPORT_TYPE_DOC{
 static RPCHelpMan getconnectioncount()
 {
     return RPCHelpMan{"getconnectioncount",
-                "\nReturns the number of connections to other nodes.\n",
+                "\nReturns the number of peers that have completed the connection handshake. Connections still being set up are reported as connection_attempts in getnetworkinfo.\n",
                 {},
                 RPCResult{
                     RPCResult::Type::NUM, "", "The connection count"
@@ -72,7 +72,7 @@ static RPCHelpMan getconnectioncount()
     NodeContext& node = EnsureAnyNodeContext(request.context);
     const CConnman& connman = EnsureConnman(node);
 
-    return connman.GetNodeCount(ConnectionDirection::Both);
+    return connman.GetHandshakedNodeCount(ConnectionDirection::Both);
 },
     };
 }
@@ -631,9 +631,10 @@ static RPCHelpMan getnetworkinfo()
                         }},
                         {RPCResult::Type::BOOL, "localrelay", "true if transaction relay is requested from peers"},
                         {RPCResult::Type::NUM, "timeoffset", "the time offset"},
-                        {RPCResult::Type::NUM, "connections", "the total number of connections"},
-                        {RPCResult::Type::NUM, "connections_in", "the number of inbound connections"},
-                        {RPCResult::Type::NUM, "connections_out", "the number of outbound connections"},
+                        {RPCResult::Type::NUM, "connections", "the number of peers that have completed the connection handshake"},
+                        {RPCResult::Type::NUM, "connections_in", "the number of inbound peers that have completed the connection handshake"},
+                        {RPCResult::Type::NUM, "connections_out", "the number of outbound peers that have completed the connection handshake"},
+                        {RPCResult::Type::NUM, "connection_attempts", "connections opened but not yet past the handshake. A count that stays above zero while peers stays at zero usually means the other side runs a different network or release."},
                         {RPCResult::Type::BOOL, "networkactive", "whether p2p networking is enabled"},
                         {RPCResult::Type::ARR, "networks", "information per network",
                         {
@@ -686,9 +687,14 @@ static RPCHelpMan getnetworkinfo()
     }
     if (node.connman) {
         obj.pushKV("networkactive", node.connman->GetNetworkActive());
-        obj.pushKV("connections", node.connman->GetNodeCount(ConnectionDirection::Both));
-        obj.pushKV("connections_in", node.connman->GetNodeCount(ConnectionDirection::In));
-        obj.pushKV("connections_out", node.connman->GetNodeCount(ConnectionDirection::Out));
+        const size_t peers{node.connman->GetHandshakedNodeCount(ConnectionDirection::Both)};
+        obj.pushKV("connections", peers);
+        obj.pushKV("connections_in", node.connman->GetHandshakedNodeCount(ConnectionDirection::In));
+        obj.pushKV("connections_out", node.connman->GetHandshakedNodeCount(ConnectionDirection::Out));
+        // Both counts are read under separate locks; a handshake finishing in
+        // between must not make the difference wrap.
+        const size_t sockets{node.connman->GetNodeCount(ConnectionDirection::Both)};
+        obj.pushKV("connection_attempts", sockets > peers ? sockets - peers : 0);
     }
     obj.pushKV("networks",      GetNetworksInfo());
     UniValue localAddresses(UniValue::VARR);

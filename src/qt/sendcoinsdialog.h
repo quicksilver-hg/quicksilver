@@ -83,6 +83,7 @@ public:
     static SendWorkNotes sendWorkNotesForTesting(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox) { return sendWorkNotes(discovery, sandbox); }
     void showSendWorkNotesForTesting(const SendWorkNotes& notes) { showSendWorkNotes(notes); }
     static QString sendWorkResourceTextForTesting(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox);
+    static QString sendWorkGraphsConfirmationTextForTesting(quint64 graphs_tried) { return sendWorkGraphsConfirmationText(graphs_tried); }
     static bool cpuFallbackWarningRequiredForTesting(bool slow_network, bool card_will_work, bool warning_enabled);
     static QMessageBox* createCpuFallbackWarning(QWidget* parent, const std::optional<cuckatoo::GpuDiscovery>& discovery);
 
@@ -156,6 +157,7 @@ private:
     void updateSendWorkGraphs(uint32_t nonce);
     QString sendWorkGraphsTriedText() const;
     QString sendWorkGraphsConfirmationText() const;
+    static QString sendWorkGraphsConfirmationText(quint64 graphs_tried);
     QString sendWorkResourceText() const;
     static QString sendWorkResourceText(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox);
     static SendWorkNotes sendWorkNotes(const std::optional<cuckatoo::GpuDiscovery>& discovery, bool sandbox);

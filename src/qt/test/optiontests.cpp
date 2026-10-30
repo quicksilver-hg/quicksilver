@@ -389,6 +389,7 @@ void OptionTests::gpuCardsListAndModes()
     QCOMPARE(state("gpuDevice_pci_0000_04_00_0"), /*W-D5*/ QStringLiteral("Chosen"));
     QCOMPARE(state("gpuDevice_pci_0000_00_02_0"), /*W-D6*/ QStringLiteral("Not used: built-in graphics"));
     QCOMPARE(state("gpuDevice_pci_0000_05_00_0"), /*W-D7*/ QStringLiteral("Can't be used: its driver couldn't run Quicksilver's graphics code"));
+    QVERIFY(!dialog.findChild<QLabel*>(QStringLiteral("gpuCardsHelp"))->isHidden());
     dialog.findChild<QRadioButton*>(QStringLiteral("gpuModeChoose"))->click();
     auto* hd = list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_00_02_0")); QVERIFY(!hd->isChecked());
     QTest::mouseClick(dialog.findChild<QPushButton*>(QStringLiteral("okButton")), Qt::LeftButton);
@@ -512,6 +513,31 @@ void OptionTests::missingBundledHelperIsNamed()
     QVERIFY(list->findChild<QLabel*>()->text().contains(advice));
     QMetaObject::invokeMethod(&dialog, "validateGpuSolverPath");
     QVERIFY(status->text().contains(headline));
+    // F-575: no helper, so no card to deselect.
+    QVERIFY(dialog.findChild<QLabel*>(QStringLiteral("gpuCardsHelp"))->isHidden());
+}
+
+//! F-575: the hint under the card list tells the reader to deselect a card, so
+//! it shows only while the list holds one. Not while discovery is still running,
+//! not when the helper lists no card, and not when the listing fails. A listed
+//! card (gpuCardsListAndModes) and a missing helper (missingBundledHelperIsNamed)
+//! are checked where those states are already built.
+void OptionTests::cardsHintNeedsACard()
+{
+    const auto check = [&](const QString& expected_state) {
+        OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
+        OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
+        auto* hint = dialog.findChild<QLabel*>(QStringLiteral("gpuCardsHelp")); QVERIFY(hint);
+        auto* list = dialog.findChild<GpuDeviceList*>(QStringLiteral("gpuDeviceList")); QVERIFY(list);
+        QVERIFY(hint->isHidden());
+        QTRY_VERIFY_WITH_TIMEOUT(list->findChild<QLabel*>() && list->findChild<QLabel*>()->text() == expected_state, 30000);
+        QVERIFY(hint->isHidden());
+    };
+    PointDiscoveryAtStub(WriteListing({}));
+    check(QStringLiteral("No graphics cards were found."));
+    PointDiscoveryAtStub(WriteListing({}));
+    qputenv("QS_PROBE_STUB_EXIT", "1");
+    check(QStringLiteral("Quicksilver couldn't list this computer's graphics cards. See the debug log."));
 }
 
 void OptionTests::tickingBuiltInGraphicsAsksFirst()

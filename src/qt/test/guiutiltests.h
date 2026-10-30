@@ -22,6 +22,7 @@ private Q_SLOTS:
     void timeOffsetBoundariesPickTheIntendedUnit();
 #ifdef USE_DBUS
     void notificationImageMarshalsInitializedFields();
+    void testsCannotReachTheSessionBus();
 #endif
 };
 

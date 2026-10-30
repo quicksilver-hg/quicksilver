@@ -922,6 +922,12 @@ std::unique_ptr<VaultDatabase> MakeDatabase(const fs::path& path, const Database
     }
 
     if (!format && options.require_existing) {
+        // A SQLite vault that another network made is not damaged: say whose it is.
+        if (const auto app_id{exists ? ReadSQLiteApplicationId(SQLiteDataFile(path)) : std::nullopt}) {
+            error = Untranslated(strprintf("Failed to load database path '%s'. %s", fs::PathToString(path), WrongNetworkVaultReason(*app_id)));
+            status = DatabaseStatus::FAILED_WRONG_NETWORK;
+            return nullptr;
+        }
         error = Untranslated(strprintf("Failed to load database path '%s'. Data is not in recognized format.", fs::PathToString(path)));
         status = DatabaseStatus::FAILED_BAD_FORMAT;
         return nullptr;

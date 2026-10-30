@@ -1976,15 +1976,14 @@ void CConnman::DisconnectNodes()
 
 void CConnman::NotifyNumConnectionsChanged()
 {
-    size_t nodes_size;
-    {
-        LOCK(m_nodes_mutex);
-        nodes_size = m_nodes.size();
-    }
-    if(nodes_size != nPrevNodeCount) {
-        nPrevNodeCount = nodes_size;
+    // The UI shows peers, so it is told the handshaked count. This runs on
+    // every socket loop pass, so a handshake that completes is pushed too,
+    // not only a socket that opens or closes.
+    const size_t peers{GetHandshakedNodeCount(ConnectionDirection::Both)};
+    if (peers != nPrevNodeCount) {
+        nPrevNodeCount = peers;
         if (m_client_interface) {
-            m_client_interface->NotifyNumConnectionsChanged(nodes_size);
+            m_client_interface->NotifyNumConnectionsChanged(peers);
         }
     }
 }
@@ -3605,6 +3604,15 @@ size_t CConnman::GetNodeCount(ConnectionDirection flags) const
     }
 
     return nNum;
+}
+
+size_t CConnman::GetHandshakedNodeCount(ConnectionDirection flags) const
+{
+    LOCK(m_nodes_mutex);
+    return std::ranges::count_if(m_nodes, [flags](const CNode* pnode) {
+        return pnode->fSuccessfullyConnected &&
+               (flags & (pnode->IsInboundConn() ? ConnectionDirection::In : ConnectionDirection::Out));
+    });
 }
 
 

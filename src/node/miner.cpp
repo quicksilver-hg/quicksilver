@@ -167,8 +167,13 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     // anchor txs are already excluded from pblock->vtx by TestPackageAnchors (#7), so this
     // sum is exactly the mint over the anchor-valid included set. vtx[0] is still the dummy
     // coinbase (mints nothing).
-    coinbaseTx.vout[0].nValue = GetBlockSubsidy(nHeight, chainparams.GetConsensus())
-                              + GetBlockMintAllowance(*pblock, chainparams.GetConsensus(), pindexPrev);
+    // F-578: zero-claim pays 0 instead. Consensus caps the claim on one side only,
+    // so the shortfall is valid and is never created. The output keeps its size,
+    // so the block weight and nCongestion below are what a full claim gives.
+    coinbaseTx.vout[0].nValue = m_options.claim_coinbase_reward
+                              ? GetBlockSubsidy(nHeight, chainparams.GetConsensus())
+                                + GetBlockMintAllowance(*pblock, chainparams.GetConsensus(), pindexPrev)
+                              : 0;
     coinbaseTx.vin[0].scriptSig = CScript() << nHeight << OP_0;
     pblock->vtx[0] = MakeTransactionRef(std::move(coinbaseTx));
     pblocktemplate->vchCoinbaseCommitment = m_chainstate.m_chainman.GenerateCoinbaseCommitment(*pblock, pindexPrev);

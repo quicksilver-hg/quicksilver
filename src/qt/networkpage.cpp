@@ -11,13 +11,13 @@
 #include <netbase.h>
 #include <protocol.h>
 #include <qt/benchpanel.h>
+#include <qt/developeroptionstoggle.h>
 #include <qt/guiutil.h>
 #include <streams.h>
 #include <tor/bundled_tor.h>
 #include <util/chaintype.h>
 #include <util/fs.h>
 
-#include <QCheckBox>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -437,12 +437,10 @@ void NetworkPage::buildDeveloperNetworkSection(QVBoxLayout* root, ChainType acti
     // stay out of the way until asked for. The choice is not kept between
     // launches, and while this window runs one of them it cannot be hidden.
     const bool on_developer_network = active_chain != ChainType::MAIN;
-    auto* toggle = new QCheckBox(tr("Show developer networks"), group);
+    auto* toggle = new DeveloperOptionsToggle(group);
     toggle->setObjectName(QStringLiteral("developerNetworkToggle"));
-    toggle->setChecked(on_developer_network);
-    toggle->setEnabled(!on_developer_network);
-    if (on_developer_network) toggle->setToolTip(tr("Shown while Quicksilver runs on a developer network."));
-    layout->addWidget(toggle);
+    if (on_developer_network) toggle->setForcedOpen(tr("Shown while Quicksilver runs on a developer network."));
+    layout->addWidget(toggle, 0, Qt::AlignLeft);
 
     auto* developer_list = new QWidget(group);
     developer_list->setObjectName(QStringLiteral("developerNetworkList"));
@@ -452,7 +450,7 @@ void NetworkPage::buildDeveloperNetworkSection(QVBoxLayout* root, ChainType acti
     add_row(developer_layout, developer_list, ChainType::PUBLIC_TEST, "developerNetworkPublicTestCard", true);
     add_row(developer_layout, developer_list, ChainType::SANDBOX, "developerNetworkSandboxCard", true);
     developer_list->setVisible(toggle->isChecked());
-    connect(toggle, &QCheckBox::toggled, developer_list, &QWidget::setVisible);
+    connect(toggle, &QAbstractButton::toggled, developer_list, &QWidget::setVisible);
     layout->addWidget(developer_list);
 
     root->addWidget(group);

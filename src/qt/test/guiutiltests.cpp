@@ -10,6 +10,9 @@
 #include <qt/notificator.h>
 
 #include <QRegularExpression>
+#ifdef USE_DBUS
+#include <QDBusConnection>
+#endif
 #include <QString>
 
 //! formatNiceTimeOffset() feeds the Home Node card's last-block age. It used to
@@ -104,5 +107,14 @@ void GUIUtilTests::timeOffsetBoundariesPickTheIntendedUnit()
 void GUIUtilTests::notificationImageMarshalsInitializedFields()
 {
     QCOMPARE(FreedesktopImageSignatureForTesting(), QStringLiteral("(iiibiiay)"));
+}
+
+//! F-572: the minimal platform isolates the display, not the session bus.
+//! Notificator prefers org.freedesktop.Notifications whenever the bus answers,
+//! so a test that connected a mining reward posted it to the developer's
+//! desktop. test_main points the bus at a socket that does not exist.
+void GUIUtilTests::testsCannotReachTheSessionBus()
+{
+    QVERIFY(!QDBusConnection::sessionBus().isConnected());
 }
 #endif

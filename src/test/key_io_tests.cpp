@@ -6,6 +6,8 @@
 #include <test/data/key_io_invalid.json.h>
 #include <test/data/key_io_valid.json.h>
 
+#include <base58.h>
+#include <chainparams.h>
 #include <key.h>
 #include <key_io.h>
 #include <script/script.h>
@@ -206,6 +208,28 @@ BOOST_AUTO_TEST_CASE(base58_address_beginning_with_the_bech32_hrp_still_decodes)
                             << ", but it was not. Either the version bytes or the HRP moved, and "
                             "the prefix collision this test covers has changed shape.");
     }
+}
+
+// G-07: the signing errors name the key-hash lead from the chain's prefix, so it
+// must hold for every key hash, not only the all-zero one it is derived from.
+BOOST_AUTO_TEST_CASE(base58_key_hash_lead)
+{
+    const std::vector<std::pair<ChainType, std::string>> chains{
+        {ChainType::MAIN, "Q"}, {ChainType::PUBLIC_TEST, "P"}, {ChainType::SANDBOX, "S"}};
+    for (const auto& [chain, lead] : chains) {
+        const auto params{CreateChainParams(*m_node.args, chain)};
+        BOOST_CHECK_EQUAL(Base58KeyHashLead(*params), lead);
+        for (const unsigned char fill : {0x00, 0xff}) {
+            std::vector<unsigned char> payload{params->Base58Prefix(CChainParams::PUBKEY_ADDRESS)};
+            payload.insert(payload.end(), 20, fill);
+            BOOST_CHECK_EQUAL(EncodeBase58Check(payload).substr(0, 1), lead);
+            // The script-hash kind never shares it.
+            std::vector<unsigned char> script_payload{params->Base58Prefix(CChainParams::SCRIPT_ADDRESS)};
+            script_payload.insert(script_payload.end(), 20, fill);
+            BOOST_CHECK(EncodeBase58Check(script_payload).substr(0, 1) != lead);
+        }
+    }
+    BOOST_CHECK_EQUAL(Base58KeyHashLead(), Base58KeyHashLead(Params()));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

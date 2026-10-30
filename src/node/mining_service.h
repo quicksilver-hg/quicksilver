@@ -139,6 +139,11 @@ public:
     void Interrupt() EXCLUSIVE_LOCKS_REQUIRED(!m_thread_mutex);
 
     bool IsActive() const { return m_active.load(); }
+    //! F-578: the coinbase of every block this service mines claims 0, giving up
+    //! the subsidy and the per-transaction mint allowance. Set once from init.
+    //! While set, Start() refuses any payout script ZeroClaimPayoutAllowed rejects.
+    void SetZeroClaim(bool zero_claim) { m_zero_claim.store(zero_claim); }
+    bool ZeroClaim() const { return m_zero_claim.load(); }
     MiningStatus GetStatus() const EXCLUSIVE_LOCKS_REQUIRED(!m_stats_mutex);
     //! Solver attempts per second over the trailing window, or nullopt when no
     //! attempt has been observed this session. See AttemptRateWindow.
@@ -156,6 +161,7 @@ private:
 
     std::atomic<bool> m_active{false};
     std::atomic<bool> m_interrupt{false};
+    std::atomic<bool> m_zero_claim{false};
     //! Graphs attempted this session. Counted off the solver's per-attempt progress
     //! callback rather than the nonce budget: the budget bills 4096 for a window
     //! that finds nothing and zero for one that finds a cycle, which made a dead
@@ -188,6 +194,11 @@ bool CpuBlockFallbackEnabled(uint8_t edgebits);
 //! True when this process can solve a block at `edgebits`: a graphics card is
 //! in use, or CpuBlockFallbackEnabled. Same live read as the fallback bit.
 bool BlockSolvingPossible(uint8_t edgebits);
+
+//! True when the service may mine to `payout_script` with zero-claim on: the
+//! script begins with OP_RETURN, so it is provably unspendable and turning
+//! zero-claim on by mistake costs nothing.
+bool ZeroClaimPayoutAllowed(const CScript& payout_script);
 
 //! Decode an address and start the service on it. Idempotent when the service
 //! is already active on the SAME address; errors when active on a different one.

@@ -104,6 +104,15 @@ int main(int argc, char* argv[])
         setenv("QT_QPA_PLATFORM", "minimal", 0 /* overwrite */);
     #endif
 
+    // The platform isolates the display, not the session bus. Notificator
+    // prefers org.freedesktop.Notifications whenever the bus answers, so a test
+    // that connected a mining reward posted it to the developer's desktop
+    // (F-572). Overwrite the address before QApplication can open it, so no bus
+    // is reached, not even one set up for the run.
+    #if !defined(WIN32)
+        setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/qs-test-bus", 1 /* overwrite */);
+    #endif
+
 
     QCoreApplication::setOrganizationName(QAPP_ORG_NAME);
     QCoreApplication::setApplicationName(QAPP_APP_NAME_DEFAULT "-test");

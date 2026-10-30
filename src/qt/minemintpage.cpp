@@ -4,10 +4,18 @@
 
 #include <qt/minemintpage.h>
 
+#include <addresstype.h>
 #include <interfaces/node.h>
+#include <key_io.h>
+#include <policy/policy.h>
 #include <qt/benchpanel.h>
+#include <qt/developeroptionstoggle.h>
 #include <qt/guiutil.h>
 #include <qt/quicksilverunits.h>
+#include <qt/qvalidatedlineedit.h>
+#include <script/interpreter.h>
+#include <script/script.h>
+#include <util/strencodings.h>
 
 #include <QFontDatabase>
 #include <QFrame>
@@ -18,8 +26,13 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
+#include <QValidator>
 #include <QVariant>
 #include <QVBoxLayout>
+
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace {
 QLabel* MakeValueLabel(const QString& object_name)
@@ -32,6 +45,34 @@ QLabel* MakeValueLabel(const QString& object_name)
     label->setTextInteractionFlags(Qt::TextSelectableByMouse);
     return label;
 }
+
+//! A custom mining script: non-empty, even-length hex, at most MAX_SCRIPT_SIZE bytes.
+std::optional<CScript> ParseScriptDraft(const QString& text)
+{
+    const std::string hex{text.trimmed().toStdString()};
+    if (!IsHex(hex)) return std::nullopt;
+    const std::vector<unsigned char> bytes{ParseHex(hex)};
+    if (bytes.size() > MAX_SCRIPT_SIZE) return std::nullopt;
+    return CScript(bytes.begin(), bytes.end());
+}
+
+//! Spendable with an empty scriptSig and an empty witness under the consensus
+//! flags: whoever sees the coins first can take them.
+bool AnyoneCanSpend(const CScript& script)
+{
+    return VerifyScript(CScript{}, script, nullptr, MANDATORY_SCRIPT_VERIFY_FLAGS, BaseSignatureChecker{});
+}
+
+//! Marks the script field invalid when focus leaves it; typing is never blocked.
+class ScriptHexValidator : public QValidator
+{
+public:
+    using QValidator::QValidator;
+    State validate(QString& input, int&) const override
+    {
+        return ParseScriptDraft(input) ? Acceptable : Intermediate;
+    }
+};
 } // namespace
 
 MineMintPage::MineMintPage(QWidget* parent)
@@ -95,10 +136,64 @@ MineMintPage::MineMintPage(QWidget* parent)
     m_saved_address_button->setObjectName(QStringLiteral("savedAddressButton"));
     m_saved_address_button->setProperty("class", QStringLiteral("benchQuiet"));
     m_saved_address_button->setVisible(false);
+    m_last_address_button = new QPushButton(tr("Use last"), payout_panel);
+    m_last_address_button->setObjectName(QStringLiteral("lastAddressButton"));
+    m_last_address_button->setProperty("class", QStringLiteral("benchQuiet"));
+    m_last_address_button->setVisible(false);
     payout_row->addWidget(m_payout_edit, 1);
     payout_row->addWidget(m_new_address_button);
     payout_row->addWidget(m_saved_address_button);
+    payout_row->addWidget(m_last_address_button);
     payout.body->addLayout(payout_row);
+    m_script_wins_note = new QLabel(tr("Start uses the custom mining script."), payout_panel);
+    m_script_wins_note->setObjectName(QStringLiteral("payoutScriptWinsNote"));
+    m_script_wins_note->setProperty("class", QStringLiteral("benchNote"));
+    m_script_wins_note->setVisible(false);
+    payout.body->addWidget(m_script_wins_note);
+
+    // F-556: a raw payout script, for developers. Collapsed at every launch unless
+    // a script is configured, typed or running: a hidden script must never be what
+    // Start uses.
+    m_developer_toggle = new DeveloperOptionsToggle(payout_panel);
+    m_developer_toggle->setObjectName(QStringLiteral("mineDeveloperOptionsToggle"));
+    payout.body->addWidget(m_developer_toggle, 0, Qt::AlignLeft);
+    m_developer_section = new QWidget(payout_panel);
+    m_developer_section->setObjectName(QStringLiteral("mineDeveloperOptions"));
+    auto* developer_layout = new QVBoxLayout(m_developer_section);
+    developer_layout->setContentsMargins(0, 0, 0, 0);
+    developer_layout->setSpacing(6);
+    auto* script_label = new QLabel(tr("Custom mining script"), m_developer_section);
+    script_label->setObjectName(QStringLiteral("payoutScriptLabel"));
+    script_label->setProperty("class", QStringLiteral("benchKey"));
+    developer_layout->addWidget(script_label);
+    auto* script_row = new QHBoxLayout;
+    script_row->setSpacing(8);
+    m_script_edit = new QValidatedLineEdit(m_developer_section);
+    m_script_edit->setObjectName(QStringLiteral("payoutScriptEdit"));
+    m_script_edit->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    m_script_edit->setCheckValidator(new ScriptHexValidator(m_script_edit));
+    script_label->setBuddy(m_script_edit);
+    m_saved_script_button = new QPushButton(tr("Use saved"), m_developer_section);
+    m_saved_script_button->setObjectName(QStringLiteral("savedScriptButton"));
+    m_saved_script_button->setProperty("class", QStringLiteral("benchQuiet"));
+    m_saved_script_button->setVisible(false);
+    script_row->addWidget(m_script_edit, 1);
+    script_row->addWidget(m_saved_script_button);
+    developer_layout->addLayout(script_row);
+    m_script_note = new QLabel(m_developer_section);
+    m_script_note->setObjectName(QStringLiteral("payoutScriptNote"));
+    m_script_note->setProperty("class", QStringLiteral("benchNote"));
+    m_script_note->setWordWrap(true);
+    m_script_note->setVisible(false);
+    developer_layout->addWidget(m_script_note);
+    m_script_warning = new QLabel(tr("Anyone can spend coins mined to this script."), m_developer_section);
+    m_script_warning->setObjectName(QStringLiteral("payoutScriptWarning"));
+    m_script_warning->setProperty("class", QStringLiteral("benchNote"));
+    m_script_warning->setWordWrap(true);
+    m_script_warning->setVisible(false);
+    developer_layout->addWidget(m_script_warning);
+    m_developer_section->setVisible(false);
+    payout.body->addWidget(m_developer_section);
     root->addWidget(payout_panel);
 
     // The miner's state as label/value rows, with its commands under them.
@@ -174,12 +269,41 @@ MineMintPage::MineMintPage(QWidget* parent)
     connect(m_saved_address_button, &QPushButton::clicked, this, [this] {
         setPayoutAddress(m_saved_payout_address);
     });
+    connect(m_last_address_button, &QPushButton::clicked, this, [this] {
+        setPayoutAddress(m_last_address);
+    });
     connect(m_payout_edit, &QLineEdit::textEdited, this, [this] {
         if (!m_payout_setting_key.isEmpty()) QSettings().setValue(m_payout_setting_key, m_payout_edit->text());
+        m_converted_note.clear();
+        refreshDeveloperOptions();
+    });
+    connect(m_developer_toggle, &QAbstractButton::toggled, m_developer_section, &QWidget::setVisible);
+    connect(m_script_edit, &QLineEdit::textChanged, this, &MineMintPage::refreshDeveloperOptions);
+    connect(m_script_edit, &QLineEdit::textEdited, this, [this] {
+        m_converted_note.clear();
+        refreshDeveloperOptions();
+    });
+    // On editingFinished, not per keystroke, so a script is not converted mid-typing.
+    connect(m_script_edit, &QLineEdit::editingFinished, this, &MineMintPage::convertAddressScript);
+    connect(m_saved_script_button, &QPushButton::clicked, this, [this] {
+        m_converted_note.clear();
+        m_script_edit->setText(m_saved_payout_script);
+        convertAddressScript();
     });
     connect(m_configure_solver_button, &QPushButton::clicked, this, &MineMintPage::solverSettingsRequested);
     connect(isolation_button, &QPushButton::clicked, this, &MineMintPage::networkHelpRequested);
     setAddressHelperAvailable(false);
+    refreshDeveloperOptions();
+}
+
+void MineMintPage::emitStart()
+{
+    const QString script{payoutScript()};
+    if (!script.isEmpty()) {
+        Q_EMIT startScriptRequested(script);
+    } else {
+        Q_EMIT startRequested(payoutAddress());
+    }
 }
 
 void MineMintPage::handleStartClicked()
@@ -189,7 +313,7 @@ void MineMintPage::handleStartClicked()
     // on peer count -- so the only defensible behaviour is to make the user assert it
     // rather than to block it or, as before, to do it silently.
     if (m_peers != 0) {
-        Q_EMIT startRequested(payoutAddress());
+        emitStart();
         return;
     }
     auto* box = new QMessageBox{QMessageBox::Warning, tr("Mine with no peers?"),
@@ -207,7 +331,7 @@ void MineMintPage::handleStartClicked()
     box->setDefaultButton(cancel_button);
     box->setEscapeButton(cancel_button);
     connect(box, &QMessageBox::finished, this, [this, box, proceed_button] {
-        if (box->clickedButton() == proceed_button) Q_EMIT startRequested(payoutAddress());
+        if (box->clickedButton() == proceed_button) emitStart();
     });
     GUIUtil::ShowModalDialogAsynchronously(box);
 }
@@ -311,6 +435,13 @@ void MineMintPage::setStatus(const interfaces::MiningStatus& s)
     m_status_value->setText(rows.block_mining);
     m_active = s.active;
     m_reported_payout = rows.payout;
+    // The target is node-wide and the field is per-vault, so the retained address
+    // is offered, never filled in: only the user fills the field (F-549).
+    m_last_address = s.active ? QString() : QString::fromStdString(s.address);
+    m_has_retained_target = !s.address.empty() || !s.payout_script.empty();
+    m_last_address_button->setVisible(!m_last_address.isEmpty());
+    m_active_on_script = s.active && s.address.empty() && !s.payout_script.empty();
+    refreshDeveloperOptions();
     renderPayout();
     m_solver_value->setText(rows.solver);
     m_coins_minted_session = s.coins_minted_session;
@@ -337,14 +468,85 @@ void MineMintPage::renderMinted()
 }
 
 //! While idle, an entered address is the one Start will use, so the row names
-//! it; otherwise the row names what the miner reports.
+//! it; a retained target Start will not use is marked as such; otherwise the row
+//! names what the miner reports.
 void MineMintPage::renderPayout()
 {
     const QString draft{payoutAddress()};
-    m_payout_value->setText(!m_active && !draft.isEmpty() ? tr("%1 (applied on Start)").arg(draft) : m_reported_payout);
+    const QString script{payoutScript()};
+    if (m_active) {
+        m_payout_value->setText(m_reported_payout);
+    } else if (!script.isEmpty()) {
+        m_payout_value->setText(tr("%1 (applied on Start)").arg(scriptLabel(script)));
+    } else if (!draft.isEmpty()) {
+        m_payout_value->setText(tr("%1 (applied on Start)").arg(draft));
+    } else if (m_has_retained_target) {
+        m_payout_value->setText(tr("%1 (last used, not applied)").arg(m_reported_payout));
+    } else {
+        m_payout_value->setText(m_reported_payout);
+    }
 }
 
 QString MineMintPage::payoutAddress() const { return m_payout_edit->text().trimmed(); }
+
+QString MineMintPage::payoutScript() const
+{
+    if (!m_script_edit) return {};
+    const QString text{m_script_edit->text().trimmed().toLower()};
+    return ParseScriptDraft(text) ? text : QString();
+}
+
+QString MineMintPage::scriptLabel(const QString& script_hex) const
+{
+    return script_hex.startsWith(QStringLiteral("6a")) ? tr("Raw script (provably unspendable)") : tr("Raw script");
+}
+
+void MineMintPage::convertAddressScript()
+{
+    const auto script{ParseScriptDraft(m_script_edit->text())};
+    CTxDestination dest;
+    // P2PK has no address, so ExtractDestination refuses it and it stays a script.
+    if (!script || !ExtractDestination(*script, dest)) return;
+    // Anchors and unknown witness versions have addresses too, but converting would hide 5j.
+    if (AnyoneCanSpend(*script)) return;
+    const QString address{QString::fromStdString(EncodeDestination(dest))};
+    setPayoutAddress(address); // stored: the user put the script there
+    m_script_edit->clear();
+    m_converted_note = tr("This script pays %1").arg(address);
+    refreshDeveloperOptions();
+}
+
+void MineMintPage::setSavedPayoutScript(const QString& script_hex)
+{
+    m_saved_payout_script = script_hex;
+    refreshDeveloperOptions();
+}
+
+void MineMintPage::refreshDeveloperOptions()
+{
+    if (!m_script_edit || !m_start_button) return;
+    const auto script{ParseScriptDraft(m_script_edit->text())};
+    const QString note{!m_converted_note.isEmpty() ? m_converted_note
+                       : script ? scriptLabel(payoutScript())
+                                : QString()};
+    m_script_note->setText(note);
+    m_script_note->setVisible(!note.isEmpty());
+    m_script_warning->setVisible(script && AnyoneCanSpend(*script));
+    m_saved_script_button->setVisible(!m_saved_payout_script.isEmpty());
+
+    // The script wins: the address row stands aside while it holds one.
+    const bool script_wins{script.has_value()};
+    m_script_wins_note->setVisible(script_wins);
+    m_payout_edit->setEnabled(!script_wins);
+    m_new_address_button->setEnabled(m_address_helper_available && !script_wins);
+    m_saved_address_button->setEnabled(!script_wins);
+    m_last_address_button->setEnabled(!script_wins);
+
+    const bool forced_open{!m_saved_payout_script.isEmpty() || m_active_on_script || !m_script_edit->text().isEmpty()};
+    m_developer_toggle->setForcedOpen(forced_open ? tr("Shown while a custom mining script is configured or in use.") : QString());
+    renderPayout();
+    refreshStartAvailability();
+}
 void MineMintPage::setPayoutAddress(const QString& a)
 {
     m_payout_edit->setText(a);
@@ -365,19 +567,25 @@ void MineMintPage::setSavedPayoutAddress(const QString& address)
 
 void MineMintPage::setAddressHelperAvailable(bool available)
 {
-    m_new_address_button->setEnabled(available);
+    m_address_helper_available = available;
+    m_new_address_button->setEnabled(available && payoutScript().isEmpty());
     m_new_address_button->setToolTip(available ? QString() : tr("Open a vault to create a fresh payout address."));
     refreshStartAvailability();
 }
 
 void MineMintPage::refreshStartAvailability()
 {
-    if (!m_start_button || !m_start_reason) return;
+    if (!m_start_button || !m_start_reason || !m_script_edit) return;
+    const bool script{!payoutScript().isEmpty()};
+    // An invalid script is marked on its field; it has no sentence of its own.
+    const bool invalid_script{!script && !m_script_edit->text().trimmed().isEmpty()};
     const bool missing_address = payoutAddress().isEmpty();
-    m_start_button->setEnabled(!m_active && !missing_address);
-    m_start_reason->setText(!m_active && missing_address
-        ? (m_new_address_button->isEnabled()
-            ? tr("Enter a payout address, or press Use new.")
+    m_start_button->setEnabled(!m_active && (script || (!invalid_script && !missing_address)));
+    m_start_reason->setText(!m_active && !script && !invalid_script && missing_address
+        ? (m_address_helper_available
+            ? (!m_last_address.isEmpty()
+                ? tr("Enter a payout address, or press Use last or Use new.")
+                : tr("Enter a payout address, or press Use new."))
             : tr("Enter a payout address, or open a vault and press Use new."))
         : QString());
     m_start_reason->setVisible(!m_start_reason->text().isEmpty());

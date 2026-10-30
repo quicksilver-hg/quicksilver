@@ -7,6 +7,7 @@
 #include <addresstype.h>
 #include <chain.h>
 #include <chainparams.h>
+#include <consensus/merkle.h>
 #include <common/args.h>
 #include <consensus/amount.h>
 #include <crypto/cuckatoo/gpu_devices.h>
@@ -17,7 +18,9 @@
 #include <key_io.h>
 #include <logging.h>
 #include <node/block_solve.h>
+#include <node/miner.h>
 #include <node/types.h>
+#include <pow.h>
 #include <primitives/block.h>
 #include <rpc/request.h>
 #include <rpc/server.h>
@@ -847,6 +850,97 @@ BOOST_AUTO_TEST_CASE(start_mining_helper_starts_on_valid_address)
     BOOST_CHECK(res);   // success
     BOOST_CHECK(svc.IsActive());
     svc.Stop();
+}
+
+namespace {
+//! Assemble a block at the tip with the mining role's options: an OP_RETURN
+//! payout, claiming or not.
+std::unique_ptr<node::CBlockTemplate> AssembleOpReturnBlock(node::NodeContext& node, bool claim)
+{
+    node::BlockAssembler::Options options;
+    options.coinbase_output_script = CScript() << OP_RETURN;
+    options.claim_coinbase_reward = claim;
+    return node::BlockAssembler{node.chainman->ActiveChainstate(), node.relaypool.get(), options}.CreateNewBlock();
+}
+} // namespace
+
+BOOST_AUTO_TEST_CASE(zero_claim_block_claims_nothing_and_keeps_its_congestion)
+{
+    // F-578: only vout[0]'s value changes; the body, its weight and the
+    // nCongestion committed from that weight are what a full claim gives.
+    const auto zero = AssembleOpReturnBlock(m_node, /*claim=*/false);
+    const auto full = AssembleOpReturnBlock(m_node, /*claim=*/true);
+    BOOST_REQUIRE(zero && full);
+
+    const CBlock& zero_block = zero->block;
+    BOOST_CHECK_EQUAL(zero_block.vtx[0]->vout[0].nValue, 0);
+    BOOST_CHECK_EQUAL(zero_block.vtx[0]->GetValueOut(), 0);
+    BOOST_CHECK(zero_block.vtx[0]->vout[0].scriptPubKey == (CScript() << OP_RETURN));
+    BOOST_CHECK_EQUAL(GetBlockWeight(zero_block), GetBlockWeight(full->block));
+    BOOST_CHECK_EQUAL(zero_block.nCongestion, full->block.nCongestion);
+    BOOST_CHECK_EQUAL(zero_block.vtx.size(), full->block.vtx.size());
+
+    CBlock checked{zero_block};
+    checked.hashMerkleRoot = BlockMerkleRoot(checked);
+    LOCK(cs_main);
+    CBlockIndex* tip = m_node.chainman->ActiveChain().Tip();
+    BlockValidationState state;
+    BOOST_CHECK_MESSAGE(TestBlockValidity(state, Params(), m_node.chainman->ActiveChainstate(), checked, tip,
+                                          /*fCheckPOW=*/false, /*fCheckMerkleRoot=*/true),
+                        state.ToString());
+}
+
+BOOST_AUTO_TEST_CASE(default_block_claims_the_full_ceiling)
+{
+    const auto full = AssembleOpReturnBlock(m_node, node::BlockCreateOptions{}.claim_coinbase_reward);
+    BOOST_REQUIRE(full);
+    const Consensus::Params& params = m_node.chainman->GetConsensus();
+    LOCK(cs_main);
+    CBlockIndex* tip = m_node.chainman->ActiveChain().Tip();
+    const CAmount ceiling = GetBlockSubsidy(tip->nHeight + 1, params) + GetBlockMintAllowance(full->block, params, tip);
+    BOOST_CHECK_GT(ceiling, 0);
+    BOOST_CHECK_EQUAL(full->block.vtx[0]->vout[0].nValue, ceiling);
+}
+
+BOOST_AUTO_TEST_CASE(zero_claim_refuses_a_spendable_payout)
+{
+    const std::string refusal{"This node mines without claiming rewards (-minezeroclaim), so it mines only to a "
+                              "provably unspendable script. Start without a payout to use -minescript, or remove "
+                              "-minezeroclaim and restart the node."};
+    auto mining = interfaces::MakeMining(m_node);
+    MiningService svc(*m_node.chainman, *mining);
+    svc.SetZeroClaim(true);
+
+    const std::string addr = EncodeDestination(PKHash(coinbaseKey.GetPubKey()));
+    const auto by_address = node::StartMining(svc, addr);
+    BOOST_REQUIRE(!by_address);
+    BOOST_CHECK_EQUAL(util::ErrorString(by_address).original, refusal);
+    BOOST_CHECK(!svc.IsActive());
+
+    const auto by_script = node::StartMining(svc, CScript() << OP_TRUE);
+    BOOST_REQUIRE(!by_script);
+    BOOST_CHECK_EQUAL(util::ErrorString(by_script).original, refusal);
+    BOOST_CHECK(!svc.IsActive());
+    BOOST_CHECK(!svc.Start(CScript() << OP_TRUE, /*payout_address=*/""));
+    BOOST_CHECK(!svc.IsActive());
+
+    // An OP_RETURN payout starts, and the blocks it mines claim nothing.
+    const int start_height = WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Height());
+    BOOST_REQUIRE(node::StartMining(svc, CScript() << OP_RETURN));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (svc.GetStatus().blocks_found < 2 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    svc.Stop();
+    const MiningStatus st = svc.GetStatus();
+    BOOST_CHECK_GE(st.blocks_found, 2);
+    BOOST_CHECK_EQUAL(st.coins_minted_session, 0);
+    LOCK(cs_main);
+    for (const CBlockIndex* index = m_node.chainman->ActiveChain().Tip(); index->nHeight > start_height; index = index->pprev) {
+        CBlock block;
+        BOOST_REQUIRE(m_node.chainman->m_blockman.ReadBlock(block, *index));
+        BOOST_CHECK_EQUAL(block.vtx[0]->GetValueOut(), 0);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(wait_for_sync_predicate)

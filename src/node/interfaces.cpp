@@ -193,7 +193,7 @@ public:
     bool getProxy(Network net, Proxy& proxy_info) override { return GetProxy(net, proxy_info); }
     size_t getNodeCount(ConnectionDirection flags) override
     {
-        return m_context->connman ? m_context->connman->GetNodeCount(flags) : 0;
+        return m_context->connman ? m_context->connman->GetHandshakedNodeCount(flags) : 0;
     }
     int getHeadersAnsweredPeers() override
     {
@@ -355,9 +355,18 @@ public:
         if (!m_context->mining_service) return util::Error{Untranslated("Mining service unavailable")};
         return node::StartMining(*m_context->mining_service, payout_address);
     }
+    util::Result<void> startMiningScript(const CScript& payout_script) override
+    {
+        if (!m_context->mining_service) return util::Error{Untranslated("Mining service unavailable")};
+        return node::StartMining(*m_context->mining_service, payout_script);
+    }
     std::string configuredMiningPayoutAddress() override
     {
         return args().IsArgSet("-minescript") ? std::string{} : args().GetArg("-mineaddress", "");
+    }
+    std::string configuredMiningPayoutScript() override
+    {
+        return args().GetArg("-minescript", "");
     }
     void stopMining() override
     {

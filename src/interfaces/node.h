@@ -28,6 +28,7 @@
 
 class BanMan;
 class CNodeStats;
+class CScript;
 class Coin;
 class RPCTimerInterface;
 class UniValue;
@@ -264,8 +265,15 @@ public:
     //! Start the opt-in background mining role on an explicit payout address.
     virtual util::Result<void> startMining(const std::string& payout_address) = 0;
 
+    //! Start the opt-in background mining role on a raw payout script.
+    virtual util::Result<void> startMiningScript(const CScript& payout_script) = 0;
+
     //! Address configured for mining before or after Start; empty for a raw-script payout.
     virtual std::string configuredMiningPayoutAddress() = 0;
+
+    //! Raw payout script configured with -minescript, hex as given; empty if unset.
+    //! Reads the arguments only: it starts nothing and touches no vault.
+    virtual std::string configuredMiningPayoutScript() = 0;
 
     //! Stop the background mining role (no-op if inactive).
     virtual void stopMining() = 0;

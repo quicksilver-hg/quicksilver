@@ -22,6 +22,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -59,6 +60,19 @@ struct VaultTxStatus;
 
 using VaultOrderForm = std::vector<std::pair<std::string, std::string>>;
 using VaultValueMap = std::map<std::string, std::string>;
+
+//! What a successful commit did beyond keeping the transaction.
+struct CommitOutcome {
+    //! Set when the vault kept the transaction but this node did not accept it
+    //! yet, to the node's reason. The vault offers it again automatically.
+    std::optional<std::string> not_accepted_reason;
+};
+
+//! A co-signed agent spend the vault committed.
+struct CosignOutcome {
+    CTransactionRef tx;
+    CommitOutcome commit;
+};
 
 //! Interface for accessing a vault.
 class Vault
@@ -113,7 +127,7 @@ public:
     virtual util::Result<vault::AgentAllotmentPolicyBundle> agentAllotmentPolicyBundle(const std::string& request_json) = 0;
 
     //! Verify and co-sign the agent's proved request, then commit it.
-    virtual util::Result<CTransactionRef> cosignAgentAllotmentSpend(const std::string& psqt_base64) = 0;
+    virtual util::Result<CosignOutcome> cosignAgentAllotmentSpend(const std::string& psqt_base64) = 0;
 
     //! Stop co-signing new requests for this allotment.
     virtual bool stopAgentAllotment(const std::string& id) = 0;
@@ -186,10 +200,11 @@ public:
                                                             const std::function<void(uint32_t nonce)>& tx_proof_progress = {},
                                                             const std::function<bool()>& tx_proof_cancel = {}) = 0;
 
-    //! Commit transaction.
-    virtual util::Result<void> commitTransaction(CTransactionRef tx,
-                                                 VaultValueMap value_map,
-                                                 VaultOrderForm order_form) = 0;
+    //! Commit transaction. Success means the vault holds it; the outcome says
+    //! whether this node has not accepted it yet.
+    virtual util::Result<CommitOutcome> commitTransaction(CTransactionRef tx,
+                                                          VaultValueMap value_map,
+                                                          VaultOrderForm order_form) = 0;
 
     //! Return whether transaction can be abandoned.
     virtual bool transactionCanBeAbandoned(const uint256& txid) = 0;

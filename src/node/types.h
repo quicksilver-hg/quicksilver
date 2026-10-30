@@ -67,6 +67,12 @@ struct BlockCreateOptions {
      * coinbase_max_additional_weight and coinbase_output_max_additional_sigops.
      */
     CScript coinbase_output_script{CScript() << OP_TRUE};
+    /**
+     * Claim the block's full ceiling, the subsidy plus each included
+     * transaction's mint allowance. False makes the coinbase pay 0, so neither
+     * is created (F-578, -minezeroclaim). Only the mining role sets it.
+     */
+    bool claim_coinbase_reward{true};
 };
 } // namespace node
 

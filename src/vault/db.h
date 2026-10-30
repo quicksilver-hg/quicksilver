@@ -8,6 +8,7 @@
 #define QUICKSILVER_VAULT_DB_H
 
 #include <clientversion.h>
+#include <kernel/messagestartchars.h>
 #include <streams.h>
 #include <support/allocators/secure.h>
 #include <util/fs.h>
@@ -203,6 +204,7 @@ enum class DatabaseStatus {
     FAILED_VERIFY,
     FAILED_ENCRYPT,
     FAILED_INVALID_BACKUP_FILE,
+    FAILED_WRONG_NETWORK,
 };
 
 /** Recursively list database paths in directory. */
@@ -213,6 +215,11 @@ std::unique_ptr<VaultDatabase> MakeDatabase(const fs::path& path, const Database
 
 fs::path SQLiteDataFile(const fs::path& path);
 bool IsSQLiteFile(const fs::path& path);
+//! The application id of a SQLite database file, which this node sets to its
+//! network's message start; nullopt when the file is missing, short or not SQLite.
+std::optional<MessageStartChars> ReadSQLiteApplicationId(const fs::path& path);
+//! Why a SQLite vault whose application id is not this network's can't be opened.
+std::string WrongNetworkVaultReason(const MessageStartChars& app_id);
 } // namespace vault
 
 #endif // QUICKSILVER_VAULT_DB_H

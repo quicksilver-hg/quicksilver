@@ -30,7 +30,7 @@ class MiningServiceTest(QuicksilverTestFramework):
         st = node.getminingstatus()
         for key in ("active", "address", "payout_script", "blocks_found", "coins_minted_session",
                     "graphs_attempted", "devices", "solver_ok",
-                    "last_solver_error", "last_block_time", "elapsed_seconds",
+                    "last_solver_error", "last_block_time", "elapsed_seconds", "claims_reward",
                     "congestion_multiplier", "template_height",
                     "template_transactions"):
             assert key in st, f"getminingstatus missing {key}"
@@ -45,10 +45,11 @@ class MiningServiceTest(QuicksilverTestFramework):
         assert_equal(st["template_transactions"], 0)
         assert_equal(st["blocks_found"], 0)
         assert_equal(st["coins_minted_session"], Decimal(0))
+        assert_equal(st["claims_reward"], True)
         assert_equal(st["graphs_attempted"], 0)
 
         self.log.info("No payout target -> error")
-        assert_raises_rpc_error(-8, "No payout target", node.startmining)
+        assert_raises_rpc_error(-8, "No payout target is loaded. Pass an address, or set mineaddress or minescript in quicksilver.conf and restart the node: the file is read only at startup.", node.startmining)
 
         # Regression guard for the bootstrap launch blocker: a fresh height-0 chain
         # whose genesis is timestamped in the past reports initialblockdownload:true,
@@ -153,6 +154,15 @@ class MiningServiceTest(QuicksilverTestFramework):
             match=ErrorMatch.PARTIAL_REGEX,
         )
 
+        self.log.info("-minezeroclaim needs -minescript with a provably unspendable script")
+        zero_claim_init_error = ("Error: -minezeroclaim requires -minescript set to a provably unspendable script, "
+                                 "one that begins with OP_RETURN (for example 6a).")
+        for args in (["-minezeroclaim"],
+                     ["-minezeroclaim", f"-mineaddress={addr}"],
+                     ["-minezeroclaim", "-minescript=51"],
+                     ["-mine", "-minezeroclaim", "-minescript=51"]):
+            node.assert_start_raises_init_error(args, zero_claim_init_error, match=ErrorMatch.FULL_TEXT)
+
         self.log.info("-mine with -mineaddress auto-starts")
         # Chain already has blocks (recent tips), so the node is past IBD and the
         # auto-started role mines immediately.
@@ -206,6 +216,20 @@ class MiningServiceTest(QuicksilverTestFramework):
         explicit = node.startmining(addr)
         assert_equal(explicit["address"], addr)
         assert_equal(explicit["payout_script"], address_to_scriptpubkey(addr).hex())
+        node.stopmining()
+
+        self.log.info("With -minezeroclaim an explicit address is refused, and -minescript still starts")
+        self.stop_node(0)
+        log_offset = node.debug_log_path.stat().st_size
+        self.start_node(0, ["-minezeroclaim", "-minescript=6a"])
+        startup_log = node.debug_log_path.read_bytes()[log_offset:]
+        assert b"zero-claim on: blocks this node mines pay 0 to script=6a" in startup_log
+        assert_equal(node.getminingstatus()["claims_reward"], False)
+        assert_raises_rpc_error(-8, "This node mines without claiming rewards (-minezeroclaim), so it mines only to a "
+                                "provably unspendable script. Start without a payout to use -minescript, or remove "
+                                "-minezeroclaim and restart the node.", node.startmining, addr)
+        assert_equal(node.getminingstatus()["active"], False)
+        assert_equal(node.startmining()["payout_script"], "6a")
         node.stopmining()
 
         self.log.info("Two stub cards each publish a device rate")

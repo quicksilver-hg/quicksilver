@@ -164,6 +164,8 @@ if(ENABLE_VAULT)
       createvaultdialog.h
       desktoplaunchpage.cpp
       desktoplaunchpage.h
+      developeroptionstoggle.cpp
+      developeroptionstoggle.h
       editaddressdialog.cpp
       editaddressdialog.h
       ledgerrows.cpp

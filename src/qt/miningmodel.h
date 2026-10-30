@@ -30,6 +30,7 @@ public:
 
 public Q_SLOTS:
     void start(const QString& address); //!< surfaces failures via miningError
+    void startScript(const QString& script_hex); //!< raw payout script, hex; failures via miningError
     void stop();
     QString freshPayoutAddress(); //!< vault getNewDestination, "" if unavailable
 

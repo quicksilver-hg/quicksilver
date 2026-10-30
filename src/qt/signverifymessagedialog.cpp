@@ -136,7 +136,7 @@ void SignVerifyMessageDialog::on_signMessageButton_SM_clicked()
     if (!pkhash) {
         ui->addressIn_SM->setValid(false);
         ui->statusLabel_SM->setStyleSheet("QLabel { color: red; }");
-        ui->statusLabel_SM->setText(tr("Message signing is only supported for Base58 addresses. Please check the address and try again."));
+        ui->statusLabel_SM->setText(tr("Message signing works only with Base58 addresses that start with %1. To get one, open Request and choose Base58 as the address type.").arg(QString::fromStdString(Base58KeyHashLead())));
         return;
     }
 
@@ -237,7 +237,7 @@ void SignVerifyMessageDialog::on_verifyMessageButton_VM_clicked()
         return;
     case MessageVerificationResult::ERR_ADDRESS_NO_KEY:
         ui->addressIn_VM->setValid(false);
-        ui->statusLabel_VM->setText(tr("Message signing is only supported for Base58 addresses. Please check the address and try again."));
+        ui->statusLabel_VM->setText(tr("Message signatures can only be checked against Base58 addresses that start with %1, and this address does not.").arg(QString::fromStdString(Base58KeyHashLead())));
         return;
     case MessageVerificationResult::ERR_MALFORMED_SIGNATURE:
         ui->signatureIn_VM->setValid(false);

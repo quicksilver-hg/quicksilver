@@ -36,6 +36,8 @@
 
 using common::PSQTError;
 using interfaces::Chain;
+using interfaces::CommitOutcome;
+using interfaces::CosignOutcome;
 using interfaces::FoundBlock;
 using interfaces::Handler;
 using interfaces::MakeSignalHandler;
@@ -53,6 +55,14 @@ namespace vault {
 // All members of the classes in this namespace are intentionally public, as the
 // classes themselves are private.
 namespace {
+//! The part of a commit result the GUI needs once the vault holds the transaction.
+CommitOutcome ToCommitOutcome(const CommitTransactionResult& committed)
+{
+    CommitOutcome outcome;
+    if (committed.not_accepted_error != node::TransactionError::OK) outcome.not_accepted_reason = committed.not_accepted_reason;
+    return outcome;
+}
+
 //! Construct vault tx struct.
 VaultTx MakeVaultTx(CVault& vault, const CVaultTx& wtx)
 {
@@ -168,9 +178,11 @@ public:
     {
         return m_vault->ValidateAgentAllotmentPolicyRequest(request_json);
     }
-    util::Result<CTransactionRef> cosignAgentAllotmentSpend(const std::string& psqt_base64) override
+    util::Result<CosignOutcome> cosignAgentAllotmentSpend(const std::string& psqt_base64) override
     {
-        return m_vault->CosignAgentAllotmentSpend(psqt_base64);
+        auto cosigned{m_vault->CosignAgentAllotmentSpend(psqt_base64)};
+        if (!cosigned) return util::Error{util::ErrorString(cosigned)};
+        return CosignOutcome{cosigned->tx, ToCommitOutcome(cosigned->commit)};
     }
     bool stopAgentAllotment(const std::string& id) override { return m_vault->StopAgentAllotment(id); }
     util::Result<AgentAllotmentPolicyBundle> agentAllotmentPolicyBundle(const std::string& request_json) override
@@ -332,9 +344,9 @@ public:
 
         return txr.tx;
     }
-    util::Result<void> commitTransaction(CTransactionRef tx,
-                                         VaultValueMap value_map,
-                                         VaultOrderForm order_form) override
+    util::Result<CommitOutcome> commitTransaction(CTransactionRef tx,
+                                                  VaultValueMap value_map,
+                                                  VaultOrderForm order_form) override
     {
         LOCK(m_vault->cs_vault);
         const CommitTransactionResult committed{m_vault->CommitTransaction(std::move(tx), std::move(value_map), std::move(order_form))};
@@ -344,7 +356,7 @@ public:
                 ? error
                 : Untranslated(strprintf("%s: %s", error.original, committed.reject_reason))};
         }
-        return {};
+        return ToCommitOutcome(committed);
     }
     bool transactionCanBeAbandoned(const uint256& txid) override { return m_vault->TransactionCanBeAbandoned(txid); }
     bool abandonTransaction(const uint256& txid) override

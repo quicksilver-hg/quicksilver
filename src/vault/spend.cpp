@@ -1669,7 +1669,7 @@ util::Result<AgentAllotmentPolicyBundle> CVault::ExportAgentAllotmentPolicyBundl
     bundle.bundle_json = bundle_json.write();
     return bundle;
 }
-util::Result<CTransactionRef> CVault::CosignAgentAllotmentSpend(const std::string& psqt_base64)
+util::Result<AgentCosignResult> CVault::CosignAgentAllotmentSpend(const std::string& psqt_base64)
 {
     PartiallySignedQuicksilverTransaction request;
     std::string decode_error;
@@ -1829,6 +1829,8 @@ util::Result<CTransactionRef> CVault::CosignAgentAllotmentSpend(const std::strin
         for (const COutPoint& outpoint : change_outpoints) UnlockCoin(outpoint, &batch);
         return util::Error{Untranslated(committed.reject_reason)};
     }
-    return tx;
+    // A spend the node did not accept yet is still committed: the change stays
+    // reserved for the agent, and the refusal goes back to the caller.
+    return AgentCosignResult{tx, committed};
 }
 } // namespace vault

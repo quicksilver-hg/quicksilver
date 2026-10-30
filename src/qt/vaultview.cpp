@@ -139,6 +139,7 @@ void VaultView::setClientModel(ClientModel *_clientModel)
     if (_clientModel && vaultModel && !miningModel) {
         miningModel = new MiningModel(_clientModel->node(), vaultModel, this);
         connect(mineMintPage, &MineMintPage::startRequested, miningModel, &MiningModel::start);
+        connect(mineMintPage, &MineMintPage::startScriptRequested, miningModel, &MiningModel::startScript);
         connect(mineMintPage, &MineMintPage::stopRequested, miningModel, &MiningModel::stop);
         connect(mineMintPage, &MineMintPage::newAddressRequested, this, [this]{
             if (!miningModel) return;
@@ -156,6 +157,8 @@ void VaultView::setClientModel(ClientModel *_clientModel)
 
     mineMintPage->setSavedPayoutAddress(_clientModel
         ? QString::fromStdString(_clientModel->node().configuredMiningPayoutAddress()) : QString());
+    mineMintPage->setSavedPayoutScript(_clientModel
+        ? QString::fromStdString(_clientModel->node().configuredMiningPayoutScript()) : QString());
 
     if (_clientModel) {
         auto refresh_network = [this]{

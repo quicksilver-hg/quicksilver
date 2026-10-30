@@ -388,6 +388,47 @@ class MultiVaultTest(QuicksilverTestFramework):
         self.nodes[0].unloadvault(vault)
         self.nodes[1].loadvault(vault)
 
+        self.test_vault_from_another_network(vault_dir)
+
+    def test_vault_from_another_network(self, vault_dir):
+        self.log.info("Test a vault from another network is named, not called unrecognised (G-03)")
+        node = self.nodes[0]
+        node.createvault('othernet')
+        node.unloadvault('othernet')
+        path = vault_dir('othernet')
+        data_file = vault_dir('othernet', 'vault.dat')
+
+        def set_application_id(app_id):
+            # SQLite keeps the application id at offset 68; the node stores its network's message start there.
+            with open(data_file, 'r+b') as f:
+                f.seek(68)
+                old = f.read(4)
+                f.seek(68)
+                f.write(bytes.fromhex(app_id))
+            return old.hex()
+
+        lead = "Failed to load database path '{}'. ".format(path)
+        known = "This vault belongs to the publictest network, but this node runs sandbox. The file is not damaged: open it with a node running publictest."
+        unknown = "This vault was made for a network this release does not know (id 00000000), and this node runs sandbox (id 48475152). The file is not damaged, but this release cannot open it."
+
+        own_id = set_application_id('48475156')
+        assert_equal(own_id, '48475152')
+        assert_raises_rpc_error(-4, "Vault file verification failed. " + lead + known, node.loadvault, 'othernet')
+        set_application_id('00000000')
+        assert_raises_rpc_error(-4, "Vault file verification failed. " + lead + unknown, node.loadvault, 'othernet')
+
+        # Startup still stops on it, with the same text.
+        self.stop_node(0)
+        set_application_id('48475156')
+        node.assert_start_raises_init_error(['-vault=othernet'], "Error: " + lead + known)
+        set_application_id('00000000')
+        node.assert_start_raises_init_error(['-vault=othernet'], "Error: " + lead + unknown)
+
+        # The file was not damaged: with its own id back, it loads.
+        set_application_id(own_id)
+        self.start_node(0, ['-vault=othernet'])
+        assert 'othernet' in node.listvaults()
+
 
 if __name__ == '__main__':
     MultiVaultTest(__file__).main()

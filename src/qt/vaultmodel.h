@@ -68,6 +68,9 @@ public:
         VaultSyncUnavailable,
         TransactionCreationFailed,
         TransactionCommitFailed,
+        //! Committed: the vault holds the transfer, but this node did not accept
+        //! it yet. The reason is the node's.
+        OkNotAcceptedYet,
     };
 
     enum EncryptionStatus {
@@ -195,7 +198,7 @@ public:
     util::Result<vault::AgentAllotmentPolicyRequestMetadata> validateAgentAllotmentPolicyRequest(const QString& request_json) const;
     util::Result<vault::AgentAllotmentPolicyBundle> agentAllotmentPolicyBundle(const QString& request_json) const;
     CAmount agentAllotmentFundingAvailable(const vault::AgentAllotmentRecord& record) const;
-    util::Result<CTransactionRef> cosignAgentAllotmentSpend(const QString& psqt);
+    util::Result<interfaces::CosignOutcome> cosignAgentAllotmentSpend(const QString& psqt);
     bool stopAgentAllotment(const QString& id);
     bool canCosignAgentAllotmentSpend() const;
     bool tryListCoins(interfaces::Vault::CoinsList& coins) const;

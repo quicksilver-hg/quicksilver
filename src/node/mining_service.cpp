@@ -103,6 +103,9 @@ bool MiningService::Start(const CScript& payout_script, const std::string& payou
 {
     LOCK(m_thread_mutex);
     if (m_active.load()) return false;  // already active
+    // StartMining refuses this with W2 before calling here; the check is repeated
+    // so no caller can arm a zero-claim worker on a spendable payout (F-549).
+    if (m_zero_claim.load() && !ZeroClaimPayoutAllowed(payout_script)) return false;
     // Interrupt() may have asked the previous worker to exit without joining.
     // Join it before spawning a replacement: assigning to a joinable std::thread
     // calls std::terminate.
@@ -247,7 +250,8 @@ void MiningService::Run(CScript payout_script)
         // completed template may have observed either side of that update.
         const unsigned int pool_updates_before = m_mining.getTransactionsUpdated();
         std::unique_ptr<interfaces::BlockTemplate> tmpl =
-            m_mining.createNewBlock(node::BlockCreateOptions{.coinbase_output_script = payout_script});
+            m_mining.createNewBlock(node::BlockCreateOptions{.coinbase_output_script = payout_script,
+                                                             .claim_coinbase_reward = !m_zero_claim.load()});
         if (!tmpl) {
             UninterruptibleSleep(std::chrono::milliseconds(500));
             continue;
@@ -440,11 +444,24 @@ interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateM
     return out;
 }
 
+bool ZeroClaimPayoutAllowed(const CScript& payout_script)
+{
+    return !payout_script.empty() && payout_script[0] == OP_RETURN;
+}
+
+static util::Error ZeroClaimRefusal()
+{
+    return util::Error{_("This node mines without claiming rewards (-minezeroclaim), so it mines only to a provably unspendable script. Start without a payout to use -minescript, or remove -minezeroclaim and restart the node.")};
+}
+
 util::Result<void> StartMining(MiningService& svc, const std::string& payout_address)
 {
     const CTxDestination dest = DecodeDestination(payout_address);
     if (!IsValidDestination(dest)) {
         return util::Error{_("Invalid payout address")};
+    }
+    if (svc.ZeroClaim() && !ZeroClaimPayoutAllowed(GetScriptForDestination(dest))) {
+        return ZeroClaimRefusal();
     }
     const bool started = svc.Start(GetScriptForDestination(dest), payout_address);
     if (!started && svc.GetStatus().address != payout_address) {
@@ -456,6 +473,9 @@ util::Result<void> StartMining(MiningService& svc, const std::string& payout_add
 util::Result<void> StartMining(MiningService& svc, const CScript& payout_script)
 {
     const std::string script_hex{HexStr(payout_script)};
+    if (svc.ZeroClaim() && !ZeroClaimPayoutAllowed(payout_script)) {
+        return ZeroClaimRefusal();
+    }
     const bool started = svc.Start(payout_script, /*payout_address=*/"");
     const MiningStatus status{svc.GetStatus()};
     if (!started && (!status.address.empty() || status.payout_script != script_hex)) {

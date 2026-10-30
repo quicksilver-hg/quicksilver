@@ -514,12 +514,78 @@ BOOST_FIXTURE_TEST_CASE(commit_retryable_rejection_keeps_transaction, VaultTxPow
     const CommitTransactionResult committed{vault->CommitTransaction(tx, {}, {})};
     BOOST_CHECK(committed);
     BOOST_CHECK_EQUAL(committed.error, node::TransactionError::OK);
+    // G-01: kept is not the same as sent. The node's refusal travels with the
+    // result so the caller can say the transfer is saved but not sent yet.
+    BOOST_CHECK_EQUAL(committed.not_accepted_error, node::TransactionError::RELAYPOOL_REJECTED);
+    BOOST_CHECK_EQUAL(committed.not_accepted_reason, "non-final");
 
     LOCK(vault->cs_vault);
     BOOST_CHECK_EQUAL(vault->mapVault.count(tx->GetHash()), 1U);
     for (const CTxIn& txin : tx->vin) {
         BOOST_CHECK(vault->IsSpent(txin.prevout));
     }
+}
+
+BOOST_FIXTURE_TEST_CASE(commit_relaypool_full_keeps_transaction_and_carries_reason, VaultTxPowTestSetup)
+{
+    // A full relay pool is retryable: the vault keeps the transaction, and the
+    // result says the node did not take it, with the reason the GUI keys on.
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    RejectingChain rejecting_chain{*m_node.chain, node::TransactionError::RELAYPOOL_REJECTED, "relaypool full"};
+    std::unique_ptr<CVault> vault{CreateSyncedVault(
+        rejecting_chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey)};
+    vault->SetBroadcastTransactions(true);
+
+    const CKey destination_key{GenerateRandomKey()};
+    CCoinControl coin_control;
+    auto created{CreateTransaction(*vault,
+                                   {CRecipient{PKHash(destination_key.GetPubKey()), COIN}},
+                                   /*change_pos=*/std::nullopt,
+                                   coin_control)};
+    BOOST_REQUIRE_MESSAGE(created, util::ErrorString(created).original);
+    const CTransactionRef tx{created->tx};
+
+    const CommitTransactionResult committed{vault->CommitTransaction(tx, {}, {})};
+    BOOST_CHECK(committed);
+    BOOST_CHECK_EQUAL(committed.error, node::TransactionError::OK);
+    BOOST_CHECK_EQUAL(committed.not_accepted_error, node::TransactionError::RELAYPOOL_REJECTED);
+    BOOST_CHECK_EQUAL(committed.not_accepted_reason, "relaypool full");
+
+    LOCK(vault->cs_vault);
+    BOOST_CHECK_EQUAL(vault->mapVault.count(tx->GetHash()), 1U);
+}
+
+BOOST_FIXTURE_TEST_CASE(commit_without_broadcast_carries_no_refusal, VaultTxPowTestSetup)
+{
+    // With broadcasting off the transaction is never offered to the node, so
+    // there is no refusal to report even though this chain would refuse it.
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    RejectingChain rejecting_chain{*m_node.chain, node::TransactionError::RELAYPOOL_REJECTED, "relaypool full"};
+    std::unique_ptr<CVault> vault{CreateSyncedVault(
+        rejecting_chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey)};
+    vault->SetBroadcastTransactions(false);
+
+    const CKey destination_key{GenerateRandomKey()};
+    CCoinControl coin_control;
+    auto created{CreateTransaction(*vault,
+                                   {CRecipient{PKHash(destination_key.GetPubKey()), COIN}},
+                                   /*change_pos=*/std::nullopt,
+                                   coin_control)};
+    BOOST_REQUIRE_MESSAGE(created, util::ErrorString(created).original);
+    const CTransactionRef tx{created->tx};
+
+    const CommitTransactionResult committed{vault->CommitTransaction(tx, {}, {})};
+    BOOST_CHECK(committed);
+    BOOST_CHECK_EQUAL(committed.error, node::TransactionError::OK);
+    BOOST_CHECK_EQUAL(committed.not_accepted_error, node::TransactionError::OK);
+    BOOST_CHECK(committed.not_accepted_reason.empty());
+
+    LOCK(vault->cs_vault);
+    BOOST_CHECK_EQUAL(vault->mapVault.count(tx->GetHash()), 1U);
 }
 
 BOOST_FIXTURE_TEST_CASE(scan_for_vault_transactions, TestChain100Setup)
@@ -1955,11 +2021,11 @@ BOOST_FIXTURE_TEST_CASE(agent_cosign_broadcasts_cosigned_spend, AgentCosignTesti
     const auto psqt{AgentRequest(bundle)};
     auto result{vault->CosignAgentAllotmentSpend(Encode(psqt))};
     BOOST_REQUIRE_MESSAGE(result, util::ErrorString(result).original);
-    BOOST_CHECK(m_node.chain->isInRelayPool((*result)->GetHash()));
-    BOOST_REQUIRE_EQUAL((*result)->vin[0].scriptWitness.stack.size(), 4U);
+    BOOST_CHECK(m_node.chain->isInRelayPool(result->tx->GetHash()));
+    BOOST_REQUIRE_EQUAL(result->tx->vin[0].scriptWitness.stack.size(), 4U);
     LOCK(vault->cs_vault);
-    BOOST_REQUIRE_EQUAL(vault->mapVault.count((*result)->GetHash()), 1U);
-    BOOST_CHECK_EQUAL(vault->mapVault.at((*result)->GetHash()).mapValue.at("agent_allotment"), bundle.metadata.id);
+    BOOST_REQUIRE_EQUAL(vault->mapVault.count(result->tx->GetHash()), 1U);
+    BOOST_CHECK_EQUAL(vault->mapVault.at(result->tx->GetHash()).mapValue.at("agent_allotment"), bundle.metadata.id);
 }
 
 // The agent spends its next request from this change, so the vault must not count it as
@@ -1974,7 +2040,7 @@ BOOST_FIXTURE_TEST_CASE(agent_cosign_locks_change_returned_to_the_allotment, Age
     const auto psqt{AgentRequest(bundle, /*sign=*/true, change)};
     auto result{vault->CosignAgentAllotmentSpend(Encode(psqt))};
     BOOST_REQUIRE_MESSAGE(result, util::ErrorString(result).original);
-    const CTransactionRef& tx{*result};
+    const CTransactionRef& tx{result->tx};
     BOOST_REQUIRE_EQUAL(tx->vout.size(), 2U);
     BOOST_REQUIRE(tx->vout[1].scriptPubKey == GetScriptForDestination(DecodeDestination(bundle.metadata.funding_address)));
     const COutPoint change_outpoint{tx->GetHash(), 1};
@@ -1988,6 +2054,40 @@ BOOST_FIXTURE_TEST_CASE(agent_cosign_locks_change_returned_to_the_allotment, Age
     for (const COutput& coin : AvailableCoins(*vault).All()) {
         BOOST_CHECK(coin.outpoint != change_outpoint);
     }
+}
+
+// G-01: a node that refuses every broadcast for a reason that may not hold later.
+struct AgentCosignNotAcceptedTestingSetup : AgentCosignTestingSetup {
+    AgentCosignNotAcceptedTestingSetup() : proxy{*m_node.chain, node::TransactionError::RELAYPOOL_REJECTED, "relaypool full"}
+    {
+        vault.reset();
+        vault = CreateSyncedVault(proxy, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
+        vault->SetBroadcastTransactions(true);
+    }
+    ~AgentCosignNotAcceptedTestingSetup() { vault.reset(); }
+    RejectingChain proxy;
+};
+
+// The vault keeps a co-signed spend the node did not accept yet, says why, and keeps the
+// agent's change reserved for the agent: unlocking it would let the treasury spend
+// change the kept transaction still pays out.
+BOOST_FIXTURE_TEST_CASE(agent_cosign_kept_spend_carries_refusal_and_keeps_change_locked, AgentCosignNotAcceptedTestingSetup)
+{
+    constexpr CAmount change{COIN / 8};
+    const auto bundle{FundAgent()};
+    const auto psqt{AgentRequest(bundle, /*sign=*/true, change)};
+    auto result{vault->CosignAgentAllotmentSpend(Encode(psqt))};
+    BOOST_REQUIRE_MESSAGE(result, util::ErrorString(result).original);
+    BOOST_CHECK_EQUAL(result->commit.not_accepted_error, node::TransactionError::RELAYPOOL_REJECTED);
+    BOOST_CHECK_EQUAL(result->commit.not_accepted_reason, "relaypool full");
+    const CTransactionRef& tx{result->tx};
+    BOOST_CHECK(!m_node.chain->isInRelayPool(tx->GetHash()));
+    BOOST_REQUIRE_EQUAL(tx->vout.size(), 2U);
+    const COutPoint change_outpoint{tx->GetHash(), 1};
+
+    LOCK(vault->cs_vault);
+    BOOST_CHECK_EQUAL(vault->mapVault.count(tx->GetHash()), 1U);
+    BOOST_CHECK(vault->IsLockedCoin(change_outpoint));
 }
 
 BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_after_stop, AgentCosignTestingSetup)
@@ -2063,7 +2163,7 @@ BOOST_FIXTURE_TEST_CASE(agent_cosign_signs_script_path_with_cosigner_only, Agent
     const auto psqt{AgentRequest(bundle)};
     auto result{vault->CosignAgentAllotmentSpend(Encode(psqt))};
     BOOST_REQUIRE_MESSAGE(result, util::ErrorString(result).original);
-    const auto& witness{(*result)->vin[0].scriptWitness};
+    const auto& witness{result->tx->vin[0].scriptWitness};
     BOOST_REQUIRE_EQUAL(witness.stack.size(), 4U);
     const auto& leaf{*psqt.inputs[0].m_tap_scripts.begin()};
     BOOST_CHECK(witness.stack[2] == leaf.first.first);
@@ -2072,7 +2172,7 @@ BOOST_FIXTURE_TEST_CASE(agent_cosign_signs_script_path_with_cosigner_only, Agent
     // This exact 2-of-2 script and successful verification require precisely A and C.
     auto data{PrecomputePSQTData(psqt)};
     BOOST_CHECK(VerifyScript({}, psqt.inputs[0].witness_utxo.scriptPubKey, &witness, STANDARD_SCRIPT_VERIFY_FLAGS,
-                            TransactionSignatureChecker{result->get(), 0, psqt.inputs[0].witness_utxo.nValue, data, MissingDataBehavior::FAIL}));
+                            TransactionSignatureChecker{result->tx.get(), 0, psqt.inputs[0].witness_utxo.nValue, data, MissingDataBehavior::FAIL}));
 }
 
 BOOST_FIXTURE_TEST_CASE(agent_only_spend_fails_script_verification, AgentCosignTestingSetup)

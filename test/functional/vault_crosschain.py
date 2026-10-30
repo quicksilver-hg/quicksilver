@@ -43,10 +43,22 @@ class VaultCrossChain(QuicksilverTestFramework):
         self.nodes[1].unloadvault(node1_vault)
         self.log.info("Loading/restoring vaults into nodes with a different genesis block")
 
-        assert_raises_rpc_error(-18, 'Vault file verification failed.', self.nodes[0].loadvault, node1_vault)
-        assert_raises_rpc_error(-18, 'Vault file verification failed.', self.nodes[1].loadvault, node0_vault)
-        assert_raises_rpc_error(-18, 'Vault file verification failed.', self.nodes[0].restorevault, 'w', node1_vault_backup)
-        assert_raises_rpc_error(-18, 'Vault file verification failed.', self.nodes[1].restorevault, 'w', node0_vault_backup)
+        # The file was found, so the error is RPC_VAULT_ERROR, not "not found".
+        self.check_wrong_network(self.nodes[0].loadvault, [node1_vault], node1_vault, "publictest", "sandbox")
+        self.check_wrong_network(self.nodes[1].loadvault, [node0_vault], node0_vault, "sandbox", "publictest")
+        self.check_wrong_network(self.nodes[0].restorevault, ['w', node1_vault_backup],
+                                 self.nodes[0].vaults_path / 'w', "publictest", "sandbox")
+        self.check_wrong_network(self.nodes[1].restorevault, ['w', node0_vault_backup],
+                                 self.nodes[1].vaults_path / 'w', "sandbox", "publictest")
+
+    @staticmethod
+    def check_wrong_network(fun, args, path, vault_chain, node_chain):
+        assert_raises_rpc_error(
+            -4,
+            f"Vault file verification failed. Failed to load database path '{path}'. "
+            f"This vault belongs to the {vault_chain} network, but this node runs {node_chain}. "
+            f"The file is not damaged: open it with a node running {vault_chain}.",
+            fun, *args)
 
 
 if __name__ == '__main__':

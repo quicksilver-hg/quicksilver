@@ -5,8 +5,16 @@
 """-cuckatoodevice is validated at start-up, before any solve.
 
 A typo or a contradictory choice must stop the node with the reason, not start
-it and leave the user to discover hours later that nothing was solving."""
+it and leave the user to discover hours later that nothing was solving.
+
+Sandbox blocks need no solver (fBlockPowNoCycle), so the node logs once that
+neither option is used for mining there (F-571), and says nothing when neither
+is set."""
+from pathlib import Path
+
 from test_framework.test_framework import QuicksilverTestFramework
+
+SANDBOX_INERT = "Sandbox blocks need no solver, so -cuckatoodevice and -cuckatoosolver are not used for mining."
 
 
 class GpuDeviceArgsTest(QuicksilverTestFramework):
@@ -24,7 +32,14 @@ class GpuDeviceArgsTest(QuicksilverTestFramework):
             extra_args=["-cuckatoodevice=04:00.0"],
             expected_msg="Error: -cuckatoodevice=04:00.0 is not a device id. Use an id from the helper's --list-devices output, such as pci:0000:04:00.0, or cpu.",
         )
-        self.start_node(0, extra_args=["-cuckatoodevice=cpu"])
+        with node.assert_debug_log(expected_msgs=[SANDBOX_INERT]):
+            self.start_node(0, extra_args=["-cuckatoodevice=cpu"])
+        stub = Path(node.binary).with_name("test_solver_stub" + Path(node.binary).suffix)
+        assert stub.exists(), stub
+        with node.assert_debug_log(expected_msgs=[SANDBOX_INERT]):
+            self.restart_node(0, extra_args=[f"-cuckatoosolver={stub}"])
+        with node.assert_debug_log(expected_msgs=[], unexpected_msgs=[SANDBOX_INERT]):
+            self.restart_node(0)
 
 
 if __name__ == '__main__':

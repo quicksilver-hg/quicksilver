@@ -130,6 +130,9 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
     m_gpu_device_list->setObjectName(QStringLiteral("gpuDeviceList"));
     ui->gpuDeviceListLayout->addWidget(m_gpu_device_list);
     m_gpu_device_list->setListingState(tr("Looking for graphics cards…"));
+    // F-575: the hint asks the reader to deselect a card. populateGpuDevices()
+    // shows it once a card is listed.
+    ui->gpuCardsHelp->hide();
     connect(ui->gpuModeAutomatic, &QRadioButton::toggled, this, &OptionsDialog::updateGpuMode);
     connect(ui->gpuModeChoose, &QRadioButton::toggled, this, &OptionsDialog::updateGpuMode);
     connect(ui->gpuModeCpu, &QRadioButton::toggled, this, &OptionsDialog::updateGpuMode);
@@ -630,7 +633,9 @@ void OptionsDialog::validateGpuSolverPath()
 void OptionsDialog::populateGpuDevices()
 {
     if (!m_gpu_discovery) return;
-    if (m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kListed && !m_gpu_discovery->listing.devices.empty()) {
+    const bool cards_listed{m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kListed && !m_gpu_discovery->listing.devices.empty()};
+    ui->gpuCardsHelp->setVisible(cards_listed);
+    if (cards_listed) {
         const QStringList chosen{model ? model->getOption(OptionsModel::GpuDevices).toStringList() : QStringList{}};
         m_gpu_device_list->setDevices(*m_gpu_discovery, chosen, model ? model->getGpuDeviceNames() : QMap<QString, QString>{});
     } else if (m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kNoHelper) {

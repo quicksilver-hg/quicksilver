@@ -636,6 +636,8 @@ void SetupServerArgs(ArgsManager& argsman)
     argsman.AddArg("-mine", strprintf("Run the opt-in background block-mining role at startup (requires -mineaddress or -minescript) (default: %u)", false), ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
     argsman.AddArg("-mineaddress=<addr>", "Payout address for the background mining role; also the default for startmining", ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
     argsman.AddArg("-minescript=<hex>", "Raw payout script (hex) for the background mining role, instead of -mineaddress. For example 6a pays a provably unspendable OP_RETURN output. Mutually exclusive with -mineaddress.", ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
+    // F-578: DEBUG_ONLY keeps it out of plain -help, so a release does not advertise it.
+    argsman.AddArg("-minezeroclaim", "Mine blocks that claim no reward: the coinbase pays 0, so neither the block subsidy nor the per-transaction mint allowance is created. Blocks still include and confirm transactions. Requires -minescript with a provably unspendable script, such as 6a. Not for anyone mining for income (default: 0)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::BLOCK_CREATION);
 
     argsman.AddArg("-rest", strprintf("Accept public REST requests (default: %u)", DEFAULT_REST_ENABLE), ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     argsman.AddArg("-rpcallowip=<ip>", "Allow JSON-RPC connections from specified source. Valid values for <ip> are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0), a network/CIDR (e.g. 1.2.3.4/24), all ipv4 (0.0.0.0/0), or all ipv6 (::/0). This option can be specified multiple times", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
@@ -2024,6 +2026,17 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     // becomes callable; reword or drop it and that assertion silently stops
     // testing anything. Move the log with the construction, not separately.
     LogInfo(HgLog::INIT, "mining service constructed\n");
+    // Before RPC becomes callable, so no startmining can arm a claiming worker
+    // first. The payout it requires is validated with -minescript below.
+    node.mining_service->SetZeroClaim(args.GetBoolArg("-minezeroclaim", false));
+    // F-571: sandbox block proof-of-work stops at the target without a cycle
+    // (fBlockPowNoCycle, block_solve.cpp), so mining there never reaches a
+    // solver. The options still parse, and transfer proofs still use a helper
+    // that -cuckatoosolver names (GpuHelperFor takes it at any graph size), so
+    // say once that mining ignores them rather than refuse them.
+    if (chainparams.GetConsensus().fBlockPowNoCycle && (args.IsArgSet("-cuckatoodevice") || args.IsArgSet("-cuckatoosolver"))) {
+        LogInfo(HgLog::FORGE, "Sandbox blocks need no solver, so -cuckatoodevice and -cuckatoosolver are not used for mining.\n");
+    }
     SetRPCWarmupFinished();
 
     uiInterface.InitMessage(_("Node online"));
@@ -2061,6 +2074,12 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
             return InitError(strprintf(_("Invalid -minescript: script exceeds %u bytes."), MAX_SCRIPT_SIZE));
         }
         mine_script.emplace(bytes.begin(), bytes.end());
+    }
+    if (node.mining_service->ZeroClaim()) {
+        if (!mine_script || !node::ZeroClaimPayoutAllowed(*mine_script)) {
+            return InitError(_("-minezeroclaim requires -minescript set to a provably unspendable script, one that begins with OP_RETURN (for example 6a)."));
+        }
+        LogInfo(HgLog::FORGE, "zero-claim on: blocks this node mines pay 0 to script=%s\n", HexStr(*mine_script));
     }
 
     // Quicksilver: opt-in background block-mining role (off by default).

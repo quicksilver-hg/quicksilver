@@ -38,6 +38,7 @@
 #include <txrelaypool.h>
 #include <txorphanage.h>
 #include <txrequest.h>
+#include <util/chaintype.h>
 #include <util/check.h>
 #include <util/strencodings.h>
 #include <util/time.h>
@@ -70,6 +71,8 @@ static constexpr auto HEADERS_RESPONSE_TIME{2min};
 static constexpr int32_t MAX_OUTBOUND_PEERS_TO_PROTECT_FROM_DISCONNECT = 4;
 /** Timeout for (unprotected) outbound peers to sync to our chainwork */
 static constexpr auto CHAIN_SYNC_TIMEOUT{20min};
+/** Outbound connections closing before their handshake, with none completing, before the node warns (G-02). */
+static constexpr int HANDSHAKE_FAILURES_WARN_THRESHOLD{3};
 /** How frequently to check for stale tips */
 static constexpr auto STALE_CHECK_INTERVAL{10min};
 /** How frequently to check for extra outbound peers and disconnect */
@@ -467,10 +470,10 @@ public:
 
     /** Implement NetEventsInterface */
     void InitializeNode(const CNode& node, ServiceFlags our_services) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_tx_download_mutex);
-    void FinalizeNode(const CNode& node) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_headers_presync_mutex, !m_tx_download_mutex, !m_headers_answered_mutex);
+    void FinalizeNode(const CNode& node) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_headers_presync_mutex, !m_tx_download_mutex, !m_headers_answered_mutex, !m_handshake_failures_mutex);
     bool HasAllDesirableServiceFlags(ServiceFlags services) const override;
     bool ProcessMessages(CNode* pfrom, std::atomic<bool>& interrupt) override
-        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, !m_headers_presync_mutex, g_msgproc_mutex, !m_tx_download_mutex, !cs_main, !m_headers_answered_mutex);
+        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, !m_headers_presync_mutex, g_msgproc_mutex, !m_tx_download_mutex, !cs_main, !m_headers_answered_mutex, !m_handshake_failures_mutex);
     bool SendMessages(CNode* pto) override
         EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, g_msgproc_mutex, !m_tx_download_mutex);
 
@@ -493,7 +496,7 @@ public:
     void UnitTestMisbehaving(NodeId peer_id) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex) { Misbehaving(*Assert(GetPeerRef(peer_id)), ""); };
     void ProcessMessage(CNode& pfrom, const std::string& msg_type, DataStream& vRecv,
                         const std::chrono::microseconds time_received, const std::atomic<bool>& interruptMsgProc) override
-        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, !m_headers_presync_mutex, g_msgproc_mutex, !m_tx_download_mutex, !cs_main, !m_headers_answered_mutex);
+        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, !m_headers_presync_mutex, g_msgproc_mutex, !m_tx_download_mutex, !cs_main, !m_headers_answered_mutex, !m_handshake_failures_mutex);
     void UpdateLastBlockAnnounceTime(NodeId node, int64_t time_in_seconds) override;
     ServiceFlags GetDesirableServiceFlags(ServiceFlags services) const override;
 
@@ -728,6 +731,15 @@ private:
 
     node::Warnings& m_warnings;
     TimeOffsets m_outbound_time_offsets{m_warnings};
+
+    /** Outbound connections that closed before their handshake, counted since
+     *  an outbound handshake last completed. Drives Warning::HANDSHAKE_FAILURES. */
+    Mutex m_handshake_failures_mutex;
+    int m_handshake_failures GUARDED_BY(m_handshake_failures_mutex){0};
+    /** Count a closed connection that never finished its handshake. */
+    void RecordHandshakeFailure(const CNode& node) EXCLUSIVE_LOCKS_REQUIRED(!m_handshake_failures_mutex);
+    /** An outbound handshake completed: the other side runs this network. */
+    void RecordOutboundHandshake() EXCLUSIVE_LOCKS_REQUIRED(!m_handshake_failures_mutex);
 
     const Options m_opts;
 
@@ -1569,7 +1581,40 @@ void PeerManagerImpl::FinalizeNode(const CNode& node)
         LOCK(m_headers_presync_mutex);
         m_headers_presync_stats.erase(nodeid);
     }
+    RecordHandshakeFailure(node);
     LogDebug(HgLog::MESH, "Cleared nodestate for peer=%d\n", nodeid);
+}
+
+void PeerManagerImpl::RecordHandshakeFailure(const CNode& node)
+{
+    // Shutdown marks every node disconnected (StopNodes), so a close after
+    // Interrupt() is this node going away, not the other side refusing it.
+    if (m_connman.IsInterrupted()) return;
+    // Inbound closes never count: a public node is probed by other networks
+    // all day. Feelers and addr-fetches are short by design.
+    if (node.fSuccessfullyConnected || !node.fDisconnect) return;
+    if (!node.IsFullOutboundConn() && !node.IsBlockOnlyConn() && !node.IsManualConn()) return;
+
+    int failures;
+    {
+        LOCK(m_handshake_failures_mutex);
+        failures = ++m_handshake_failures;
+    }
+    if (failures < HANDSHAKE_FAILURES_WARN_THRESHOLD) return;
+    const bilingual_str message{strprintf(_("Connections to other nodes keep failing before they finish. Check that those "
+                                            "nodes run the same network as this one (%s) and a current Quicksilver release."),
+                                          ChainTypeToString(m_chainparams.GetChainType()))};
+    // Set() is false while the warning is already up: one log line per raise.
+    if (m_warnings.Set(node::Warning::HANDSHAKE_FAILURES, message)) {
+        LogInfo(HgLog::MESH, "%d outbound connections closed before finishing the handshake, with none completed since; "
+                             "warning that peers may run another network or release\n", failures);
+    }
+}
+
+void PeerManagerImpl::RecordOutboundHandshake()
+{
+    WITH_LOCK(m_handshake_failures_mutex, m_handshake_failures = 0);
+    m_warnings.Unset(node::Warning::HANDSHAKE_FAILURES);
 }
 
 bool PeerManagerImpl::HasAllDesirableServiceFlags(ServiceFlags services) const
@@ -3528,6 +3573,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         }
 
         pfrom.fSuccessfullyConnected = true;
+        if (!pfrom.IsInboundConn()) RecordOutboundHandshake();
         return;
     }
 

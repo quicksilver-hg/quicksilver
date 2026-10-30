@@ -169,6 +169,8 @@ void VaultFrame::setClientModel(ClientModel *_clientModel)
 
     m_mining_page->setSavedPayoutAddress(_clientModel
         ? QString::fromStdString(_clientModel->node().configuredMiningPayoutAddress()) : QString());
+    m_mining_page->setSavedPayoutScript(_clientModel
+        ? QString::fromStdString(_clientModel->node().configuredMiningPayoutScript()) : QString());
 
     for (auto i = mapVaultViews.constBegin(); i != mapVaultViews.constEnd(); ++i) {
         i.value()->setClientModel(_clientModel);
@@ -189,6 +191,7 @@ void VaultFrame::setClientModel(ClientModel *_clientModel)
         if (!m_mining_model) {
             m_mining_model = new MiningModel(clientModel->node(), nullptr, this);
             connect(m_mining_page, &MineMintPage::startRequested, m_mining_model, &MiningModel::start);
+            connect(m_mining_page, &MineMintPage::startScriptRequested, m_mining_model, &MiningModel::startScript);
             connect(m_mining_page, &MineMintPage::stopRequested, m_mining_model, &MiningModel::stop);
             connect(m_mining_page, &MineMintPage::newAddressRequested, this, [this] {
                 if (!m_mining_model) return;

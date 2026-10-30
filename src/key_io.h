@@ -23,6 +23,10 @@ CExtPubKey DecodeExtPubKey(const std::string& str);
 std::string EncodeExtPubKey(const CExtPubKey& extpubkey);
 
 std::string EncodeDestination(const CTxDestination& dest);
+//! The character every Base58 key-hash address on a network starts with (Q on
+//! main, P on publictest, S on sandbox): the address kind message signing needs.
+std::string Base58KeyHashLead(const CChainParams& params);
+std::string Base58KeyHashLead();
 CTxDestination DecodeDestination(const std::string& str);
 CTxDestination DecodeDestination(const std::string& str, std::string& error_msg, std::vector<int>* error_locations = nullptr);
 bool IsValidDestinationString(const std::string& str);

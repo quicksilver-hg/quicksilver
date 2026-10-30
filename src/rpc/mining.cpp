@@ -552,7 +552,7 @@ static RPCHelpMan startmining()
                 throw JSONRPCError(RPC_INVALID_PARAMETER, util::ErrorString(res).original);
             }
         } else {
-            throw JSONRPCError(RPC_INVALID_PARAMETER, "No payout target: pass an address or set -mineaddress or -minescript");
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "No payout target is loaded. Pass an address, or set mineaddress or minescript in quicksilver.conf and restart the node: the file is read only at startup.");
         }
     }
 
@@ -597,6 +597,7 @@ static RPCHelpMan getminingstatus()
             {RPCResult::Type::STR_HEX, "payout_script", "Payout script in use, hex (empty if never started)"},
             {RPCResult::Type::NUM, "blocks_found", "Blocks mined this session"},
             {RPCResult::Type::STR_AMOUNT, "coins_minted_session", "Coins minted this session (" + CURRENCY_UNIT + ")"},
+            {RPCResult::Type::BOOL, "claims_reward", "False when -minezeroclaim is set: blocks this node mines claim nothing, so no coins are created for them"},
             {RPCResult::Type::NUM, "attempts_per_second", /*optional=*/true, "Sum of measured rates for solving cards when available; otherwise Cuckatoo graphs attempted per second over the trailing " + util::ToString(node::AttemptRateWindow::WINDOW_SECONDS) + " seconds, including processor mining. This is the rate now, not a session average. Omitted while no rate or attempt has been measured -- unknown, not zero"},
             {RPCResult::Type::ARR, "devices", "Cards with recorded solver activity", {{RPCResult::Type::OBJ, "", "", {
                 {RPCResult::Type::STR, "id", "Card device id"},
@@ -629,6 +630,7 @@ static RPCHelpMan getminingstatus()
     obj.pushKV("payout_script", st.payout_script);
     obj.pushKV("blocks_found", st.blocks_found);
     obj.pushKV("coins_minted_session", ValueFromAmount(st.coins_minted_session));
+    obj.pushKV("claims_reward", !svc.ZeroClaim());
     // Deliberately absent rather than 0 when unknown: a zero rate is a real
     // reading (an armed miner whose solver has stopped) and must not be produced
     // by a miner that simply has not finished its first graph yet.
@@ -883,7 +885,7 @@ static RPCHelpMan getblocktemplate()
 
     if (!miner.isTestChain()) {
         const CConnman& connman = EnsureConnman(node);
-        if (connman.GetNodeCount(ConnectionDirection::Both) == 0) {
+        if (connman.GetHandshakedNodeCount(ConnectionDirection::Both) == 0) {
             // The first node on a new chain has no peer and never will until a
             // second one arrives, so this is the bootstrap condition rather than
             // a fault. The gate stays -- it is what stops a syncing node mining a

@@ -43,6 +43,13 @@ struct ConnmanTestMsg : public CConnman {
         m_peer_connect_timeout = timeout;
     }
 
+    void SetClientInterface(CClientUIInterface* client_interface)
+    {
+        m_client_interface = client_interface;
+    }
+
+    void NotifyNumConnections() { NotifyNumConnectionsChanged(); }
+
     std::vector<CNode*> TestNodes()
     {
         LOCK(m_nodes_mutex);
