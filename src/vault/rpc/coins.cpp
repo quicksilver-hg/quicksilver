@@ -405,7 +405,7 @@ RPCHelpMan getbalances()
                 {RPCResult::Type::OBJ, "mine", "balances from outputs that the vault can sign",
                 {
                     {RPCResult::Type::STR_AMOUNT, "trusted", "trusted balance (outputs created by the vault or confirmed outputs)"},
-                    {RPCResult::Type::STR_AMOUNT, "untrusted_pending", "untrusted pending balance (outputs created by others that are in the relay pool)"},
+                    {RPCResult::Type::STR_AMOUNT, "untrusted_pending", "untrusted pending balance (others' unconfirmed outputs in the relay pool, and the change of this vault's own unconfirmed transactions, including ones the node has not accepted yet)"},
                     {RPCResult::Type::STR_AMOUNT, "immature", "balance from immature coinbase outputs"},
                     {RPCResult::Type::STR_AMOUNT, "delegated", "balance handed to an agent: still this vault's coins, but locked out of coin selection until they are swept back"},
                     {RPCResult::Type::STR_AMOUNT, "used", /*optional=*/true, "(only present if avoid_reuse is set) balance from coins sent to addresses that were previously spent from (potentially privacy violating)"},

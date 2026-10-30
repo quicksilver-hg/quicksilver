@@ -347,7 +347,14 @@ Balance GetBalance(const CVault& vault, const int min_depth, bool avoid_reuse)
                 ret.m_mine_trusted += tx_credit_mine - tx_delegated;
                 ret.m_mine_delegated += tx_delegated;
             }
-            if (!is_trusted && tx_depth == 0 && wtx.InRelayPool()) {
+            // A transaction of this vault that the node has not accepted (kept: saved,
+            // not sent yet) is outside the relay pool, but IsSpent still counts its
+            // inputs as spent. Its change must count here, or the balance drops by the
+            // whole change the moment it is kept (F-579). The conditions are IsSpent's,
+            // so an abandoned or conflicted one frees its inputs instead. Others'
+            // transactions still need the pool.
+            const bool kept{wtx.isUnconfirmed() && !wtx.InRelayPool() && CachedTxIsFromMe(vault, wtx, ISMINE_SPENDABLE)};
+            if (!is_trusted && tx_depth == 0 && (wtx.InRelayPool() || kept)) {
                 ret.m_mine_untrusted_pending += tx_credit_mine;
             }
             ret.m_mine_immature += CachedTxGetImmatureCredit(vault, wtx, ISMINE_SPENDABLE);

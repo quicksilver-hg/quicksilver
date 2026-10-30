@@ -189,6 +189,7 @@ MineMintPage::MineMintPage(QWidget* parent)
     m_script_warning = new QLabel(tr("Anyone can spend coins mined to this script."), m_developer_section);
     m_script_warning->setObjectName(QStringLiteral("payoutScriptWarning"));
     m_script_warning->setProperty("class", QStringLiteral("benchNote"));
+    m_script_warning->setProperty("benchTone", QStringLiteral("warn"));
     m_script_warning->setWordWrap(true);
     m_script_warning->setVisible(false);
     developer_layout->addWidget(m_script_warning);
@@ -586,7 +587,9 @@ void MineMintPage::refreshStartAvailability()
             ? (!m_last_address.isEmpty()
                 ? tr("Enter a payout address, or press Use last or Use new.")
                 : tr("Enter a payout address, or press Use new."))
-            : tr("Enter a payout address, or open a vault and press Use new."))
+            : (!m_last_address.isEmpty()
+                ? tr("Enter a payout address, or press Use last.")
+                : tr("Enter a payout address, or open a vault and press Use new.")))
         : QString());
     m_start_reason->setVisible(!m_start_reason->text().isEmpty());
 }

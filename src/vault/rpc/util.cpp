@@ -127,6 +127,11 @@ void HandleVaultError(const std::shared_ptr<CVault> vault, DatabaseStatus& statu
     }
 }
 
+bilingual_str NotAcceptedText(const std::string& reason)
+{
+    return strprintf(_("Not accepted by this node yet (%s). The vault keeps the transaction and will resubmit it automatically."), reason);
+}
+
 void AppendLastProcessedBlock(UniValue& entry, const CVault& vault)
 {
     AssertLockHeld(vault.cs_vault);

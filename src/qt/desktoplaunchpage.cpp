@@ -332,6 +332,11 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     m_node_height = BenchPanel::AddRow(live, tr("Height"), QStringLiteral("homeNodeHeight"), m_node_live_rows);
     m_node_peers = BenchPanel::AddRow(live, tr("Peers"), QStringLiteral("homeNodePeers"), m_node_live_rows);
     m_node_last_block = BenchPanel::AddRow(live, tr("Last block"), QStringLiteral("homeNodeLastBlock"), m_node_live_rows);
+    // A stopwatch from the tip's block time: local arithmetic only, never a node call.
+    m_last_block_timer = new QTimer(this);
+    m_last_block_timer->setObjectName(QStringLiteral("homeNodeLastBlockTimer"));
+    m_last_block_timer->setInterval(1000);
+    connect(m_last_block_timer, &QTimer::timeout, this, &DesktopLaunchPage::refreshLastBlockAge);
     m_node_sync = new QProgressBar(m_node_live_rows);
     m_node_sync->setObjectName(QStringLiteral("homeNodeSync"));
     m_node_sync->setTextVisible(false);
@@ -698,6 +703,8 @@ void DesktopLaunchPage::refreshLedgerCount()
 void DesktopLaunchPage::setChainTip(int height, const QDateTime& block_time)
 {
     const QString none = QStringLiteral("—");
+    m_last_block_time = QDateTime();
+    m_last_block_timer->stop();
     if (height < 0) {
         m_node_height->setText(none);
         m_node_last_block->setText(none);
@@ -712,9 +719,33 @@ void DesktopLaunchPage::setChainTip(int height, const QDateTime& block_time)
         m_node_last_block->setText(none);
         return;
     }
-    const qint64 secs = block_time.secsTo(QDateTime::currentDateTime());
+    m_last_block_time = block_time;
+    refreshLastBlockAge();
+    if (isVisible()) m_last_block_timer->start();
+}
+
+void DesktopLaunchPage::refreshLastBlockAge()
+{
+    if (!m_last_block_time.isValid()) return;
+    const qint64 secs = m_last_block_time.secsTo(now());
     const qint64 age = secs < 0 ? 0 : secs;
     m_node_last_block->setText(tr("%1 ago").arg(GUIUtil::formatNiceTimeOffset(age)));
+}
+
+void DesktopLaunchPage::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    // The age went stale while Home was hidden. Bring it up to date before the tick does.
+    if (m_last_block_time.isValid()) {
+        refreshLastBlockAge();
+        m_last_block_timer->start();
+    }
+}
+
+void DesktopLaunchPage::hideEvent(QHideEvent* event)
+{
+    QWidget::hideEvent(event);
+    m_last_block_timer->stop();
 }
 
 void DesktopLaunchPage::setSyncState(int blocks, int answered, bool behind_known_headers, double progress)

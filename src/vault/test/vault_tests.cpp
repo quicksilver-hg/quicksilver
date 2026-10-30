@@ -83,6 +83,12 @@ public:
         err_string = m_reason;
         return m_error;
     }
+    //! Answer later broadcasts with this instead.
+    void SetAnswer(node::TransactionError error, std::string reason)
+    {
+        m_error = error;
+        m_reason = std::move(reason);
+    }
     void getTransactionAncestry(const uint256& txid, size_t& ancestors, size_t& descendants, size_t* ancestorsize = nullptr) override { m_chain.getTransactionAncestry(txid, ancestors, descendants, ancestorsize); }
     void getPackageLimits(unsigned int& limit_ancestor_count, unsigned int& limit_descendant_count) override { m_chain.getPackageLimits(limit_ancestor_count, limit_descendant_count); }
     util::Result<void> checkChainLimits(const CTransactionRef& tx) override { return m_chain.checkChainLimits(tx); }
@@ -586,6 +592,111 @@ BOOST_FIXTURE_TEST_CASE(commit_without_broadcast_carries_no_refusal, VaultTxPowT
 
     LOCK(vault->cs_vault);
     BOOST_CHECK_EQUAL(vault->mapVault.count(tx->GetHash()), 1U);
+}
+
+BOOST_FIXTURE_TEST_CASE(kept_transaction_change_counts_as_pending, VaultTxPowTestSetup)
+{
+    // F-579: a kept transaction the node refused is not in the relay pool, yet its
+    // inputs count as spent. Its change must count somewhere, or the balance drops
+    // by the whole change the moment the transfer is saved.
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    RejectingChain rejecting_chain{*m_node.chain, node::TransactionError::RELAYPOOL_REJECTED, "relaypool full"};
+    std::unique_ptr<CVault> vault{CreateSyncedVault(
+        rejecting_chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey)};
+    vault->SetBroadcastTransactions(true);
+
+    const Balance before{GetBalance(*vault)};
+    BOOST_REQUIRE_GT(before.m_mine_trusted, COIN);
+    BOOST_REQUIRE_EQUAL(before.m_mine_untrusted_pending, 0);
+
+    const CKey destination_key{GenerateRandomKey()};
+    CCoinControl coin_control;
+    auto created{CreateTransaction(*vault,
+                                   {CRecipient{PKHash(destination_key.GetPubKey()), COIN}},
+                                   /*change_pos=*/std::nullopt,
+                                   coin_control)};
+    BOOST_REQUIRE_MESSAGE(created, util::ErrorString(created).original);
+    const CTransactionRef tx{created->tx};
+    const CommitTransactionResult committed{vault->CommitTransaction(tx, {}, {})};
+    BOOST_REQUIRE(committed);
+    BOOST_REQUIRE_EQUAL(committed.not_accepted_error, node::TransactionError::RELAYPOOL_REJECTED);
+
+    // Quicksilver is feeless, so only the amount sent leaves the vault. The change
+    // shows as Pending until the node accepts the transaction and it confirms.
+    const Balance kept{GetBalance(*vault)};
+    BOOST_CHECK_GT(kept.m_mine_untrusted_pending, 0);
+    BOOST_CHECK_EQUAL(kept.m_mine_trusted + kept.m_mine_untrusted_pending, before.m_mine_trusted - COIN);
+
+    // Abandoning frees the inputs again, so the change must stop counting or the
+    // same money would show twice.
+    BOOST_REQUIRE(vault->AbandonTransaction(tx->GetHash()));
+    const Balance abandoned{GetBalance(*vault)};
+    BOOST_CHECK_EQUAL(abandoned.m_mine_untrusted_pending, 0);
+    BOOST_CHECK_EQUAL(abandoned.m_mine_trusted, before.m_mine_trusted);
+}
+
+BOOST_FIXTURE_TEST_CASE(kept_transaction_carries_the_refusal_until_a_resubmission_is_accepted, VaultTxPowTestSetup)
+{
+    // F-576: the refusal stays on the transaction, not only on the commit result,
+    // so gettransaction can say it is kept but not sent. Every resubmission sets
+    // it with the latest reason or clears it.
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    RejectingChain rejecting_chain{*m_node.chain, node::TransactionError::RELAYPOOL_REJECTED, "relaypool full"};
+    std::unique_ptr<CVault> vault{CreateSyncedVault(
+        rejecting_chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey)};
+    vault->SetBroadcastTransactions(true);
+
+    const CKey destination_key{GenerateRandomKey()};
+    CCoinControl coin_control;
+    auto created{CreateTransaction(*vault,
+                                   {CRecipient{PKHash(destination_key.GetPubKey()), COIN}},
+                                   /*change_pos=*/std::nullopt,
+                                   coin_control)};
+    BOOST_REQUIRE_MESSAGE(created, util::ErrorString(created).original);
+    const CTransactionRef tx{created->tx};
+    BOOST_REQUIRE(vault->CommitTransaction(tx, {}, {}));
+    const auto reason{[&] { return WITH_LOCK(vault->cs_vault, return vault->mapVault.at(tx->GetHash()).m_not_accepted_reason); }};
+    BOOST_CHECK(reason() == std::optional<std::string>{"relaypool full"});
+
+    rejecting_chain.SetAnswer(node::TransactionError::RELAYPOOL_REJECTED, "non-final");
+    vault->ResubmitVaultTransactions(/*relay=*/false, /*force=*/true);
+    BOOST_CHECK(reason() == std::optional<std::string>{"non-final"});
+
+    rejecting_chain.SetAnswer(node::TransactionError::OK, "");
+    vault->ResubmitVaultTransactions(/*relay=*/false, /*force=*/true);
+    BOOST_CHECK(!reason().has_value());
+    BOOST_CHECK(WITH_LOCK(vault->cs_vault, return vault->mapVault.at(tx->GetHash()).InRelayPool()));
+}
+
+BOOST_FIXTURE_TEST_CASE(kept_transaction_entering_the_pool_clears_the_refusal, VaultTxPowTestSetup)
+{
+    // F-576: the pool can take a kept transaction by another route than this
+    // vault's own resubmission (a peer relays it back); it is accepted then too.
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    RejectingChain rejecting_chain{*m_node.chain, node::TransactionError::RELAYPOOL_REJECTED, "relaypool full"};
+    std::unique_ptr<CVault> vault{CreateSyncedVault(
+        rejecting_chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey)};
+    vault->SetBroadcastTransactions(true);
+
+    const CKey destination_key{GenerateRandomKey()};
+    CCoinControl coin_control;
+    auto created{CreateTransaction(*vault,
+                                   {CRecipient{PKHash(destination_key.GetPubKey()), COIN}},
+                                   /*change_pos=*/std::nullopt,
+                                   coin_control)};
+    BOOST_REQUIRE_MESSAGE(created, util::ErrorString(created).original);
+    const CTransactionRef tx{created->tx};
+    BOOST_REQUIRE(vault->CommitTransaction(tx, {}, {}));
+    BOOST_REQUIRE(WITH_LOCK(vault->cs_vault, return vault->mapVault.at(tx->GetHash()).m_not_accepted_reason.has_value()));
+
+    vault->transactionAddedToRelayPool(tx);
+    BOOST_CHECK(!WITH_LOCK(vault->cs_vault, return vault->mapVault.at(tx->GetHash()).m_not_accepted_reason.has_value()));
 }
 
 BOOST_FIXTURE_TEST_CASE(scan_for_vault_transactions, TestChain100Setup)
@@ -2088,6 +2199,27 @@ BOOST_FIXTURE_TEST_CASE(agent_cosign_kept_spend_carries_refusal_and_keeps_change
     LOCK(vault->cs_vault);
     BOOST_CHECK_EQUAL(vault->mapVault.count(tx->GetHash()), 1U);
     BOOST_CHECK(vault->IsLockedCoin(change_outpoint));
+}
+
+// F-579 on the Agents page: the kept co-signed spend took the whole allotment out of
+// Delegated and put its change nowhere. The change counts as Pending until accepted.
+BOOST_FIXTURE_TEST_CASE(agent_cosign_kept_spend_change_counts_as_pending, AgentCosignNotAcceptedTestingSetup)
+{
+    constexpr CAmount change{COIN / 8};
+    const auto bundle{FundAgent()};
+    const Balance before{GetBalance(*vault)};
+    BOOST_REQUIRE_EQUAL(before.m_mine_delegated, COIN / 4);
+    BOOST_REQUIRE_EQUAL(before.m_mine_untrusted_pending, 0);
+
+    const auto psqt{AgentRequest(bundle, /*sign=*/true, change)};
+    auto result{vault->CosignAgentAllotmentSpend(Encode(psqt))};
+    BOOST_REQUIRE_MESSAGE(result, util::ErrorString(result).original);
+    BOOST_REQUIRE_EQUAL(result->commit.not_accepted_error, node::TransactionError::RELAYPOOL_REJECTED);
+
+    const Balance after{GetBalance(*vault)};
+    BOOST_CHECK_EQUAL(after.m_mine_delegated, 0);
+    BOOST_CHECK_EQUAL(after.m_mine_untrusted_pending, change);
+    BOOST_CHECK_EQUAL(after.m_mine_trusted, before.m_mine_trusted);
 }
 
 BOOST_FIXTURE_TEST_CASE(agent_cosign_refuses_after_stop, AgentCosignTestingSetup)

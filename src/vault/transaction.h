@@ -20,6 +20,8 @@
 #include <cassert>
 #include <cstdint>
 #include <map>
+#include <optional>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -256,6 +258,12 @@ public:
     // can be nonempty if state is Inactive or
     // BlockConflicted.
     std::set<Txid> relaypool_conflicts;
+
+    // Why this node last refused the transaction (F-576). Each submission sets
+    // it on a refusal and clears it on acceptance, as does the transaction
+    // entering the relay pool by any other route. Never stored: the startup
+    // resubmission sets it again.
+    std::optional<std::string> m_not_accepted_reason;
 
     template<typename Stream>
     void Serialize(Stream& s) const

@@ -40,7 +40,7 @@ std::vector<CRecipient> CreateRecipients(const std::vector<std::pair<CTxDestinat
 static void PushNotAcceptedWarning(const CommitTransactionResult& committed, std::vector<bilingual_str>& warnings)
 {
     if (committed.not_accepted_error == node::TransactionError::OK) return;
-    warnings.push_back(strprintf(_("Not accepted by this node yet (%s). The vault keeps the transaction and will resubmit it automatically."), committed.not_accepted_reason));
+    warnings.push_back(NotAcceptedText(committed.not_accepted_reason));
 }
 
 static UniValue FinishTransaction(const std::shared_ptr<CVault> pvault, const UniValue& options,

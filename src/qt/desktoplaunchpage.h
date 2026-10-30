@@ -5,11 +5,13 @@
 #ifndef QUICKSILVER_QT_DESKTOPLAUNCHPAGE_H
 #define QUICKSILVER_QT_DESKTOPLAUNCHPAGE_H
 
+#include <QDateTime>
 #include <QPointer>
 #include <QString>
 #include <QWidget>
 
 #include <cstdint>
+#include <functional>
 
 class PlatformStyle;
 class TransactionFilterProxy;
@@ -17,7 +19,6 @@ class VaultModel;
 namespace interfaces { struct MiningStatus; }
 
 QT_BEGIN_NAMESPACE
-class QDateTime;
 class QEvent;
 class QFrame;
 class QLabel;
@@ -25,6 +26,7 @@ class QProgressBar;
 class QPushButton;
 class QSortFilterProxyModel;
 class QTableView;
+class QTimer;
 class QWidget;
 QT_END_NAMESPACE
 
@@ -60,6 +62,8 @@ public:
     //! The Home ledger reads this vault. Null hides the table and says no vault is open.
     void setVaultModel(VaultModel* model);
     //! Block tip for the Node panel. A negative height means the tip is not known yet.
+    //! The Last block age is re-counted from block_time once a second while the page is
+    //! visible, so it keeps ageing between tips. The tick asks the node for nothing.
     void setChainTip(int height, const QDateTime& block_time);
     //! Shared sync inputs and GUI-computed progress (0..1) for the Node panel.
     void setSyncState(int blocks, int answered, bool behind_known_headers, double progress);
@@ -70,6 +74,7 @@ public:
     //! How many times the ledger columns were measured. A burst of inserts
     //! should add a handful, not one measurement per row.
     int ledgerColumnFitsForTesting() const { return m_ledger_column_fits; }
+    void setClockForTesting(std::function<QDateTime()> clock) { m_now = std::move(clock); }
 
 public Q_SLOTS:
     //! The node's warnings, such as a build that is not a release. Empty hides them.
@@ -101,6 +106,11 @@ private:
     //! The instruments column's width, and the notes' text width with it.
     void setInstrumentWidth(int width);
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+    //! The Last block value, aged from m_last_block_time to now.
+    void refreshLastBlockAge();
+    QDateTime now() const { return m_now ? m_now() : QDateTime::currentDateTime(); }
 
     const PlatformStyle* m_platform_style;
     const uint64_t m_blockchain_size_gb;
@@ -128,6 +138,11 @@ private:
     QLabel* m_node_height{nullptr};
     QLabel* m_node_peers{nullptr};
     QLabel* m_node_last_block{nullptr};
+    //! The tip's block time while Last block shows an age; invalid otherwise.
+    QDateTime m_last_block_time;
+    //! Re-ages Last block once a second, only while the page is visible.
+    QTimer* m_last_block_timer{nullptr};
+    std::function<QDateTime()> m_now;
     QProgressBar* m_node_sync{nullptr};
     QWidget* m_cost_panel{nullptr};
     QPushButton* m_consensus_button{nullptr};

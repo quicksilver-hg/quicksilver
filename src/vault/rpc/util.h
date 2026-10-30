@@ -48,6 +48,8 @@ std::string LabelFromValue(const UniValue& value);
 void PushParentDescriptors(const CVault& vault, const CScript& script_pubkey, UniValue& entry);
 
 void HandleVaultError(const std::shared_ptr<CVault> vault, DatabaseStatus& status, bilingual_str& error);
+//! Signed 1d (G-01): a transaction the vault kept but this node has not accepted yet.
+bilingual_str NotAcceptedText(const std::string& reason);
 void AppendLastProcessedBlock(UniValue& entry, const CVault& vault) EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault);
 } //  namespace vault
 

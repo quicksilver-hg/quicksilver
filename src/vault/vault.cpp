@@ -1257,6 +1257,8 @@ void CVault::transactionAddedToRelayPool(const CTransactionRef& tx)
     auto it = mapVault.find(tx->GetHash());
     if (it != mapVault.end()) {
         RefreshRelayPoolStatus(it->second, chain());
+        // Accepted, whichever route it came by: no longer "not accepted yet".
+        it->second.m_not_accepted_reason.reset();
     }
 
     const Txid& txid = tx->GetHash();
@@ -1896,8 +1898,10 @@ TxSubmissionResult CVault::SubmitTxMemoryPoolAndRelay(CVaultTx& wtx, std::string
     const node::TransactionError error{chain().broadcastTransaction(wtx.tx, relay, err_string)};
     if (error == node::TransactionError::OK) {
         wtx.m_state = TxStateInRelayPool{};
+        wtx.m_not_accepted_reason.reset();
         return {TxSubmissionStatus::SUCCEEDED, error};
     }
+    wtx.m_not_accepted_reason = err_string;
     return {TxSubmissionStatus::FAILED, error};
 }
 
@@ -1985,8 +1989,9 @@ void CVault::ResubmitVaultTransactions(bool relay, bool force)
         }
         // Now try submitting the transactions to the memory pool and (optionally) relay them.
         for (auto wtx : to_submit) {
-            std::string unused_err_string;
-            if (SubmitTxMemoryPoolAndRelay(*wtx, unused_err_string, relay).status == TxSubmissionStatus::SUCCEEDED) ++submitted_tx_count;
+            // A refusal's reason stays on the transaction for gettransaction (F-576).
+            std::string err_string;
+            if (SubmitTxMemoryPoolAndRelay(*wtx, err_string, relay).status == TxSubmissionStatus::SUCCEEDED) ++submitted_tx_count;
         }
     } // cs_vault
 

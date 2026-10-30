@@ -635,6 +635,17 @@ class VaultTest(QuicksilverTestFramework):
             "This transfer spends change from an earlier transfer that has not confirmed yet. If that transfer is dropped, this one fails too and its work is lost. To avoid this, wait for the earlier transfer to confirm.",
         ])
 
+        self.log.info("gettransaction and listtransactions mark spent unconfirmed change until it confirms (G-09 (3))")
+        unconfirmed_change = ("This transfer spends change from an earlier transfer that has not confirmed yet. "
+                              "If that transfer is dropped, this one fails too and its work is lost.")
+        assert_equal(warn_vault.gettransaction(unconfirmed["txid"])["unconfirmed_change"], unconfirmed_change)
+        listed = {tx["txid"]: tx for tx in warn_vault.listtransactions()}
+        assert_equal(listed[unconfirmed["txid"]]["unconfirmed_change"], unconfirmed_change)
+        assert "unconfirmed_change" not in warn_vault.gettransaction(confirmed["txid"])
+        assert "unconfirmed_change" not in listed[confirmed["txid"]]
+        self.generate(self.nodes[0], 1, sync_fun=self.no_op)
+        assert "unconfirmed_change" not in warn_vault.gettransaction(unconfirmed["txid"])
+
         self.test_chain_listunspent()
 
     def test_chain_listunspent(self):

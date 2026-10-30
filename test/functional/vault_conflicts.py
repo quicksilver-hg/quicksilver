@@ -314,8 +314,10 @@ class TxConflicts(QuicksilverTestFramework):
         bob.sendrawtransaction(tx1_conflict_conflict) # kick tx1_conflict out of the relaypool
         bob.sendrawtransaction(raw_tx1) #re-broadcast tx1 because it is no longer conflicted
 
-        # Now bob has no pending funds because tx1 and tx2 are spent by tx3, which hasn't been re-broadcast yet
-        assert_equal(bob.getbalances()["mine"]["untrusted_pending"], 0)
+        # tx1 and tx2 are spent by tx3, which is no longer conflicted but hasn't been re-broadcast yet.
+        # tx3 is bob's own, so its output counts as pending without the relay pool (F-579): the
+        # 50 that tx3's inputs no longer count is not lost from bob's balance meanwhile.
+        assert_equal(bob.getbalances()["mine"]["untrusted_pending"], Decimal("50.00000000"))
 
         bob.sendrawtransaction(raw_tx3)
         assert_equal(len(bob.getrawrelaypool()), 4) # The relaypool contains: tx1, tx2, tx1_conflict_conflict, tx3

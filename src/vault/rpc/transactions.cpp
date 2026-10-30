@@ -7,9 +7,11 @@
 #include <key_io.h>
 #include <rpc/util.h>
 #include <rpc/blockchain.h>
+#include <util/translation.h>
 #include <util/vector.h>
 #include <vault/receive.h>
 #include <vault/rpc/util.h>
+#include <vault/spend.h>
 #include <vault/vault.h>
 
 using interfaces::FoundBlock;
@@ -33,6 +35,17 @@ static void VaultTxToJSON(const CVault& vault, const CVaultTx& wtx, UniValue& en
         entry.pushKV("blocktime", block_time);
     } else {
         entry.pushKV("trusted", CachedTxIsTrusted(vault, wtx));
+        // F-576: kept but refused, read off the last submission. Only while the
+        // vault still keeps it unconfirmed outside the pool, so an abandoned or
+        // conflicted transaction never claims it will be resubmitted.
+        if (wtx.m_not_accepted_reason && wtx.isUnconfirmed() && !wtx.InRelayPool()) {
+            entry.pushKV("not_accepted", NotAcceptedText(*wtx.m_not_accepted_reason).original);
+        }
+        // G-09 (3): recomputed on each read, never stored.
+        if (SpendsUnconfirmedChange(vault, wtx.tx->vin)) {
+            const bilingual_str text = _("This transfer spends change from an earlier transfer that has not confirmed yet. If that transfer is dropped, this one fails too and its work is lost.");
+            entry.pushKV("unconfirmed_change", text.original);
+        }
     }
     uint256 hash = wtx.GetHash();
     entry.pushKV("txid", hash.GetHex());
@@ -372,6 +385,8 @@ static std::vector<RPCResult> TransactionDescriptionString()
            {RPCResult::Type::BOOL, "generated", /*optional=*/true, "Only present if the transaction's only input is a coinbase one."},
            {RPCResult::Type::BOOL, "trusted", /*optional=*/true, "Whether we consider the transaction to be trusted and safe to spend from.\n"
                 "Only present when the transaction has 0 confirmations (or negative confirmations, if conflicted)."},
+           {RPCResult::Type::STR, "not_accepted", /*optional=*/true, "Present while this node has not accepted the transaction: why, and that the vault keeps it and resubmits it automatically."},
+           {RPCResult::Type::STR, "unconfirmed_change", /*optional=*/true, "Present while the transaction spends change from an earlier transaction of this vault that has not confirmed yet."},
            {RPCResult::Type::STR_HEX, "blockhash", /*optional=*/true, "The block hash containing the transaction."},
            {RPCResult::Type::NUM, "blockheight", /*optional=*/true, "The block height containing the transaction."},
            {RPCResult::Type::NUM, "blockindex", /*optional=*/true, "The index of the transaction in the block that includes it."},

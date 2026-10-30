@@ -76,6 +76,7 @@ private Q_SLOTS:
     void nodeWindowSaysWhyEveryFieldReadsNotApplicable();
     void devBuildBannerUsesTheWarningTone();
     void genesisTipHasNoLastBlockAge();
+    void homeLastBlockAgesBetweenTips();
     void panelsMenuWindowsUseTheBenchGrammar();
     void menuDialogsUseTheBenchGrammar();
     void agentSpendRequestRefuseWaitsForARequest();

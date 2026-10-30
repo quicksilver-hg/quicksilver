@@ -48,7 +48,7 @@ bool CachedTxIsTrusted(const CVault& vault, const CVaultTx& wtx);
 
 struct Balance {
     CAmount m_mine_trusted{0};           //!< Trusted and selectable, at depth=GetBalance.min_depth or more
-    CAmount m_mine_untrusted_pending{0}; //!< Untrusted, but in relaypool (pending)
+    CAmount m_mine_untrusted_pending{0}; //!< Untrusted, but in relaypool or kept by this vault (pending)
     CAmount m_mine_immature{0};          //!< Immature coinbases in the main chain
     CAmount m_mine_delegated{0};         //!< Trusted, but handed to an agent and therefore not selectable
 };

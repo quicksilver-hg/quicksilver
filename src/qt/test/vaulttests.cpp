@@ -3887,6 +3887,57 @@ void VaultTests::genesisTipHasNoLastBlockAge()
     QVERIFY(last_block->text().contains(QStringLiteral("ago")));
 }
 
+//! F-581: Last block was worked out only when a tip arrived, so between blocks it
+//! froze. The walk read "42 seconds ago" for over seven minutes, freshest exactly when
+//! the chain had stalled. It now ages once a second while Home is on screen, from the
+//! block time the tip brought: the tick reads only the clock.
+void VaultTests::homeLastBlockAgesBetweenTips()
+{
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    DesktopLaunchPage page(style.get(), 0, 0, nullptr);
+    const QDateTime start{QDateTime::fromSecsSinceEpoch(1750000000)};
+    QDateTime clock{start};
+    page.setClockForTesting([&clock] { return clock; });
+    auto* last_block = page.findChild<QLabel*>(QStringLiteral("homeNodeLastBlock"));
+    auto* timer = page.findChild<QTimer*>(QStringLiteral("homeNodeLastBlockTimer"));
+    QVERIFY(last_block && timer);
+    QCOMPARE(timer->interval(), 1000);
+
+    // Hidden: the age is right when the tip arrives, and nothing ticks.
+    page.setChainTip(5, start.addSecs(-42));
+    QCOMPARE(last_block->text(), QStringLiteral("42 seconds ago"));
+    QVERIFY(!timer->isActive());
+
+    // Shown after seven minutes away: up to date at once, then ticking.
+    clock = start.addSecs(7 * 60);
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+    QCOMPARE(last_block->text(), QStringLiteral("7 minutes ago"));
+    QVERIFY(timer->isActive());
+
+    // No new tip: the stopwatch alone moves it on.
+    clock = start.addSecs(10 * 60);
+    QTRY_COMPARE(last_block->text(), QStringLiteral("10 minutes ago"));
+
+    // A new tip restarts the count from its own block time.
+    page.setChainTip(6, clock.addSecs(-3));
+    QCOMPARE(last_block->text(), QStringLiteral("3 seconds ago"));
+    QVERIFY(timer->isActive());
+
+    // An age that is not shown is not counted.
+    page.setChainTip(-1, QDateTime());
+    QCOMPARE(last_block->text(), QStringLiteral("—"));
+    QVERIFY(!timer->isActive());
+    page.setChainTip(6, clock.addSecs(-3));
+    QVERIFY(timer->isActive());
+
+    page.hide();
+    QVERIFY(!timer->isActive());
+    clock = clock.addSecs(3600);
+    QTest::qWait(1200);
+    QCOMPARE(last_block->text(), QStringLiteral("3 seconds ago"));
+}
+
 //! F-442 send-back 2, item 7: every window the Window menu opens takes the
 //! bench grammar: no eyebrow or page title, content in a titled panel,
 //! label/value rows with key and value roles, section heads as captions,
@@ -7953,15 +8004,18 @@ void VaultTests::mineUseLastOffersOnlyARetainedAddressWhileStopped()
     page.setStatus(st);
     QVERIFY(!last->isHidden());
 
-    // The Start hint names it only while it is shown and a vault can give a new address.
+    // The Start hint names only the buttons that can be pressed: Use last while it is
+    // shown, Use new while a vault can give a new address.
     auto* reason = page.findChild<QLabel*>(QStringLiteral("startMiningReason"));
     QVERIFY(reason);
-    QCOMPARE(reason->text(), QStringLiteral("Enter a payout address, or open a vault and press Use new."));
+    QCOMPARE(reason->text(), QStringLiteral("Enter a payout address, or press Use last."));
     page.setAddressHelperAvailable(true);
     QCOMPARE(reason->text(), QStringLiteral("Enter a payout address, or press Use last or Use new."));
     st.address.clear();
     page.setStatus(st);
     QCOMPARE(reason->text(), QStringLiteral("Enter a payout address, or press Use new."));
+    page.setAddressHelperAvailable(false);
+    QCOMPARE(reason->text(), QStringLiteral("Enter a payout address, or open a vault and press Use new."));
 }
 
 void VaultTests::mineUseLastFillsAndStoresOnPress()
@@ -8214,6 +8268,10 @@ void VaultTests::mineScriptNoteNamesTheScript()
     QCOMPARE(note->text(), QStringLiteral("Raw script"));
     QVERIFY(!warning->isHidden());
     QCOMPARE(warning->text(), QStringLiteral("Anyone can spend coins mined to this script."));
+    // F-580: it is a warning, so it takes the warning tone, not the grey of the note above it.
+    QCOMPARE(warning->property("class").toString(), QStringLiteral("benchNote"));
+    QCOMPARE(warning->property("benchTone").toString(), QStringLiteral("warn"));
+    QVERIFY(note->property("benchTone").toString().isEmpty());
 
     // P2PK pays a key, not an address: it stays a script, and nobody else can spend it.
     script->setText(QStringLiteral("210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ac"));
