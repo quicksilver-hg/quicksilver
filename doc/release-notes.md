@@ -49,6 +49,46 @@ Notable changes
   node that cannot reach Tor needs an explicit peer configured with `-addnode`,
   `-connect`, or `-seednode`; see `doc/bootstrapping.md`.
 
+Changes in 0.1.7
+================
+
+- A transfer this node kept but did not accept now says so. The desktop shows
+  `Transfer saved, not sent yet`, gives the node's reason, and says the vault
+  will offer it again automatically. The Agents page says the same for a
+  spend. Until the transfer is accepted, its change counts as pending instead
+  of leaving the balance.
+- A send whose locktime is further ahead than its proof of work lasts is
+  refused before any work starts. The error gives the furthest locktime that
+  can be accepted.
+- A kept transfer whose proof of work expired before this node accepted it is
+  abandoned, and its coins return to the vault. The desktop and the vault log
+  say `Transfer failed: its proof of work expired before this node accepted
+  it. Nothing was spent; please try again.`
+- `gettransaction`, `listtransactions` and `listsinceblock` add two fields.
+  `not_accepted` is present while this node has not accepted the transaction,
+  and says why; it is absent once the transfer is abandoned.
+  `unconfirmed_change` is present while the transaction spends change from an
+  earlier transfer that has not confirmed. Sending such a transfer also warns
+  that if the earlier one is dropped, this one fails too.
+- Behaviour change: connection counts now mean peers. `getconnectioncount` and
+  the `connections`, `connections_in` and `connections_out` fields of
+  `getnetworkinfo` count only peers that have completed the connection
+  handshake, and so does the desktop. Connections still being set up are
+  reported as `connection_attempts` in `getnetworkinfo`.
+- When connections to other nodes keep failing before the handshake, the node
+  warns that those nodes may run a different network or an older release.
+- Opening or restoring a vault made on another network names that network,
+  and says the file is not damaged, instead of calling the file unrecognized.
+- The Mine page offers `Use last` for the address this node last mined to.
+  With no vault open, its Start hint names `Use last`.
+- A custom mining script can be set under `Show developer options` on the Mine
+  page. A script that anyone can spend is marked with a warning.
+- Home's last block age keeps counting between blocks.
+- Message signing and verifying say that only Base58 addresses can sign, and
+  how to get one.
+- `startmining` with no payout target says that `quicksilver.conf` is read only
+  at startup.
+
 Changes in 0.1.6
 ================
 

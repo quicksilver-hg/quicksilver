@@ -30,8 +30,8 @@ CPU solving is allowed for a transfer because it is one bounded search the
 sender waits out once. An agent spend is that same bounded search, but the
 agent starts it on its own schedule, so the processor is refused unless the
 operator opts in. The command-line opt-in is `-allowcputxpow`. The desktop
-checkbox next to the mining one is a separate setting, because the
-command-line agent does not read desktop settings. It is opt-in for blocks
+has no setting for it, and the command-line agent does not read desktop
+settings. It is opt-in for blocks
 because block mining is a continuous race against GPU cards: a CPU can run
 the graph, but an unbounded grind at near-zero odds would look like a broken
 miner. The block opt-in is `-allowcpumining`, and the same switch is the

@@ -1,10 +1,13 @@
-quicksilver (0.1.7-1) UNRELEASED; urgency=low
+quicksilver (0.1.7-1) unstable; urgency=low
 
-  * Development series after the 0.1.6 release. Not a release: the 0.1.6 tag
-    is what a release build identifies itself as, and this tree carries work
-    that has not been tagged.
+  * Quicksilver 0.1.7: a transfer the node kept but did not accept says it
+    is saved, not sent, and one whose proof of work expired returns its
+    coins; connection counts mean peers, with a warning when other nodes
+    seem to run a different network; and a vault from another network
+    names that network. Ubuntu 22.04, Ubuntu 24.04 and Windows x64, from
+    public tag v0.1.7.
 
- -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Wed, 28 Oct 2026 00:00:00 +0000
+ -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Sat, 31 Oct 2026 14:55:00 -0400
 
 quicksilver (0.1.6-1) unstable; urgency=low
 

@@ -202,12 +202,12 @@ public:
         fDefaultConsistencyChecks = false;
         m_is_mockable_chain = false;
 
-        // Data from RPC: getchaintxstats 4096 3163621af75b65bfdce2524327567654ec377c9fa78675db84071fd7942e30d3
-        // height 12213
+        // Data from RPC: getchaintxstats 4096 7670c69169107c6c37cef65d035897dd07be428a61d76987972ccb99d782f565
+        // height 13554
         chainTxData = ChainTxData{
-            .nTime    = 1793061783,
-            .tx_count = 12228,
-            .dTxRate  = 0.00328476778849612,
+            .nTime    = 1793467808,
+            .tx_count = 13573,
+            .dTxRate  = 0.003271136159253602,
         };
     }
 };
