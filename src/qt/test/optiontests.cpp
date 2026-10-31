@@ -879,7 +879,10 @@ void OptionTests::hardwareTabFitsAtTheOpeningSize()
         const auto widgets = tab->findChildren<QWidget*>();
         for (QWidget* widget : widgets) {
             const bool tracked = qobject_cast<QLabel*>(widget) || qobject_cast<QCheckBox*>(widget) || qobject_cast<QSpinBox*>(widget);
-            if (!tracked || widget->isHidden()) continue;
+            // isVisibleTo, not isHidden: a row inside a hidden box (the
+            // external signer group, absent from v1) is not hidden itself,
+            // but it is never laid out, so its geometry means nothing (F-586).
+            if (!tracked || !widget->isVisibleTo(tab)) continue;
             // A word-wrapped label's sizeHint height is the height at its
             // preferred width. At the width it actually has, the height it
             // needs is heightForWidth.
@@ -923,7 +926,7 @@ void OptionTests::hardwareTabFitsAtTheOpeningSize()
         const auto widgets = main->findChildren<QWidget*>();
         for (QWidget* widget : widgets) {
             const bool tracked = qobject_cast<QLabel*>(widget) || qobject_cast<QCheckBox*>(widget) || qobject_cast<QSpinBox*>(widget);
-            if (!tracked || widget->isHidden()) continue;
+            if (!tracked || !widget->isVisibleTo(main)) continue;
             const int hint = widget->hasHeightForWidth()
                 ? widget->heightForWidth(qMax(1, widget->width()))
                 : widget->sizeHint().height();
