@@ -142,6 +142,9 @@ BOOST_AUTO_TEST_CASE(timed_out_listing_retries)
     // So the retry is counted from whatever the first call left.
     const long after_timeout{Appended(mark)};
     BOOST_CHECK_LE(after_timeout, 1L);
+    // The retry runs under the production limit: it proves the timeout was not
+    // cached, and the 150ms limit would let a slow start time it out again.
+    SetListingLimitForTesting(kListingLimit);
     std::ofstream{script} << "append " << mark << "\necho " << RX << "\nexit 0\n";
     BOOST_CHECK(DiscoverGpus(28).situation == GpuSituation::kReady);
     BOOST_CHECK_EQUAL(Appended(mark), after_timeout + 1);
