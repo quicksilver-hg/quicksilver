@@ -1966,6 +1966,10 @@ NodeClock::time_point CVault::GetDefaultNextResend() { return FastRandomContext{
 // (on start, or after import) uses relay=false force=true.
 void CVault::ResubmitVaultTransactions(bool relay, bool force)
 {
+    // F-582: an expired proof is refused everywhere, so offering it again cannot help.
+    // Before the broadcast check: a vault that does not broadcast holds it all the same.
+    AbandonExpiredTransactions();
+
     // Don't attempt to resubmit if the vault is configured to not broadcast,
     // even if forcing.
     if (!fBroadcastTransactions) return;
@@ -2000,11 +2004,54 @@ void CVault::ResubmitVaultTransactions(bool relay, bool force)
     }
 }
 
+void CVault::AbandonExpiredTransactions()
+{
+    bool expired_any{false};
+    {
+        LOCK(cs_vault);
+        // Decided from this vault's own tip, not from the node's reject reason. Only
+        // expiry is permanent: an anchor ahead of the tip or off the branch can become
+        // valid again, so those stay kept and retried.
+        uint256 tip_hash;
+        // No tip yet (loading, -reindex): nothing to judge against.
+        if (!TryGetLastBlockHash(tip_hash)) return;
+        const int64_t tip{GetLastBlockHeight()};
+        const int64_t oldest_valid_anchor{tip - Params().GetConsensus().nMaxAnchorAge};
+        std::set<CVaultTx*, VaultTxOrderComparator> expired;
+        for (auto& [txid, wtx] : mapVault) {
+            if (!wtx.isUnconfirmed() || wtx.InRelayPool()) continue;
+            if (int64_t{wtx.tx->nAnchorHeight} >= oldest_valid_anchor) continue;
+            // A transaction this vault only receives is not a transfer it made.
+            if (!IsFromMe(*wtx.tx)) continue;
+            expired.insert(&wtx);
+        }
+        // Abandoning one also abandons what spends it. Only the ones whose own proof
+        // expired are announced: the notice says so, and for a descendant it may not be true.
+        for (CVaultTx* wtx : expired) {
+            if (!AbandonTransaction(*wtx)) continue;
+            VaultLogPrintf("Transfer failed: its proof of work expired before this node accepted it. Nothing was spent; please try again. tx=%s anchor=%d tip=%d",
+                           wtx->GetHash().ToString(), wtx->tx->nAnchorHeight, tip);
+            m_expired_unannounced.push_back(wtx->GetHash());
+            expired_any = true;
+        }
+    }
+    if (expired_any) NotifyTransferExpired();
+}
+
+std::vector<uint256> CVault::TakeExpiredTransfers()
+{
+    LOCK(cs_vault);
+    return std::exchange(m_expired_unannounced, {});
+}
+
 /** @} */ // end of mapVault
 
 void MaybeResendVaultTxs(VaultContext& context)
 {
     for (const std::shared_ptr<CVault>& pvault : GetVaults(context)) {
+        // Every minute, not on the 12-36 hour resend timer: an expired transfer's
+        // inputs and change are released, and the user told, soon after it expires.
+        pvault->AbandonExpiredTransactions();
         if (!pvault->ShouldResend()) continue;
         pvault->ResubmitVaultTransactions(/*relay=*/true, /*force=*/false);
         pvault->SetNextResend();

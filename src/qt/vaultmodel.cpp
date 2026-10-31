@@ -65,6 +65,9 @@ VaultModel::VaultModel(std::unique_ptr<interfaces::Vault> vault, interfaces::Nod
     recentRequestsTableModel = new RecentRequestsTableModel(this);
 
     subscribeToCoreSignals();
+    // The startup resubmission runs before this model exists. Queued, so whoever
+    // shows this model's messages has connected by then.
+    QMetaObject::invokeMethod(this, "announceExpiredTransfers", Qt::QueuedConnection);
 }
 
 VaultModel::~VaultModel()
@@ -152,6 +155,17 @@ void VaultModel::updateTransaction()
 {
     // Balance and number of transactions might have changed
     fForceCheckBalanceChanged = true;
+}
+
+void VaultModel::announceExpiredTransfers()
+{
+    // Taking them is what makes each one shown once: the queued call from the
+    // constructor and the one from the vault's signal cannot both get it.
+    for ([[maybe_unused]] const uint256& txid : m_vault->takeExpiredTransfers()) {
+        // A desktop notice, not a dialog: nothing on screen waits on an answer.
+        Q_EMIT message(QString(), tr("Transfer failed: its proof of work expired before this node accepted it. Nothing was spent; please try again."),
+                       CClientUIInterface::ICON_WARNING);
+    }
 }
 
 void VaultModel::updateAddressBook(const QString& address, const QString& label,
@@ -411,6 +425,12 @@ static void ShowProgress(VaultModel* vaultmodel, const std::string& title, int n
     assert(invoked);
 }
 
+static void NotifyTransferExpired(VaultModel* vaultmodel)
+{
+    bool invoked = QMetaObject::invokeMethod(vaultmodel, "announceExpiredTransfers", Qt::QueuedConnection);
+    assert(invoked);
+}
+
 static void NotifyCanGetAddressesChanged(VaultModel* vaultmodel)
 {
     bool invoked = QMetaObject::invokeMethod(vaultmodel, "canGetAddressesChanged");
@@ -426,6 +446,7 @@ void VaultModel::subscribeToCoreSignals()
     m_handler_transaction_changed = m_vault->handleTransactionChanged(std::bind(NotifyTransactionChanged, this, std::placeholders::_1, std::placeholders::_2));
     m_handler_show_progress = m_vault->handleShowProgress(std::bind(ShowProgress, this, std::placeholders::_1, std::placeholders::_2));
     m_handler_can_get_addrs_changed = m_vault->handleCanGetAddressesChanged(std::bind(NotifyCanGetAddressesChanged, this));
+    m_handler_transfer_expired = m_vault->handleTransferExpired(std::bind(NotifyTransferExpired, this));
 }
 
 void VaultModel::unsubscribeFromCoreSignals()
@@ -437,6 +458,7 @@ void VaultModel::unsubscribeFromCoreSignals()
     m_handler_transaction_changed->disconnect();
     m_handler_show_progress->disconnect();
     m_handler_can_get_addrs_changed->disconnect();
+    m_handler_transfer_expired->disconnect();
 }
 
 // VaultModel::UnlockContext implementation

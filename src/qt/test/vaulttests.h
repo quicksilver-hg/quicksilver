@@ -147,6 +147,9 @@ private Q_SLOTS:
     void transferSaysARefusalLeftItSavedNotSent();
     void transferThroughARefusingNodeSaysSavedNotSent();
     void agentsPageSaysAKeptSpendIsSavedNotSent();
+    // F-582 (slice FP)
+    void expiredTransferNoticeSaysItFailed();
+    void expiredTransferNoticeWaitsForTheVaultToOpen();
     // G1 (slice FN)
     void mineUseLastOffersOnlyARetainedAddressWhileStopped();
     void mineUseLastFillsAndStoresOnPress();

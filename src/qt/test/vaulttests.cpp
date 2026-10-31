@@ -455,6 +455,11 @@ public:
     {
         return interfaces::MakeCleanupHandler([] {});
     }
+    std::unique_ptr<interfaces::Handler> handleTransferExpired(TransferExpiredFn) override
+    {
+        return interfaces::MakeCleanupHandler([] {});
+    }
+    std::vector<uint256> takeExpiredTransfers() override { return {}; }
 };
 
 //! Press "Yes" or "Cancel" buttons in modal send confirmation dialog.
@@ -7934,6 +7939,108 @@ void VaultTests::transferThroughARefusingNodeSaysSavedNotSent()
                             "Your vault will offer it again automatically."));
     QCOMPARE(messages.at(0).at(2).toUInt(), static_cast<unsigned int>(CClientUIInterface::MSG_WARNING));
     QCOMPARE(coins_sent, 3);
+}
+
+namespace {
+//! A kept transfer from this vault that no node has accepted, then enough blocks
+//! that its proof has expired, as the vault sees the chain.
+CTransactionRef KeepATransferAndLetItExpire(TestChain100Setup& test, CVault& vault)
+{
+    vault.SetBroadcastTransactions(false);
+    CTransactionRef tx;
+    {
+        vault::CCoinControl coin_control;
+        auto created{vault::CreateTransaction(vault, {vault::CRecipient{PKHash(GenerateRandomKey().GetPubKey()), COIN}},
+                                              /*change_pos=*/std::nullopt, coin_control)};
+        if (!created) return nullptr;
+        tx = created->tx;
+    }
+    if (!vault.CommitTransaction(tx, {}, {})) return nullptr;
+    const int expired_at{static_cast<int>(tx->nAnchorHeight) + Params().GetConsensus().nMaxAnchorAge + 1};
+    while (WITH_LOCK(::cs_main, return test.m_node.chainman->ActiveChain().Height()) < expired_at) {
+        test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+    }
+    LOCK2(vault.cs_vault, ::cs_main);
+    const CBlockIndex* tip{test.m_node.chainman->ActiveChain().Tip()};
+    vault.SetLastBlockProcessed(tip->nHeight, tip->GetBlockHash());
+    return tx;
+}
+
+const QString EXPIRED_TRANSFER_NOTICE{QStringLiteral(
+    "Transfer failed: its proof of work expired before this node accepted it. Nothing was spent; please try again.")};
+} // namespace
+
+void VaultTests::expiredTransferNoticeSaysItFailed()
+{
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    for (int i = 0; i < 5; ++i) {
+        test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+    }
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
+    MiniGUI mini_gui(m_node, platformStyle.get());
+    mini_gui.initModelForVault(m_node, vault, platformStyle.get());
+    QSignalSpy messages(mini_gui.vaultModel.get(), &VaultModel::message);
+    QCoreApplication::processEvents();
+    QCOMPARE(messages.count(), 0);
+
+    const CTransactionRef tx{KeepATransferAndLetItExpire(test, *vault)};
+    QVERIFY(tx);
+    vault->ResubmitVaultTransactions(/*relay=*/false, /*force=*/true);
+    QVERIFY(WITH_LOCK(vault->cs_vault, return vault->mapVault.at(tx->GetHash()).isAbandoned()));
+
+    // Signed F-582 C. A desktop notice, not a dialog: the transfer is long gone
+    // from the Send page and nothing waits on an answer.
+    QTRY_COMPARE(messages.count(), 1);
+    QCOMPARE(messages.at(0).at(0).toString(), QString());
+    QCOMPARE(messages.at(0).at(1).toString(), EXPIRED_TRANSFER_NOTICE);
+    QCOMPARE(messages.at(0).at(2).toUInt(), static_cast<unsigned int>(CClientUIInterface::ICON_WARNING));
+
+    // Once per transfer.
+    vault->ResubmitVaultTransactions(/*relay=*/false, /*force=*/true);
+    QCoreApplication::processEvents();
+    QCOMPARE(messages.count(), 1);
+}
+
+void VaultTests::expiredTransferNoticeWaitsForTheVaultToOpen()
+{
+    // The startup resubmission runs before the GUI has a model for the vault. The
+    // notice is held until the model opens, then shown once.
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    for (int i = 0; i < 5; ++i) {
+        test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+    }
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    const CTransactionRef tx{KeepATransferAndLetItExpire(test, *vault)};
+    QVERIFY(tx);
+    vault->ResubmitVaultTransactions(/*relay=*/false, /*force=*/true);
+    QVERIFY(WITH_LOCK(vault->cs_vault, return vault->mapVault.at(tx->GetHash()).isAbandoned()));
+
+    std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
+    {
+        MiniGUI mini_gui(m_node, platformStyle.get());
+        mini_gui.initModelForVault(m_node, vault, platformStyle.get());
+        QSignalSpy messages(mini_gui.vaultModel.get(), &VaultModel::message);
+        QTRY_COMPARE(messages.count(), 1);
+        QCOMPARE(messages.at(0).at(1).toString(), EXPIRED_TRANSFER_NOTICE);
+        QCOMPARE(messages.at(0).at(2).toUInt(), static_cast<unsigned int>(CClientUIInterface::ICON_WARNING));
+    }
+
+    // A new model for the same vault, as after closing and reopening it, does not
+    // show it again.
+    MiniGUI reopened(m_node, platformStyle.get());
+    reopened.initModelForVault(m_node, vault, platformStyle.get());
+    QSignalSpy reopened_messages(reopened.vaultModel.get(), &VaultModel::message);
+    QTest::qWait(50);
+    QCOMPARE(reopened_messages.count(), 0);
 }
 
 void VaultTests::agentsPageSaysAKeptSpendIsSavedNotSent()

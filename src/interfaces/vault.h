@@ -333,6 +333,13 @@ public:
     using TransactionChangedFn = std::function<void(const uint256& txid, ChangeType status)>;
     virtual std::unique_ptr<Handler> handleTransactionChanged(TransactionChangedFn fn) = 0;
 
+    //! Register handler for a transfer abandoned because its proof expired.
+    using TransferExpiredFn = std::function<void()>;
+    virtual std::unique_ptr<Handler> handleTransferExpired(TransferExpiredFn fn) = 0;
+
+    //! Transfers abandoned because their proof expired, not yet announced. Each once.
+    virtual std::vector<uint256> takeExpiredTransfers() = 0;
+
     //! Register handler for keypool changed messages.
     using CanGetAddressesChangedFn = std::function<void()>;
     virtual std::unique_ptr<Handler> handleCanGetAddressesChanged(CanGetAddressesChangedFn fn) = 0;

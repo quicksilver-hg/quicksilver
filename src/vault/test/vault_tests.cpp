@@ -78,8 +78,9 @@ public:
     double guessVerificationProgress(const uint256& block_hash) override { return m_chain.guessVerificationProgress(block_hash); }
     bool hasBlocks(const uint256& block_hash, int min_height = 0, std::optional<int> max_height = {}) override { return m_chain.hasBlocks(block_hash, min_height, max_height); }
     bool isInRelayPool(const uint256& txid) override { return m_chain.isInRelayPool(txid); }
-    node::TransactionError broadcastTransaction(const CTransactionRef&, bool, std::string& err_string) override
+    node::TransactionError broadcastTransaction(const CTransactionRef& tx, bool, std::string& err_string) override
     {
+        broadcasts.push_back(tx->GetHash());
         err_string = m_reason;
         return m_error;
     }
@@ -115,6 +116,9 @@ public:
     void requestRelayPoolTransactions(Notifications& notifications) override { m_chain.requestRelayPoolTransactions(notifications); }
     bool hasChainstate() override { return m_chain.hasChainstate(); }
     node::NodeContext* context() override { return m_chain.context(); }
+
+    //! Every transaction offered to this chain, in order.
+    std::vector<uint256> broadcasts;
 
 protected:
     interfaces::Chain& m_chain;
@@ -697,6 +701,314 @@ BOOST_FIXTURE_TEST_CASE(kept_transaction_entering_the_pool_clears_the_refusal, V
 
     vault->transactionAddedToRelayPool(tx);
     BOOST_CHECK(!WITH_LOCK(vault->cs_vault, return vault->mapVault.at(tx->GetHash()).m_not_accepted_reason.has_value()));
+}
+
+// F-582: a proof anchors VAULT_ANCHOR_DEPTH below the tip and expires nMaxAnchorAge
+// blocks after its anchor, everywhere at once. A locktime past that point can never
+// be accepted, so the vault refuses it before grinding a proof for it.
+BOOST_FIXTURE_TEST_CASE(send_refuses_a_locktime_the_proof_cannot_outlive, VaultTxPowTestSetup)
+{
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    std::unique_ptr<CVault> vault{CreateSyncedVault(
+        *m_node.chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey)};
+    const int tip{*m_node.chain->getHeight()};
+    const int max_anchor_age{Params().GetConsensus().nMaxAnchorAge};
+    const int last_accepted{tip - VAULT_ANCHOR_DEPTH + max_anchor_age};
+    const std::string refusal{strprintf(
+        "This locktime is too far ahead. A transfer's proof of work expires about %d blocks after it is made, "
+        "so this transfer could never be accepted. Use a locktime at most %d blocks ahead.",
+        max_anchor_age - VAULT_ANCHOR_DEPTH, max_anchor_age - VAULT_ANCHOR_DEPTH)};
+
+    // The grind asks whether to cancel before it starts, so a refusal that never
+    // reaches it never asks.
+    const auto create = [&](uint32_t locktime, int& grind_started) {
+        CCoinControl coin_control;
+        coin_control.m_locktime = locktime;
+        return CreateTransaction(*vault, {CRecipient{PKHash(GenerateRandomKey().GetPubKey()), COIN}},
+                                 /*change_pos=*/std::nullopt, coin_control, /*sign=*/true,
+                                 /*tx_proof_progress=*/{}, [&] { ++grind_started; return false; });
+    };
+
+    int grind_started{0};
+    const auto refused{create(last_accepted + 1, grind_started)};
+    BOOST_REQUIRE(!refused);
+    BOOST_CHECK_EQUAL(util::ErrorString(refused).original, refusal);
+    BOOST_CHECK_EQUAL(grind_started, 0);
+
+    const auto accepted{create(last_accepted, grind_started)};
+    BOOST_REQUIRE_MESSAGE(accepted, util::ErrorString(accepted).original);
+    BOOST_CHECK_GT(grind_started, 0);
+
+    // The boundary is the node's: the largest locktime the vault builds is taken
+    // into the relay pool at the last height its proof is still valid.
+    while (*m_node.chain->getHeight() < last_accepted) {
+        CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    }
+    std::string err_string;
+    BOOST_CHECK_EQUAL(m_node.chain->broadcastTransaction(accepted->tx, /*relay=*/false, err_string), node::TransactionError::OK);
+    BOOST_CHECK_MESSAGE(m_node.chain->isInRelayPool(accepted->tx->GetHash()), err_string);
+}
+
+BOOST_FIXTURE_TEST_CASE(send_refuses_a_time_locktime_the_proof_cannot_outlive, VaultTxPowTestSetup)
+{
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    std::unique_ptr<CVault> vault{CreateSyncedVault(
+        *m_node.chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey)};
+    const Consensus::Params& params{Params().GetConsensus()};
+    const int span{params.nMaxAnchorAge - VAULT_ANCHOR_DEPTH};
+    const int64_t mtp{WITH_LOCK(::cs_main, return Assert(m_node.chainman->ActiveChain().Tip())->GetMedianTimePast())};
+    // A time locktime matures when the median time passes it. At the target spacing
+    // that is the median time now plus the blocks the proof has left.
+    const int64_t last_accepted{mtp + span * params.nPowTargetSpacing};
+    BOOST_REQUIRE_GE(last_accepted, LOCKTIME_THRESHOLD);
+
+    const auto create = [&](int64_t locktime) {
+        CCoinControl coin_control;
+        coin_control.m_locktime = static_cast<uint32_t>(locktime);
+        return CreateTransaction(*vault, {CRecipient{PKHash(GenerateRandomKey().GetPubKey()), COIN}},
+                                 /*change_pos=*/std::nullopt, coin_control);
+    };
+
+    const auto refused{create(last_accepted + 1)};
+    BOOST_REQUIRE(!refused);
+    BOOST_CHECK_EQUAL(util::ErrorString(refused).original, strprintf(
+        "This locktime is too far ahead. A transfer's proof of work expires about %d blocks after it is made, "
+        "so this transfer could never be accepted. Use a locktime at most %d blocks ahead.", span, span));
+    const auto accepted{create(last_accepted)};
+    BOOST_CHECK_MESSAGE(accepted, util::ErrorString(accepted).original);
+}
+
+BOOST_FIXTURE_TEST_CASE(send_ignores_a_locktime_every_input_disables, VaultTxPowTestSetup)
+{
+    // With every input's sequence final the locktime does not bind, so it cannot
+    // keep the transfer out of a block and is no reason to refuse it.
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    std::unique_ptr<CVault> vault{CreateSyncedVault(
+        *m_node.chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey)};
+    const COutPoint input{WITH_LOCK(vault->cs_vault, return AvailableCoins(*vault).All().front().outpoint)};
+
+    CCoinControl coin_control;
+    coin_control.m_locktime = *m_node.chain->getHeight() + 1000;
+    coin_control.m_allow_other_inputs = false;
+    coin_control.Select(input).SetSequence(CTxIn::SEQUENCE_FINAL);
+    const auto created{CreateTransaction(*vault, {CRecipient{PKHash(GenerateRandomKey().GetPubKey()), COIN}},
+                                         /*change_pos=*/std::nullopt, coin_control)};
+    BOOST_CHECK_MESSAGE(created, util::ErrorString(created).original);
+}
+
+namespace {
+//! A kept transfer from this vault, refused by the chain, and a child spending its change.
+struct ExpiringTransfer {
+    CTransactionRef parent;
+    CTransactionRef child;
+};
+
+ExpiringTransfer KeepAnExpiringTransfer(CVault& vault, bool with_child, int child_anchor)
+{
+    ExpiringTransfer kept;
+    CCoinControl coin_control;
+    auto created{CreateTransaction(vault, {CRecipient{PKHash(GenerateRandomKey().GetPubKey()), COIN}},
+                                   /*change_pos=*/std::nullopt, coin_control)};
+    BOOST_REQUIRE_MESSAGE(created, util::ErrorString(created).original);
+    kept.parent = created->tx;
+    const CommitTransactionResult committed{vault.CommitTransaction(kept.parent, {}, {})};
+    BOOST_REQUIRE(committed);
+    BOOST_REQUIRE(committed.not_accepted_error != node::TransactionError::OK);
+    if (!with_child) return kept;
+
+    // A later transfer that spends the kept one's change, its own proof still fresh.
+    LOCK(vault.cs_vault);
+    for (uint32_t n = 0; n < kept.parent->vout.size(); ++n) {
+        if (!vault.IsMine(kept.parent->vout[n])) continue;
+        CMutableTransaction child;
+        child.vin.emplace_back(COutPoint{kept.parent->GetHash(), n}, CScript{}, CTxIn::MAX_SEQUENCE_NONFINAL);
+        child.vout.emplace_back(kept.parent->vout[n].nValue, GetScriptForDestination(PKHash(GenerateRandomKey().GetPubKey())));
+        child.nAnchorHeight = static_cast<uint32_t>(child_anchor);
+        kept.child = MakeTransactionRef(std::move(child));
+        BOOST_REQUIRE(vault.AddToVault(kept.child, TxStateInactive{}));
+        break;
+    }
+    BOOST_REQUIRE(kept.child);
+    return kept;
+}
+
+bool IsAbandoned(CVault& vault, const CTransactionRef& tx)
+{
+    return WITH_LOCK(vault.cs_vault, return vault.mapVault.at(tx->GetHash()).isAbandoned());
+}
+
+std::string ExpiredLogLine(const CTransactionRef& tx)
+{
+    return "Transfer failed: its proof of work expired before this node accepted it. "
+           "Nothing was spent; please try again. tx=" + tx->GetHash().ToString();
+}
+} // namespace
+
+BOOST_FIXTURE_TEST_CASE(expired_kept_transfer_is_abandoned_on_startup_resubmission, VaultTxPowTestSetup)
+{
+    // F-582: once the tip is more than nMaxAnchorAge past a kept transfer's anchor,
+    // no node or block will take it again. The vault abandons it instead of offering
+    // the same bytes forever, which releases its inputs and its pending change.
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    RejectingChain rejecting_chain{*m_node.chain, node::TransactionError::RELAYPOOL_REJECTED, "relaypool full"};
+    std::unique_ptr<CVault> vault{CreateSyncedVault(
+        rejecting_chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey)};
+    vault->SetBroadcastTransactions(true);
+    const int max_anchor_age{Params().GetConsensus().nMaxAnchorAge};
+    const int anchor{*m_node.chain->getHeight() - VAULT_ANCHOR_DEPTH};
+    const ExpiringTransfer kept{KeepAnExpiringTransfer(*vault, /*with_child=*/true, /*child_anchor=*/anchor + max_anchor_age)};
+    BOOST_REQUIRE_EQUAL(kept.parent->nAnchorHeight, static_cast<uint32_t>(anchor));
+
+    // An expired transaction this vault only receives is not a transfer it made.
+    CMutableTransaction foreign;
+    foreign.vin.emplace_back(Txid::FromUint256(m_rng.rand256()), 0);
+    foreign.vout.emplace_back(COIN, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    const CTransactionRef foreign_tx{MakeTransactionRef(std::move(foreign))};
+    BOOST_REQUIRE(WITH_LOCK(vault->cs_vault, return vault->AddToVault(foreign_tx, TxStateInactive{})));
+
+    int notified{0};
+    vault->NotifyTransferExpired.connect([&] { ++notified; });
+    const auto advance_to = [&](int height) {
+        while (*m_node.chain->getHeight() < height) {
+            CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+        }
+        LOCK2(vault->cs_vault, ::cs_main);
+        const CBlockIndex* tip{Assert(m_node.chainman->ActiveChain().Tip())};
+        vault->SetLastBlockProcessed(tip->nHeight, tip->GetBlockHash());
+    };
+
+    // The last height the proof is valid at: still offered, untouched.
+    advance_to(anchor + max_anchor_age);
+    rejecting_chain.SetAnswer(node::TransactionError::RELAYPOOL_REJECTED, "non-final");
+    vault->ResubmitVaultTransactions(/*relay=*/false, /*force=*/true);
+    BOOST_CHECK(!IsAbandoned(*vault, kept.parent));
+    BOOST_CHECK(WITH_LOCK(vault->cs_vault, return vault->mapVault.at(kept.parent->GetHash()).m_not_accepted_reason) == std::optional<std::string>{"non-final"});
+    BOOST_CHECK_EQUAL(notified, 0);
+    BOOST_CHECK(vault->TakeExpiredTransfers().empty());
+
+    // One block later it has expired: abandoned, not offered.
+    advance_to(anchor + max_anchor_age + 1);
+    // Read at this tip: the blocks above matured older coinbases, so the balance from
+    // before the transfer is no reference.
+    const Balance before{GetBalance(*vault)};
+    CAmount inputs{0};
+    {
+        LOCK(vault->cs_vault);
+        for (const CTxIn& txin : kept.parent->vin) inputs += vault->mapVault.at(txin.prevout.hash).tx->vout.at(txin.prevout.n).nValue;
+    }
+    rejecting_chain.broadcasts.clear();
+    {
+        ASSERT_DEBUG_LOG(ExpiredLogLine(kept.parent));
+        vault->ResubmitVaultTransactions(/*relay=*/false, /*force=*/true);
+    }
+    BOOST_CHECK(IsAbandoned(*vault, kept.parent));
+    BOOST_CHECK(IsAbandoned(*vault, kept.child));
+    BOOST_CHECK(!IsAbandoned(*vault, foreign_tx));
+    BOOST_CHECK(std::find(rejecting_chain.broadcasts.begin(), rejecting_chain.broadcasts.end(), kept.parent->GetHash()) == rejecting_chain.broadcasts.end());
+    {
+        LOCK(vault->cs_vault);
+        for (const CTxIn& txin : kept.parent->vin) BOOST_CHECK(!vault->IsSpent(txin.prevout));
+    }
+    const Balance after{GetBalance(*vault)};
+    BOOST_CHECK_EQUAL(after.m_mine_untrusted_pending, 0);
+    BOOST_CHECK_EQUAL(after.m_mine_trusted, before.m_mine_trusted + inputs);
+
+    // One notice per transfer whose own proof expired. The child is abandoned with
+    // its parent, but its proof did not expire, so the notice's words do not fit it.
+    BOOST_CHECK_EQUAL(notified, 1);
+    BOOST_CHECK(vault->TakeExpiredTransfers() == std::vector<uint256>{kept.parent->GetHash()});
+    BOOST_CHECK(vault->TakeExpiredTransfers().empty());
+    vault->ResubmitVaultTransactions(/*relay=*/false, /*force=*/true);
+    BOOST_CHECK_EQUAL(notified, 1);
+}
+
+BOOST_FIXTURE_TEST_CASE(expired_kept_transfer_is_abandoned_on_periodic_resubmission, VaultTxPowTestSetup)
+{
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    RejectingChain rejecting_chain{*m_node.chain, node::TransactionError::RELAYPOOL_REJECTED, "relaypool full"};
+    std::unique_ptr<CVault> vault{CreateSyncedVault(
+        rejecting_chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey)};
+    vault->SetBroadcastTransactions(true);
+    const int expired_at{*m_node.chain->getHeight() - VAULT_ANCHOR_DEPTH + Params().GetConsensus().nMaxAnchorAge + 1};
+    const ExpiringTransfer kept{KeepAnExpiringTransfer(*vault, /*with_child=*/false, /*child_anchor=*/0)};
+
+    while (*m_node.chain->getHeight() < expired_at) {
+        CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    }
+    {
+        LOCK2(vault->cs_vault, ::cs_main);
+        const CBlockIndex* tip{Assert(m_node.chainman->ActiveChain().Tip())};
+        vault->SetLastBlockProcessed(tip->nHeight, tip->GetBlockHash(), tip->GetBlockTime());
+    }
+    // F-579 counts a kept transfer's change as pending; abandoning releases it.
+    BOOST_REQUIRE_GT(GetBalance(*vault).m_mine_untrusted_pending, 0);
+    rejecting_chain.broadcasts.clear();
+    vault->ResubmitVaultTransactions(/*relay=*/true, /*force=*/false);
+    BOOST_CHECK(IsAbandoned(*vault, kept.parent));
+    BOOST_CHECK(rejecting_chain.broadcasts.empty());
+    BOOST_CHECK_EQUAL(GetBalance(*vault).m_mine_untrusted_pending, 0);
+    BOOST_CHECK(vault->TakeExpiredTransfers() == std::vector<uint256>{kept.parent->GetHash()});
+}
+
+BOOST_FIXTURE_TEST_CASE(expired_kept_transfer_is_abandoned_within_a_minute, VaultTxPowTestSetup)
+{
+    // The periodic resubmission runs 12 to 36 hours apart, so it cannot be what
+    // releases an expired transfer. The minute task does, whether or not this vault
+    // broadcasts: an expired proof is refused everywhere, not only by this node.
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    RejectingChain rejecting_chain{*m_node.chain, node::TransactionError::RELAYPOOL_REJECTED, "relaypool full"};
+    std::shared_ptr<CVault> vault{CreateSyncedVault(
+        rejecting_chain,
+        WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+        coinbaseKey)};
+    vault->SetBroadcastTransactions(true);
+    const int expired_at{*m_node.chain->getHeight() - VAULT_ANCHOR_DEPTH + Params().GetConsensus().nMaxAnchorAge + 1};
+    const ExpiringTransfer kept{KeepAnExpiringTransfer(*vault, /*with_child=*/false, /*child_anchor=*/0)};
+    vault->SetBroadcastTransactions(false);
+
+    while (*m_node.chain->getHeight() < expired_at) {
+        CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    }
+    {
+        LOCK2(vault->cs_vault, ::cs_main);
+        const CBlockIndex* tip{Assert(m_node.chainman->ActiveChain().Tip())};
+        vault->SetLastBlockProcessed(tip->nHeight, tip->GetBlockHash());
+    }
+    VaultContext context;
+    context.args = &m_args;
+    context.chain = &rejecting_chain;
+    BOOST_REQUIRE(AddVault(context, vault));
+    BOOST_REQUIRE(!vault->ShouldResend());
+    MaybeResendVaultTxs(context);
+    WITH_LOCK(context.vaults_mutex, context.vaults.clear());
+    BOOST_CHECK(IsAbandoned(*vault, kept.parent));
+    BOOST_CHECK(vault->TakeExpiredTransfers() == std::vector<uint256>{kept.parent->GetHash()});
+}
+
+BOOST_FIXTURE_TEST_CASE(expiry_check_waits_for_a_tip, TestChain100Setup)
+{
+    // A vault that has not processed a block yet (loading, -reindex) has no tip to
+    // judge expiry against. The startup resubmission reaches it then; it must not
+    // judge, and must not abort.
+    CVault vault{m_node.chain.get(), "", CreateMockableVaultDatabase()};
+    BOOST_REQUIRE(!WITH_LOCK(vault.cs_vault, uint256 hash; return vault.TryGetLastBlockHash(hash)));
+    CMutableTransaction mtx;
+    mtx.vin.emplace_back(Txid::FromUint256(m_rng.rand256()), 0);
+    mtx.vout.emplace_back(COIN, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    BOOST_REQUIRE(WITH_LOCK(vault.cs_vault, return vault.AddToVault(MakeTransactionRef(std::move(mtx)), TxStateInactive{})));
+    vault.ResubmitVaultTransactions(/*relay=*/false, /*force=*/true);
+    vault.AbandonExpiredTransactions();
+    BOOST_CHECK(vault.TakeExpiredTransfers().empty());
 }
 
 BOOST_FIXTURE_TEST_CASE(scan_for_vault_transactions, TestChain100Setup)

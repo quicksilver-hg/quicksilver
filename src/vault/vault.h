@@ -303,6 +303,8 @@ private:
 
     /** The next scheduled rebroadcast of vault transactions. */
     NodeClock::time_point m_next_resend{GetDefaultNextResend()};
+    //! Expired transfers abandoned and not yet announced. Not stored: abandoning is.
+    std::vector<uint256> m_expired_unannounced GUARDED_BY(cs_vault);
     /** Whether this vault will submit newly created transactions to the node's relaypool and
      * prompt rebroadcasts (see ResendVaultTransactions()). */
     bool fBroadcastTransactions = false;
@@ -649,6 +651,13 @@ public:
     /** Return true if all conditions for periodically resending transactions are met. */
     bool ShouldResend() const;
     void ResubmitVaultTransactions(bool relay, bool force);
+    /** Abandon every transfer from this vault that nothing accepted before its proof
+     *  expired (its anchor is more than nMaxAnchorAge below this vault's tip). No node or
+     *  block will take it again, so this releases its inputs and change (F-582). */
+    void AbandonExpiredTransactions();
+    /** The transfers AbandonExpiredTransactions abandoned and nobody has announced yet,
+     *  oldest first; the caller announces them. Each is returned once. */
+    std::vector<uint256> TakeExpiredTransfers();
 
     OutputType TransactionChangeType(const std::optional<OutputType>& change_type, const std::vector<CRecipient>& vecSend) const;
 
@@ -831,6 +840,11 @@ public:
      * @note called with lock cs_vault held.
      */
     boost::signals2::signal<void(const uint256& hashTx, ChangeType status)> NotifyTransactionChanged;
+
+    /** A transfer from this vault was abandoned because its proof expired. Take them with
+     *  TakeExpiredTransfers().
+     *  @note called without lock cs_vault held. */
+    boost::signals2::signal<void()> NotifyTransferExpired;
 
     /** Show progress e.g. for rescan */
     boost::signals2::signal<void(const std::string& title, int nProgress)> ShowProgress;

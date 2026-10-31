@@ -385,7 +385,8 @@ static std::vector<RPCResult> TransactionDescriptionString()
            {RPCResult::Type::BOOL, "generated", /*optional=*/true, "Only present if the transaction's only input is a coinbase one."},
            {RPCResult::Type::BOOL, "trusted", /*optional=*/true, "Whether we consider the transaction to be trusted and safe to spend from.\n"
                 "Only present when the transaction has 0 confirmations (or negative confirmations, if conflicted)."},
-           {RPCResult::Type::STR, "not_accepted", /*optional=*/true, "Present while this node has not accepted the transaction: why, and that the vault keeps it and resubmits it automatically."},
+           {RPCResult::Type::STR, "not_accepted", /*optional=*/true, "Present while this node has not accepted the transaction: why, and that the vault keeps it and resubmits it automatically. "
+                "Absent once the transaction is abandoned, including when its proof of work expires."},
            {RPCResult::Type::STR, "unconfirmed_change", /*optional=*/true, "Present while the transaction spends change from an earlier transaction of this vault that has not confirmed yet."},
            {RPCResult::Type::STR_HEX, "blockhash", /*optional=*/true, "The block hash containing the transaction."},
            {RPCResult::Type::NUM, "blockheight", /*optional=*/true, "The block height containing the transaction."},

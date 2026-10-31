@@ -952,12 +952,48 @@ void LogFinalTxPow(CVault& vault, const CTransaction& tx, int anchor_height)
                          cuckatoo::CuckatooProofHash(tx.nCycle).ToString());
 }
 
+// F-582: a proof expires everywhere at once, when the tip passes its anchor by
+// nMaxAnchorAge (CheckTxAnchor). A transaction is final in the block after the tip
+// reaches its height locktime (CheckFinalTxAtTip tests tip + 1, IsFinalTx is strict),
+// so a height locktime can be accepted only if it is at most anchor + nMaxAnchorAge.
+// A time locktime has no exact height: it is refused past the median time now plus
+// the blocks the proof has left at the target spacing. Blocks slower than the target
+// would let a later one through, so this is the expected limit, not a proven one.
+static std::optional<bilingual_str> CheckLocktimeOutlivesProof(CVault& vault, const CMutableTransaction& tx, int anchor_height)
+{
+    if (tx.nLockTime == 0) return std::nullopt;
+    // With every input final the locktime does not bind (IsFinalTx).
+    if (std::all_of(tx.vin.begin(), tx.vin.end(), [](const CTxIn& in) { return in.nSequence == CTxIn::SEQUENCE_FINAL; })) {
+        return std::nullopt;
+    }
+    const Consensus::Params& cp = Params().GetConsensus();
+    const int64_t last_valid_tip{int64_t{anchor_height} + cp.nMaxAnchorAge};
+    bool too_far;
+    if (tx.nLockTime < LOCKTIME_THRESHOLD) {
+        too_far = int64_t{tx.nLockTime} > last_valid_tip;
+    } else {
+        const auto tip{vault.chain().getTipLocator()};
+        int tip_height{-1};
+        int64_t tip_mtp{0};
+        if (tip.vHave.empty() || !vault.chain().findBlock(tip.vHave.front(), FoundBlock{}.height(tip_height).mtpTime(tip_mtp))) {
+            return _("Cannot anchor per-tx proof-of-work: no chain tip");
+        }
+        const int64_t blocks_left{std::max<int64_t>(0, last_valid_tip - tip_height)};
+        too_far = int64_t{tx.nLockTime} > tip_mtp + blocks_left * cp.nPowTargetSpacing;
+    }
+    if (!too_far) return std::nullopt;
+    const int span{cp.nMaxAnchorAge - VAULT_ANCHOR_DEPTH};
+    return strprintf(_("This locktime is too far ahead. A transfer's proof of work expires about %d blocks after it is made, so this transfer could never be accepted. Use a locktime at most %d blocks ahead."), span, span);
+}
+
 std::optional<bilingual_str> GrindTransactionPow(CVault& vault, CMutableTransaction& txNew,
                                                  uint64_t bytes, int anchor_height,
                                                  const cuckatoo::SolverProgressCallback& tx_proof_progress,
                                                  const cuckatoo::SolverCancelCallback& tx_proof_cancel)
 {
     const Consensus::Params& cp = Params().GetConsensus();
+    // Every grind starts here, so no path proves a transaction that can never be accepted.
+    if (auto err{CheckLocktimeOutlivesProof(vault, txNew, anchor_height)}) return err;
     txNew.nAnchorHeight = static_cast<uint32_t>(anchor_height);
     if (tx_proof_cancel && tx_proof_cancel()) return _("Transfer proof-of-work canceled");
 

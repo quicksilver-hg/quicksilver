@@ -5,7 +5,24 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 from test_framework.test_framework import QuicksilverTestFramework
-from test_framework.util import assert_equal
+from test_framework.util import (
+    assert_equal,
+    assert_raises_rpc_error,
+)
+
+# Sandbox: a proof expires nMaxAnchorAge (20) blocks after its anchor, which is
+# VAULT_ANCHOR_DEPTH (6) below the tip it was made at.
+PROOF_SPAN = 20 - 6
+TOO_FAR_AHEAD = (
+    f"This locktime is too far ahead. A transfer's proof of work expires about {PROOF_SPAN} blocks after it is made, "
+    f"so this transfer could never be accepted. Use a locktime at most {PROOF_SPAN} blocks ahead."
+)
+
+
+def assert_abandoned(tx):
+    sent = [d for d in tx["details"] if d["category"] == "send"]
+    assert sent
+    assert all(d["abandoned"] for d in sent)
 
 
 class VaultLocktimeTest(QuicksilverTestFramework):
@@ -56,7 +73,11 @@ class VaultLocktimeTest(QuicksilverTestFramework):
 
         self.log.info("A send the node refuses as non-final is kept, and says so")
         mine_before = node.getbalances()["mine"]
-        kept = node.send(outputs=[{address: 1}], locktime=node.getblockcount() + 100)
+        # Within the proof's lifetime (F-582). This was 100 blocks ahead, past the
+        # point where the proof expires, so it pinned a transfer that could never be
+        # accepted being kept and promised a resubmission: the F-582 defect itself.
+        kept_height = node.getblockcount()
+        kept = node.send(outputs=[{address: 1}], locktime=kept_height + 10)
         assert_equal(kept["warnings"], [
             "Not accepted by this node yet (non-final). "
             "The vault keeps the transaction and will resubmit it automatically."
@@ -95,6 +116,43 @@ class VaultLocktimeTest(QuicksilverTestFramework):
         assert near["txid"] in node.getrawrelaypool()
         assert "not_accepted" not in node.gettransaction(near["txid"])
         assert_equal(node.gettransaction(kept["txid"])["not_accepted"], not_accepted)
+
+        self.log.info("A locktime the proof cannot outlive is refused before any proof is made (F-582)")
+        assert_raises_rpc_error(-4, TOO_FAR_AHEAD, node.send,
+                                outputs=[{address: 1}], locktime=node.getblockcount() + PROOF_SPAN + 1)
+        assert_raises_rpc_error(-4, TOO_FAR_AHEAD, node.sendall,
+                                recipients=[address], locktime=node.getblockcount() + PROOF_SPAN + 1)
+        far_time = node.getblockheader(node.getbestblockhash())["mediantime"] + 10 * 365 * 24 * 60 * 60
+        assert_raises_rpc_error(-4, TOO_FAR_AHEAD, node.send, outputs=[{address: 1}], locktime=far_time)
+
+        self.log.info("The largest locktime the proof outlives is still built")
+        edge_height = node.getblockcount()
+        edge = node.send(outputs=[{address: 1}], locktime=edge_height + PROOF_SPAN)
+        assert_equal(node.gettransaction(edge["txid"])["not_accepted"], not_accepted)
+
+        self.log.info("A kept transfer whose proof expired is abandoned within a minute, and its coins return")
+        self.generate(node, kept_height + PROOF_SPAN + 1 - node.getblockcount())
+        node.syncwithvalidationinterfacequeue()
+        kept_inputs = node.decoderawtransaction(node.gettransaction(kept["txid"])["hex"])["vin"]
+        node.mockscheduler(60)
+        node.syncwithvalidationinterfacequeue()
+        expired = node.gettransaction(kept["txid"])
+        assert_abandoned(expired)
+        assert "not_accepted" not in expired
+        assert "not_accepted" not in {tx["txid"]: tx for tx in node.listtransactions(count=100)}[kept["txid"]]
+        unspent = {(u["txid"], u["vout"]) for u in node.listunspent(minconf=0)}
+        for txin in kept_inputs:
+            assert (txin["txid"], txin["vout"]) in unspent
+        # The other kept transfer's proof has not expired: it is still kept.
+        assert_equal(node.gettransaction(edge["txid"])["not_accepted"], not_accepted)
+
+        self.log.info("After a restart, one that expired is abandoned, not offered again")
+        self.generate(node, edge_height + PROOF_SPAN + 1 - node.getblockcount())
+        self.restart_node(0)
+        expired = node.gettransaction(edge["txid"])
+        assert_abandoned(expired)
+        assert "not_accepted" not in expired
+        assert edge["txid"] not in node.getrawrelaypool()
 
 
 if __name__ == "__main__":

@@ -45,6 +45,8 @@ std::string Script(const char* name, const std::string& content) {
     const std::string p = Tmp(name);
     std::ofstream{p} << content; return p;
 }
+//! How many times the stub's `append` ran on this mark: 0 before the first.
+long Appended(const std::string& mark) { std::ifstream f(mark, std::ios::binary | std::ios::ate); return f ? static_cast<long>(f.tellg()) : 0L; }
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(gpu_devices_tests, GpuCardTablesTestSetup)
@@ -135,10 +137,14 @@ BOOST_AUTO_TEST_CASE(timed_out_listing_retries)
     SetListingLimitForTesting(std::chrono::milliseconds{150});
     std::ofstream{script} << "append " << mark << "\nsleep 60000\n";
     BOOST_CHECK(DiscoverGpus(28).listing.outcome == ListOutcome::kTimedOut);
+    // F-583: the timed-out helper can be killed before it reaches `append`. A loaded
+    // Windows runner took longer than the limit to start it, and this read 1, not 2.
+    // So the retry is counted from whatever the first call left.
+    const long after_timeout{Appended(mark)};
+    BOOST_CHECK_LE(after_timeout, 1L);
     std::ofstream{script} << "append " << mark << "\necho " << RX << "\nexit 0\n";
     BOOST_CHECK(DiscoverGpus(28).situation == GpuSituation::kReady);
-    std::ifstream count(mark, std::ios::binary | std::ios::ate);
-    BOOST_CHECK_EQUAL(static_cast<long>(count.tellg()), 2L);
+    BOOST_CHECK_EQUAL(Appended(mark), after_timeout + 1);
     std::remove(script.c_str());
     std::remove(mark.c_str());
 }

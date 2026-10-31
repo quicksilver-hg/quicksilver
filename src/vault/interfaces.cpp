@@ -625,6 +625,11 @@ public:
         return MakeSignalHandler(m_vault->NotifyTransactionChanged.connect(
             [fn](const uint256& txid, ChangeType status) { fn(txid, status); }));
     }
+    std::unique_ptr<Handler> handleTransferExpired(TransferExpiredFn fn) override
+    {
+        return MakeSignalHandler(m_vault->NotifyTransferExpired.connect(fn));
+    }
+    std::vector<uint256> takeExpiredTransfers() override { return m_vault->TakeExpiredTransfers(); }
     std::unique_ptr<Handler> handleCanGetAddressesChanged(CanGetAddressesChangedFn fn) override
     {
         return MakeSignalHandler(m_vault->NotifyCanGetAddressesChanged.connect(fn));
