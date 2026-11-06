@@ -7,6 +7,7 @@
 
 #include <common/args.h>
 #include <crypto/cuckatoo/gpu_devices.h>
+#include <crypto/cuckatoo/gpu_kernel_limit.h>
 #include <crypto/cuckatoo/gpu_solver.h>
 #include <crypto/cuckatoo/multi_device.h>
 #include <qt/quicksilver.h>
@@ -40,6 +41,7 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QDir>
+#include <QTemporaryDir>
 #include <QElapsedTimer>
 #include <QLabel>
 #include <QLineEdit>
@@ -482,6 +484,62 @@ void OptionTests::gpuCardStatsRefresh()
         cuckatoo::SolverFault(cuckatoo::GpuSolveStatus::kDeviceFault, false).value())));
     list->setMiningActive(false);
     QCOMPARE(state->text(), QStringLiteral("Chosen"));
+}
+
+// F-590: the Hardware page advises when a chosen amdgpu card sits under a short kernel compute limit.
+void OptionTests::amdgpuAdvisoryFollowsTheKernelLimit()
+{
+#ifdef Q_OS_WIN
+    // The fake /sys below names a directory after the PCI slot ("0000:04:00.0"), and a colon is not legal in a Windows
+    // file name. The advisory reads Linux sysfs only, so the case runs where that tree can exist.
+    QSKIP("The fake Linux sysfs needs a ':' in a directory name, which Windows file names cannot hold.");
+#else
+    QTemporaryDir root; QVERIFY(root.isValid());
+    const auto slot_dir = QDir(root.path()).filePath(QStringLiteral("bus/pci/devices/0000:04:00.0"));
+    QVERIFY(QDir().mkpath(slot_dir));
+    const auto write = [](const QString& path, const QByteArray& text) { QFile f(path); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(text); };
+    write(slot_dir + QStringLiteral("/uevent"), "DRIVER=amdgpu\nPCI_SLOT_NAME=0000:04:00.0\n");
+    const QString lockup = QDir(root.path()).filePath(QStringLiteral("lockup_timeout"));
+    cuckatoo::KernelPaths paths;
+    paths.pci_devices = QDir(root.path()).filePath(QStringLiteral("bus/pci/devices")).toStdString();
+    paths.amdgpu_lockup_timeout = lockup.toStdString();
+
+    cuckatoo::GpuDiscovery discovery;
+    discovery.listing.outcome = cuckatoo::ListOutcome::kListed;
+    cuckatoo::GpuDevice card; card.backend = "opencl"; card.id = "pci:0000:04:00.0"; card.type = "gpu";
+    card.status = cuckatoo::DeviceStatus::kOk; card.name = "Radeon RX 580";
+    discovery.listing.devices.push_back(card);
+
+    GpuDeviceList list;
+    list.setObjectName(QStringLiteral("gpuDeviceList"));
+    list.show();
+    list.setKernelPaths(paths);
+    list.setMode(GpuDeviceList::Mode::kAutomatic);
+    list.setDevices(discovery, {}, {});
+    const auto advisory = [&list] { return list.findChild<QLabel*>(QStringLiteral("gpuAmdgpuAdvisory")); };
+
+    write(lockup, "2000,2000,2000,2000\n");
+    list.refreshRows();
+    QVERIFY(advisory());
+    QVERIFY(advisory()->isVisible());
+    QCOMPARE(advisory()->text(), QString::fromStdString(cuckatoo::AmdgpuAdvisoryText(2000)));
+
+    write(lockup, "2000,60000,2000,2000\n");
+    list.refreshRows();
+    QVERIFY(!advisory() || !advisory()->isVisible());
+
+    write(lockup, "garbage\n");
+    list.refreshRows();
+    QVERIFY(!advisory() || !advisory()->isVisible());
+
+    // The card is not chosen, so there is nothing to warn about.
+    write(lockup, "2000,2000,2000,2000\n");
+    list.setMode(GpuDeviceList::Mode::kChoose);
+    list.setChecked(QStringLiteral("pci:0000:04:00.0"), false);
+    QVERIFY(!advisory() || !advisory()->isVisible());
+    list.setChecked(QStringLiteral("pci:0000:04:00.0"), true);
+    QVERIFY(advisory() && advisory()->isVisible());
+#endif // Q_OS_WIN
 }
 
 void OptionTests::missingBundledHelperIsNamed()

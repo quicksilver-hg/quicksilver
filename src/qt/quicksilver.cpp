@@ -5,6 +5,7 @@
 
 #include <quicksilver-build-config.h> // IWYU pragma: keep
 
+#include <qt/sessionend.h>
 #include <qt/quicksilver.h>
 
 #include <chainparams.h>
@@ -816,6 +817,13 @@ int GuiMain(int argc, char* argv[])
 #endif
 
     QuicksilverApplication app;
+    // F-591: a lost session manager connection must take the File > Quit path,
+    // not libICE's default exit(1), which skips Shutdown(). Queued, so the
+    // shutdown does not run inside libICE's callback.
+    SessionEnd::InstallIceIoErrorHandler([&app] {
+        LogInfo(HgLog::QT, "GUI: session manager connection lost; shutting down\n");
+        QMetaObject::invokeMethod(&app, "requestShutdown", Qt::QueuedConnection);
+    });
     app.setRestartCommandLine(argc, argv);
     GUIUtil::LoadFont(QStringLiteral(":/fonts/monospace"));
     GUIUtil::LoadUnitGlyph();

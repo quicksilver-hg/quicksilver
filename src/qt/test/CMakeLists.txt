@@ -13,6 +13,7 @@ add_executable(test_quicksilver-qt
   optiontests.cpp
   quicksilverstyletests.cpp
   rpcnestedtests.cpp
+  sessionendtests.cpp
   storagecoststests.cpp
   test_main.cpp
   uritests.cpp

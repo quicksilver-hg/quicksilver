@@ -9,7 +9,7 @@ FROM ubuntu@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake pkgconf git libevent-dev libboost-dev \
-    libsqlite3-dev qtbase5-dev libqrencode-dev debhelper dpkg-dev fakeroot \
+    libsqlite3-dev qtbase5-dev libice-dev libqrencode-dev debhelper dpkg-dev fakeroot \
     && rm -rf /var/lib/apt/lists/*
 
 COPY contrib/release/build-debs.sh /usr/local/bin/build-debs

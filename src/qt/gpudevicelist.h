@@ -5,6 +5,7 @@
 #define QUICKSILVER_QT_GPUDEVICELIST_H
 
 #include <crypto/cuckatoo/gpu_devices.h>
+#include <crypto/cuckatoo/gpu_kernel_limit.h>
 
 #include <QMap>
 #include <QStringList>
@@ -28,6 +29,8 @@ public:
     QMap<QString, QString> tickedNames() const;
     void setChecked(const QString& id, bool checked);
     void refreshRows();
+    //! Where the kernel's amdgpu limit is read (F-590); a test points it at a fake tree.
+    void setKernelPaths(const cuckatoo::KernelPaths& paths);
 Q_SIGNALS:
     void changed();
     void integratedChecked(const QString& id);
@@ -36,6 +39,8 @@ private:
     void clearRows();
     QVBoxLayout* m_layout;
     QLabel* m_state;
+    QLabel* m_advisory{nullptr};
+    cuckatoo::KernelPaths m_kernel_paths;
     QList<Row> m_rows;
     Mode m_mode{Mode::kAutomatic};
     bool m_mining_active{false};

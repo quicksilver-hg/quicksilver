@@ -9,6 +9,7 @@
 #include <common/args.h>
 #include <consensus/params.h>
 #include <crypto/cuckatoo/cuckatoo.h>
+#include <crypto/cuckatoo/gpu_kernel_limit.h>
 #include <crypto/cuckatoo/gpu_solver.h>
 #include <crypto/cuckatoo/multi_device.h>
 #include <interfaces/mining.h>
@@ -222,7 +223,18 @@ void MiningService::Run(CScript payout_script)
     // the next Start() runs this again.
     const bool cpu_fallback = CpuBlockFallbackEnabled(cparams.nEdgeBits);
     const bool gpu_configured = cuckatoo::GpuHelperConfigured(cparams.nEdgeBits);
-    if (gpu_configured) LogInfo(HgLog::FORGE, "%s\n", cuckatoo::DescribeDiscovery(cuckatoo::DiscoverGpus(cparams.nEdgeBits)));
+    if (gpu_configured) {
+        const auto discovery = cuckatoo::DiscoverGpus(cparams.nEdgeBits);
+        LogInfo(HgLog::FORGE, "%s\n", cuckatoo::DescribeDiscovery(discovery));
+        // F-590: advisory only, never stops mining. One line, because the limit is a module
+        // parameter shared by every amdgpu card.
+        for (const auto& device : discovery.selection.use) {
+            if (const auto limit = cuckatoo::AmdgpuLowComputeLimit(device)) {
+                LogWarning(HgLog::FORGE, "%s\n", cuckatoo::AmdgpuLogLine(*limit));
+                break;
+            }
+        }
+    }
     {
         LOCK(m_stats_mutex);
         m_status.block_solving_possible = gpu_configured || cpu_fallback;

@@ -10,6 +10,7 @@ Build-Depends: debhelper-compat (= 13),
                libevent-dev,
                libboost-dev,
                libsqlite3-dev,
+               libice-dev,
                qtbase5-dev,
                libqrencode-dev
 Standards-Version: 4.6.2

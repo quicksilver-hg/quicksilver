@@ -155,6 +155,29 @@ indistinguishable from an unlucky nonce window. The helper therefore arms
 before each call and tests independent signals after it, rather than trusting
 the solver's return value.
 
+### AMD cards on Linux kernel 7.0
+
+On Linux kernel 7.0 the `amdgpu` driver's default limit for a compute job is 2000 ms (kernel 6.17 uses 10000 ms). A Cuckatoo solve
+job can run longer than that. When it does, the kernel logs a line like `ring comp_1.3.0 timeout` and resets the GPU, and
+mining stalls. On one tested machine (an RX 580 on kernel 7.0.0-42) this repeated about every two seconds while mining, and the
+machine later froze.
+
+To see whether you are affected, run `sudo dmesg | grep 'ring comp'` while mining, and read the current limit:
+
+```
+cat /sys/module/amdgpu/parameters/lockup_timeout
+modinfo -p amdgpu | grep lockup
+```
+
+The first command prints a value only if one was set. It is four numbers in milliseconds, in the order GFX, compute, SDMA, video. A blank line means none was set, and the driver uses the default that the second command shows in `(default: ...)`. On kernel 7.0 that default is 2000 for all jobs. If the compute limit is 2000, raise it:
+
+1. Create `/etc/modprobe.d/amdgpu-lockup.conf` containing `options amdgpu lockup_timeout=2000,60000,2000,2000`.
+2. Run `sudo update-initramfs -u` (Debian, Ubuntu, Linux Mint) and reboot.
+3. Read the parameter again. It must show `2000,60000,2000,2000`.
+
+On the tested machine, this removed the timeout lines (none in a 2 hour 24 minute mining run). This has been checked on one machine and one card
+family; other cards and kernels may behave differently. Nvidia cards and the CUDA solver are not affected.
+
 ## Windows
 
 ### Getting a CUDA 12.x toolkit

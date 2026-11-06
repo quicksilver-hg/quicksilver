@@ -37,6 +37,7 @@ private Q_SLOTS:
     void gpuCardsListAndModes();
     void sameNamedCardsShowTheirIds();
     void gpuCardStatsRefresh();
+    void amdgpuAdvisoryFollowsTheKernelLimit();
     void missingBundledHelperIsNamed();
     void cardsHintNeedsACard();
     void tickingBuiltInGraphicsAsksFirst();

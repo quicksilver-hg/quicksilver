@@ -100,6 +100,20 @@ ALLOWED_WHOLE = {
     ("src/test/getarg_tests.cpp", "win_argv_trailing_lone_high_names_argument_2"): "BENIGN: an unpaired UTF-16 surrogate is refused only on Windows, where the command line is wide",
     ("src/test/getarg_tests.cpp", "win_argv_lone_low_names_argument_1"): "BENIGN: an unpaired UTF-16 surrogate is refused only on Windows, where the command line is wide",
     ("src/test/getarg_tests.cpp", "win_argv_lone_surrogate_names_program_path"): "BENIGN: an unpaired UTF-16 surrogate is refused only on Windows, where the command line is wide",
+    # -- BENIGN below: the amdgpu advisory reads Linux sysfs only (F-590). The fake /sys is named after the PCI slot
+    #    ("0000:04:00.0"), and a colon is not a legal Windows file name, so no neutral fixture can build it.
+    ("src/test/gpu_kernel_limit_tests.cpp", "a_60000_compute_limit_does_not_advise"): "BENIGN: the amdgpu advisory reads Linux sysfs, whose fake tree needs a ':' in a directory name",
+    ("src/test/gpu_kernel_limit_tests.cpp", "a_blank_file_and_an_unusable_modinfo_does_not_advise"): "BENIGN: the amdgpu advisory reads Linux sysfs, whose fake tree needs a ':' in a directory name",
+    ("src/test/gpu_kernel_limit_tests.cpp", "a_blank_file_uses_the_module_default_of_kernel_6_17"): "BENIGN: the amdgpu advisory reads Linux sysfs, whose fake tree needs a ':' in a directory name",
+    ("src/test/gpu_kernel_limit_tests.cpp", "a_blank_file_uses_the_module_default_of_kernel_7_0"): "BENIGN: the amdgpu advisory reads Linux sysfs, whose fake tree needs a ':' in a directory name",
+    ("src/test/gpu_kernel_limit_tests.cpp", "a_card_on_another_driver_does_not_advise"): "BENIGN: the amdgpu advisory reads Linux sysfs, whose fake tree needs a ':' in a directory name",
+    ("src/test/gpu_kernel_limit_tests.cpp", "a_missing_or_unparsable_parameter_does_not_advise"): "BENIGN: the amdgpu advisory reads Linux sysfs, whose fake tree needs a ':' in a directory name",
+    ("src/test/gpu_kernel_limit_tests.cpp", "a_parseable_file_value_wins_over_the_module_default"): "BENIGN: the amdgpu advisory reads Linux sysfs, whose fake tree needs a ':' in a directory name",
+    ("src/test/gpu_kernel_limit_tests.cpp", "amdgpu_card_with_2000_compute_limit_advises"): "BENIGN: the amdgpu advisory reads Linux sysfs, whose fake tree needs a ':' in a directory name",
+    ("src/test/gpu_kernel_limit_tests.cpp", "modinfo_is_never_run_for_a_card_on_another_driver"): "BENIGN: the amdgpu advisory reads Linux sysfs, whose fake tree needs a ':' in a directory name",
+    ("src/test/gpu_kernel_limit_tests.cpp", "modinfo_runs_at_most_once_across_many_queries"): "BENIGN: the amdgpu advisory reads Linux sysfs, whose fake tree needs a ':' in a directory name",
+    ("src/test/gpu_kernel_limit_tests.cpp", "the_four_value_list_is_read_by_position"): "BENIGN: the amdgpu advisory reads Linux sysfs, whose fake tree needs a ':' in a directory name",
+    ("src/test/gpu_kernel_limit_tests.cpp", "the_threshold_is_below_10000"): "BENIGN: the amdgpu advisory reads Linux sysfs, whose fake tree needs a ':' in a directory name",
 }
 
 ALLOWED_PARTIAL = {

@@ -14,6 +14,7 @@
 #include <qt/test/guiutiltests.h>
 #include <qt/test/introtests.h>
 #include <qt/test/maturitytests.h>
+#include <qt/test/sessionendtests.h>
 #include <qt/test/optiontests.h>
 #include <qt/test/quicksilverstyletests.h>
 #include <qt/test/rpcnestedtests.h>
@@ -133,6 +134,7 @@ int main(int argc, char* argv[])
             {&GUIUtilTests::staticMetaObject, [&] { return std::make_unique<GUIUtilTests>(); }},
             {&IntroTests::staticMetaObject, [&] { return std::make_unique<IntroTests>(); }},
             {&MaturityTests::staticMetaObject, [&] { return std::make_unique<MaturityTests>(); }},
+            {&SessionEndTests::staticMetaObject, [&] { return std::make_unique<SessionEndTests>(); }},
             {&StorageCostsTests::staticMetaObject, [&] { return std::make_unique<StorageCostsTests>(); }},
             {&AppTests::staticMetaObject, [&] { return std::make_unique<AppTests>(app); }},
             {&OptionTests::staticMetaObject, [&] { return std::make_unique<OptionTests>(app.node()); }},

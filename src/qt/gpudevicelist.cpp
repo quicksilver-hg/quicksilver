@@ -14,6 +14,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <optional>
 
 namespace {
 QString ObjectSuffix(QString id)
@@ -35,6 +36,7 @@ GpuDeviceList::GpuDeviceList(QWidget* parent) : QWidget(parent), m_layout(new QV
 void GpuDeviceList::clearRows()
 {
     m_rows.clear();
+    m_advisory = nullptr;
     while (QLayoutItem* item = m_layout->takeAt(0)) {
         if (QWidget* widget = item->widget()) widget->deleteLater();
         delete item;
@@ -101,6 +103,11 @@ void GpuDeviceList::setDevices(const cuckatoo::GpuDiscovery& discovery, const QS
         missing.name = names.value(id, id).toStdString();
         add(id, names.value(id, id), false, true, missing, true);
     }
+    m_advisory = new QLabel(this);
+    m_advisory->setObjectName(QStringLiteral("gpuAmdgpuAdvisory"));
+    m_advisory->setWordWrap(true);
+    m_advisory->hide();
+    m_layout->addWidget(m_advisory);
     refreshRows();
 }
 
@@ -120,6 +127,7 @@ void GpuDeviceList::setMiningActive(bool active)
 void GpuDeviceList::refreshRows()
 {
     const auto stats = cuckatoo::GetGpuDeviceStats();
+    std::optional<long> advised;
     for (Row& row : m_rows) {
         row.check->setEnabled(m_mode == Mode::kChoose && !row.missing && row.device.status == cuckatoo::DeviceStatus::kOk);
         QString state{row.missing ? gpusituation::MissingRowState() : gpusituation::RowState(row.device, m_mode == Mode::kAutomatic ? gpusituation::RowMode::kAutomatic : gpusituation::RowMode::kChoose, row.check->isChecked())};
@@ -137,6 +145,12 @@ void GpuDeviceList::refreshRows()
             }
         }
         row.state->setText(state);
+        if (chosen && !advised) advised = cuckatoo::AmdgpuLowComputeLimit(row.device, m_kernel_paths);
+    }
+    // F-590: advisory only. It names the limit the kernel reports and changes nothing.
+    if (m_advisory) {
+        m_advisory->setText(advised ? QString::fromStdString(cuckatoo::AmdgpuAdvisoryText(*advised)) : QString{});
+        m_advisory->setVisible(advised.has_value());
     }
 }
 
@@ -157,4 +171,10 @@ QMap<QString, QString> GpuDeviceList::tickedNames() const
 void GpuDeviceList::setChecked(const QString& id, bool checked)
 {
     for (Row& row : m_rows) if (row.id == id) row.check->setChecked(checked);
+}
+
+void GpuDeviceList::setKernelPaths(const cuckatoo::KernelPaths& paths)
+{
+    m_kernel_paths = paths;
+    refreshRows();
 }

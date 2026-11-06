@@ -99,6 +99,8 @@ add_library(quicksilver_qt STATIC EXCLUDE_FROM_ALL
   qvaluecombobox.h
   rpcconsole.cpp
   rpcconsole.h
+  sessionend.cpp
+  sessionend.h
   splashscreen.cpp
   splashscreen.h
   trafficgraphwidget.cpp
@@ -235,6 +237,24 @@ endif()
 
 if(WITH_DBUS)
   target_link_libraries(quicksilver_qt PRIVATE Qt5::DBus)
+endif()
+
+# F-591: a system Qt on X11 connects to the session manager over ICE and
+# installs no ICE IO-error handler, so libICE's default calls exit(1) when the
+# session ends. src/qt/sessionend.cpp installs one that quits normally. The
+# depends Qt is static and built with -no-feature-sessionmanager, so it never
+# opens that connection and needs nothing here.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT qt_lib_type STREQUAL "STATIC_LIBRARY")
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(ICE QUIET IMPORTED_TARGET ice)
+    if(ICE_FOUND)
+      target_link_libraries(quicksilver_qt PUBLIC PkgConfig::ICE)
+      target_compile_definitions(quicksilver_qt PUBLIC QS_HAVE_ICE)
+    else()
+      message(STATUS "libICE not found: the GUI will not handle a lost session manager connection (F-591); install libice-dev")
+    endif()
+  endif()
 endif()
 
 if(qt_lib_type STREQUAL "STATIC_LIBRARY")

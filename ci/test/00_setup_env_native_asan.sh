@@ -21,7 +21,7 @@ fi
 
 export CONTAINER_NAME=ci_native_asan
 export APT_LLVM_V="20"
-export PACKAGES="systemtap-sdt-dev clang-${APT_LLVM_V} llvm-${APT_LLVM_V} libclang-rt-${APT_LLVM_V}-dev python3-zmq qtbase5-dev libevent-dev libboost-dev libzmq3-dev libqrencode-dev libsqlite3-dev ${BPFCC_PACKAGE}"
+export PACKAGES="systemtap-sdt-dev clang-${APT_LLVM_V} llvm-${APT_LLVM_V} libclang-rt-${APT_LLVM_V}-dev python3-zmq qtbase5-dev libice-dev libevent-dev libboost-dev libzmq3-dev libqrencode-dev libsqlite3-dev ${BPFCC_PACKAGE}"
 export NO_DEPENDS=1
 export GOAL="install"
 export QUICKSILVER_CONFIG="\

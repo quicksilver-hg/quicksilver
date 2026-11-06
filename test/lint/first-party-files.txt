@@ -102,6 +102,8 @@ src/crypto/cuckatoo/gpu/qsgpusolve-cuda.cu
 src/crypto/cuckatoo/gpu/watchdog_check.h
 src/crypto/cuckatoo/gpu_devices.cpp
 src/crypto/cuckatoo/gpu_devices.h
+src/crypto/cuckatoo/gpu_kernel_limit.cpp
+src/crypto/cuckatoo/gpu_kernel_limit.h
 src/crypto/cuckatoo/gpu_solver.cpp
 src/crypto/cuckatoo/gpu_solver.h
 src/crypto/cuckatoo/multi_device.cpp
@@ -150,6 +152,8 @@ src/qt/pagestack.cpp
 src/qt/pagestack.h
 src/qt/quicksilverstyle.cpp
 src/qt/quicksilverstyle.h
+src/qt/sessionend.cpp
+src/qt/sessionend.h
 src/qt/test/guiutiltests.cpp
 src/qt/test/guiutiltests.h
 src/qt/test/introtests.cpp
@@ -158,6 +162,8 @@ src/qt/test/maturitytests.cpp
 src/qt/test/maturitytests.h
 src/qt/test/quicksilverstyletests.cpp
 src/qt/test/quicksilverstyletests.h
+src/qt/test/sessionendtests.cpp
+src/qt/test/sessionendtests.h
 src/qt/test/solverprobestub.cpp
 src/qt/test/storagecoststests.cpp
 src/qt/test/storagecoststests.h
@@ -177,6 +183,7 @@ src/test/cuckatoo_f265_capture_tests.cpp
 src/test/cuckatoo_tests.cpp
 src/test/cuckatoo_verify_codes_tests.cpp
 src/test/gpu_devices_tests.cpp
+src/test/gpu_kernel_limit_tests.cpp
 src/test/gpu_helper_config_tests.cpp
 src/test/gpu_parity_tests.cpp
 src/test/gpu_solver_tests.cpp

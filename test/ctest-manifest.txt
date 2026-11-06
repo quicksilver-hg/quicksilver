@@ -71,6 +71,7 @@ fs_tests  tests  never  -
 getarg_tests  tests  never  -
 gpu_devices_tests  tests  never  -
 gpu_helper_config_tests  tests  never  -
+gpu_kernel_limit_tests  tests  never  -
 gpu_parity_tests  tests  gpu-unset  CUCKATOO_GPU_SOLVER is unset; set it to a qsgpusolve-cuda binary to run parity.
 gpu_solver_tests  tests  never  -
 multi_device_tests  tests  never  -
