@@ -100,6 +100,8 @@ Q_SIGNALS:
     void networkRequested();
     //! Home asked for the Mine / Mint page.
     void miningRequested();
+    //! The top-level Mine page, the one in use with no vault open, asked for the solver setting.
+    void solverSettingsRequested();
     //! Home asked for the Ledger page.
     void ledgerRequested();
     void miningStatusUpdated(const interfaces::MiningStatus& status);

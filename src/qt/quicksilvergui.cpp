@@ -168,6 +168,9 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
         connect(vaultFrame, &VaultFrame::networkRequested, this, &QuicksilverGUI::gotoNetworkPage);
         // Through the rail action, so the rail marks the Mine / Mint page.
         connect(vaultFrame, &VaultFrame::miningRequested, this, &QuicksilverGUI::gotoMineMintPage);
+        connect(vaultFrame, &VaultFrame::solverSettingsRequested, this, [this] {
+            openOptionsDialogWithTab(OptionsDialog::TAB_HARDWARE);
+        });
         content_scroll->setWidget(vaultFrame);
         createBenchChrome(content_scroll);
         setCentralWidget(m_bench_top_bar->parentWidget());

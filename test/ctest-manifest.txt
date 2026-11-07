@@ -113,6 +113,7 @@ pow_tests  tests  never  -
 prevector_tests  tests  never  -
 psqt_vault_tests  tests,vault  never  -
 quicksilver_no_qt_copy_reloc  tests,gui,linux  never  -
+quicksilver_version_no_display  tests,gui,linux  never  -
 raii_event_tests  tests  never  -
 random_tests  tests  never  -
 relaypool_tests  tests  never  -

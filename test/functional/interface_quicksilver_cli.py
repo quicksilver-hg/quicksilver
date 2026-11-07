@@ -131,6 +131,42 @@ class TestQuicksilverCli(QuicksilverTestFramework):
         assert_equal(['foo', 'bar'], self.nodes[0].cli(f'-rpcuser={user}', '-stdin', '-stdinrpcpass', input=f'{password}\nfoo\nbar').echo())
         assert_raises_process_error(1, 'Incorrect rpcuser or rpcpassword', self.nodes[0].cli(f'-rpcuser={user}', '-stdin', '-stdinrpcpass', input='foo').echo)
 
+        self.log.info("Test -stdinvaultpassphrase rejects unrelated commands")
+        assert_raises_process_error(
+            1,
+            '-stdinvaultpassphrase is only applicable for vaultpassphrase(change)',
+            self.nodes[0].cli('-stdinvaultpassphrase', input='not-a-passphrase').echo,
+        )
+        # A command that only begins with the name is not a passphrase command.
+        assert_raises_process_error(
+            1,
+            '-stdinvaultpassphrase is only applicable for vaultpassphrase(change)',
+            self.nodes[0].cli('-stdinvaultpassphrase', input='not-a-passphrase').vaultpassphrasefoo,
+        )
+        if self.is_specified_vault_compiled():
+            stdin_vault_name = 'stdin-passphrase'
+            old_passphrase = 'old-stdin-passphrase'
+            new_passphrase = 'new-stdin-passphrase'
+            self.nodes[0].createvault(vault_name=stdin_vault_name)
+            stdin_vault = self.nodes[0].get_vault_rpc(stdin_vault_name)
+            stdin_vault.encryptvault(old_passphrase)
+            stdin_vault_cli_options = (f'-rpcvault={stdin_vault_name}', '-stdinvaultpassphrase')
+
+            self.log.info("Test -stdinvaultpassphrase with vaultpassphrase")
+            assert_equal(None, self.nodes[0].cli(*stdin_vault_cli_options, input=old_passphrase).vaultpassphrase(self.rpc_timeout))
+            stdin_vault.vaultlock()
+            self.log.info("Test -stdinvaultpassphrase with vaultpassphrasechange")
+            assert_equal(None, self.nodes[0].cli(*stdin_vault_cli_options, input=f'{old_passphrase}\n{new_passphrase}').vaultpassphrasechange())
+            stdin_vault.vaultlock()
+            assert_equal(None, self.nodes[0].cli(*stdin_vault_cli_options, input=new_passphrase).vaultpassphrase(self.rpc_timeout))
+            stdin_vault.vaultlock()
+            assert_raises_process_error(
+                1,
+                '-stdinvaultpassphrase specified for vaultpassphrasechange but failed to read the new vault passphrase from standard input',
+                self.nodes[0].cli(*stdin_vault_cli_options, input=new_passphrase).vaultpassphrasechange,
+            )
+            self.nodes[0].unloadvault(stdin_vault_name)
+
         self.log.info("Test that -stdin accepts a regular file at offset zero")
         with tempfile.TemporaryFile(mode='w+', encoding='utf-8') as stdin_file:
             stdin_file.write('foo\nbar\n')

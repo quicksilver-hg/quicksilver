@@ -775,6 +775,33 @@ static void SetupUIArgs(ArgsManager& argsman)
     argsman.AddArg("-uiplatform", strprintf("Select platform to customize UI for (one of windows, macosx, other; default: %s)", QuicksilverGUI::DEFAULT_UIPLATFORM), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::GUI);
 }
 
+#if defined(Q_OS_LINUX)
+/**
+ * F-597: on Linux -version and -help only print (HelpMessageDialog::showOrPrint),
+ * but the QApplication exists before they are answered, and without a reachable
+ * display the xcb plugin aborts it. Those two requests get "minimal", the one
+ * platform every build links, static Qt included (import_plugins). A request the
+ * real parse below would refuse keeps the default platform: its error is a message
+ * box, which on "minimal" would wait forever where nobody can see it.
+ *
+ * @return whether the request only prints.
+ */
+static bool SelectPlatformForPrintOnlyRequest(int argc, char* argv[])
+{
+    ArgsManager args;
+    SetupServerArgs(args);
+    SetupUIArgs(args);
+    std::string error;
+    if (!args.ParseParameters(argc, argv, error)) return false;
+    for (int i = 1; i < argc; ++i) {
+        if (!IsSwitchChar(argv[i][0])) return false;
+    }
+    if (!HelpRequested(args) && !args.GetBoolArg("-version", false)) return false;
+    qputenv("QT_QPA_PLATFORM", "minimal");
+    return true;
+}
+#endif // Q_OS_LINUX
+
 int GuiMain(int argc, char* argv[])
 {
 #ifdef WIN32
@@ -816,6 +843,12 @@ int GuiMain(int argc, char* argv[])
     QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
 #endif
 
+#if defined(Q_OS_LINUX)
+    const bool print_only{SelectPlatformForPrintOnlyRequest(argc, argv)};
+#else
+    const bool print_only{false};
+#endif
+
     QuicksilverApplication app;
     // F-591: a lost session manager connection must take the File > Quit path,
     // not libICE's default exit(1), which skips Shutdown(). Queued, so the
@@ -825,8 +858,10 @@ int GuiMain(int argc, char* argv[])
         QMetaObject::invokeMethod(&app, "requestShutdown", Qt::QueuedConnection);
     });
     app.setRestartCommandLine(argc, argv);
-    GUIUtil::LoadFont(QStringLiteral(":/fonts/monospace"));
-    GUIUtil::LoadUnitGlyph();
+    if (!print_only) {
+        GUIUtil::LoadFont(QStringLiteral(":/fonts/monospace"));
+        GUIUtil::LoadUnitGlyph();
+    }
 
     /// 2. Parse command-line options. We do this after qt in order to show an error if there are problems parsing these
     // Command-line options take precedence:

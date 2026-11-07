@@ -105,16 +105,17 @@ the first line from standard input is used for the RPC password.
 Read RPC password from standard input as a single line. When combined
 with \fB\-stdin\fR, the first line from standard input is used for the
 RPC password. When combined with \fB\-stdinvaultpassphrase\fR,
-\fB\-stdinrpcpass\fR consumes the first line, and \fB\-stdinvaultpassphrase\fR
-consumes the second. Regular\-file stdin and already\-buffered
+\fB\-stdinrpcpass\fR consumes the first line, followed by the vault
+passphrase line or lines. Regular\-file stdin and already\-buffered
 terminal input are rejected.
 .HP
 \fB\-stdinvaultpassphrase\fR
 .IP
-Read vault passphrase from standard input as a single line. When
-combined with \fB\-stdin\fR, the first line from standard input is used
-for the vault passphrase. Regular\-file stdin and already\-buffered
-terminal input are rejected.
+Read vault passphrase from standard input: one line for vaultpassphrase,
+or two lines for vaultpassphrasechange (current, then new). When
+combined with \fB\-stdin\fR, the passphrase line or lines are consumed
+before additional arguments. Regular\-file stdin and
+already\-buffered terminal input are rejected.
 .HP
 \fB\-version\fR
 .IP

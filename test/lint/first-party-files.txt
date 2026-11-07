@@ -19,6 +19,7 @@ ci/lto-qt-copy-reloc.sh
 ci/prune-gha-caches.sh
 cmake/script/CheckBundledTor.cmake
 cmake/script/CheckCtestManifest.cmake
+cmake/script/CheckGuiVersionNoDisplay.cmake
 cmake/script/CheckNoQtCopyReloc.cmake
 cmake/script/EmbedTextFile.cmake
 contrib/calibration/mainnet_floor_model.py

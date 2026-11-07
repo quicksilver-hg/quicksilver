@@ -332,6 +332,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_test(NAME quicksilver_no_qt_copy_reloc
     COMMAND ${CMAKE_COMMAND} -DBINARY=$<TARGET_FILE:quicksilver> -P ${PROJECT_SOURCE_DIR}/cmake/script/CheckNoQtCopyReloc.cmake
   )
+  add_test(NAME quicksilver_version_no_display
+    COMMAND ${CMAKE_COMMAND} -DBINARY=$<TARGET_FILE:quicksilver> -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/version-no-display -P ${PROJECT_SOURCE_DIR}/cmake/script/CheckGuiVersionNoDisplay.cmake
+  )
 endif()
 
 if(BUILD_GUI_TESTS)

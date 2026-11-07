@@ -46,8 +46,10 @@ $ quicksilver-cli -rpcvault="vault-01" encryptvault "passphrase"
 Once encrypted, the passphrase can be changed with the `vaultpassphrasechange` command, or in the GUI with `Settings` -> `Change Passphrase…`.
 
 ```
-$ quicksilver-cli -rpcvault="vault-01" vaultpassphrasechange "oldpassphrase" "newpassphrase"
+$ quicksilver-cli -rpcvault="vault-01" -stdinvaultpassphrase vaultpassphrasechange
 ```
+
+With `-stdinvaultpassphrase`, the command prompts for the current passphrase and then the new passphrase, keeping both off the command line. Piped input uses the same order, one passphrase per line.
 
 The argument passed to `-rpcvault` is the name of the vault to be encrypted.
 

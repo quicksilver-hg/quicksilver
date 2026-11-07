@@ -45,6 +45,7 @@
 #include <qt/networkstyle.h>
 #include <qt/notificator.h>
 #include <qt/quicksilvergui.h>
+#include <qt/optionsdialog.h>
 #include <qt/optionsmodel.h>
 #include <qt/platformstyle.h>
 #include <qt/rpcconsole.h>
@@ -2154,6 +2155,34 @@ void VaultTests::homeAndMineLinksFollowRail()
     QCOMPARE(no_vault_stack->currentWidget()->objectName(), QStringLiteral("networkPage"));
     QVERIFY(no_vault_network_action->isChecked());
     QCOMPARE(no_vault_breadcrumb->text(), QStringLiteral("NO VAULT OPEN / NETWORK"));
+
+    // F-529: with no vault open the Mine page belongs to the frame, and its one
+    // fixable health state has to open the same settings tab the vault's page does.
+    no_vault_window.setOptionsModel(&options_model);
+    no_vault_window.show();
+    QApplication::processEvents();
+    no_vault_mining->click();
+    auto* no_vault_mine_page = qobject_cast<MineMintPage*>(no_vault_stack->currentWidget());
+    QVERIFY(no_vault_mine_page);
+    interfaces::MiningStatus no_solver;
+    no_solver.active = true;
+    no_solver.solver_ok = false;
+    no_solver.solver_missing = true;
+    no_vault_mine_page->setStatus(no_solver);
+    QPushButton* no_vault_configure = no_vault_mine_page->findChild<QPushButton*>(QStringLiteral("configureSolverButton"));
+    QVERIFY(no_vault_configure);
+    QVERIFY(no_vault_configure->isVisible());
+    QSignalSpy no_vault_settings_spy(no_vault_frame, &VaultFrame::solverSettingsRequested);
+    QVERIFY(no_vault_settings_spy.isValid());
+    no_vault_configure->click();
+    QCOMPARE(no_vault_settings_spy.count(), 1);
+    auto* no_vault_options = qobject_cast<OptionsDialog*>(QApplication::activeModalWidget());
+    QVERIFY2(no_vault_options, "the Mine page's graphics settings button opened no OptionsDialog");
+    auto* no_vault_tabs = no_vault_options->findChild<QTabWidget*>();
+    QVERIFY(no_vault_tabs);
+    QCOMPARE(no_vault_tabs->currentWidget()->objectName(), QStringLiteral("tabHardware"));
+    no_vault_options->reject();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
 void VaultTests::homeLedgerListsVaultTransactions()
