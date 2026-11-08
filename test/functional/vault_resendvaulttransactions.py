@@ -4,6 +4,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test that the vault resends transactions periodically."""
+import re
 import time
 
 from test_framework.blocktools import (
@@ -78,18 +79,9 @@ class ResendVaultTransactionsTest(QuicksilverTestFramework):
         peer_second.wait_for_broadcast([txid])
 
         self.log.info("Chain of unconfirmed not-in-relaypool txs are rebroadcast")
-        # Upstream additionally pinned the mapVault ordering so it could assert the
-        # parent is broadcast before the child. It did that by repeatedly bump-feeing
-        # the child to replace it until the ordering came out right -- a loop with no
-        # Quicksilver equivalent, since a feeless chain has neither a fee to raise nor
-        # "insufficient fee, rejecting replacement" to grind against. Replacement here
-        # ranks on surplus proof-of-work, and re-grinding a child purely to shuffle a
-        # map ordering would be a test that mines rather than a test that checks.
-        #
-        # What remains is the coverage that does apply: a parent and its unconfirmed
-        # child, evicted from the relay pool, are BOTH resubmitted. The parent-before-
-        # child ordering assertion is not covered here and wants its own test built on
-        # the surplus-work ranking.
+        # The vault resubmits by nOrderPos, so creation order guarantees this parent
+        # precedes its child. Observe that order in the per-transaction vault log;
+        # unlike the P2P inventory, it records the synchronous submission sequence.
         child_inputs = [{"txid": txid, "vout": 0}]
         child_txid = node.sendall(recipients=[addr], inputs=child_inputs)["txid"]
         entry_time = node.getrelaypoolentry(child_txid)["time"]
@@ -114,10 +106,16 @@ class ResendVaultTransactionsTest(QuicksilverTestFramework):
         assert_raises_rpc_error(-5, "Transaction not in the relay pool", node.getrelaypoolentry, txid)
         assert_raises_rpc_error(-5, "Transaction not in the relay pool", node.getrelaypoolentry, child_txid)
 
-        # Rebroadcast and check that parent and child are both in the relaypool
+        # Rebroadcast and check that parent and child are submitted in dependency
+        # order and both land in the relaypool.
+        log_offset = node.debug_log_path.stat().st_size
         with node.assert_debug_log(['submitted unconfirmed_txs=2 reason=resubmit']):
             node.setmocktime(evict_time + 36 * 60 * 60) # 36 hrs is the upper limit of the resend timer
             node.mockscheduler(60)
+        with open(node.debug_log_path, encoding="utf8", errors="replace") as log:
+            log.seek(log_offset)
+            resubmitted = re.findall(r"submitted tx=([0-9a-f]{64}) target=relaypool", log.read())
+        assert_equal(resubmitted, [txid, child_txid])
         node.getrelaypoolentry(txid)
         node.getrelaypoolentry(child_txid)
 

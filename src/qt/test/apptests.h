@@ -23,6 +23,7 @@ public:
 
 private Q_SLOTS:
     void restartArgumentsForDeveloperNetwork();
+    void sessionManagerArgumentsAreNotOurs();
     void consensusTorPreflight();
     // This block runs before appTests. appTests starts the shared node and then
     // shuts it down; a slot after that cannot open Options with no client model

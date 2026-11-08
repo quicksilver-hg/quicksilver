@@ -1458,6 +1458,29 @@ void AppTests::restartArgumentsForDeveloperNetwork()
         }));
 }
 
+//! F-599: a desktop session restore launches us as `quicksilver -session <id>`.
+//! Qt would strip that, but the application is built on a placeholder argv, so
+//! the option reaches our own parser, which refuses it.
+void AppTests::sessionManagerArgumentsAreNotOurs()
+{
+    const auto strip = &QuicksilverApplication::withoutSessionManagerArgumentsForTesting;
+    // Both spellings Qt's own parser accepts; the separate value goes with the option.
+    QCOMPARE(strip({QStringLiteral("-session"), QStringLiteral("21d39cd80-9b02_1793975681_475231")}), QStringList());
+    QCOMPARE(strip({QStringLiteral("-session=21d39cd80-9b02_1793975681_475231")}), QStringList());
+    // Ours are kept, in order, wherever the session option sits.
+    QCOMPARE(strip({QStringLiteral("-min"), QStringLiteral("-session"), QStringLiteral("id1"), QStringLiteral("-chain=main")}),
+        QStringList({QStringLiteral("-min"), QStringLiteral("-chain=main")}));
+    QCOMPARE(strip({QStringLiteral("-chain=main"), QStringLiteral("-session=id1"), QStringLiteral("-min")}),
+        QStringList({QStringLiteral("-chain=main"), QStringLiteral("-min")}));
+    // Not the session option: a longer name, a value that happens to read like it, a payment URI.
+    QCOMPARE(strip({QStringLiteral("-sessions=1")}), QStringList({QStringLiteral("-sessions=1")}));
+    QCOMPARE(strip({QStringLiteral("-datadir=-session")}), QStringList({QStringLiteral("-datadir=-session")}));
+    QCOMPARE(strip({QStringLiteral("quicksilver:abc")}), QStringList({QStringLiteral("quicksilver:abc")}));
+    // A trailing option with no value is dropped, not left to break the parse.
+    QCOMPARE(strip({QStringLiteral("-min"), QStringLiteral("-session")}), QStringList({QStringLiteral("-min")}));
+    QCOMPARE(strip(QStringList()), QStringList());
+}
+
 //! Entry point for QuicksilverApplication tests.
 void AppTests::appTests()
 {

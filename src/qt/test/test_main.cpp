@@ -33,6 +33,7 @@
 #include <QDebug>
 #include <QObject>
 #include <QSettings>
+#include <QTemporaryDir>
 #include <QTest>
 
 #include <cstdio>
@@ -73,6 +74,31 @@ int main(int argc, char* argv[])
     // F-382: keep piped Qt test output readable if the process aborts, including under MSVC.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::set_terminate(TestTerminateHandler);
+
+    // Each test process gets private persistent settings. Concurrent Qt test
+    // binaries otherwise race through the same Qt test settings.
+    // Keep an explicit caller-provided XDG_CONFIG_HOME for harnesses that want
+    // to inspect the files after the process exits.
+    std::unique_ptr<QTemporaryDir> settings_directory;
+#if defined(WIN32)
+    settings_directory = std::make_unique<QTemporaryDir>();
+    if (!settings_directory->isValid()) {
+        std::fputs("test_quicksilver-qt: cannot create temporary settings directory\n", stderr);
+        return EXIT_FAILURE;
+    }
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings_directory->path());
+#else
+    const char* const config_home{std::getenv("XDG_CONFIG_HOME")};
+    if (!config_home || !*config_home) {
+        settings_directory = std::make_unique<QTemporaryDir>();
+        if (!settings_directory->isValid()) {
+            std::fputs("test_quicksilver-qt: cannot create temporary settings directory\n", stderr);
+            return EXIT_FAILURE;
+        }
+        setenv("XDG_CONFIG_HOME", settings_directory->path().toLocal8Bit().constData(), 1 /* overwrite */);
+    }
+#endif
 
     // Initialize persistent globals with the testing setup state for sanity.
     // E.g. -datadir in gArgs is set to a temp directory dummy value (instead

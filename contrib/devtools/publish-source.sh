@@ -201,7 +201,9 @@ if [[ -z "$message" ]]; then
     exit 0
 fi
 
-git -C "$publication" commit --quiet -m "$message"
+# Commit in UTC so the published timestamp carries +0000, not the publisher's
+# local offset.
+TZ=UTC git -C "$publication" commit --quiet -m "$message"
 published_sha=$(git -C "$publication" rev-parse HEAD)
 
 # The commit must carry the tree unchanged.

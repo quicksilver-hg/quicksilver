@@ -66,6 +66,8 @@ public:
     void setRestartCommandLine(int argc, char* argv[]);
     /// Test wrapper for the network-context restart argument sanitizer.
     static QStringList restartArgumentsForChainForTesting(const QStringList& original_arguments, const QString& chain_token);
+    //! Test wrapper for the removal of the session manager's own `-session <id>` argument (F-599).
+    static QStringList withoutSessionManagerArgumentsForTesting(const QStringList& arguments);
     //! Finds the tor executable for an -bundledtorpath value (empty: the default search).
     using TorLocator = std::function<std::optional<fs::path>(const fs::path& override_path)>;
     //! Test wrapper for the check that a consensus start will find the Tor it needs.

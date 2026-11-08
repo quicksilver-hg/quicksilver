@@ -61,6 +61,7 @@
 #include <optional>
 
 #include <QApplication>
+#include <QSessionManager>
 #include <QDebug>
 #include <QLatin1String>
 #include <QLibraryInfo>
@@ -149,6 +150,24 @@ bool IsSandboxOnlyArgument(QString arg)
         lower.startsWith(QLatin1String("-notxpownocycle=")) ||
         lower == QLatin1String("-vbparams") ||
         lower.startsWith(QLatin1String("-vbparams="));
+}
+
+//! F-599: a desktop session restore starts the application with `-session <id>`
+//! (or `-session=<id>`). Qt would take it out of argv, but the application is
+//! built on a placeholder argv (qt_argv), so it must not reach our own parser,
+//! which refuses unknown options.
+QStringList WithoutSessionManagerArguments(const QStringList& arguments)
+{
+    QStringList kept;
+    for (int i = 0; i < arguments.size(); ++i) {
+        if (arguments[i] == QLatin1String("-session")) {
+            ++i; // its value goes with it
+            continue;
+        }
+        if (arguments[i].startsWith(QLatin1String("-session="))) continue;
+        kept.push_back(arguments[i]);
+    }
+    return kept;
 }
 
 QStringList RestartArgumentsForChain(const QStringList& original_arguments, const QString& chain_token)
@@ -429,6 +448,11 @@ void QuicksilverApplication::setRestartCommandLine(int argc, char* argv[])
 QStringList QuicksilverApplication::restartArgumentsForChainForTesting(const QStringList& original_arguments, const QString& chain_token)
 {
     return RestartArgumentsForChain(original_arguments, chain_token);
+}
+
+QStringList QuicksilverApplication::withoutSessionManagerArgumentsForTesting(const QStringList& arguments)
+{
+    return WithoutSessionManagerArguments(arguments);
 }
 
 bool QuicksilverApplication::baseInitialize()
@@ -816,6 +840,18 @@ int GuiMain(int argc, char* argv[])
     }
 #endif
 
+    // F-599: take the session manager's own option out before anything parses argv.
+    QStringList session_free_arguments;
+    for (int i = 0; i < argc; ++i) session_free_arguments.push_back(QString::fromLocal8Bit(argv[i]));
+    session_free_arguments = WithoutSessionManagerArguments(session_free_arguments);
+    std::vector<QByteArray> session_free_storage;
+    std::vector<char*> session_free_argv;
+    for (const QString& argument : session_free_arguments) session_free_storage.push_back(argument.toLocal8Bit());
+    for (QByteArray& argument : session_free_storage) session_free_argv.push_back(argument.data());
+    session_free_argv.push_back(nullptr);
+    argc = static_cast<int>(session_free_storage.size());
+    argv = session_free_argv.data();
+
     std::unique_ptr<interfaces::Init> init = interfaces::MakeGuiInit();
 
     SetupEnvironment();
@@ -858,6 +894,12 @@ int GuiMain(int argc, char* argv[])
         QMetaObject::invokeMethod(&app, "requestShutdown", Qt::QueuedConnection);
     });
     app.setRestartCommandLine(argc, argv);
+    // F-599: the node is started by the autostart entry, and a second instance
+    // started by the session manager would find the data directory locked. Ask
+    // the session manager not to restart us.
+    const auto no_session_restart = [](QSessionManager& manager) { manager.setRestartHint(QSessionManager::RestartNever); };
+    QObject::connect(&app, &QGuiApplication::saveStateRequest, &app, no_session_restart, Qt::DirectConnection);
+    QObject::connect(&app, &QGuiApplication::commitDataRequest, &app, no_session_restart, Qt::DirectConnection);
     if (!print_only) {
         GUIUtil::LoadFont(QStringLiteral(":/fonts/monospace"));
         GUIUtil::LoadUnitGlyph();

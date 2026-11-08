@@ -73,7 +73,7 @@ jobs:
         run: |
           # Run tests on commits after the last merge commit and before the PR head commit
           # Use clang++, because it is a bit faster and uses less memory than g++
-          git rebase --exec "echo Running test-one-commit on \$( git log -1 ) && CC=clang CXX=clang++ cmake -B build -DWERROR=ON -DWITH_ZMQ=ON -DBUILD_GUI=ON -DBUILD_BENCH=ON -DBUILD_FUZZ_BINARY=ON -DWITH_USDT=ON -DCMAKE_CXX_FLAGS='-Wno-error=unused-member-function' && cmake --build build -j $(nproc) && cmake -DBUILD_DIR=build -P cmake/script/CheckCtestManifest.cmake && ctest --output-on-failure --stop-on-failure --test-dir build -j $(nproc) --output-junit ctest-results.xml && cmake -DBUILD_DIR=build -DRESULTS=build/ctest-results.xml -P cmake/script/CheckCtestManifest.cmake && ./build/test/functional/test_runner.py -j $(( $(nproc) * 2 )) --combinedlogslen=99999999" ${{ env.TEST_BASE }}
+          git rebase --exec "echo Running test-one-commit on \$( git log -1 ) && CC=clang CXX=clang++ cmake -B build -DWERROR=ON -DWITH_ZMQ=ON -DBUILD_GUI=ON -DBUILD_BENCH=ON -DBUILD_FUZZ_BINARY=ON -DWITH_USDT=ON -DCMAKE_CXX_FLAGS='-Wno-error=unused-member-function' && cmake --build build -j $(nproc) && cmake -DBUILD_DIR=build -P cmake/script/CheckCtestManifest.cmake && ctest --output-on-failure --test-dir build -j $(nproc) --output-junit ctest-results.xml && cmake -DBUILD_DIR=build -DRESULTS=build/ctest-results.xml -P cmake/script/CheckCtestManifest.cmake && ./build/test/functional/test_runner.py -j $(( $(nproc) * 2 )) --combinedlogslen=99999999" ${{ env.TEST_BASE }}
 
   win64-native:
     name: ${{ matrix.job-name }}
@@ -242,7 +242,7 @@ jobs:
           # also writes each class's log to a file, printed here if anything fails.
           $env:QS_QT_TEST_LOG_DIR = "$PWD\qt-test-logs"
           New-Item -ItemType Directory -Force -Path $env:QS_QT_TEST_LOG_DIR | Out-Null
-          ctest --output-on-failure --stop-on-failure -j $env:NUMBER_OF_PROCESSORS -C Release --output-junit ctest-results.xml
+          ctest --output-on-failure -j $env:NUMBER_OF_PROCESSORS -C Release --output-junit ctest-results.xml
           $ctest_rc = $LASTEXITCODE
           Write-Output "::group::Qt test summary"
           Get-ChildItem $env:QS_QT_TEST_LOG_DIR -Filter *.txt | Select-String -Pattern '^(FAIL!|SKIP|Totals)|not checked' | ForEach-Object { "$($_.Filename): $($_.Line)" }
