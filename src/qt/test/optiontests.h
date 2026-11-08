@@ -12,6 +12,10 @@
 
 #include <QObject>
 
+//! F-595: keeps the real bundled helper off the build machine's hardware for the
+//! whole test binary. A helper a test named itself still runs.
+void ShieldOptionsDialogFromBundledHelper();
+
 class OptionTests : public QObject
 {
     Q_OBJECT
@@ -38,6 +42,9 @@ private Q_SLOTS:
     void sameNamedCardsShowTheirIds();
     void gpuCardStatsRefresh();
     void amdgpuAdvisoryFollowsTheKernelLimit();
+    void dialogTestsDoNotRunTheBundledHelper();
+    void injectedDiscoveryFillsTheDialog();
+    void defaultDiscoveryRunnerListsThroughTheHelper();
     void missingBundledHelperIsNamed();
     void cardsHintNeedsACard();
     void tickingBuiltInGraphicsAsksFirst();

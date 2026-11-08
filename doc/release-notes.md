@@ -49,6 +49,27 @@ Notable changes
   node that cannot reach Tor needs an explicit peer configured with `-addnode`,
   `-connect`, or `-seednode`; see `doc/bootstrapping.md`.
 
+Changes in 0.1.8
+================
+
+- `quicksilver-cli -stdinvaultpassphrase` now works for `vaultpassphrasechange`:
+  it reads the current passphrase on the first line and the new one on the
+  second. It still accepts only `vaultpassphrase` and `vaultpassphrasechange`.
+- On Linux, `quicksilver -version` and `-help` no longer need a display. A bad
+  command-line option prints its error and exits with code 1. Starting the
+  desktop with no display prints `No display was detected, please use
+  quicksilver-daemon for a headless environment.` and exits with code 1,
+  instead of aborting.
+- The Mine page's `Open graphics settings` button opens the Hardware settings
+  even when no vault is open.
+- Ending a desktop session (logging out) now closes the application through
+  its normal quit path, and restoring a session no longer fails with an error
+  about command-line arguments.
+- The Hardware page advises when the Linux amdgpu driver limits GPU compute
+  jobs to under 10000 ms, which can reset the card during a Cuckatoo solve.
+  When the limit is blank the module default is read from `modinfo`. See
+  `doc/gpu-solver.md`.
+
 Changes in 0.1.7
 ================
 

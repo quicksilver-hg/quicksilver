@@ -1,2 +1,8 @@
 # Suppress warnings triggered in dependencies
 leak:QGuiApplicationPrivate::createPlatformIntegration
+
+# Some OpenCL drivers allocate during platform discovery and never free it, in
+# code mapped from a GPU device node. The module name is matched before any
+# symbolization, so llvm-symbolizer is never asked to read the device node: it
+# would block on that read, and the process under test would never exit.
+leak:/dev/dri/renderD

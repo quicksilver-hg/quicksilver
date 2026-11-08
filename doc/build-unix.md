@@ -84,10 +84,10 @@ and [INSTALL.md](../INSTALL.md) needs, update the package index and then:
 
     sudo apt-get update
     sudo apt-get install build-essential cmake pkgconf python3 git \
-        libevent-dev libboost-dev libsqlite3-dev qtbase5-dev libqrencode-dev tor
+        libevent-dev libboost-dev libsqlite3-dev qtbase5-dev libice-dev libqrencode-dev tor
 
-Add `qtwayland5` on a Wayland desktop. For a headless node, drop `qtbase5-dev`
-and `libqrencode-dev`. Keep `tor`: without it, and without an explicit peer, a
+Add `qtwayland5` on a Wayland desktop. For a headless node, drop `qtbase5-dev`,
+`libice-dev` and `libqrencode-dev`. Keep `tor`: without it, and without an explicit peer, a
 headless node cannot reach the only seed (see
 [Bootstrapping](bootstrapping.md)). The itemized lists below say what each
 package is for and cover the optional features.
@@ -148,6 +148,11 @@ Additionally, to support Wayland protocol for modern desktop environments:
 
     sudo apt install qtwayland5
 
+With the system Qt, libICE lets the GUI shut down cleanly when the desktop session ends. The GUI builds without it,
+but logging out or powering off can then end it without a clean shutdown. A `depends` build does not need it.
+
+    sudo apt-get install libice-dev
+
 The GUI will be able to encode addresses in QR codes unless this feature is explicitly disabled. To install libqrencode, run:
 
     sudo apt-get install libqrencode-dev
@@ -163,10 +168,10 @@ To install everything the GUI build recommended by [README.md](../README.md)
 and [INSTALL.md](../INSTALL.md) needs, in one command:
 
     sudo dnf install gcc-c++ cmake make python3 git \
-        libevent-devel boost-devel sqlite-devel qt5-qtbase-devel qrencode-devel tor
+        libevent-devel boost-devel sqlite-devel qt5-qtbase-devel libICE-devel qrencode-devel tor
 
 Add `qt5-qtwayland` on a Wayland desktop. For a headless node, drop
-`qt5-qtbase-devel` and `qrencode-devel`. Keep `tor`: without it, and without an
+`qt5-qtbase-devel`, `libICE-devel` and `qrencode-devel`. Keep `tor`: without it, and without an
 explicit peer, a headless node cannot reach the only seed (see
 [Bootstrapping](bootstrapping.md)). The itemized lists below say what each
 package is for and cover the optional features.
@@ -214,6 +219,11 @@ the necessary parts of Qt, the libqrencode and pass `-DBUILD_GUI=ON`. Skip if yo
 Additionally, to support Wayland protocol for modern desktop environments:
 
     sudo dnf install qt5-qtwayland
+
+With the system Qt, libICE lets the GUI shut down cleanly when the desktop session ends. The GUI builds without it,
+but logging out or powering off can then end it without a clean shutdown. A `depends` build does not need it.
+
+    sudo dnf install libICE-devel
 
 The GUI will be able to encode addresses in QR codes unless this feature is explicitly disabled. To install libqrencode, run:
 

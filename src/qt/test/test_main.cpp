@@ -150,6 +150,7 @@ int main(int argc, char* argv[])
         QuicksilverApplication app;
         QuicksilverStyle::Apply(app);
         app.createNode(*init);
+        ShieldOptionsDialogFromBundledHelper();
 
         struct TestClass {
             const QMetaObject* meta_object;

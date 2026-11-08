@@ -57,6 +57,7 @@
 
 #include <boost/signals2/connection.hpp>
 #include <chrono>
+#include <iostream>
 #include <memory>
 #include <optional>
 
@@ -800,29 +801,78 @@ static void SetupUIArgs(ArgsManager& argsman)
 }
 
 #if defined(Q_OS_LINUX)
-/**
- * F-597: on Linux -version and -help only print (HelpMessageDialog::showOrPrint),
- * but the QApplication exists before they are answered, and without a reachable
- * display the xcb plugin aborts it. Those two requests get "minimal", the one
- * platform every build links, static Qt included (import_plugins). A request the
- * real parse below would refuse keeps the default platform: its error is a message
- * box, which on "minimal" would wait forever where nobody can see it.
- *
- * @return whether the request only prints.
- */
-static bool SelectPlatformForPrintOnlyRequest(int argc, char* argv[])
+enum class LinuxStartupAction {
+    CONTINUE,
+    PRINT_ONLY,
+    FAIL,
+};
+
+static std::optional<std::string> CommandLineError(int argc, char* argv[], ArgsManager& args)
 {
-    ArgsManager args;
     SetupServerArgs(args);
     SetupUIArgs(args);
     std::string error;
-    if (!args.ParseParameters(argc, argv, error)) return false;
-    for (int i = 1; i < argc; ++i) {
-        if (!IsSwitchChar(argv[i][0])) return false;
+    if (!args.ParseParameters(argc, argv, error)) {
+        return strprintf("Error parsing command line arguments: %s", error);
     }
-    if (!HelpRequested(args) && !args.GetBoolArg("-version", false)) return false;
-    qputenv("QT_QPA_PLATFORM", "minimal");
-    return true;
+
+    bool payment_server_token_seen{false};
+    for (int i = 1; i < argc; ++i) {
+        const QString arg{QString::fromLocal8Bit(argv[i])};
+        bool invalid_token{!arg.startsWith('-')};
+#ifdef ENABLE_VAULT
+        if (arg.startsWith(QUICKSILVER_IPC_PREFIX, Qt::CaseInsensitive)) {
+            invalid_token = false;
+            payment_server_token_seen = true;
+        }
+#endif
+        if (payment_server_token_seen && arg.startsWith('-')) {
+            return strprintf("Options ('%s') cannot follow a BIP-21 payment URI", argv[i]);
+        }
+        if (invalid_token) {
+            return strprintf("Command line contains unexpected token '%s', see quicksilver -h "
+                             "for a list of options.", argv[i]);
+        }
+    }
+    return std::nullopt;
+}
+
+static bool HasDisplayForGuiStart()
+{
+    if (!qgetenv("DISPLAY").isEmpty() || !qgetenv("WAYLAND_DISPLAY").isEmpty()) return true;
+
+    // An explicitly selected direct or virtual backend does not need X11 or
+    // Wayland. Let Qt handle that deliberate choice (and any backend options).
+    QByteArray platform{qgetenv("QT_QPA_PLATFORM")};
+    const int option_separator{platform.indexOf(':')};
+    if (option_separator >= 0) platform.truncate(option_separator);
+    return platform == "eglfs" || platform == "linuxfb" || platform == "minimal" ||
+           platform == "minimalegl" || platform == "offscreen" || platform == "vnc";
+}
+
+/**
+ * F-597/F-598: decide Linux starts before QApplication can let the xcb plugin
+ * abort. Print-only requests use "minimal", the one platform every build
+ * links. Invalid or GUI-requiring requests without a display report to stderr.
+ */
+static LinuxStartupAction CheckLinuxStartup(int argc, char* argv[])
+{
+    ArgsManager args;
+    const auto error{CommandLineError(argc, argv, args)};
+    if (error) {
+        if (HasDisplayForGuiStart()) return LinuxStartupAction::CONTINUE;
+        std::cerr << *error << '\n';
+        return LinuxStartupAction::FAIL;
+    }
+
+    if (HelpRequested(args) || args.GetBoolArg("-version", false)) {
+        qputenv("QT_QPA_PLATFORM", "minimal");
+        return LinuxStartupAction::PRINT_ONLY;
+    }
+    if (HasDisplayForGuiStart()) return LinuxStartupAction::CONTINUE;
+
+    std::cerr << "No display was detected, please use quicksilver-daemon for a headless environment.\n";
+    return LinuxStartupAction::FAIL;
 }
 #endif // Q_OS_LINUX
 
@@ -880,7 +930,9 @@ int GuiMain(int argc, char* argv[])
 #endif
 
 #if defined(Q_OS_LINUX)
-    const bool print_only{SelectPlatformForPrintOnlyRequest(argc, argv)};
+    const LinuxStartupAction startup_action{CheckLinuxStartup(argc, argv)};
+    if (startup_action == LinuxStartupAction::FAIL) return EXIT_FAILURE;
+    const bool print_only{startup_action == LinuxStartupAction::PRINT_ONLY};
 #else
     const bool print_only{false};
 #endif

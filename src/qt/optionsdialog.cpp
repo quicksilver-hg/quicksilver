@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <utility>
 
 #include <QApplication>
 #include <QCheckBox>
@@ -62,6 +63,19 @@ QStringList ShippedUiLanguages()
     return {};
 }
 } // namespace
+
+namespace {
+OptionsDialog::GpuDiscoveryRunner& GpuDiscoveryRunnerOverride()
+{
+    static OptionsDialog::GpuDiscoveryRunner runner;
+    return runner;
+}
+} // namespace
+
+void OptionsDialog::setGpuDiscoveryRunnerForTesting(GpuDiscoveryRunner runner)
+{
+    GpuDiscoveryRunnerOverride() = std::move(runner);
+}
 
 OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
     : QDialog(parent, GUIUtil::dialog_flags | Qt::WindowMaximizeButtonHint),
@@ -155,11 +169,17 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
         });
         GUIUtil::ShowModalDialogAsynchronously(box);
     });
-    gpusituation::RunDiscovery(cuckatoo::kBundledHelperEdgeBits, this, [this](const cuckatoo::GpuDiscovery& discovery) {
+    const auto& run_discovery_override{GpuDiscoveryRunnerOverride()};
+    auto on_discovery{[this](const cuckatoo::GpuDiscovery& discovery) {
         m_gpu_discovery = discovery;
         populateGpuDevices();
         if (ui->gpuSolverPath->text().trimmed().isEmpty()) validateGpuSolverPath();
-    });
+    }};
+    if (run_discovery_override) {
+        run_discovery_override(cuckatoo::kBundledHelperEdgeBits, this, std::move(on_discovery));
+    } else {
+        gpusituation::RunDiscovery(cuckatoo::kBundledHelperEdgeBits, this, std::move(on_discovery));
+    }
 
     /* Tray and close live on Display. macOS has no tray here, so hide the
        boxes instead of removing a tab. */

@@ -17,6 +17,7 @@
 #include <qt/guiutil.h>
 #include <qt/optionsdialog.h>
 #include <qt/gpudevicelist.h>
+#include <qt/gpusituation.h>
 #include <qt/platformstyle.h>
 #include <qt/quicksilverunits.h>
 #include <qt/quicksilverstyle.h>
@@ -54,6 +55,7 @@
 #include <QSpinBox>
 #include <QStringList>
 #include <QTest>
+#include <QTimer>
 #include <QTabWidget>
 #include <QTabBar>
 #include <QStyle>
@@ -63,6 +65,19 @@
 
 #include <fstream>
 #include <utility>
+
+void ShieldOptionsDialogFromBundledHelper()
+{
+    OptionsDialog::setGpuDiscoveryRunnerForTesting([](uint8_t edgebits, QObject* receiver, std::function<void(const cuckatoo::GpuDiscovery&)> done) {
+        const bool runs_bundled{qEnvironmentVariableIsEmpty("CUCKATOO_GPU_SOLVER") && cuckatoo::GpuHelperFor(edgebits)};
+        if (!runs_bundled) {
+            gpusituation::RunDiscovery(edgebits, receiver, std::move(done));
+            return;
+        }
+        // The state a run of this class alone sees: no bundled helper configured.
+        QTimer::singleShot(0, receiver, [done = std::move(done)] { done(cuckatoo::GpuDiscovery{}); });
+    });
+}
 
 OptionTests::OptionTests(interfaces::Node& node) : m_node(node)
 {
@@ -542,17 +557,95 @@ void OptionTests::amdgpuAdvisoryFollowsTheKernelLimit()
 #endif // Q_OS_WIN
 }
 
+namespace {
+//! AppTests' node init points CUCKATOO_GPU_BUNDLED at the real helper for the
+//! rest of the process, so a slot that changes it puts it back.
+struct RestoreBundled {
+    QByteArray value{qgetenv("CUCKATOO_GPU_BUNDLED")};
+    ~RestoreBundled()
+    {
+        if (value.isEmpty()) qunsetenv("CUCKATOO_GPU_BUNDLED");
+        else qputenv("CUCKATOO_GPU_BUNDLED", value);
+        cuckatoo::ResetGpuDiscoveryForTesting();
+    }
+};
+} // namespace
+
+//! F-595: after AppTests had run, every OptionsDialog a test opened ran the real
+//! qsgpusolve-opencl on the build machine's graphics card. The stub stands in for
+//! the bundled helper here and lists a card only it can name: if that card reaches
+//! the dialog, a test run started whatever helper the node was configured with.
+void OptionTests::dialogTestsDoNotRunTheBundledHelper()
+{
+    const RestoreBundled restore;
+    qputenv("CUCKATOO_GPU_BUNDLED", SolverProbeStubPath().toUtf8());
+    qputenv("QS_PROBE_STUB_LISTING", WriteListing({QStringLiteral("device backend=opencl id=pci:0000:0a:00.0 type=gpu integrated=0 mem=0 status=ok name=Ran The Bundled Helper")}).toUtf8());
+    cuckatoo::ResetGpuDiscoveryForTesting();
+
+    OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
+    auto* list = dialog.findChild<GpuDeviceList*>(QStringLiteral("gpuDeviceList")); QVERIFY(list);
+    const QString no_helper = QStringLiteral("Quicksilver's graphics helper isn't installed.");
+    const auto bundled_card = [&] { return list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_0a_00_0")); };
+    QTRY_VERIFY_WITH_TIMEOUT(bundled_card() || list->findChild<QLabel*>()->text().contains(no_helper), 30000);
+    QVERIFY2(!bundled_card(), "the Options dialog ran the bundled graphics helper during a test");
+}
+
+namespace {
+//! Puts the suite's shield back when a slot has replaced it.
+struct RestoreDiscoveryShield {
+    ~RestoreDiscoveryShield() { ShieldOptionsDialogFromBundledHelper(); }
+};
+
+cuckatoo::GpuDiscovery FixedDiscovery(cuckatoo::ListOutcome outcome, const std::string& listing)
+{
+    cuckatoo::GpuDiscovery discovery;
+    discovery.helper = "/fixed/helper";
+    discovery.listing.outcome = outcome;
+    discovery.listing.devices = cuckatoo::ParseDeviceListing(listing);
+    discovery.selection = cuckatoo::SelectDevices(discovery.listing.devices, discovery.choice);
+    discovery.situation = cuckatoo::ClassifySituation(discovery.listing, discovery.choice, discovery.selection);
+    return discovery;
+}
+} // namespace
+
+void OptionTests::injectedDiscoveryFillsTheDialog()
+{
+    const RestoreDiscoveryShield restore;
+    const auto inject = [](const cuckatoo::GpuDiscovery& discovery) {
+        OptionsDialog::setGpuDiscoveryRunnerForTesting([discovery](uint8_t, QObject* receiver, std::function<void(const cuckatoo::GpuDiscovery&)> done) {
+            QTimer::singleShot(0, receiver, [discovery, done = std::move(done)] { done(discovery); });
+        });
+    };
+    OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
+
+    inject(FixedDiscovery(cuckatoo::ListOutcome::kListed, "device backend=opencl id=pci:0000:0b:00.0 type=gpu integrated=0 mem=0 status=ok name=Fixed Card\n"));
+    OptionsDialog listed(nullptr, true); listed.setModel(&options);
+    auto* listed_cards = listed.findChild<GpuDeviceList*>(QStringLiteral("gpuDeviceList")); QVERIFY(listed_cards);
+    QTRY_VERIFY_WITH_TIMEOUT(listed_cards->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_0b_00_0")), 30000);
+
+    inject(FixedDiscovery(cuckatoo::ListOutcome::kFailed, ""));
+    OptionsDialog failed(nullptr, true); failed.setModel(&options);
+    auto* failed_cards = failed.findChild<GpuDeviceList*>(QStringLiteral("gpuDeviceList")); QVERIFY(failed_cards);
+    QTRY_COMPARE_WITH_TIMEOUT(failed_cards->findChild<QLabel*>()->text(), QStringLiteral("Quicksilver couldn't list this computer's graphics cards. See the debug log."), 30000);
+}
+
+//! Without an injected runner the dialog runs production discovery. The named
+//! helper is the stub, so this reaches a real process and no hardware.
+void OptionTests::defaultDiscoveryRunnerListsThroughTheHelper()
+{
+    const RestoreDiscoveryShield restore;
+    OptionsDialog::setGpuDiscoveryRunnerForTesting(nullptr);
+    PointDiscoveryAtStub(WriteListing({QStringLiteral("device backend=opencl id=pci:0000:0c:00.0 type=gpu integrated=0 mem=0 status=ok name=Default Runner Card")}));
+    OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
+    auto* list = dialog.findChild<GpuDeviceList*>(QStringLiteral("gpuDeviceList")); QVERIFY(list);
+    QTRY_VERIFY_WITH_TIMEOUT(list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_0c_00_0")), 30000);
+}
+
 void OptionTests::missingBundledHelperIsNamed()
 {
-    struct RestoreBundled {
-        QByteArray value{qgetenv("CUCKATOO_GPU_BUNDLED")};
-        ~RestoreBundled()
-        {
-            if (value.isEmpty()) qunsetenv("CUCKATOO_GPU_BUNDLED");
-            else qputenv("CUCKATOO_GPU_BUNDLED", value);
-            cuckatoo::ResetGpuDiscoveryForTesting();
-        }
-    } restore;
+    const RestoreBundled restore;
     qunsetenv("CUCKATOO_GPU_BUNDLED");
     cuckatoo::ResetGpuDiscoveryForTesting();
     OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));

@@ -11,6 +11,8 @@
 #include <QValidator>
 #include <crypto/cuckatoo/gpu_devices.h>
 
+#include <cstdint>
+#include <functional>
 #include <optional>
 
 class ClientModel;
@@ -63,6 +65,11 @@ public:
     void setMapper();
     void setCurrentTab(OptionsDialog::Tab tab);
     static void configureLanguageRow(const QStringList& shipped_languages, QComboBox* languages, QLabel* language_label);
+    using GpuDiscoveryRunner = std::function<void(uint8_t edgebits, QObject* receiver, std::function<void(const cuckatoo::GpuDiscovery&)> done)>;
+    //! Replace the graphics-card listing every dialog starts when it opens, so a
+    //! test run never executes the helper on the build machine's hardware (F-595).
+    //! An empty runner restores production discovery.
+    static void setGpuDiscoveryRunnerForTesting(GpuDiscoveryRunner runner);
 
 private Q_SLOTS:
     /* set OK button state (enabled / disabled) */

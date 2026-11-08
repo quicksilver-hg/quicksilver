@@ -1,3 +1,13 @@
+quicksilver (0.1.8-1) unstable; urgency=low
+
+  * Quicksilver 0.1.8: the desktop closes normally when a login session
+    ends and starts cleanly after a session restore; `quicksilver -version`,
+    `-help` and a start with no display no longer abort on Linux; and
+    `quicksilver-cli` can rotate a vault passphrase from standard input.
+    Ubuntu 22.04, Ubuntu 24.04 and Windows x64, from public tag v0.1.8.
+
+ -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Sun, 08 Nov 2026 15:00:00 -0500
+
 quicksilver (0.1.7-1) unstable; urgency=low
 
   * Quicksilver 0.1.7: a transfer the node kept but did not accept says it
