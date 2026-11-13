@@ -9,6 +9,7 @@
 #include <interfaces/vault.h>
 #include <qt/benchpanel.h>
 #include <qt/clientmodel.h>
+#include <qt/consensusreviewpage.h>
 #include <qt/guiconstants.h>
 #include <qt/guiutil.h>
 #include <qt/ledgerrows.h>
@@ -355,11 +356,13 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     // intro dialog does. See doc/design/chain-storage.md.
     auto* cost_copy = MakeNote(QStringLiteral("desktopLaunchCostCopy"), m_cost_panel);
     cost_copy->setText(m_blockchain_size_gb == 0
-        ? tr("Transfers require proof-of-work. Enabling consensus records up to %1 GB of blockchain data and is not required to use a vault.").arg(DEFAULT_PRUNE_TARGET_GB)
-        : tr("Transfers spend proof-of-work. With default pruning, consensus keeps a %1 GB recent-block window and grows the chain state by about %2 GB per year; keeping full history grows total storage by about %3 GB per year. Consensus is never required just to use the vault.")
-              .arg(DEFAULT_PRUNE_TARGET_GB)
+        ? tr("Transfers require proof-of-work. Enabling consensus records up to %1 GB of blockchain data. %2").arg(DEFAULT_PRUNE_TARGET_GB).arg(ConsensusReviewPage::vaultWithoutConsensusSentence())
+        : tr("Transfers spend proof-of-work. Consensus storage is estimated at up to about %3 GB a year: %1 GB of block data and %2 GB of chain state. Default pruning caps the block data at %4 GB. %5")
+              .arg(m_blockchain_size_gb)
               .arg(m_chain_state_size_gb)
-              .arg(m_blockchain_size_gb + m_chain_state_size_gb));
+              .arg(m_blockchain_size_gb + m_chain_state_size_gb)
+              .arg(DEFAULT_PRUNE_TARGET_GB)
+              .arg(ConsensusReviewPage::vaultWithoutConsensusSentence()));
     cost_layout->addWidget(cost_copy);
     node.body->addWidget(m_cost_panel);
     m_consensus_button = MakeQuietButton(QStringLiteral("launchConsensusCardButton"), node.frame);

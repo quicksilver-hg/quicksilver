@@ -203,7 +203,7 @@
    <item>
     <widget class="QLabel" name="lblExplanation1">
      <property name="text">
-      <string>This is where %1 will keep the ledger. Consensus builds it from the genesis block onward and, when other participants hold history, fetches and validates that history — you choose whether to turn Consensus on after this screen. This chain begins at height 0, so there may be very little to fetch; about %2 GB of block data is expected in its first year.</string>
+      <string>This is where %1 will keep the ledger. Consensus builds it from the genesis block onward and, when other participants hold history, fetches and validates that history — you choose whether to turn Consensus on after this screen. The block data is estimated at up to about %2 GB a year.</string>
      </property>
      <property name="wordWrap">
       <bool>true</bool>

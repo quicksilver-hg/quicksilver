@@ -144,9 +144,10 @@ Intro::Intro(QWidget *parent, int64_t blockchain_size_gb, int64_t chain_state_si
     ui->pruneGB->setRange(min_prune_target_GB, std::numeric_limits<int>::max());
     // Quicksilver prunes by default; keeping the whole chain is the deliberate opt-in.
     // Upstream defaults this off and only turns it on for a disk that looks too small,
-    // which suits a chain that grows ~60 GB/year. This one grows about 128 GB/year of
-    // block data, so an unprompted archival default would quietly hand every desktop
-    // operator a cost they did not choose. See doc/design/chain-storage.md.
+    // which suits a chain that grows ~60 GB/year. This one is sized for up to about
+    // 128 GB/year of block data at full traffic (it carries far less today, F-601), so an
+    // unprompted archival default would hand every desktop operator a cost they did not
+    // choose. See doc/design/chain-storage.md.
     ui->prune->setChecked(true);
     if (gArgs.IsArgSet("-prune")) {
         ui->prune->setChecked(gArgs.GetIntArg("-prune", 0) >= 1);
@@ -424,30 +425,35 @@ QString Intro::getPathToCheck()
 void Intro::UpdatePruneLabels(bool prune_checked)
 {
     m_required_space_gb = m_blockchain_size_gb + m_chain_state_size_gb;
-    QString storageRequiresMsg = tr("At least %1 GB of data will be stored in this directory, and it will grow over time.");
+    QString storageRequiresMsg = tr("An estimated %1 GB of data will be stored in this directory, and it will grow over time.");
     if (prune_checked && m_prune_target_gb <= m_blockchain_size_gb) {
         m_required_space_gb = m_prune_target_gb + m_chain_state_size_gb;
-        storageRequiresMsg = tr("Approximately %1 GB of data will be stored in this directory.");
+        storageRequiresMsg = tr("An estimated %1 GB of data will be stored in this directory.");
     }
     ui->lblExplanation3->setVisible(prune_checked);
-    ui->lblExplanation3->setText(tr("With the %1 GB recent-block limit, older blocks are deleted after validation. After the first year, expect about %2 GB on disk: %1 GB of recent blocks plus about %3 GB of chain state. The %4 GB first-year block-data figure above is processed volume, not retained storage.")
+    ui->lblExplanation3->setText(tr("With the %1 GB limit, the oldest blocks are deleted after validation once block data passes %1 GB. Expect about %2 GB on disk in all, including an estimated %3 GB of chain state.")
         .arg(m_prune_target_gb)
         .arg(m_required_space_gb)
-        .arg(m_chain_state_size_gb)
-        .arg(m_blockchain_size_gb));
+        .arg(m_chain_state_size_gb));
     ui->pruneGB->setEnabled(prune_checked);
-    static constexpr uint64_t nPowTargetSpacing = 5 * 60;  // from chainparams, which we don't have at this stage
-    static constexpr uint32_t expected_block_data_size = 1217399;  // includes undo data; M5 honest shape
-    const uint64_t expected_backup_days = m_prune_target_gb * 1e9 / (uint64_t(expected_block_data_size) * 86400 / nPowTargetSpacing);
-    // Singular and plural as separate strings rather than the "%n day(s)" idiom, for the
-    // reason set out in qt/maturity.cpp: with no catalogue installed Qt leaves the literal
-    // "(s)", so a first-run user reads "backups 30 day(s) old".
-    ui->lblPruneSuffix->setText(
-        expected_backup_days == 1
-            //: Explanatory text on the capability of the current prune target.
-            ? tr("(sufficient to restore backups 1 day old)")
-            //: Explanatory text on the capability of the current prune target.
-            : tr("(sufficient to restore backups %1 days old)").arg(expected_backup_days));
+    // F-601 B5a (owner, 2026-11-12): the reach follows the published estimate of block data
+    // a year, so every figure on this screen comes from the same place. It used to assume a
+    // fixed full-traffic block size and claimed 5 days at the 2 GB default. A network that
+    // publishes no estimate (blockchain size 0) gets no claim.
+    if (m_blockchain_size_gb == 0) {
+        ui->lblPruneSuffix->clear();
+    } else {
+        const int64_t expected_backup_days = m_prune_target_gb * 365 / m_blockchain_size_gb;
+        // Singular and plural as separate strings rather than the "%n day(s)" idiom, for the
+        // reason set out in qt/maturity.cpp: with no catalogue installed Qt leaves the literal
+        // "(s)", so a first-run user reads "backups 30 day(s) old".
+        ui->lblPruneSuffix->setText(
+            expected_backup_days == 1
+                //: Explanatory text on the capability of the current prune target.
+                ? tr("(sufficient to restore backups 1 day old)")
+                //: Explanatory text on the capability of the current prune target.
+                : tr("(sufficient to restore backups %1 days old)").arg(expected_backup_days));
+    }
     ui->sizeWarningLabel->setText(
         tr("When Consensus is running, %1 downloads and stores a copy of the Quicksilver block chain here.").arg(CLIENT_NAME) + " " +
         storageRequiresMsg.arg(m_required_space_gb) + " " +

@@ -17,6 +17,9 @@ private Q_SLOTS:
     void lostSessionManagerRequestsOneQuit();
     void repeatedLossStillQuitsOnce();
     void emptyQuitActionIsHarmless();
+    void exitLatchIsClearWhenNoShutdownStarted();
+    void exitLatchHoldsAnUnfinishedShutdown();
+    void exitLatchClearsWhenTheShutdownFinishes();
     void installedIceHandlerReplacesTheExitingDefault();
     void installedIceHandlerRequestsTheQuit();
 };

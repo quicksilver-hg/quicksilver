@@ -1328,6 +1328,8 @@ void QuicksilverGUI::removeAllVaults()
 void QuicksilverGUI::markConsensusInitializationFailed()
 {
     if (!vaultFrame) return;
+    // The vault frame shows the network page; keep the sidebar on it too.
+    networkAction->setChecked(true);
     vaultFrame->markConsensusInitializationFailed();
     m_consensus_enabled = false;
     setVaultActionsEnabled(vaultFrame->currentVaultModel());
@@ -1419,7 +1421,7 @@ void QuicksilverGUI::beginConsensusActivation()
             }
             return;
         }
-        if (vaultFrame) vaultFrame->gotoNetworkStatusPage();
+        gotoNetworkPage();
         if (!m_vault_controller) return;
         m_vault_controller->stopProofOfWork([this] {
             if (!m_vault_controller) return;

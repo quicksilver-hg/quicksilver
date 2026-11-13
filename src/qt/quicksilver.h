@@ -66,8 +66,13 @@ public:
     void setRestartCommandLine(int argc, char* argv[]);
     /// Test wrapper for the network-context restart argument sanitizer.
     static QStringList restartArgumentsForChainForTesting(const QStringList& original_arguments, const QString& chain_token);
-    //! Test wrapper for the removal of the session manager's own `-session <id>` argument (F-599).
-    static QStringList withoutSessionManagerArgumentsForTesting(const QStringList& arguments);
+    //! Test wrapper for recognising a session manager's `-session <id>` start (F-599).
+    static bool isSessionRestoreStartForTesting(const QStringList& arguments);
+#if defined(Q_OS_LINUX)
+    //! Test wrappers for the no-display advice (F-605).
+    static bool quicksilverDaemonAvailableForTesting(const fs::path& executable_dir);
+    static QString noDisplayMessageForTesting(bool daemon_available);
+#endif
     //! Finds the tor executable for an -bundledtorpath value (empty: the default search).
     using TorLocator = std::function<std::optional<fs::path>(const fs::path& override_path)>;
     //! Test wrapper for the check that a consensus start will find the Tor it needs.
@@ -134,6 +139,8 @@ protected:
 
 private:
     std::optional<InitExecutor> m_executor;
+    //! A session ending can ask more than once (Die, then the lost connection).
+    bool m_shutdown_requested{false};
     OptionsModel* optionsModel{nullptr};
     ClientModel* clientModel{nullptr};
     QuicksilverGUI* window{nullptr};

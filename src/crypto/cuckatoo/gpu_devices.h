@@ -63,5 +63,10 @@ void ResetGpuDiscoveryForTesting();
 //! reach kTimedOut without sleeping out kListingLimit. ResetGpuDiscoveryForTesting
 //! restores the default.
 void SetListingLimitForTesting(std::chrono::milliseconds limit);
+//! Kill every listing child still running and refuse new ones. Registered with atexit the first time a
+//! listing starts, so every normal exit of the daemon and the GUI (return from main, exit()) runs it; call it
+//! directly only from a test. Does not take the discovery lock (a listing holds it for up to 15 s).
+//! ResetGpuDiscoveryForTesting re-opens listing.
+void KillOutstandingListings();
 } // namespace cuckatoo
 #endif // QUICKSILVER_CRYPTO_CUCKATOO_GPU_DEVICES_H

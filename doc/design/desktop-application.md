@@ -147,7 +147,7 @@ and is usable within seconds of first launch.
 
 This is the load-bearing decision in the whole application. If the vault embedded
 a node, the ordinary user would inherit the same storage cost that the agent
-client exists to avoid — about 26 GB per year pruned, 154 GB per year archival
+client exists to avoid — up to about 26 GB per year pruned, 154 GB per year archival, at full traffic
 (see [chain-storage.md](chain-storage.md)) — and first launch would begin with a
 download measured in days.
 
@@ -303,12 +303,10 @@ that accepts it, never after.
   processor. The command-line agent uses a graphics card on those networks
   unless `-allowcputxpow` is set. The flag is off by default because an
   agent can start the work while the computer is in use. See [delegation.md](delegation.md).
-- **Consensus** costs about 26 GB per year pruned, which is the default, or 154 GB
-  per year to keep full history. Both figures are shown, because a user who is
-  offered only the larger one will decline for the wrong reason. It is framed as
-  buying independent verification rather than unlocking features, because nobody
-  should enable it believing it grants something they need. Declining is offered
-  with equal weight, since for most users declining is correct. See
+- **Consensus** is estimated at up to about 2 GB a year (up to 154 GB a year at
+  full traffic). Its cost is shown before the control that accepts it. Without
+  consensus the vault keeps keys and addresses but cannot see incoming payments or
+  send, and the opt-in page says so and highlights *Enable consensus* (F-611). See
   [chain-storage.md](chain-storage.md).
 
 Burying either would be the same dishonesty as concealing a fee.

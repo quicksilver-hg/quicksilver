@@ -9,6 +9,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <future>
+#include <thread>
+#ifdef WIN32
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#endif
 
 using namespace cuckatoo;
 namespace {
@@ -162,5 +171,45 @@ BOOST_AUTO_TEST_CASE(listing_timeout_kills_the_helper)
 BOOST_AUTO_TEST_CASE(helper_graph_size)
 {
     Guard g; SetEnv("CUCKATOO_GPU_BUNDLED", "/helper"); BOOST_CHECK_EQUAL(*GpuHelperFor(28), "/helper"); BOOST_CHECK(!GpuHelperFor(19)); SetEnv("CUCKATOO_GPU_SOLVER", "/custom"); BOOST_CHECK_EQUAL(*GpuHelperFor(19), "/custom");
+}
+//! True while some process holds the stub's `hold` lock on `path`. The OS drops the lock when the holder
+//! exits, so this is the OS's statement about the stub, not a marker the stub wrote. Same primitive the stub
+//! takes: flock on POSIX, an exclusive (share 0) open on Windows.
+static bool LockHeld(const std::string& path)
+{
+#ifdef WIN32
+    HANDLE h = CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_SHARING_VIOLATION;
+    CloseHandle(h);
+    return false;
+#else
+    const int fd = open(path.c_str(), O_RDWR | O_CREAT, 0600);
+    if (fd < 0) return false;
+    const bool free = flock(fd, LOCK_EX | LOCK_NB) == 0;
+    close(fd);
+    return !free;
+#endif
+}
+static bool WaitFor(bool want_held, const std::string& path, std::chrono::milliseconds bound)
+{
+    const auto end = std::chrono::steady_clock::now() + bound;
+    while (std::chrono::steady_clock::now() < end) { if (LockHeld(path) == want_held) return true; std::this_thread::sleep_for(std::chrono::milliseconds{10}); }
+    return LockHeld(path) == want_held;
+}
+//! F-606: a hung listing child must not outlive the app. The exit-time kill ends it and the listing returns.
+BOOST_AUTO_TEST_CASE(exit_kill_ends_outstanding_listing_child)
+{
+    Guard g;
+    const std::string lock{Tmp("qs-list-exitkill-lock")};
+    std::remove(lock.c_str());
+    SetEnv("QS_SOLVER_STUB_LISTING", Script("qs-list-exitkill", "hold " + lock + "\nsleep 90000\n"));
+    auto listing = std::async(std::launch::async, [] { return ListDevices(SOLVER_STUB_PATH, std::chrono::milliseconds{60000}); });
+    BOOST_REQUIRE_MESSAGE(WaitFor(true, lock, std::chrono::milliseconds{5000}), "the stub never started holding its lock");
+    KillOutstandingListings();
+    BOOST_CHECK_MESSAGE(WaitFor(false, lock, std::chrono::milliseconds{2000}), "the listing child is still running after the exit-time kill");
+    const bool returned = listing.wait_for(std::chrono::seconds{5}) == std::future_status::ready;
+    BOOST_REQUIRE_MESSAGE(returned, "the listing did not return after the exit-time kill");
+    BOOST_CHECK(listing.get().outcome == ListOutcome::kFailed);
+    std::remove(lock.c_str());
 }
 BOOST_AUTO_TEST_SUITE_END()

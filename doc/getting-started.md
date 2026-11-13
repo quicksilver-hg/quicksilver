@@ -62,9 +62,8 @@ nothing fails and nothing warns:
 
 To turn it on: **Home → Review cost → Enable consensus**.
 
-The opt-in page states the storage cost and makes *Decline for now* its
-highlighted button, so a reader whose goal is to run a node has to choose the
-other one. The choice is remembered per network, in that network's Qt settings
+The opt-in page states the storage cost and what the vault cannot do without
+consensus, and highlights *Enable consensus*. The choice is remembered per network, in that network's Qt settings
 (`Desktop/ConsensusEnabled`) rather than in `quicksilver.conf`, so it is made
 once per network and not per launch.
 
@@ -97,7 +96,8 @@ on the network.
 
 The first-run screen's storage limit **arrives already ticked**, at 2 GB. This
 is deliberate, and it is the opposite of the headless default below: this chain
-writes on the order of 128 GB of block data a year, so an archival default
+is sized for up to about 128 GB of block data a year at full traffic (it
+carries far less today), so an archival default
 would hand every desktop operator a cost they did not choose. Untick it on the
 first-run screen to keep full history. The reasoning is in
 [Who Stores the Chain](design/chain-storage.md).
@@ -197,6 +197,16 @@ look up an address and read the amounts it has sent and received. Your name is
 not part of a transfer, but anyone who learns one of your addresses can read
 that address's history. Use **Generate receiving address** to give a different
 address to each person, so they cannot see each other's payments to you.
+
+## When a payment is final
+
+A payment to your vault appears in the Ledger as soon as your node sees it, but
+it is not final yet. Until it is buried under enough blocks, a chain
+reorganisation could remove it. Quicksilver recommends waiting for
+**20 confirmations**, about 100 minutes at the 5-minute block target, before
+you treat a payment as received: before you hand over goods, for instance, or
+pass the coins on. The Ledger shows a payment as *Confirming* with its count
+until then, and as *Confirmed* once it has 20.
 
 ## Prepare to send
 

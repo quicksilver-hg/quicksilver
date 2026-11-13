@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <map>
 #include <mutex>
+#include <set>
 
 namespace cuckatoo {
 namespace {
@@ -18,6 +19,51 @@ std::mutex g_mutex;
 auto* g_cache = new std::map<std::string, GpuDiscovery>;
 //! Guarded by g_mutex. Tests shorten this; production always uses kListingLimit.
 std::chrono::milliseconds g_listing_limit{kListingLimit};
+
+// F-606: listing children still running when the process exits. A detached GUI discovery thread is
+// never unwound at exit, so ~ContainedChild never runs for its child, and on POSIX nothing else ties a
+// hung helper to us. KillOutstandingListings() (run by atexit) kills them. Its own lock, never g_mutex:
+// DiscoverGpus holds g_mutex for the whole listing. Leaked like g_cache, because the detached thread can
+// outlive static destruction.
+struct ListingRegistry {
+    std::mutex mutex;
+    std::set<util::ContainedChild*> live; //! Guarded by mutex.
+    bool closing{false};                  //! Guarded by mutex. Set at exit: no new listing may start.
+};
+ListingRegistry& Registry() { static auto* r = new ListingRegistry; return *r; }
+
+//! Registers one listing child for its lifetime. The listing thread must Release() BEFORE it reaps the
+//! child (Wait) and before the child is destroyed: both happen under the registry lock's exclusion, so the
+//! exit-time kill never signals a process id that has been reaped (and so possibly reused), and never reads
+//! the child while the listing thread is reaping it.
+class ListingRegistration
+{
+public:
+    explicit ListingRegistration(util::ContainedChild& child) : m_child{&child}
+    {
+        auto& r = Registry();
+        std::lock_guard<std::mutex> lock{r.mutex};
+        if (r.closing) { m_refused = true; child.KillGroup(); return; }
+        r.live.insert(m_child);
+        static std::once_flag once; std::call_once(once, [] { std::atexit([] { KillOutstandingListings(); }); });
+    }
+    ~ListingRegistration() { Release(); }
+    ListingRegistration(const ListingRegistration&) = delete;
+    ListingRegistration& operator=(const ListingRegistration&) = delete;
+    //! True if the process is already exiting: the child was killed at once and the listing must give up.
+    bool Refused() const { return m_refused; }
+    void Release()
+    {
+        if (!m_child) return;
+        auto& r = Registry();
+        std::lock_guard<std::mutex> lock{r.mutex};
+        r.live.erase(m_child);
+        m_child = nullptr;
+    }
+private:
+    util::ContainedChild* m_child;
+    bool m_refused{false};
+};
 
 std::string Trim(std::string_view text)
 {
@@ -149,6 +195,8 @@ DeviceListing ListDevices(const std::string& helper, std::chrono::milliseconds l
     DeviceListing out;
     auto child = util::ContainedChild::Spawn({helper, "--list-devices"}, util::ChildStdout::kPipe);
     if (!child) { out.outcome = ListOutcome::kFailed; out.detail = "could not start " + helper; return out; }
+    ListingRegistration registration{*child};
+    if (registration.Refused()) { out.outcome = ListOutcome::kFailed; out.detail = "listing abandoned: exiting"; return out; }
     const auto deadline = std::chrono::steady_clock::now() + limit;
     std::string text; char buf[4096];
     for (;;) {
@@ -160,6 +208,7 @@ DeviceListing ListDevices(const std::string& helper, std::chrono::milliseconds l
         if (state == util::ContainedChild::ReadStatus::kData) text.append(buf, got);
         else if (state == util::ContainedChild::ReadStatus::kClosed) break;
     }
+    registration.Release(); // before the reap: see ListingRegistration
     const int rc = child->Wait();
     out.devices = ParseDeviceListing(text);
     if (rc == 0) out.outcome = ListOutcome::kListed;
@@ -241,11 +290,21 @@ void ResetGpuDiscoveryForTesting()
     std::lock_guard<std::mutex> lock{g_mutex};
     g_cache->clear();
     g_listing_limit = kListingLimit;
+    auto& r = Registry();
+    std::lock_guard<std::mutex> rlock{r.mutex};
+    r.closing = false;
 }
 
 void SetListingLimitForTesting(std::chrono::milliseconds limit)
 {
     std::lock_guard<std::mutex> lock{g_mutex};
     g_listing_limit = limit;
+}
+void KillOutstandingListings()
+{
+    auto& r = Registry();
+    std::lock_guard<std::mutex> lock{r.mutex};
+    r.closing = true;
+    for (util::ContainedChild* child : r.live) child->KillGroup();
 }
 } // namespace cuckatoo

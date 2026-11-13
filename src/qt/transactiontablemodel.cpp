@@ -431,7 +431,13 @@ QString TransactionTableModel::formatTxToAddress(const TransactionRecord *wtx, b
     {
     case TransactionRecord::RecvFromOther:
         return QString::fromStdString(wtx->address);
-    case TransactionRecord::RecvWithAddress:
+    case TransactionRecord::RecvWithAddress: {
+        const QString label = vaultModel->getAddressTableModel()->labelForAddress(QString::fromStdString(wtx->address));
+        if (label.isEmpty()) return lookupAddress(wtx->address, tooltip);
+        QString text = TransactionDesc::receivedAt(label);
+        if (tooltip) text += QString(" (") + QString::fromStdString(wtx->address) + QString(")");
+        return text;
+    }
     case TransactionRecord::SendToAddress:
     case TransactionRecord::Generated:
         return lookupAddress(wtx->address, tooltip);
@@ -509,7 +515,13 @@ QVariant TransactionTableModel::txStatusDecoration(const TransactionRecord *wtx)
 
 QString TransactionTableModel::formatTooltip(const TransactionRecord *rec) const
 {
-    QString tooltip = formatTxStatus(rec) + QString("\n") + formatTxType(rec);
+    QString tooltip = formatTxStatus(rec) + QString("\n");
+    // A receive to a labelled address already reads "Received at <label>"
+    // (F-608), so the type word would only repeat it.
+    const bool received_at = rec->type == TransactionRecord::RecvWithAddress &&
+        !vaultModel->getAddressTableModel()->labelForAddress(QString::fromStdString(rec->address)).isEmpty();
+    if (received_at) return tooltip + formatTxToAddress(rec, true);
+    tooltip += formatTxType(rec);
     if(rec->type==TransactionRecord::RecvFromOther || rec->type==TransactionRecord::SendToOther ||
        rec->type==TransactionRecord::SendToAddress || rec->type==TransactionRecord::RecvWithAddress)
     {

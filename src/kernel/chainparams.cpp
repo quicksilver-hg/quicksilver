@@ -163,8 +163,8 @@ public:
         // are taking on. Measured at the honest 2-output traffic shape in M5
         // (tools/calibration/m5-disk-cost): 1,217,399 blocks+undo bytes and 244,224
         // chainstate bytes per block, at 288 blocks/day. See doc/design/chain-storage.md.
-        m_assumed_blockchain_size = 128;
-        m_assumed_chain_state_size = 26;
+        m_assumed_blockchain_size = 1;
+        m_assumed_chain_state_size = 1;
 
         // Quicksilver mainnet genesis. Genesis is the hardcoded trust anchor:
         // CheckProofOfWorkImpl exempts exactly consensus.hashGenesisBlock, and
@@ -289,8 +289,8 @@ public:
         m_onion_service_port = 19559;  // NOT P2P+1: 19558 is this network's RPC port
         nPruneAfterHeight = 1000;
         // Same consensus parameters as main, so the same first-year growth applies.
-        m_assumed_blockchain_size = 128;
-        m_assumed_chain_state_size = 26;
+        m_assumed_blockchain_size = 1;
+        m_assumed_chain_state_size = 1;
 
         const char* publictest_genesis_msg = "Quicksilver publictest genesis 2026-09-05 - zero-cycle trust anchor";
         // Quicksilver mark: provably-unspendable OP_RETURN genesis coinbase output.

@@ -136,6 +136,9 @@ private Q_SLOTS:
     void transferRecipientAreaFitsItsRow();
     void transferSummaryCountsTheRowClearAllLeaves();
     void transactionDescriptionCountsConfirmationsFromFirstBlock();
+    void debugInputsNameOnlyOwnedAddresses();
+    void incomingTransferIsNotNamedByReceivingLabel();
+    void paymentConfirmsAtTheRecommendedTwentyConfirmations();
     void homeLedgerKeepsALabelAtFloor();
     void idStyledPrimaryButtonsShowDisabledState();
     void statusStripNamesConsensusOff();

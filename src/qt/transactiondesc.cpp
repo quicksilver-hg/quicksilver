@@ -67,6 +67,11 @@ QString TransactionDesc::FormatTxStatus(const interfaces::VaultTxStatus& status,
     }
 }
 
+QString TransactionDesc::receivedAt(const QString& label)
+{
+    return tr("Received at %1").arg(label);
+}
+
 QString TransactionDesc::toHTML(interfaces::Node& node, interfaces::Vault& vault, TransactionRecord* rec, QuicksilverUnit unit)
 {
     int numBlocks;
@@ -119,11 +124,9 @@ QString TransactionDesc::toHTML(interfaces::Node& node, interfaces::Vault& vault
                     strHTML += "<b>" + tr("From") + ":</b> " + tr("unknown") + "<br>";
                     strHTML += "<b>" + tr("To") + ":</b> ";
                     strHTML += GUIUtil::HtmlEscape(rec->address);
+                    strHTML += " (" + tr("own address") + ")<br>";
                     if (!name.empty())
-                        strHTML += " (" + tr("own address") + ", " + tr("label") + ": " + GUIUtil::HtmlEscape(name) + ")";
-                    else
-                        strHTML += " (" + tr("own address") + ")";
-                    strHTML += "<br>";
+                        strHTML += GUIUtil::HtmlEscape(receivedAt(QString::fromStdString(name))) + "<br>";
                 }
             }
         }
@@ -315,7 +318,14 @@ QString TransactionDesc::toHTML(interfaces::Node& node, interfaces::Vault& vault
                     strHTML += "<li>";
                     const CTxOut& vout = prev->out;
                     CTxDestination address;
-                    if (ExtractDestination(vout.scriptPubKey, address))
+                    const bool owned = vault.txoutIsMine(vout) & ISMINE_SPENDABLE;
+                    // An input the vault does not own is the other party's:
+                    // its address is not shown, only where the coins came from.
+                    if (!owned)
+                    {
+                        strHTML += GUIUtil::HtmlEscape(prevout.hash.ToString() + ":" + util::ToString(prevout.n));
+                    }
+                    else if (ExtractDestination(vout.scriptPubKey, address))
                     {
                         std::string name;
                         if (vault.getAddress(address, &name, /* is_mine= */ nullptr, /* purpose= */ nullptr) && !name.empty())
@@ -323,7 +333,7 @@ QString TransactionDesc::toHTML(interfaces::Node& node, interfaces::Vault& vault
                         strHTML += QString::fromStdString(EncodeDestination(address));
                     }
                     strHTML = strHTML + " " + tr("Amount") + "=" + QuicksilverUnits::formatHtmlWithUnit(unit, vout.nValue);
-                    strHTML = strHTML + " IsMine=" + (vault.txoutIsMine(vout) & ISMINE_SPENDABLE ? tr("true") : tr("false")) + "</li>";
+                    strHTML = strHTML + " IsMine=" + (owned ? tr("true") : tr("false")) + "</li>";
                 }
             }
         }

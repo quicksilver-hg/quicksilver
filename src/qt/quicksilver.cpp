@@ -10,6 +10,7 @@
 
 #include <chainparams.h>
 #include <common/args.h>
+#include <common/executable.h>
 #include <common/init.h>
 #include <common/system.h>
 #include <init.h>
@@ -70,6 +71,7 @@
 #include <QMessageBox>
 #include <QProcess>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QThread>
 #include <QTimer>
 #include <QTranslator>
@@ -154,22 +156,34 @@ bool IsSandboxOnlyArgument(QString arg)
 }
 
 //! F-599: a desktop session restore starts the application with `-session <id>`
-//! (or `-session=<id>`). Qt would take it out of argv, but the application is
-//! built on a placeholder argv (qt_argv), so it must not reach our own parser,
-//! which refuses unknown options.
-QStringList WithoutSessionManagerArguments(const QStringList& arguments)
+//! (or `-session=<id>`). The application asks the session manager never to
+//! restore it, and the autostart entry starts the only copy, so such a start is
+//! always a stale replay of a session saved by an older version.
+bool IsSessionRestoreStart(const QStringList& arguments)
 {
-    QStringList kept;
-    for (int i = 0; i < arguments.size(); ++i) {
-        if (arguments[i] == QLatin1String("-session")) {
-            ++i; // its value goes with it
-            continue;
-        }
-        if (arguments[i].startsWith(QLatin1String("-session="))) continue;
-        kept.push_back(arguments[i]);
+    for (const QString& argument : arguments) {
+        if (argument == QLatin1String("-session") || argument.startsWith(QLatin1String("-session="))) return true;
     }
-    return kept;
+    return false;
 }
+
+#if defined(Q_OS_LINUX)
+//! F-605: `quicksilver-daemon` ships in quicksilver-devtools, not beside a
+//! desktop-only install, so the no-display advice depends on whether it is here.
+bool QuicksilverDaemonAvailable(const fs::path& executable_dir)
+{
+    const QString name{QStringLiteral("quicksilver-daemon")};
+    if (!executable_dir.empty() && common::IsUsableExecutable(executable_dir / GUIUtil::QStringToPath(name))) return true;
+    return !QStandardPaths::findExecutable(name).isEmpty();
+}
+
+QString NoDisplayMessage(bool daemon_available)
+{
+    return daemon_available
+        ? QStringLiteral("No display was detected, please use quicksilver-daemon for a headless environment.")
+        : QStringLiteral("No display was detected. For a headless environment, install the quicksilver-devtools package and use quicksilver-daemon.");
+}
+#endif // Q_OS_LINUX
 
 QStringList RestartArgumentsForChain(const QStringList& original_arguments, const QString& chain_token)
 {
@@ -451,10 +465,22 @@ QStringList QuicksilverApplication::restartArgumentsForChainForTesting(const QSt
     return RestartArgumentsForChain(original_arguments, chain_token);
 }
 
-QStringList QuicksilverApplication::withoutSessionManagerArgumentsForTesting(const QStringList& arguments)
+bool QuicksilverApplication::isSessionRestoreStartForTesting(const QStringList& arguments)
 {
-    return WithoutSessionManagerArguments(arguments);
+    return IsSessionRestoreStart(arguments);
 }
+
+#if defined(Q_OS_LINUX)
+bool QuicksilverApplication::quicksilverDaemonAvailableForTesting(const fs::path& executable_dir)
+{
+    return QuicksilverDaemonAvailable(executable_dir);
+}
+
+QString QuicksilverApplication::noDisplayMessageForTesting(bool daemon_available)
+{
+    return NoDisplayMessage(daemon_available);
+}
+#endif // Q_OS_LINUX
 
 bool QuicksilverApplication::baseInitialize()
 {
@@ -492,6 +518,8 @@ void QuicksilverApplication::startThread()
     /*  communication to and from thread */
     connect(&m_executor.value(), &InitExecutor::initializeResult, this, &QuicksilverApplication::initializeResult);
     connect(&m_executor.value(), &InitExecutor::shutdownResult, this, &QuicksilverApplication::shutdownResult);
+    // Direct: an exit waiting on this cannot run the queued slot above.
+    connect(&m_executor.value(), &InitExecutor::shutdownResult, this, [] { SessionEnd::ExitLatch().MarkFinished(); }, Qt::DirectConnection);
     connect(&m_executor.value(), &InitExecutor::runawayException, this, &QuicksilverApplication::handleRunawayException);
     connect(this, &QuicksilverApplication::requestedInitialize, &m_executor.value(), &InitExecutor::initialize);
     connect(this, &QuicksilverApplication::requestedShutdown, &m_executor.value(), &InitExecutor::shutdown);
@@ -594,6 +622,9 @@ void QuicksilverApplication::requestShutdown()
         return;
     }
 
+    if (m_shutdown_requested) return;
+    m_shutdown_requested = true;
+
     for (const auto w : QGuiApplication::topLevelWindows()) {
         w->hide();
     }
@@ -646,6 +677,11 @@ void QuicksilverApplication::requestShutdown()
     }
 
     // Request shutdown from core thread
+    // F-604: registered here because atexit runs handlers last-in, first-out. Any
+    // function-local static the node first used after an earlier registration
+    // (the RNG state, for one) would be destroyed before this wait.
+    SessionEnd::InstallExitWait();
+    SessionEnd::ExitLatch().MarkStarted();
     Q_EMIT requestedShutdown();
 }
 
@@ -871,7 +907,7 @@ static LinuxStartupAction CheckLinuxStartup(int argc, char* argv[])
     }
     if (HasDisplayForGuiStart()) return LinuxStartupAction::CONTINUE;
 
-    std::cerr << "No display was detected, please use quicksilver-daemon for a headless environment.\n";
+    std::cerr << NoDisplayMessage(QuicksilverDaemonAvailable(common::SelfExecutableDir())).toStdString() << '\n';
     return LinuxStartupAction::FAIL;
 }
 #endif // Q_OS_LINUX
@@ -890,17 +926,10 @@ int GuiMain(int argc, char* argv[])
     }
 #endif
 
-    // F-599: take the session manager's own option out before anything parses argv.
-    QStringList session_free_arguments;
-    for (int i = 0; i < argc; ++i) session_free_arguments.push_back(QString::fromLocal8Bit(argv[i]));
-    session_free_arguments = WithoutSessionManagerArguments(session_free_arguments);
-    std::vector<QByteArray> session_free_storage;
-    std::vector<char*> session_free_argv;
-    for (const QString& argument : session_free_arguments) session_free_storage.push_back(argument.toLocal8Bit());
-    for (QByteArray& argument : session_free_storage) session_free_argv.push_back(argument.data());
-    session_free_argv.push_back(nullptr);
-    argc = static_cast<int>(session_free_storage.size());
-    argv = session_free_argv.data();
+    // F-599: see IsSessionRestoreStart. No window, no node, nothing on stderr.
+    QStringList launch_arguments;
+    for (int i = 1; i < argc; ++i) launch_arguments.push_back(QString::fromLocal8Bit(argv[i]));
+    if (IsSessionRestoreStart(launch_arguments)) return EXIT_SUCCESS;
 
     std::unique_ptr<interfaces::Init> init = interfaces::MakeGuiInit();
 
@@ -936,6 +965,13 @@ int GuiMain(int argc, char* argv[])
 #else
     const bool print_only{false};
 #endif
+
+    // F-604: left on, Qt answers every session save by closing all windows and
+    // cancels the logout if one refuses, and ours do: minimize-on-close, and the
+    // shutdown window that closing the main window opens. A save is not a logout
+    // either, so a checkpoint stopped the node. The session manager's Die is
+    // what ends us: Qt delivers it as the Quit that event() below shuts down on.
+    QGuiApplication::setFallbackSessionManagementEnabled(false);
 
     QuicksilverApplication app;
     // F-591: a lost session manager connection must take the File > Quit path,

@@ -16,6 +16,7 @@
 #include <interfaces/handler.h>
 #include <interfaces/node.h>
 #include <key.h>
+#include <logging.h>
 #include <key_io.h>
 #include <node/context.h>
 #include <node/interface_ui.h>
@@ -63,6 +64,7 @@
 #include <qt/sendcoinsentry.h>
 #include <qt/transactionrecord.h>
 #include <qt/transactiondesc.h>
+#include <qt/ledgerrows.h>
 #include <qt/transactiontablemodel.h>
 #include <qt/transactionview.h>
 #include <qt/thinvaultheadersource.h>
@@ -7277,6 +7279,125 @@ void VaultTests::transactionDescriptionCountsConfirmationsFromFirstBlock()
     QVERIFY(description.contains(QStringLiteral("If the block fails to get into the chain")));
 }
 
+namespace {
+//! A pending transfer into `vault`: it spends `prevout` (an output of the test
+//! chain, so the node's UTXO set holds it) and pays `payee`.
+CTransactionRef AddPendingTransfer(CVault& vault, const COutPoint& prevout, const CScript& payee)
+{
+    CMutableTransaction mtx;
+    mtx.vin.emplace_back(prevout);
+    mtx.vout.emplace_back(COIN / 2, payee);
+    const CTransactionRef tx = MakeTransactionRef(mtx);
+    LOCK(vault.cs_vault);
+    vault.AddToVault(tx, vault::TxStateInRelayPool{});
+    return tx;
+}
+
+//! Mines a block whose reward pays `script`; returns that reward's outpoint.
+COutPoint MineRewardTo(TestChain100Setup& test, const CScript& script)
+{
+    const CBlock block = test.CreateAndProcessBlock({}, script);
+    return COutPoint{block.vtx[0]->GetHash(), 0};
+}
+
+struct DebugCategoryOn {
+    DebugCategoryOn() { LogInstance().EnableCategory(HgLog::MESH); }
+    ~DebugCategoryOn() { LogInstance().DisableCategory(HgLog::MESH); }
+};
+} // namespace
+
+//! F-607: the debug Inputs list named the sender's address for a pending
+//! incoming transfer. Only inputs the vault owns may show an address.
+void VaultTests::debugInputsNameOnlyOwnedAddresses()
+{
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    DebugCategoryOn debug;
+
+    const CKey stranger = GenerateRandomKey();
+    const CTxDestination stranger_dest{WitnessV0KeyHash(stranger.GetPubKey())};
+    const COutPoint unowned_prevout = MineRewardTo(test, GetScriptForDestination(stranger_dest));
+    const CTxDestination mine{WitnessV0KeyHash(test.coinbaseKey.GetPubKey())};
+    const COutPoint owned_prevout = MineRewardTo(test, GetScriptForDestination(mine));
+
+    auto wrapped = interfaces::MakeVault(*m_node.vaultLoader().context(), vault);
+    const QString stranger_text = QString::fromStdString(EncodeDestination(stranger_dest));
+    const QString mine_text = QString::fromStdString(EncodeDestination(mine));
+
+    const CTransactionRef incoming = AddPendingTransfer(*vault, unowned_prevout, GetScriptForDestination(mine));
+    TransactionRecord incoming_rec{incoming->GetHash(), 0, TransactionRecord::RecvWithAddress, EncodeDestination(mine), 0, COIN / 2};
+    const QString incoming_html = TransactionDesc::toHTML(m_node, *wrapped, &incoming_rec, QuicksilverUnit::HG);
+    QVERIFY(incoming_html.contains(QStringLiteral("Inputs")));
+    QVERIFY2(!incoming_html.contains(stranger_text), "the debug Inputs list shows an address the vault does not own");
+    const QString outpoint = QString::fromStdString(unowned_prevout.hash.ToString()) + QLatin1Char(':') + QString::number(unowned_prevout.n);
+    QVERIFY2(incoming_html.contains(outpoint), "an unowned input is shown by its outpoint");
+    QVERIFY(incoming_html.contains(QStringLiteral("IsMine=")));
+
+    const CTransactionRef spend = AddPendingTransfer(*vault, owned_prevout, GetScriptForDestination(stranger_dest));
+    TransactionRecord spend_rec{spend->GetHash(), 0, TransactionRecord::SendToAddress, EncodeDestination(stranger_dest), -COIN / 2, 0};
+    const QString spend_html = TransactionDesc::toHTML(m_node, *wrapped, &spend_rec, QuicksilverUnit::HG);
+    QVERIFY2(spend_html.contains(QStringLiteral("<li>")), "inputs list present");
+    QVERIFY2(spend_html.contains(mine_text), "an owned input still shows its address");
+}
+
+//! F-608: Home, Ledger and the details dialog named an incoming transfer by
+//! the label of the receiving address, which reads as the sender's name.
+void VaultTests::incomingTransferIsNotNamedByReceivingLabel()
+{
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+
+    const CTxDestination labelled{WitnessV0KeyHash(test.coinbaseKey.GetPubKey())};
+    const QString label = QStringLiteral("from-funder");
+    {
+        LOCK(vault->cs_vault);
+        vault->SetAddressBook(labelled, label.toStdString(), vault::AddressPurpose::RECEIVE);
+    }
+    const CKey stranger = GenerateRandomKey();
+    const COutPoint prevout = MineRewardTo(test, GetScriptForDestination(WitnessV0KeyHash(stranger.GetPubKey())));
+    const CTransactionRef tx = AddPendingTransfer(*vault, prevout, GetScriptForDestination(labelled));
+
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    MiniGUI mini_gui(m_node, platform_style.get());
+    mini_gui.initModelForVault(m_node, vault, platform_style.get());
+    TransactionTableModel* table = mini_gui.vaultModel->getTransactionTableModel();
+
+    const QString wanted = QStringLiteral("Received at ") + label;
+    int row = -1;
+    for (int r = 0; r < table->rowCount(QModelIndex{}); ++r) {
+        if (table->index(r, 0).data(TransactionTableModel::TxHashRole).toString() == QString::fromStdString(tx->GetHash().ToString())) row = r;
+    }
+    QVERIFY(row >= 0);
+    QCOMPARE(table->index(row, 0).data(TransactionTableModel::TypeRole).toInt(), int(TransactionRecord::RecvWithAddress));
+    // The label itself stays the label: filters, CSV and "Copy label" use it.
+    QCOMPARE(table->index(row, 0).data(TransactionTableModel::LabelRole).toString(), label);
+
+    for (const auto tooltips : {LedgerRows::Tooltips::LabelOnly, LedgerRows::Tooltips::All}) {
+        LedgerRows rows(tooltips, nullptr);
+        rows.setSourceModel(table);
+        const QModelIndex cell = rows.index(row, TransactionTableModel::ToAddress);
+        QCOMPARE(cell.data(Qt::DisplayRole).toString(), wanted);
+        if (tooltips == LedgerRows::Tooltips::All) {
+            // The model's tooltip is the status line, then the counterparty.
+            // The counterparty already says "Received at", so no type word
+            // goes before it (owner, 2026-11-12).
+            const QString tooltip = cell.data(Qt::ToolTipRole).toString();
+            const QString line = wanted + QStringLiteral(" (") + QString::fromStdString(EncodeDestination(labelled)) + QStringLiteral(")");
+            QVERIFY2(tooltip.endsWith(QStringLiteral("\n") + line), qPrintable(tooltip));
+        }
+    }
+
+    const QString details = table->index(row, 0).data(TransactionTableModel::LongDescriptionRole).toString();
+    QVERIFY2(details.contains(wanted), qPrintable(details));
+    QVERIFY2(!details.contains(QStringLiteral("label: ") + label), "details still name the receiving label as a counterparty");
+}
+
 //! F-459 established Home's ledger fit at 1024x768. On 2026-10-17, F-511
 //! moved the supported floor to 1366x768. Type is shown there, the label column
 //! stays at least as wide as the reference label, Date, Amount and Status keep
@@ -8540,3 +8661,27 @@ void VaultTests::mineStartWithScriptReachesTheScriptOverload()
     test.m_node.mining_service.reset();
 }
 
+
+void VaultTests::paymentConfirmsAtTheRecommendedTwentyConfirmations()
+{
+    // F-565 (b): receivers are told to wait for 20 confirmations
+    // (doc/getting-started.md, "When a payment is final"), so the Ledger
+    // keeps a payment Confirming until then and calls it Confirmed at 20.
+    QCOMPARE(TransactionRecord::RecommendedNumConfirmations, 20);
+    const auto status_at = [](int depth) {
+        TransactionRecord rec(uint256::ONE, /*_time=*/0, TransactionRecord::RecvWithAddress, /*_address=*/"", /*_debit=*/0, /*_credit=*/1);
+        interfaces::VaultTxStatus wtx{};
+        wtx.block_height = 100;
+        wtx.depth_in_main_chain = depth;
+        wtx.is_trusted = true;
+        wtx.is_in_main_chain = depth > 0;
+        rec.updateStatus(wtx, uint256::ONE, /*numBlocks=*/100 + depth, /*block_time=*/0);
+        return rec.status.status;
+    };
+    QCOMPARE(status_at(0), TransactionStatus::Unconfirmed);
+    for (const int depth : {1, 6, 19}) {
+        QCOMPARE(status_at(depth), TransactionStatus::Confirming);
+    }
+    QCOMPARE(status_at(20), TransactionStatus::Confirmed);
+    QCOMPARE(status_at(21), TransactionStatus::Confirmed);
+}

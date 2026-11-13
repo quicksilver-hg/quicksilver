@@ -27,6 +27,10 @@ class TransactionDesc: public QObject
     Q_OBJECT
 
 public:
+    //! How an incoming transfer to a labelled own address reads. The label names
+    //! the receiving address, not the sender, so the words say where it arrived.
+    static QString receivedAt(const QString& label);
+
     static QString toHTML(interfaces::Node& node, interfaces::Vault& vault, TransactionRecord* rec, QuicksilverUnit unit);
 
 private:

@@ -1,3 +1,11 @@
+quicksilver (0.1.9-1) UNRELEASED; urgency=low
+
+  * Development series after the 0.1.8 release. Not a release: the 0.1.8 tag
+    is what a release build identifies itself as, and this tree carries work
+    that has not been tagged.
+
+ -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Mon, 09 Nov 2026 00:00:00 +0000
+
 quicksilver (0.1.8-1) unstable; urgency=low
 
   * Quicksilver 0.1.8: the desktop closes normally when a login session

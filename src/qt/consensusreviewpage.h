@@ -23,6 +23,10 @@ public:
     //! Storage sizes are injected rather than read from Params(); see DesktopLaunchPage.
     explicit ConsensusReviewPage(uint64_t blockchain_size_gb, uint64_t chain_state_size_gb, QWidget* parent = nullptr);
 
+    //! F-611: what a vault can and cannot do with consensus off. One string, used by
+    //! this page and by Home, so the two cannot drift apart.
+    static QString vaultWithoutConsensusSentence();
+
     void setConsensusEnabled(bool enabled);
     void setStartupFailed(bool failed);
 

@@ -6,6 +6,9 @@
 
 #include <qt/sessionend.h>
 
+#include <chrono>
+#include <thread>
+
 #if defined(QS_HAVE_ICE)
 #include <X11/ICE/ICElib.h>
 #endif
@@ -36,6 +39,33 @@ void SessionEndTests::emptyQuitActionIsHarmless()
 {
     bool requested{false};
     SessionEnd::OnSessionManagerLost(SessionEnd::QuitAction{}, requested);
+}
+
+void SessionEndTests::exitLatchIsClearWhenNoShutdownStarted()
+{
+    SessionEnd::NodeShutdownLatch latch;
+    QVERIFY(latch.WaitUntilClear(std::chrono::milliseconds{0}));
+    // A shutdown that reports finishing without being started holds nothing.
+    latch.MarkFinished();
+    QVERIFY(latch.WaitUntilClear(std::chrono::milliseconds{0}));
+}
+
+void SessionEndTests::exitLatchHoldsAnUnfinishedShutdown()
+{
+    SessionEnd::NodeShutdownLatch latch;
+    latch.MarkStarted();
+    QVERIFY(!latch.WaitUntilClear(std::chrono::milliseconds{0}));
+}
+
+void SessionEndTests::exitLatchClearsWhenTheShutdownFinishes()
+{
+    SessionEnd::NodeShutdownLatch latch;
+    latch.MarkStarted();
+    std::thread finisher{[&latch] { latch.MarkFinished(); }};
+    // The bound is only a backstop: the outcome does not depend on the clock.
+    const bool cleared{latch.WaitUntilClear(std::chrono::minutes{10})};
+    finisher.join();
+    QVERIFY(cleared);
 }
 
 #if defined(QS_HAVE_ICE)

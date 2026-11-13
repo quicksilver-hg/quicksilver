@@ -36,15 +36,15 @@ compacted the index during the measurement window. It is compaction noise, not a
 any operator banks. The two components that persist are blocks+undo at 128.0 GB/year and
 chainstate at 25.7 GB/year, which is why §2's table sums to 153.7 rather than to 152.0.
 
-`m_assumed_blockchain_size` and `m_assumed_chain_state_size` therefore carry **128** and
-**26**, and every user-facing figure is derived as their sum — **154 GB** — rather than
-written out. The GUI never hardcodes it: `Intro` computes it, and `DesktopLaunchPage` and
+The full-traffic capacity is 128 GB of block data and 26 GB of chain state a year,
+154 GB in all. Since F-601 the parameters carry the measured estimate instead (1 / 1 GB,
+see below), and the screens derive their totals from those two values, never a
+written-out number: `Intro` computes the sum, and `DesktopLaunchPage` and
 `ConsensusReviewPage` take the two sizes as constructor arguments and compute the same
-sum (`StorageCostsTests` pins all three to one number).
+sum (`StorageCostsTests` pins all three screens to one figure).
 
 **Use 152.0 when quoting the measurement** — against the 200 GB/year ceiling in
-[chain-growth.md](chain-growth.md), or in the calibration record. **Use 154 when telling
-an operator what a year of full history costs them.**
+[chain-growth.md](chain-growth.md), or in the calibration record. **Use 154 for the full-traffic capacity.**
 
 **The 420 GB/year figure that appeared throughout this project's documents and screens
 is retired.** It assumed 4 MB of block bytes per block, where realistic weight-full
@@ -110,10 +110,10 @@ ordinary user runs without reading the manual.
   operator, whose archival default §3 deliberately leaves alone.
 - The consensus review screen states both numbers, defaulted and archival, before the
   control that accepts the cost (`src/qt/consensusreviewpage.cpp`).
-- `m_assumed_blockchain_size` / `m_assumed_chain_state_size` are 128 / 26 GB on `main`
-  and `publictest` (`src/kernel/chainparams.cpp`), which are **first-year growth**
-  figures. This chain starts at height 0, so upstream's "size of the chain today" would
-  be zero and would tell a prospective operator nothing.
+- `m_assumed_blockchain_size` / `m_assumed_chain_state_size` are 1 / 1 GB on `main`
+  and `publictest` (`src/kernel/chainparams.cpp`): an estimate from the measured chain
+  plus a margin (F-601, measured 2026-11-10 at about 0.07 GB/year). The 128 / 26 GB
+  first-year capacity figures above remain the design ceiling.
 - `MIN_DISK_SPACE_FOR_BLOCK_FILES` stays at 550 MiB, but its derivation comment in
   `src/validation.h` was rebuilt from Quicksilver's block size and spacing rather than
   the inherited ones. The re-derivation lands at 575.0 MB required against 576.7 MB allowed —

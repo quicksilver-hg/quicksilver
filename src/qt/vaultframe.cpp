@@ -688,13 +688,19 @@ void VaultFrame::acceptConsensusAndShowStatus()
     // The state-change signal may show the vault-handover dialog. "Not now"
     // reverts the opt-in; if that happens before this function continues, do
     // not overwrite that truthful state with the consensus-starting screen.
+    //
+    // The page changes here, and the window is told through the same signals the
+    // pages use, so its rail and title follow (F-603: they stayed on Mine / Mint).
     if (m_consensus_enabled) {
         gotoNetworkStatusPage();
+        Q_EMIT networkRequested();
     } else if (m_consensus_tor_missing) {
         // Refused for want of Tor: markConsensusTorMissing() already shows why.
         gotoNetworkStatusPage();
+        Q_EMIT networkRequested();
     } else {
         gotoLaunchPage();
+        Q_EMIT homeRequested();
     }
 }
 

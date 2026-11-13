@@ -6,6 +6,7 @@
 
 #include <qt/guiutil.h>
 #include <qt/quicksilverstyle.h>
+#include <qt/transactiondesc.h>
 #include <qt/transactionrecord.h>
 #include <qt/transactiontablemodel.h>
 
@@ -142,7 +143,11 @@ QString FriendlyDate(const QDateTime& when)
 QString Counterparty(const QModelIndex& index)
 {
     QString label = index.data(TransactionTableModel::LabelRole).toString();
-    if (!label.isEmpty()) return label;
+    if (!label.isEmpty()) {
+        // An incoming transfer's label names the receiving address, not the sender.
+        if (index.data(TransactionTableModel::TypeRole).toInt() == TransactionRecord::RecvWithAddress) return TransactionDesc::receivedAt(label);
+        return label;
+    }
     if (index.data(TransactionTableModel::TypeRole).toInt() == TransactionRecord::Generated) return QStringLiteral("—");
     const QString address = index.data(TransactionTableModel::AddressRole).toString();
     return address.isEmpty() ? QStringLiteral("—") : address;

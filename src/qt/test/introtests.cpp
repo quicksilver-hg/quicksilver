@@ -23,7 +23,7 @@
 //! The Phase 6 S2 walk found both of these live on the first screen of a clean install.
 void IntroTests::explanationLeavesNoPlaceholderAndNoInheritedYear()
 {
-    Intro intro(nullptr, /*blockchain_size_gb=*/128, /*chain_state_size_gb=*/26);
+    Intro intro(nullptr, /*blockchain_size_gb=*/1, /*chain_state_size_gb=*/1);
     QLabel* explanation = intro.findChild<QLabel*>(QStringLiteral("lblExplanation1"));
     QVERIFY(explanation);
     const QString text = explanation->text();
@@ -36,28 +36,29 @@ void IntroTests::explanationLeavesNoPlaceholderAndNoInheritedYear()
     // an argument list that falls out of step with the .ui string shows the user a raw "%3".
     QVERIFY(!text.contains(QRegularExpression(QStringLiteral("%[0-9]"))));
 
-    // The figure that is claimed has to be the one passed in.
-    QVERIFY(text.contains(QStringLiteral("128")));
+    // The figure that is claimed has to be the one passed in, presented as an estimate
+    // (F-601, owner 2026-11-12).
+    QVERIFY(text.contains(QStringLiteral("The block data is estimated at up to about 1 GB a year.")));
 }
 
 //! Phase 6 S1-8: the first screen still described the initial block download of the
 //! chain this one forked from.
 //!
-//! The figures on it are ours and correct -- 128 GB is first-year *growth*, documented
-//! at chainparams.cpp and doc/design/chain-storage.md -- but the sentences around them
-//! were inherited, and they promise a download of history that does not exist.
-//! Quicksilver starts at height 0: on launch day there is nothing to download. The
-//! replacement has to stay true a year later, when there is.
+//! The sentences around the figures were inherited, and they promised a download of
+//! history that did not exist on launch day. The replacement has to stay true once the
+//! chain has history, which it now does (F-601 dropped "This chain begins at height 0").
 void IntroTests::explanationDoesNotPromiseADownloadOfHistoryThatMayNotExist()
 {
-    Intro intro(nullptr, /*blockchain_size_gb=*/128, /*chain_state_size_gb=*/26);
+    Intro intro(nullptr, /*blockchain_size_gb=*/1, /*chain_state_size_gb=*/1);
 
     QLabel* first_label = intro.findChild<QLabel*>(QStringLiteral("lblExplanation1"));
     QVERIFY(first_label);
     const QString first = first_label->text();
-    // The figure is a projection of what the chain will grow by, not the weight of a
-    // download waiting to happen.
-    QVERIFY(first.contains(QStringLiteral("first year")));
+    // The figure is an estimate of what the chain grows by, not the weight of a download
+    // waiting to happen, and the launch-day framing is gone.
+    QVERIFY(first.contains(QStringLiteral("estimated at up to about 1 GB a year")));
+    QVERIFY(!first.contains(QStringLiteral("height 0")));
+    QVERIFY(!first.contains(QStringLiteral("first year")));
     QVERIFY(!first.contains(QStringLiteral("download and process the full block chain")));
     // G12: clicking OK does not start a node. The desktop shows the main window with
     // consensus Optional and not running, and nothing downloads or validates until the
@@ -80,14 +81,11 @@ void IntroTests::explanationDoesNotPromiseADownloadOfHistoryThatMayNotExist()
     QLabel* pruning = intro.findChild<QLabel*>(QStringLiteral("lblExplanation3"));
     QVERIFY(pruning);
     const QString pruning_text = pruning->text();
-    // F-113: the first-run screen used to show 28 GB retained and 128 GB
-    // processed without saying why both were true. Spell out the 2 + 26 GB
-    // retained split and identify 128 GB as processed block volume.
-    QVERIFY(pruning_text.contains(QStringLiteral("2 GB of recent blocks")));
-    QVERIFY(pruning_text.contains(QStringLiteral("26 GB of chain state")));
-    QVERIFY(pruning_text.contains(QStringLiteral("about 28 GB on disk")));
-    QVERIFY(pruning_text.contains(QStringLiteral("128 GB first-year block-data")));
-    QVERIFY(pruning_text.contains(QStringLiteral("processed volume, not retained storage")));
+    // F-113 asked that the retained split be spelled out. F-601 (owner, 2026-11-12):
+    // at 1 / 1 the default 2 GB limit is larger than a year of block data, so the total
+    // is the smaller of the two plus the chain state, and the old "processed volume"
+    // sentence is no longer true.
+    QCOMPARE(pruning_text, QStringLiteral("With the 2 GB limit, the oldest blocks are deleted after validation once block data passes 2 GB. Expect about 2 GB on disk in all, including an estimated 1 GB of chain state."));
     QVERIFY(!pruning_text.contains(QRegularExpression(QStringLiteral("%[0-9]"))));
 
     // The storage panel carried the same promise in shorter form.
@@ -95,11 +93,18 @@ void IntroTests::explanationDoesNotPromiseADownloadOfHistoryThatMayNotExist()
     QVERIFY(size_warning);
     QVERIFY(!size_warning->text().contains(QStringLiteral("will download and store")));
     QVERIFY(size_warning->text().contains(QStringLiteral("When Consensus is running")));
+    QVERIFY(size_warning->text().contains(QStringLiteral("An estimated 2 GB of data will be stored in this directory, and it will grow over time.")));
+
+    // A limit below a year of block data: the limit plus the chain state.
+    Intro larger(nullptr, /*blockchain_size_gb=*/5, /*chain_state_size_gb=*/1);
+    QCOMPARE(larger.findChild<QLabel*>(QStringLiteral("lblExplanation3"))->text(),
+             QStringLiteral("With the 2 GB limit, the oldest blocks are deleted after validation once block data passes 2 GB. Expect about 3 GB on disk in all, including an estimated 1 GB of chain state."));
+    QVERIFY(larger.findChild<QLabel*>(QStringLiteral("sizeWarningLabel"))->text().contains(QStringLiteral("An estimated 3 GB of data will be stored in this directory.")));
 }
 
 void IntroTests::pruneSuffixReadsGrammaticallyWithNoCatalogue()
 {
-    Intro intro(nullptr, /*blockchain_size_gb=*/128, /*chain_state_size_gb=*/26);
+    Intro intro(nullptr, /*blockchain_size_gb=*/1, /*chain_state_size_gb=*/1);
     QLabel* suffix = intro.findChild<QLabel*>(QStringLiteral("lblPruneSuffix"));
     QVERIFY(suffix);
     const QString text = suffix->text();
@@ -109,6 +114,11 @@ void IntroTests::pruneSuffixReadsGrammaticallyWithNoCatalogue()
     QVERIFY(!text.contains(QStringLiteral("(s)")));
     QVERIFY(!text.contains(QStringLiteral("%n")));
     QVERIFY(text.contains(QStringLiteral("day")));
+
+    // F-601 B5a (owner, 2026-11-12): the reach is derived from the ruled figure, the
+    // limit divided by a year of block data: 2 GB / 1 GB a year = 730 days. It used to
+    // come from a fixed full-traffic block size and read "5 days".
+    QCOMPARE(text, QStringLiteral("(sufficient to restore backups 730 days old)"));
 }
 
 //! Phase 6 S3. The free-space line sits directly under the data-directory chooser on

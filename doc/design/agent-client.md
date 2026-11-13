@@ -30,7 +30,7 @@
 > integration remain deferred; see [v1-scope.md](v1-scope.md).
 
 Quicksilver's intended users are software agents. A full node is not something an
-agent can run: the chain grows by roughly 154 GB per year archival, or 26 GB per
+agent can run: the chain grows by up to roughly 154 GB per year archival at full traffic, or 26 GB per
 year pruned (see [chain-storage.md](chain-storage.md)), which is a cost no
 ordinary agent host will carry. The agent client exists so that an agent can hold
 and spend quicksilver without one.

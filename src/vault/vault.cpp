@@ -1070,6 +1070,10 @@ bool CVault::AddToVaultIfInvolvingMe(const CTransactionRef& ptx, const SyncTxSta
              */
 
             // loop though all outputs
+            // F-609: a payment far ahead of the keypool's next unused index skips every address in
+            // between. Collect them and write the address-book entries in one database transaction:
+            // one commit per skipped address (two writes each) held the vault for minutes.
+            std::vector<CTxDestination> new_receive_addresses;
             for (const CTxOut& txout : tx.vout) {
                 for (const auto& spk_man : GetScriptPubKeyMans(txout.scriptPubKey)) {
                     for (auto& dest : spk_man->MarkUnusedAddresses(txout.scriptPubKey)) {
@@ -1085,9 +1089,19 @@ bool CVault::AddToVaultIfInvolvingMe(const CTransactionRef& ptx, const SyncTxSta
                         // (e.g. it wasn't generated on this node or we're restoring from backup)
                         // add it to the address book for proper transaction accounting
                         if (!*dest.internal && !FindAddressBookEntry(dest.dest, /* allow_change= */ false)) {
-                            SetAddressBook(dest.dest, "", AddressPurpose::RECEIVE);
+                            new_receive_addresses.push_back(dest.dest);
                         }
                     }
+                }
+            }
+            if (!new_receive_addresses.empty()) {
+                if (!RunWithinTxn(GetDatabase(), /*process_desc=*/"skipped receive addresses", [&](VaultBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(cs_vault) {
+                        for (const CTxDestination& dest : new_receive_addresses) {
+                            if (!SetAddressBookWithDB(batch, dest, "", AddressPurpose::RECEIVE)) return false;
+                        }
+                        return true;
+                    })) {
+                    VaultLogPrintf("%s: could not record %u skipped receive addresses in the address book\n", __func__, new_receive_addresses.size());
                 }
             }
 

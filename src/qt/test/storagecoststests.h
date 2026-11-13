@@ -19,6 +19,7 @@ private Q_SLOTS:
     void launchPageQuotesTheDerivedArchivalTotal();
     void consensusReviewQuotesTheDerivedArchivalTotal();
     void bothScreensAgreeWithIntroOnTheArchivalTotal();
+    void consensusReviewVaultRequirementSaysWhatTheVaultNeedsConsensusFor();
 };
 
 #endif // QUICKSILVER_QT_TEST_STORAGECOSTSTESTS_H

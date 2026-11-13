@@ -68,12 +68,23 @@ public:
     Status Next(DataStream& key, DataStream& value) override;
 };
 
+/** How many separate commits a test's database work cost. A write made while no
+ *  transaction is active commits on its own (as the SQLite batch does); an explicit
+ *  transaction commits once however many writes it holds. */
+struct MockableCommitCounters
+{
+    size_t implicit{0}; //!< writes made outside any transaction
+    size_t explicit_txn{0}; //!< successful TxnCommit calls
+    size_t Total() const { return implicit + explicit_txn; }
+};
+
 class MockableBatch : public DatabaseBatch
 {
 private:
     MockableData& m_records;
     bool m_pass;
     bool m_txn_active{false};
+    MockableCommitCounters* m_counters{nullptr};
 
     bool ReadKey(DataStream&& key, DataStream& value) override;
     bool WriteKey(DataStream&& key, DataStream&& value, bool overwrite=true) override;
@@ -82,7 +93,7 @@ private:
     bool ErasePrefix(Span<const std::byte> prefix) override;
 
 public:
-    explicit MockableBatch(MockableData& records, bool pass) : m_records(records), m_pass(pass) {}
+    explicit MockableBatch(MockableData& records, bool pass, MockableCommitCounters* counters = nullptr) : m_records(records), m_pass(pass), m_counters(counters) {}
     ~MockableBatch() = default;
 
     void Flush() override {}
@@ -105,6 +116,7 @@ public:
     {
         if (!m_pass || !m_txn_active) return false;
         m_txn_active = false;
+        if (m_counters) ++m_counters->explicit_txn;
         return true;
     }
     bool TxnAbort() override
@@ -124,6 +136,7 @@ public:
     MockableData m_records;
     bool m_pass{true};
     bool m_backup_pass{true};
+    MockableCommitCounters m_commits;
 
     MockableDatabase(MockableData records = {}) : VaultDatabase(), m_records(records) {}
     ~MockableDatabase() = default;
@@ -140,7 +153,7 @@ public:
 
     std::string Filename() override { return "mockable"; }
     std::string Format() override { return "mock"; }
-    std::unique_ptr<DatabaseBatch> MakeBatch(bool flush_on_close = true) override { return std::make_unique<MockableBatch>(m_records, m_pass); }
+    std::unique_ptr<DatabaseBatch> MakeBatch(bool flush_on_close = true) override { return std::make_unique<MockableBatch>(m_records, m_pass, &m_commits); }
 };
 
 std::unique_ptr<VaultDatabase> CreateMockableVaultDatabase(MockableData records = {});

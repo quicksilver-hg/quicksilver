@@ -57,9 +57,12 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QFile>
 #include <QFileInfo>
 #include <QVBoxLayout>
 #include <QRadioButton>
+#include <QScopeGuard>
+#include <QTemporaryDir>
 #include <QSpinBox>
 #include <QSystemTrayIcon>
 #include <QCoreApplication>
@@ -736,8 +739,8 @@ void TestModernShell(QuicksilverGUI* window)
     // copy instead of quoting zero growth. This still pins the wiring, which is what the
     // pre-F-562 assertion was for: any nonzero reaching the page selects the measured
     // sentence instead and fails this compare. The figures a real user reads are asserted
-    // in StorageCostsTests, at 128/26 injected.
-    const QString sandbox_cost_copy = QStringLiteral("Transfers require proof-of-work. Enabling consensus records up to 2 GB of blockchain data and is not required to use a vault.");
+    // in StorageCostsTests, at the chainparams figures injected.
+    const QString sandbox_cost_copy = QStringLiteral("Transfers require proof-of-work. Enabling consensus records up to 2 GB of blockchain data. Without consensus, the vault keeps your keys and addresses but cannot see incoming payments or send.");
     QCOMPARE(launch_cost->text(), sandbox_cost_copy);
     QWidget* backup_panel = launch->findChild<QWidget*>(QStringLiteral("desktopLaunchBackupPanel"));
     QVERIFY(backup_panel);
@@ -771,8 +774,14 @@ void TestModernShell(QuicksilverGUI* window)
     QPushButton* consensus_continue = consensus_review->findChild<QPushButton*>(QStringLiteral("consensusContinueButton"));
     QVERIFY(consensus_continue);
     QCOMPARE(consensus_continue->text(), QStringLiteral("Enable consensus"));
-    QCOMPARE(consensus_decline->property("class").toString(), QStringLiteral("primaryActionButton"));
-    QCOMPARE(consensus_continue->property("class").toString(), QStringLiteral("secondaryActionButton"));
+    // F-611 (owner, 2026-11-12): the page says what the vault cannot do without
+    // consensus, and G15 is decided (F5a): Enable consensus is the primary button.
+    QCOMPARE(consensus_review->findChild<QLabel*>(QStringLiteral("consensusReviewIntro"))->text(),
+             QStringLiteral("Consensus verifies the ledger on this computer. It uses the storage below and runs in the background. Without consensus, the vault keeps your keys and addresses but cannot see incoming payments or send."));
+    QCOMPARE(consensus_review->findChild<QLabel*>(QStringLiteral("consensusChoiceCopy"))->text(),
+             QStringLiteral("You can decline for now and enable it later from Home. Until you do, payments sent to this vault will not appear."));
+    QCOMPARE(consensus_decline->property("class").toString(), QStringLiteral("secondaryActionButton"));
+    QCOMPARE(consensus_continue->property("class").toString(), QStringLiteral("primaryActionButton"));
     consensus_continue->click();
     QCOMPARE(vault_stack->currentWidget()->objectName(), QStringLiteral("networkPage"));
     QCOMPARE(launch->findChild<QLabel*>(QStringLiteral("launchConsensusCardState"))->text(), QStringLiteral("Enabled"));
@@ -1311,6 +1320,54 @@ void TestLazyConsensusActivation(interfaces::Node& node, const NetworkStyle* net
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
 }
 
+//! F-603: a page change the vault frame makes on its own must move the sidebar and
+//! the title with it. Opting in from the Mine rail lands on the network page; seen
+//! on 0.1.8 with the content on Network while the rail and title still said Mine.
+void TestConsensusOptInMovesTheRail(interfaces::Node& node, const NetworkStyle* network_style)
+{
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate(QuicksilverGUI::DEFAULT_UIPLATFORM.c_str()));
+    {
+        QuicksilverGUI window(node, platform_style.data(), network_style);
+        QAction* mine_mint_action = window.findChild<QAction*>(QStringLiteral("mineMintAction"));
+        QAction* network_action = window.findChild<QAction*>(QStringLiteral("networkAction"));
+        QStackedWidget* vault_stack = window.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+        QLabel* breadcrumb = window.findChild<QLabel*>(QStringLiteral("benchBreadcrumb"));
+        QVERIFY(mine_mint_action);
+        QVERIFY(network_action);
+        QVERIFY(vault_stack);
+        QVERIFY(breadcrumb);
+
+        mine_mint_action->trigger();
+        QCOMPARE(vault_stack->currentWidget()->objectName(), QStringLiteral("consensusReviewPage"));
+        QVERIFY(mine_mint_action->isChecked());
+        // The title is upper-cased by refreshBenchChrome.
+        QCOMPARE(breadcrumb->text(), QStringLiteral("NO VAULT OPEN / MINE / MINT"));
+
+        QPushButton* consensus_continue = vault_stack->currentWidget()->findChild<QPushButton*>(QStringLiteral("consensusContinueButton"));
+        QVERIFY(consensus_continue);
+        QCOMPARE(consensus_continue->text(), QStringLiteral("Enable consensus"));
+        consensus_continue->click();
+        QCOMPARE(vault_stack->currentWidget()->objectName(), QStringLiteral("networkPage"));
+        QVERIFY(network_action->isChecked());
+        QVERIFY(!mine_mint_action->isChecked());
+        QCOMPARE(breadcrumb->text(), QStringLiteral("NO VAULT OPEN / NETWORK"));
+    }
+    {
+        // A failed start shows the network page from wherever the rail was.
+        QuicksilverGUI window(node, platform_style.data(), network_style);
+        QAction* network_action = window.findChild<QAction*>(QStringLiteral("networkAction"));
+        QStackedWidget* vault_stack = window.findChild<QStackedWidget*>(QStringLiteral("vaultFrameStack"));
+        QVERIFY(network_action);
+        QVERIFY(vault_stack);
+        QVERIFY(!network_action->isChecked());
+        window.markConsensusInitializationFailed();
+        QCOMPARE(vault_stack->currentWidget()->objectName(), QStringLiteral("networkPage"));
+        QVERIFY(network_action->isChecked());
+    }
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+}
+
 //! F-441: an opt-in that cannot find the Tor it needs is refused before the node
 //! starts -- and before the vault handover closes an open vault -- and the
 //! desktop stays usable, says why, and lets the user retry without a restart.
@@ -1458,28 +1515,68 @@ void AppTests::restartArgumentsForDeveloperNetwork()
         }));
 }
 
-//! F-599: a desktop session restore launches us as `quicksilver -session <id>`.
-//! Qt would strip that, but the application is built on a placeholder argv, so
-//! the option reaches our own parser, which refuses it.
-void AppTests::sessionManagerArgumentsAreNotOurs()
+//! F-599: a desktop session restore launches us as `quicksilver -session <id>`,
+//! and the owner ruled (2026-11-09) that such a start exits at once and quietly.
+void AppTests::sessionRestoreStartIsRecognised()
 {
-    const auto strip = &QuicksilverApplication::withoutSessionManagerArgumentsForTesting;
-    // Both spellings Qt's own parser accepts; the separate value goes with the option.
-    QCOMPARE(strip({QStringLiteral("-session"), QStringLiteral("21d39cd80-9b02_1793975681_475231")}), QStringList());
-    QCOMPARE(strip({QStringLiteral("-session=21d39cd80-9b02_1793975681_475231")}), QStringList());
-    // Ours are kept, in order, wherever the session option sits.
-    QCOMPARE(strip({QStringLiteral("-min"), QStringLiteral("-session"), QStringLiteral("id1"), QStringLiteral("-chain=main")}),
-        QStringList({QStringLiteral("-min"), QStringLiteral("-chain=main")}));
-    QCOMPARE(strip({QStringLiteral("-chain=main"), QStringLiteral("-session=id1"), QStringLiteral("-min")}),
-        QStringList({QStringLiteral("-chain=main"), QStringLiteral("-min")}));
-    // Not the session option: a longer name, a value that happens to read like it, a payment URI.
-    QCOMPARE(strip({QStringLiteral("-sessions=1")}), QStringList({QStringLiteral("-sessions=1")}));
-    QCOMPARE(strip({QStringLiteral("-datadir=-session")}), QStringList({QStringLiteral("-datadir=-session")}));
-    QCOMPARE(strip({QStringLiteral("quicksilver:abc")}), QStringList({QStringLiteral("quicksilver:abc")}));
-    // A trailing option with no value is dropped, not left to break the parse.
-    QCOMPARE(strip({QStringLiteral("-min"), QStringLiteral("-session")}), QStringList({QStringLiteral("-min")}));
-    QCOMPARE(strip(QStringList()), QStringList());
+    const auto is_restore = &QuicksilverApplication::isSessionRestoreStartForTesting;
+    // Both spellings Qt's own parser accepts.
+    QVERIFY(is_restore({QStringLiteral("-session"), QStringLiteral("21d39cd80-9b02_1793975681_475231")}));
+    QVERIFY(is_restore({QStringLiteral("-session=21d39cd80-9b02_1793975681_475231")}));
+    // Wherever the option sits among ours, and with no value at all.
+    QVERIFY(is_restore({QStringLiteral("-min"), QStringLiteral("-session"), QStringLiteral("id1"), QStringLiteral("-chain=main")}));
+    QVERIFY(is_restore({QStringLiteral("-chain=main"), QStringLiteral("-session=id1"), QStringLiteral("-min")}));
+    QVERIFY(is_restore({QStringLiteral("-min"), QStringLiteral("-session")}));
+    // Not the session option: a longer name, a value that happens to read like it, a payment URI, nothing.
+    QVERIFY(!is_restore({QStringLiteral("-sessions=1")}));
+    QVERIFY(!is_restore({QStringLiteral("-datadir=-session")}));
+    QVERIFY(!is_restore({QStringLiteral("quicksilver:abc")}));
+    QVERIFY(!is_restore({QStringLiteral("-min"), QStringLiteral("-chain=main")}));
+    QVERIFY(!is_restore(QStringList()));
 }
+
+#if defined(Q_OS_LINUX)
+//! F-605: the wording the owner signed on 2026-11-09, both sides of the condition.
+void AppTests::noDisplayMessageFollowsTheDaemon()
+{
+    QCOMPARE(QuicksilverApplication::noDisplayMessageForTesting(true),
+        QStringLiteral("No display was detected, please use quicksilver-daemon for a headless environment."));
+    QCOMPARE(QuicksilverApplication::noDisplayMessageForTesting(false),
+        QStringLiteral("No display was detected. For a headless environment, install the quicksilver-devtools package and use quicksilver-daemon."));
+}
+
+void AppTests::daemonIsFoundBesideTheBinaryThenOnPath()
+{
+    QTemporaryDir beside_dir;
+    QTemporaryDir path_dir;
+    QVERIFY(beside_dir.isValid());
+    QVERIFY(path_dir.isValid());
+    const auto place = [](const QTemporaryDir& dir, QFile::Permissions permissions) {
+        QFile file(dir.filePath(QStringLiteral("quicksilver-daemon")));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.close();
+        QVERIFY(file.setPermissions(permissions));
+    };
+    const QByteArray saved_path = qgetenv("PATH");
+    const auto restore_path = qScopeGuard([&saved_path] { qputenv("PATH", saved_path); });
+    qputenv("PATH", path_dir.path().toLocal8Bit());
+    const fs::path beside = GUIUtil::QStringToPath(beside_dir.path());
+    const auto available = &QuicksilverApplication::quicksilverDaemonAvailableForTesting;
+
+    QVERIFY(!available(beside));
+    // A plain file of that name is not a program.
+    place(beside_dir, QFile::ReadOwner | QFile::WriteOwner);
+    QVERIFY(!available(beside));
+    place(beside_dir, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    QVERIFY(available(beside));
+    // Not beside us, but on PATH; and a platform that cannot say where we are.
+    QVERIFY(QFile::remove(beside_dir.filePath(QStringLiteral("quicksilver-daemon"))));
+    QVERIFY(!available(beside));
+    place(path_dir, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    QVERIFY(available(beside));
+    QVERIFY(available(fs::path{}));
+}
+#endif // Q_OS_LINUX
 
 //! Entry point for QuicksilverApplication tests.
 void AppTests::appTests()
@@ -1503,6 +1600,7 @@ void AppTests::appTests()
     setupPlatformStyleOnce();
     TestLazyConsensusActivation(m_app.node(), style.data());
     TestConsensusRefusedWithoutTor(m_app.node(), style.data());
+    TestConsensusOptInMovesTheRail(m_app.node(), style.data());
     // Reproduce the returning-user path: persisted consensus must let AppInitMain
     // load settings-listed vaults before the GUI controller is constructed.
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), true);

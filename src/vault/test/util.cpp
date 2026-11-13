@@ -138,6 +138,7 @@ bool MockableBatch::WriteKey(DataStream&& key, DataStream&& value, bool overwrit
     if (!m_pass) {
         return false;
     }
+    if (m_counters && !m_txn_active) ++m_counters->implicit;
     SerializeData key_data{key.begin(), key.end()};
     SerializeData value_data{value.begin(), value.end()};
     auto [it, inserted] = m_records.emplace(key_data, value_data);

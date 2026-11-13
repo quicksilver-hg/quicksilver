@@ -10,7 +10,32 @@
 #include <X11/ICE/ICElib.h>
 #endif
 
+#include <cstdlib>
+#include <thread>
+
 namespace SessionEnd {
+
+bool NodeShutdownLatch::WaitUntilClear(std::chrono::milliseconds limit) const
+{
+    const auto deadline{std::chrono::steady_clock::now() + limit};
+    while (m_started && !m_finished) {
+        if (std::chrono::steady_clock::now() >= deadline) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    return true;
+}
+
+NodeShutdownLatch& ExitLatch()
+{
+    static NodeShutdownLatch* const latch{new NodeShutdownLatch};
+    return *latch;
+}
+
+void InstallExitWait()
+{
+    // The bound keeps a shutdown that has hung from holding the process forever.
+    std::atexit([] { ExitLatch().WaitUntilClear(std::chrono::seconds{60}); });
+}
 
 void OnSessionManagerLost(const QuitAction& quit, bool& already_requested)
 {

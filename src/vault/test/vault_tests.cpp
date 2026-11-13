@@ -3193,5 +3193,85 @@ BOOST_FIXTURE_TEST_CASE(thin_header_tip_refreshes_vault_without_enabling_spends,
     WaitForDeleteVault(std::move(vault));
 }
 
+// F-609: a payment to a receive address far ahead of the keypool's next unused index
+// makes the vault record every skipped address in the address book. Each of those used to
+// be its own database commit, so a payment at index 999 held the vault for minutes
+// (8 fdatasync per address on SQLite). The number of commits must not depend on how far
+// ahead the payment is, and the address book must come out the same.
+BOOST_FIXTURE_TEST_CASE(far_receive_writes_skipped_addresses_in_one_transaction, TestChain100Setup)
+{
+    struct Outcome {
+        size_t commits;
+        size_t skipped;
+        size_t book_entries_after_reload;
+    };
+    const auto run = [&](int index) {
+        auto database = CreateMockableVaultDatabase();
+        MockableDatabase& mock = dynamic_cast<MockableDatabase&>(*database);
+        CVault vault(m_node.chain.get(), "", std::move(database));
+        LOCK(vault.cs_vault);
+        vault.SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
+        vault.SetupDescriptorScriptPubKeyMans();
+        auto* spk_man = dynamic_cast<DescriptorScriptPubKeyMan*>(vault.GetScriptPubKeyMan(OutputType::BECH32, /*internal=*/false));
+        BOOST_REQUIRE(spk_man);
+
+        // The script of keypool index i is the one in the set from i that is not in the set from i + 1.
+        const auto script_at = [&](int i) {
+            auto from_i = spk_man->GetScriptPubKeys(i);
+            const auto after = spk_man->GetScriptPubKeys(i + 1);
+            for (const CScript& script : after) from_i.erase(script);
+            BOOST_REQUIRE_EQUAL(from_i.size(), 1U);
+            return *from_i.begin();
+        };
+        std::vector<CTxDestination> skipped;
+        for (int i = 0; i <= index; ++i) {
+            CTxDestination dest;
+            BOOST_REQUIRE(ExtractDestination(script_at(i), dest));
+            skipped.push_back(dest);
+        }
+        for (const CTxDestination& dest : skipped) BOOST_REQUIRE(!vault.FindAddressBookEntry(dest));
+
+        CMutableTransaction tx;
+        tx.vin.emplace_back(Txid::FromUint256(uint256{7}), 0);
+        tx.vout.emplace_back(COIN, script_at(index));
+
+        mock.m_commits = {};
+        vault.transactionAddedToRelayPool(MakeTransactionRef(tx));
+        const size_t commits = mock.m_commits.Total();
+
+        // Every skipped receive address is in the address book, unlabelled, as a receive address.
+        for (const CTxDestination& dest : skipped) {
+            const CAddressBookData* entry = vault.FindAddressBookEntry(dest);
+            BOOST_REQUIRE(entry);
+            BOOST_CHECK(entry->GetLabel() == "");
+            BOOST_CHECK(entry->purpose == AddressPurpose::RECEIVE);
+        }
+
+        // And the same entries come back from the database.
+        CVault reloaded(m_node.chain.get(), "", DuplicateMockDatabase(vault.GetDatabase()));
+        BOOST_REQUIRE_EQUAL(reloaded.LoadVault(), DBErrors::LOAD_OK);
+        LOCK(reloaded.cs_vault);
+        size_t reloaded_entries{0};
+        for (const CTxDestination& dest : skipped) {
+            const CAddressBookData* entry = reloaded.FindAddressBookEntry(dest);
+            BOOST_REQUIRE(entry);
+            BOOST_CHECK(entry->GetLabel() == "");
+            BOOST_CHECK(entry->purpose == AddressPurpose::RECEIVE);
+            ++reloaded_entries;
+        }
+        return Outcome{commits, skipped.size(), reloaded_entries};
+    };
+
+    const Outcome near_ahead = run(100);
+    const Outcome far_ahead = run(200);
+    BOOST_CHECK_EQUAL(near_ahead.skipped, 101U);
+    BOOST_CHECK_EQUAL(far_ahead.skipped, 201U);
+    BOOST_CHECK_EQUAL(near_ahead.book_entries_after_reload, near_ahead.skipped);
+    BOOST_CHECK_EQUAL(far_ahead.book_entries_after_reload, far_ahead.skipped);
+    // 100 more skipped addresses must not cost a single extra commit.
+    BOOST_CHECK_EQUAL(far_ahead.commits, near_ahead.commits);
+    BOOST_TEST_MESSAGE("commits for 101 skipped: " << near_ahead.commits << ", for 201 skipped: " << far_ahead.commits);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 } // namespace vault

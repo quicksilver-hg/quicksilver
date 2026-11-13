@@ -57,13 +57,14 @@ ConsensusReviewPage::ConsensusReviewPage(uint64_t blockchain_size_gb, uint64_t c
         label->setWordWrap(true);
     };
     add_cost("consensusStorageCost", tr("Storage"), m_blockchain_size_gb == 0
-        ? tr("Transfers require proof-of-work. Enabling consensus records up to %1 GB of blockchain data and is not required to use a vault.").arg(DEFAULT_PRUNE_TARGET_GB)
-        : tr("Default pruning keeps a %1 GB recent-block window while chain state grows by about %2 GB per year. Keeping full history grows total storage by about %3 GB per year instead.")
-              .arg(DEFAULT_PRUNE_TARGET_GB)
+        ? tr("Transfers require proof-of-work. Enabling consensus records up to %1 GB of blockchain data. %2").arg(DEFAULT_PRUNE_TARGET_GB).arg(vaultWithoutConsensusSentence())
+        : tr("Storage is estimated at up to about %3 GB a year: %1 GB of block data and %2 GB of chain state. Default pruning caps the block data at %4 GB.")
+              .arg(m_blockchain_size_gb)
               .arg(m_chain_state_size_gb)
-              .arg(m_blockchain_size_gb + m_chain_state_size_gb));
+              .arg(m_blockchain_size_gb + m_chain_state_size_gb)
+              .arg(DEFAULT_PRUNE_TARGET_GB));
     add_cost("consensusBackgroundCost", tr("Background work"), tr("Keeps a verifying process online and syncs with peers."));
-    add_cost("consensusVaultCost", tr("Vault requirement"), tr("Not required for holding, requesting, or transferring quicksilver."));
+    add_cost("consensusVaultCost", tr("Vault requirement"), tr("Needed to see incoming payments and to send. Not needed to keep keys or give out addresses."));
     review.body->addWidget(rows_host);
     root->addWidget(review.frame);
 
@@ -92,6 +93,11 @@ ConsensusReviewPage::ConsensusReviewPage(uint64_t blockchain_size_gb, uint64_t c
     root->addWidget(choice.frame);
     root->addStretch();
     setConsensusEnabled(false);
+}
+
+QString ConsensusReviewPage::vaultWithoutConsensusSentence()
+{
+    return tr("Without consensus, the vault keeps your keys and addresses but cannot see incoming payments or send.");
 }
 
 void ConsensusReviewPage::setConsensusEnabled(bool enabled)
@@ -123,16 +129,15 @@ void ConsensusReviewPage::refreshState()
     m_title->setText(m_consensus_enabled ? tr("Consensus is enabled") : tr("Consensus is optional"));
     m_intro->setText(m_consensus_enabled
         ? tr("Independent verification has been accepted on this desktop. Node status shows the current peer and sync state.")
-        : tr("Run independent verification only when the storage and background activity are an intentional choice. The vault works without it."));
+        : tr("Consensus verifies the ledger on this computer. It uses the storage below and runs in the background.") + QLatin1Char(' ') + vaultWithoutConsensusSentence());
     m_choice_copy->setText(m_consensus_enabled
         ? tr("You can review live status now. To turn consensus off, untick it in Settings > Options > Network. It stops when the client restarts.")
-        : tr("Independent verification is valuable, but most vault-only users should decline until they specifically want to run consensus."));
+        : tr("You can decline for now and enable it later from Home. Until you do, payments sent to this vault will not appear."));
     m_decline_button->setText(m_consensus_enabled ? tr("Back to home") : tr("Decline for now"));
     m_continue_button->setText(m_consensus_enabled ? tr("Show node status") : tr("Enable consensus"));
     m_continue_button->setEnabled(true);
-    // When consensus is optional, the visual hierarchy follows the copy's
-    // recommendation to decline. Once it is running, live status becomes the
-    // primary next action.
-    SetActionClass(m_decline_button, m_consensus_enabled ? QStringLiteral("secondaryActionButton") : QStringLiteral("primaryActionButton"));
-    SetActionClass(m_continue_button, m_consensus_enabled ? QStringLiteral("primaryActionButton") : QStringLiteral("secondaryActionButton"));
+    // Enable consensus is the primary action (G15, owner 2026-11-12): without it the
+    // vault cannot see what it receives (F-611). Once it is running, live status is.
+    SetActionClass(m_decline_button, QStringLiteral("secondaryActionButton"));
+    SetActionClass(m_continue_button, QStringLiteral("primaryActionButton"));
 }
