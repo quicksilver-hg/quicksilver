@@ -555,8 +555,8 @@ void VaultFrame::backupVault()
     VaultView *vaultView = currentVaultView();
     if (!vaultView) return;
     QPointer<VaultFrame> self{this};
-    vaultView->backupVault([self](bool ok) {
-        if (self && ok) self->setCurrentVaultBackupRecorded(true);
+    vaultView->backupVault([self](bool recorded) {
+        if (self && recorded) self->refreshBackupState();
     });
 }
 
@@ -607,7 +607,7 @@ void VaultFrame::updateLaunchSummary()
     VaultModel* vault_model = currentVaultModel();
     if (!vault_model) {
         m_launch_page->setVaultSummary(false, QString());
-        m_launch_page->setBackupState(false, false);
+        m_launch_page->setBackupState(false, vault::BackupState::NEEDED, false);
         m_launch_page->setVaultModel(nullptr);
         return;
     }
@@ -625,8 +625,8 @@ void VaultFrame::updateLaunchSummary()
         : tr("Funding %1 of %2 confirmed").arg(funded_agent_setups).arg(agent_setups);
     m_launch_page->setVaultSummary(true, vault_model->getDisplayName(), agent_summary);
     m_launch_page->setVaultModel(vault_model);
-    const bool backup_recorded = currentVaultBackupRecorded();
-    m_launch_page->setBackupState(true, backup_recorded);
+    const VaultModel::EncryptionStatus encryption{vault_model->getEncryptionStatus()};
+    m_launch_page->setBackupState(true, vault_model->backupState(), encryption == VaultModel::Locked || encryption == VaultModel::Unlocked);
 }
 
 void VaultFrame::connectLaunchSummarySignals(VaultModel* vault_model)
@@ -635,6 +635,9 @@ void VaultFrame::connectLaunchSummarySignals(VaultModel* vault_model)
 
     connect(vault_model, &VaultModel::balanceChanged, this, &VaultFrame::updateLaunchSummary, Qt::UniqueConnection);
     connect(vault_model->getOptionsModel(), &OptionsModel::displayUnitChanged, this, &VaultFrame::updateLaunchSummary, Qt::UniqueConnection);
+    // Encrypting, changing the passphrase or adding an agent allotment changes the backup fingerprint (F-567).
+    connect(vault_model, &VaultModel::encryptionStatusChanged, this, &VaultFrame::refreshBackupState, Qt::UniqueConnection);
+    connect(vault_model, &VaultModel::backupStateChanged, this, &VaultFrame::refreshBackupState, Qt::UniqueConnection);
 
     TransactionTableModel* tx_model = vault_model->getTransactionTableModel();
     if (!tx_model) return;
@@ -644,18 +647,10 @@ void VaultFrame::connectLaunchSummarySignals(VaultModel* vault_model)
     connect(tx_model, &QAbstractItemModel::modelReset, this, &VaultFrame::updateLaunchSummary, Qt::UniqueConnection);
 }
 
-bool VaultFrame::currentVaultBackupRecorded() const
+void VaultFrame::refreshBackupState()
 {
-    const VaultModel* vault_model = currentVaultModel();
-    return vault_model && vault_model->backupRecorded();
-}
+    if (!currentVaultModel()) return;
 
-void VaultFrame::setCurrentVaultBackupRecorded(bool backed_up)
-{
-    VaultModel* vault_model = currentVaultModel();
-    if (!vault_model) return;
-
-    vault_model->setBackupRecorded(backed_up);
     updateLaunchSummary();
     // The status strip reads this label. currentVaultSet is the notification
     // the window already uses to repaint vault chrome.

@@ -439,9 +439,10 @@ backup holds only the history that existed when it was made, because a stale
 backup that reads as done is the failure mode this design is most exposed to.
 
 Current Qt status: the launch page and active vault overview show this prompt
-for the active vault. A successful backup stores the completion marker in the
-vault database before the file copy, so the marker follows the vault file rather
-than this desktop's Qt settings.
+for the active vault. After a backup is saved, the application reopens the file
+and checks it; only a passing check records the backup as done. The record
+stays in the live vault's database and is not written into the backup, so a
+restored vault starts at Needed.
 
 ## Developer networks
 

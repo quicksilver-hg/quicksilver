@@ -1,10 +1,13 @@
-quicksilver (0.1.9-1) UNRELEASED; urgency=low
+quicksilver (0.1.9-1) unstable; urgency=low
 
-  * Development series after the 0.1.8 release. Not a release: the 0.1.8 tag
-    is what a release build identifies itself as, and this tree carries work
-    that has not been tagged.
+  * Quicksilver 0.1.9: logging out on Linux now completes on the first try;
+    saving a vault backup now checks the saved file, and Home shows whether
+    a new backup is needed; an incoming transfer to a labelled address reads
+    "Received at"; and Quicksilver now recommends 20 confirmations before
+    treating a payment as received.
+    Ubuntu 22.04, Ubuntu 24.04 and Windows x64, from public tag v0.1.9.
 
- -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Mon, 09 Nov 2026 00:00:00 +0000
+ -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Sat, 14 Nov 2026 15:00:00 -0500
 
 quicksilver (0.1.8-1) unstable; urgency=low
 

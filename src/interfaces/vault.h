@@ -102,14 +102,17 @@ public:
     //! Abort a rescan.
     virtual void abortRescan() = 0;
 
-    //! Back up vault.
+    //! Back up vault. The copy alone records nothing (F-567).
     virtual bool backupVault(const std::string& filename) = 0;
 
-    //! Return whether this vault records a completed backup.
-    virtual bool isBackupRecorded() = 0;
+    //! Reopen a saved backup read-only and check it; with a passphrase, also test it against the backup (F-567).
+    virtual vault::BackupCheck verifyBackup(const std::string& filename, const SecureString* passphrase) = 0;
 
-    //! Record whether this vault has a completed backup.
-    virtual bool setBackupRecorded(bool recorded) = 0;
+    //! Record a backup check in this vault.
+    virtual bool recordBackupCheck(const vault::BackupCheck& check) = 0;
+
+    //! The backup state Home shows.
+    virtual vault::BackupState getBackupState() = 0;
 
     //! Create a co-signed agent allotment and its taproot funding output.
     virtual util::Result<vault::AgentAllotmentRecord> recordAgentAllotmentSetup(const std::string& label, CAmount funding_limit, CAmount daily_limit) = 0;

@@ -5,6 +5,7 @@
 
 #include <chain.h>
 #include <clientversion.h>
+#include <common/args.h>
 #include <core_io.h>
 #include <hash.h>
 #include <interfaces/chain.h>
@@ -21,6 +22,7 @@
 #include <util/time.h>
 #include <util/translation.h>
 #include <vault/archive.h>
+#include <vault/context.h>
 #include <vault/rpc/util.h>
 #include <vault/vault.h>
 
@@ -660,10 +662,27 @@ RPCHelpMan importvaultarchive()
     };
 }
 
+//! F-567: why the saved file failed its check, for the RPC error.
+static std::string BackupCheckFailureReason(BackupCheckResult result)
+{
+    switch (result) {
+    case BackupCheckResult::UNREADABLE: return "the saved file cannot be read as a vault.";
+    case BackupCheckResult::DIFFERENT_VAULT: return "the saved file is a different vault.";
+    case BackupCheckResult::OLDER_COPY: return "the saved file is an older copy of this vault.";
+    case BackupCheckResult::PROTECTION_DIFFERS: return "the saved file's encryption does not match this vault.";
+    case BackupCheckResult::OK:
+    case BackupCheckResult::WRONG_PASSPHRASE:
+        break;
+    }
+    return "unknown.";
+}
+
 RPCHelpMan backupvault()
 {
     return RPCHelpMan{"backupvault",
-                "\nSafely copies the current vault file to the specified destination, which can either be a directory or a path with a filename.\n",
+                "\nSafely copies the current vault file to the specified destination, which can either be a directory or a path with a filename.\n"
+                "Then reopens the saved file and checks that it is a readable copy of this vault, with the keys and encryption the vault uses now.\n"
+                "It never asks for the passphrase and does not test it; the GUI backup can.\n",
                 {
                     {"destination", RPCArg::Type::STR, RPCArg::Optional::NO, "The destination directory or file"},
                 },
@@ -681,11 +700,26 @@ RPCHelpMan backupvault()
     // the user could have gotten from another RPC command prior to now
     pvault->BlockUntilSyncedToCurrentChain();
 
-    LOCK(pvault->cs_vault);
-
     std::string strDest = request.params[0].get_str();
-    if (!pvault->BackupVault(strDest)) {
-        throw JSONRPCError(RPC_VAULT_ERROR, "Error: Vault backup failed!");
+    {
+        LOCK(pvault->cs_vault);
+        if (!pvault->BackupVault(strDest)) {
+            throw JSONRPCError(RPC_VAULT_ERROR, "Error: Vault backup failed!");
+        }
+    }
+
+    const VaultContext& context{EnsureVaultContext(request.context)};
+    if (context.args && HasTestOption(*context.args, "corruptbackup")) {
+        // Test only: stand in for a medium that does not keep what was written, so the check below is what fails.
+        std::fstream saved{fs::PathFromString(strDest), std::ios::binary | std::ios::in | std::ios::out};
+        const std::string zeros(100, '\0');
+        saved.write(zeros.data(), zeros.size());
+    }
+
+    const BackupCheck check{pvault->VerifyBackup(fs::PathFromString(strDest), /*passphrase=*/nullptr)};
+    pvault->RecordBackupCheck(check);
+    if (!check.StepsPassed()) {
+        throw JSONRPCError(RPC_VAULT_ERROR, strprintf("Error: The backup was saved, but checking it failed: %s", BackupCheckFailureReason(check.result)));
     }
 
     return UniValue::VNULL;

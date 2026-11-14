@@ -394,6 +394,8 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     m_backup_state = BenchPanel::AddRow(vault_grid, tr("Backup"), QStringLiteral("desktopLaunchBackupState"), vault_rows);
     m_vault_agents = BenchPanel::AddRow(vault_grid, tr("Agents"), QStringLiteral("homeVaultAgents"), vault_rows, &m_vault_agents_key);
     vault.body->addWidget(vault_rows);
+    m_backup_note = MakeNote(QStringLiteral("homeVaultBackupNote"), vault.frame);
+    vault.body->addWidget(m_backup_note);
     m_vault_summary = MakeNote(QStringLiteral("launchVaultCardBody"), vault.frame);
     vault.body->addWidget(m_vault_summary);
 
@@ -418,7 +420,7 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     root->addWidget(instruments);
 
     setVaultSummary(false, QString());
-    setBackupState(false, false);
+    setBackupState(false, vault::BackupState::NEEDED, false);
     setConsensusEnabled(false);
     setPeerCount(-1);
     setChainTip(-1, QDateTime());
@@ -490,26 +492,52 @@ void DesktopLaunchPage::setVaultRuntimeAvailable(bool available)
     renderVaultRows();
 }
 
-void DesktopLaunchPage::setBackupState(bool has_vault, bool backup_done)
+void DesktopLaunchPage::setBackupState(bool has_vault, vault::BackupState state, bool encrypted)
 {
     m_backup_panel->setVisible(has_vault);
     m_backup_button->setVisible(has_vault);
+    m_backup_note->setVisible(false);
     if (!has_vault) {
         m_backup_state->setText(tr("No vault"));
         SetTone(m_backup_state, "plain");
         return;
     }
 
-    m_backup_state->setText(backup_done ? tr("Done") : tr("Needed"));
+    // F-567: Done only for a backup that was reopened and still matches the vault's keys and passphrase.
+    const bool backup_done{state == vault::BackupState::DONE || state == vault::BackupState::DONE_PASSPHRASE};
+    switch (state) {
+    case vault::BackupState::NEEDED:
+        m_backup_state->setText(tr("Needed"));
+        break;
+    case vault::BackupState::NOT_CHECKED:
+        m_backup_state->setText(tr("Saved, not checked"));
+        break;
+    case vault::BackupState::DONE:
+        m_backup_state->setText(tr("Done"));
+        break;
+    case vault::BackupState::DONE_PASSPHRASE:
+        m_backup_state->setText(tr("Done (passphrase checked)"));
+        break;
+    }
     SetTone(m_backup_state, backup_done ? "good" : "warn");
-    // Only a missing backup needs the sentence; a recorded one is said by the row.
+    if (state == vault::BackupState::DONE && encrypted) {
+        m_backup_note->setText(tr("The passphrase was not tested on this backup."));
+        m_backup_note->setVisible(true);
+    }
+    // Only a missing or unchecked backup needs the sentence; a checked one is said by the row.
     m_backup_summary->setText(backup_done
         ? tr("This vault records a completed backup. Make another backup after meaningful activity, because a backup only holds the history that existed when it was made.")
         : tr("Back up the vault file before relying on this desktop. This app does not issue a recovery phrase; only a current vault-file backup restores both spending keys and transaction history."));
     m_backup_summary->setVisible(!backup_done);
     m_backup_panel->setVisible(!backup_done);
     SetTone(m_backup_summary, "warn");
-    m_backup_button->setText(backup_done ? tr("Back up again") : tr("Back up vault"));
+    if (backup_done) {
+        m_backup_button->setText(tr("Back up again"));
+    } else if (state == vault::BackupState::NOT_CHECKED) {
+        m_backup_button->setText(tr("Back up and check"));
+    } else {
+        m_backup_button->setText(tr("Back up vault"));
+    }
 }
 
 void DesktopLaunchPage::setConsensusEnabled(bool enabled)

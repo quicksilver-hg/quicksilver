@@ -135,8 +135,8 @@ private:
 
     void updateLaunchSummary();
     void connectLaunchSummarySignals(VaultModel* vault_model);
-    bool currentVaultBackupRecorded() const;
-    void setCurrentVaultBackupRecorded(bool backed_up);
+    //! Repaint Home's backup row and the status strip after a backup check was recorded.
+    void refreshBackupState();
     void updateConsensusState();
     void setConsensusEnabled(bool enabled);
     void acceptConsensusAndShowStatus();

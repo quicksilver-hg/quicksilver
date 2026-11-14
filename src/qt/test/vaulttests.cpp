@@ -111,6 +111,8 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QInputDialog>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QFontDatabase>
 #include <QHBoxLayout>
@@ -288,8 +290,9 @@ public:
     bool changeVaultPassphrase(const SecureString&, const SecureString&) override { return false; }
     void abortRescan() override {}
     bool backupVault(const std::string&) override { return false; }
-    bool isBackupRecorded() override { return false; }
-    bool setBackupRecorded(bool) override { return false; }
+    vault::BackupCheck verifyBackup(const std::string&, const SecureString*) override { return {}; }
+    bool recordBackupCheck(const vault::BackupCheck&) override { return false; }
+    vault::BackupState getBackupState() override { return vault::BackupState::NEEDED; }
     util::Result<vault::AgentAllotmentRecord> recordAgentAllotmentSetup(const std::string&, CAmount, CAmount) override { return util::Error{Untranslated("unsupported")}; }
     std::vector<vault::AgentAllotmentRecord> listAgentAllotmentRecords() override { return agent_records; }
     std::string agentAllotmentPolicyRequest(const vault::AgentAllotmentRecord&, CAmount) override { return {}; }
@@ -689,6 +692,27 @@ public:
     }
 };
 
+//! The visible dialog of this type and name. Closed dialogs linger until their deferred delete runs.
+template <typename T>
+T* VisibleChild(QObject* parent, const QString& name)
+{
+    for (T* child : parent->findChildren<T*>(name)) {
+        if (child->isVisible()) return child;
+    }
+    return nullptr;
+}
+
+//! F-567: start a backup from the frame and choose a file in its save dialog.
+bool SaveBackupThroughFrame(VaultFrame& frame, VaultView& view, const QString& file)
+{
+    frame.backupVault();
+    QFileDialog* save{VisibleChild<QFileDialog>(&view, QStringLiteral("saveFileDialog"))};
+    if (!save) return false;
+    save->selectFile(file);
+    static_cast<QDialog*>(save)->accept();
+    return true;
+}
+
 //! Simple qt vault tests.
 //
 // Test widgets can be debugged interactively calling show() on them and
@@ -901,7 +925,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     auto* routedVaultView = new VaultView(&vaultModel, platformStyle.get(), &vaultFrame);
     QVERIFY(vaultFrame.addView(routedVaultView));
     vaultFrame.setCurrentVault(&vaultModel);
-    QCOMPARE(vaultModel.backupRecorded(), false);
+    QVERIFY(vaultModel.backupState() == vault::BackupState::NEEDED);
 
     // F-442 owner walk: with a vault open, Home is the new Home. A vault loaded at
     // startup, the Vault panel's command and choosing the vault again each land
@@ -990,17 +1014,24 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QVERIFY(launch_mining);
     QVERIFY(launch_mining->isEnabled());
 
+    // F-567: a copy is not a backup until the saved file is reopened. This vault's database is in memory,
+    // so the copy reports success but leaves no file behind: the check fails and Home stays Needed.
     QTemporaryDir backup_dir;
     QVERIFY(backup_dir.isValid());
-    const QString backup_file = backup_dir.filePath(QStringLiteral("vault-backup.dat"));
-    QVERIFY(vaultModel.vault().backupVault(backup_file.toLocal8Bit().data()));
-    QCOMPARE(vaultModel.backupRecorded(), true);
-    vaultFrame.setCurrentVault(&vaultModel);
+    {
+        QSignalSpy backup_messages(routedVaultView, &VaultView::message);
+        QVERIFY(SaveBackupThroughFrame(vaultFrame, *routedVaultView, backup_dir.filePath(QStringLiteral("vault-backup.dat"))));
+        QTRY_COMPARE(backup_messages.count(), 1);
+        QCOMPARE(backup_messages.at(0).at(0).toString(), QStringLiteral("Backup Check Failed"));
+        QVERIFY(backup_messages.at(0).at(1).toString().contains(QStringLiteral("but checking it failed: the saved file cannot be read as a vault.")));
+        QCOMPARE(backup_messages.at(0).at(2).toUInt(), static_cast<unsigned int>(CClientUIInterface::MSG_ERROR));
+    }
+    QVERIFY(!VisibleChild<QInputDialog>(routedVaultView, QStringLiteral("backupPassphraseDialog")));
+    QVERIFY(vaultModel.backupState() == vault::BackupState::NEEDED);
     vaultFrame.gotoLaunchPage();
-    QCOMPARE(vaultFrame.findChild<QLabel*>(QStringLiteral("desktopLaunchBackupState"))->text(), QStringLiteral("Done"));
-    // A recorded backup is said by the row; the warning sentence goes away.
-    QVERIFY(vaultFrame.findChild<QLabel*>(QStringLiteral("desktopLaunchBackupSummary"))->isHidden());
-    QCOMPARE(vaultFrame.findChild<QPushButton*>(QStringLiteral("desktopLaunchBackupButton"))->text(), QStringLiteral("Back up again"));
+    QCOMPARE(vaultFrame.findChild<QLabel*>(QStringLiteral("desktopLaunchBackupState"))->text(), QStringLiteral("Needed"));
+    QVERIFY(!vaultFrame.findChild<QLabel*>(QStringLiteral("desktopLaunchBackupSummary"))->isHidden());
+    QCOMPARE(vaultFrame.findChild<QPushButton*>(QStringLiteral("desktopLaunchBackupButton"))->text(), QStringLiteral("Back up vault"));
 
     vaultFrame.gotoAgentAllotmentPage();
     QVERIFY(vaultFrame.currentVaultView());
@@ -1919,6 +1950,218 @@ void VaultTests::vaultTests()
     }
 #endif
     TestGUI(m_node);
+}
+
+// F-567: the GUI backup reopens the saved file, offers the passphrase test on an encrypted vault, and Home
+// tells the truth about the result.
+void VaultTests::backupChecksTheSavedFile()
+{
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    TestChain100Setup test;
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+
+    // A vault on a real SQLite file, so the saved copy is a real file the check can reopen.
+    vault::DatabaseOptions db_options;
+    db_options.require_create = true;
+    db_options.require_format = vault::DatabaseFormat::SQLITE;
+    vault::DatabaseStatus db_status;
+    bilingual_str db_error;
+    auto database{vault::MakeDatabase(test.m_path_root / "backup-gui", db_options, db_status, db_error)};
+    QVERIFY2(database, db_error.original.c_str());
+    auto vault{std::make_shared<CVault>(m_node.context()->chain.get(), "", std::move(database))};
+    QVERIFY(vault->LoadVault() == vault::DBErrors::LOAD_OK);
+    {
+        LOCK(vault->cs_vault);
+        vault->SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
+        vault->SetupDescriptorScriptPubKeyMans();
+    }
+
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    OptionsModel options_model(m_node);
+    bilingual_str error;
+    QVERIFY(options_model.Init(error));
+    VaultContext& vault_context = *m_node.vaultLoader().context();
+    AddVault(vault_context, vault);
+    VaultModel model(interfaces::MakeVault(vault_context, vault), m_node, &options_model, platform_style.get());
+    RemoveVault(vault_context, vault, /*load_on_start=*/std::nullopt);
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(&model, platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(&model);
+    frame->gotoLaunchPage();
+
+    QLabel* row = frame->findChild<QLabel*>(QStringLiteral("desktopLaunchBackupState"));
+    QLabel* note = frame->findChild<QLabel*>(QStringLiteral("homeVaultBackupNote"));
+    QWidget* panel = frame->findChild<QWidget*>(QStringLiteral("desktopLaunchBackupPanel"));
+    QPushButton* button = frame->findChild<QPushButton*>(QStringLiteral("desktopLaunchBackupButton"));
+    QLabel* status = window.findChild<QLabel*>(QStringLiteral("benchStatusVault"));
+    QVERIFY(row && note && panel && button && status);
+    QTemporaryDir backup_dir;
+    QVERIFY(backup_dir.isValid());
+    QSignalSpy messages(view, &VaultView::message);
+    QVERIFY(messages.isValid());
+
+    // Nothing saved yet.
+    QCOMPARE(row->text(), QStringLiteral("Needed"));
+    QVERIFY(note->isHidden());
+    QCOMPARE(button->text(), QStringLiteral("Back up vault"));
+    QCOMPARE(status->text(), QStringLiteral("Vault not encrypted · backup needed"));
+
+    // A backup saved before checks existed is not Done.
+    QVERIFY(vault->SetBackupRecorded(true));
+    frame->setCurrentVault(&model);
+    QCOMPARE(row->text(), QStringLiteral("Saved, not checked"));
+    QCOMPARE(row->property("benchTone").toString(), QStringLiteral("warn"));
+    QVERIFY(!panel->isHidden());
+    QCOMPARE(button->text(), QStringLiteral("Back up and check"));
+    QCOMPARE(status->text(), QStringLiteral("Vault not encrypted · backup saved, not checked"));
+
+    // Unencrypted: save, check, Done. No passphrase prompt.
+    QVERIFY(SaveBackupThroughFrame(*frame, *view, backup_dir.filePath(QStringLiteral("plain.dat"))));
+    QTRY_COMPARE(messages.count(), 1);
+    QCOMPARE(messages.at(0).at(0).toString(), QStringLiteral("Backup Successful"));
+    QCOMPARE(messages.at(0).at(1).toString(), QStringLiteral("The vault data was saved to %1 and checked.").arg(QDir::toNativeSeparators(backup_dir.filePath(QStringLiteral("plain.dat")))));
+    QVERIFY(!VisibleChild<QInputDialog>(view, QStringLiteral("backupPassphraseDialog")));
+    QCOMPARE(row->text(), QStringLiteral("Done"));
+    QCOMPARE(row->property("benchTone").toString(), QStringLiteral("good"));
+    QVERIFY(note->isHidden());
+    QVERIFY(panel->isHidden());
+    QCOMPARE(button->text(), QStringLiteral("Back up again"));
+    QCOMPARE(status->text(), QStringLiteral("Vault not encrypted"));
+
+    // Encrypting makes new keys: the checked backup no longer covers them.
+    const SecureString passphrase{"backup check"};
+    QVERIFY(vault->EncryptVault(passphrase));
+    model.updateStatus();
+    QCOMPARE(row->text(), QStringLiteral("Needed"));
+    QCOMPARE(button->text(), QStringLiteral("Back up vault"));
+    QCOMPARE(status->text(), QStringLiteral("Vault locked · backup needed"));
+
+    const auto passphrase_dialog = [&]() { return VisibleChild<QInputDialog>(view, QStringLiteral("backupPassphraseDialog")); };
+
+    // Encrypted, Skip: Done, with a quiet line that the passphrase was not tested.
+    QVERIFY(SaveBackupThroughFrame(*frame, *view, backup_dir.filePath(QStringLiteral("skip.dat"))));
+    QTRY_VERIFY(passphrase_dialog());
+    QInputDialog* ask = passphrase_dialog();
+    QCOMPARE(ask->windowTitle(), QStringLiteral("Check Backup"));
+    QCOMPARE(ask->labelText(), QStringLiteral("Type your passphrase to confirm it opens this backup"));
+    QCOMPARE(ask->textEchoMode(), QLineEdit::Password);
+    QCOMPARE(ask->okButtonText(), QStringLiteral("Check"));
+    QCOMPARE(ask->cancelButtonText(), QStringLiteral("Skip"));
+    ask->reject();
+    QTRY_COMPARE(messages.count(), 2);
+    QCOMPARE(messages.at(1).at(1).toString(), QStringLiteral("The vault data was saved to %1 and checked. The passphrase was not tested.").arg(QDir::toNativeSeparators(backup_dir.filePath(QStringLiteral("skip.dat")))));
+    QCOMPARE(row->text(), QStringLiteral("Done"));
+    QVERIFY(!note->isHidden());
+    QCOMPARE(note->text(), QStringLiteral("The passphrase was not tested on this backup."));
+    QCOMPARE(status->text(), QStringLiteral("Vault locked"));
+    QVERIFY(vault->IsLocked());
+
+    // Encrypted, wrong then right: the wrong one says the file is fine and asks again.
+    QVERIFY(SaveBackupThroughFrame(*frame, *view, backup_dir.filePath(QStringLiteral("checked.dat"))));
+    QTRY_VERIFY(passphrase_dialog());
+    ask = passphrase_dialog();
+    ask->setTextValue(QStringLiteral("not it"));
+    ask->accept();
+    QTRY_VERIFY(passphrase_dialog());
+    ask = passphrase_dialog();
+    QCOMPARE(ask->labelText(), QStringLiteral("That passphrase does not open this backup. The file is fine. Type your passphrase to try again."));
+    QCOMPARE(messages.count(), 2);
+    ask->setTextValue(QStringLiteral("backup check"));
+    ask->accept();
+    QTRY_COMPARE(messages.count(), 3);
+    QCOMPARE(messages.at(2).at(0).toString(), QStringLiteral("Backup Successful"));
+    QCOMPARE(messages.at(2).at(1).toString(), QStringLiteral("The vault data was saved to %1 and checked, and your passphrase opens it.").arg(QDir::toNativeSeparators(backup_dir.filePath(QStringLiteral("checked.dat")))));
+    QVERIFY(!passphrase_dialog());
+    QCOMPARE(row->text(), QStringLiteral("Done (passphrase checked)"));
+    QCOMPARE(row->property("benchTone").toString(), QStringLiteral("good"));
+    QVERIFY(note->isHidden());
+    QCOMPARE(status->text(), QStringLiteral("Vault locked"));
+    // The test opened the backup, not the vault.
+    QVERIFY(vault->IsLocked());
+
+    // A passphrase change makes the checked backup stale. Through the model, as the Change Passphrase dialog
+    // does, and with no re-selection of the vault: the lock status is Locked before and after, so Home must
+    // be told by the change itself (walk 2026-11-14: Home kept "Done").
+    QVERIFY(model.changePassphrase(passphrase, SecureString{"changed"}));
+    QTRY_COMPARE(row->text(), QStringLiteral("Needed"));
+    QCOMPARE(status->text(), QStringLiteral("Vault locked · backup needed"));
+}
+
+void VaultTests::agentAllotmentMakesHomeBackupNeeded()
+{
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    TestChain100Setup test;
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+
+    // An unencrypted vault on a real SQLite file, so the backup is a real file the check can reopen.
+    vault::DatabaseOptions db_options;
+    db_options.require_create = true;
+    db_options.require_format = vault::DatabaseFormat::SQLITE;
+    vault::DatabaseStatus db_status;
+    bilingual_str db_error;
+    auto database{vault::MakeDatabase(test.m_path_root / "backup-agent", db_options, db_status, db_error)};
+    QVERIFY2(database, db_error.original.c_str());
+    auto vault{std::make_shared<CVault>(m_node.context()->chain.get(), "", std::move(database))};
+    QVERIFY(vault->LoadVault() == vault::DBErrors::LOAD_OK);
+    {
+        LOCK(vault->cs_vault);
+        vault->SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
+        vault->SetupDescriptorScriptPubKeyMans();
+    }
+
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    OptionsModel options_model(m_node);
+    bilingual_str error;
+    QVERIFY(options_model.Init(error));
+    VaultContext& vault_context = *m_node.vaultLoader().context();
+    AddVault(vault_context, vault);
+    VaultModel model(interfaces::MakeVault(vault_context, vault), m_node, &options_model, platform_style.get());
+    RemoveVault(vault_context, vault, /*load_on_start=*/std::nullopt);
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(&model, platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(&model);
+    frame->gotoLaunchPage();
+
+    QLabel* row = frame->findChild<QLabel*>(QStringLiteral("desktopLaunchBackupState"));
+    QLabel* status = window.findChild<QLabel*>(QStringLiteral("benchStatusVault"));
+    AgentAllotmentPage* page = view->findChild<AgentAllotmentPage*>();
+    QVERIFY(row && status && page);
+    QTemporaryDir backup_dir;
+    QVERIFY(backup_dir.isValid());
+    QSignalSpy messages(view, &VaultView::message);
+    QVERIFY(messages.isValid());
+
+    QVERIFY(SaveBackupThroughFrame(*frame, *view, backup_dir.filePath(QStringLiteral("plain.dat"))));
+    QTRY_COMPARE(messages.count(), 1);
+    QCOMPARE(messages.at(0).at(0).toString(), QStringLiteral("Backup Successful"));
+    QCOMPARE(row->text(), QStringLiteral("Done"));
+    QCOMPARE(status->text(), QStringLiteral("Vault not encrypted"));
+
+    // An allotment adds a descriptor the backup does not hold. The vault is not encrypted, so the setup
+    // asks for no unlock and the lock status never changes: Home must be told by the setup itself
+    // (2026-11-14: the Agents page said "Back up this vault again." while Home kept "Done").
+    page->findChild<QLineEdit*>("agentAllotmentNameEdit")->setText("backup agent");
+    page->findChild<QuicksilverAmountField*>("agentAllotmentFundingLimit")->setValue(COIN);
+    page->findChild<QCheckBox*>("agentAllotmentAcceptanceCheck")->setChecked(true);
+    page->findChild<QPushButton*>("agentAllotmentCreateButton")->click();
+    QCOMPARE(model.listAgentAllotmentRecords().size(), size_t{1});
+    QCOMPARE(vault->GetBackupState(), vault::BackupState::NEEDED);
+    QTRY_COMPARE(row->text(), QStringLiteral("Needed"));
+    QCOMPARE(status->text(), QStringLiteral("Vault not encrypted · backup needed"));
 }
 
 void VaultTests::benchTickerMatchesVaultBalances()

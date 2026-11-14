@@ -190,8 +190,7 @@ public:
 
     QString getVaultName() const;
     QString getDisplayName() const;
-    bool backupRecorded() const;
-    bool setBackupRecorded(bool recorded);
+    vault::BackupState backupState() const;
     util::Result<vault::AgentAllotmentRecord> recordAgentAllotmentSetup(const QString& label, CAmount funding_limit, CAmount daily_limit);
     std::vector<vault::AgentAllotmentRecord> listAgentAllotmentRecords() const;
     QString agentAllotmentPolicyRequest(const vault::AgentAllotmentRecord& record, CAmount funding_available) const;
@@ -267,6 +266,9 @@ Q_SIGNALS:
 
     // Encryption status of vault changed
     void encryptionStatusChanged();
+
+    // The vault changed in a way an earlier backup does not hold, with no lock or balance change to say so (F-567)
+    void backupStateChanged();
 
     // Signal emitted when vault needs to be unlocked
     // It is valid behaviour for listeners to keep the vault locked after this signal;

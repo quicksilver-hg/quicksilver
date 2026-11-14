@@ -9,8 +9,10 @@
 #include <consensus/amount.h>
 #include <qt/pagestack.h>
 #include <qt/quicksilverunits.h>
+#include <vault/types.h>
 
 #include <functional>
+#include <string>
 
 class ClientModel;
 class MineMintPage;
@@ -56,6 +58,8 @@ public:
     bool handlePaymentRequest(const SendCoinsRecipient& recipient);
 
 private:
+    //! F-567: offer the passphrase test on a checked backup of an encrypted vault. Skip records it untested.
+    void askBackupPassphrase(const QString& filename, const std::string& path, const vault::BackupCheck& check, std::function<void(bool)> done, bool retry);
     ClientModel* clientModel{nullptr};
 
     //!
@@ -102,7 +106,7 @@ public Q_SLOTS:
     void processNewTransaction(const QModelIndex& parent, int start, int /*end*/);
     /** Encrypt the vault */
     void encryptVault();
-    /** Backup the vault */
+    /** Back up the vault, then reopen and check the saved file (F-567). done(true) once a check was recorded. */
     void backupVault(std::function<void(bool)> done = {});
     /** Change encrypted vault passphrase */
     void changePassphrase();

@@ -6,6 +6,7 @@
 #include <vault/vault.h>
 
 #include <chrono>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <future>
@@ -1460,19 +1461,21 @@ BOOST_AUTO_TEST_CASE(ComputeTimeSmart)
     BOOST_CHECK_EQUAL(AddTx(*m_node.chainman, m_vault, 5, 50, 600), 300);
 }
 
-BOOST_AUTO_TEST_CASE(backup_records_vault_metadata)
+// F-567: the copy alone proves nothing, so it no longer marks the vault as backed up; only a recorded check does.
+BOOST_AUTO_TEST_CASE(backup_copy_does_not_record_backup)
 {
     CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
     BOOST_CHECK(!vault.IsBackupRecorded());
 
     BOOST_CHECK(vault.BackupVault("successful-backup.dat"));
-    BOOST_CHECK(vault.IsBackupRecorded());
+    BOOST_CHECK(!vault.IsBackupRecorded());
+    BOOST_CHECK(vault.GetBackupState() == BackupState::NEEDED);
 
-    BOOST_CHECK(vault.SetBackupRecorded(false));
     GetMockableDatabase(vault).m_backup_pass = false;
-    BOOST_CHECK(!vault.BackupVault("failed-first-backup.dat"));
+    BOOST_CHECK(!vault.BackupVault("failed-backup.dat"));
     BOOST_CHECK(!vault.IsBackupRecorded());
 
+    // A legacy flag survives a failed copy.
     BOOST_CHECK(vault.SetBackupRecorded(true));
     BOOST_CHECK(!vault.BackupVault("failed-later-backup.dat"));
     BOOST_CHECK(vault.IsBackupRecorded());
@@ -1782,6 +1785,247 @@ BOOST_AUTO_TEST_CASE(agent_allotment_setup_refuses_private_keys_disabled)
     BOOST_CHECK_EQUAL(util::ErrorString(result).original, "Agent allotment setup requires a vault with private keys.");
     BOOST_CHECK(vault.ListAgentAllotmentRecords().empty());
     BOOST_CHECK_EQUAL(WITH_LOCK(vault.cs_vault, return vault.GetAllScriptPubKeyMans().size()), managers_before);
+}
+
+// F-567: a vault backed by a real SQLite file, so its backups are real files the check can reopen.
+static std::unique_ptr<CVault> MakeFileVault(interfaces::Chain* chain, const fs::path& dir)
+{
+    DatabaseOptions options;
+    options.require_create = true;
+    options.require_format = DatabaseFormat::SQLITE;
+    DatabaseStatus status;
+    bilingual_str error;
+    auto database{MakeDatabase(dir, options, status, error)};
+    BOOST_REQUIRE_MESSAGE(database, error.original);
+    auto vault{std::make_unique<CVault>(chain, "", std::move(database))};
+    BOOST_REQUIRE(vault->LoadVault() == DBErrors::LOAD_OK);
+    EnableDescriptorVault(*vault);
+    return vault;
+}
+
+static BackupCheck BackUpAndCheck(CVault& vault, const fs::path& file, const SecureString* passphrase = nullptr)
+{
+    BOOST_REQUIRE(vault.BackupVault(fs::PathToString(file)));
+    const BackupCheck check{vault.VerifyBackup(file, passphrase)};
+    BOOST_REQUIRE(vault.RecordBackupCheck(check));
+    return check;
+}
+
+BOOST_AUTO_TEST_CASE(backup_check_good_backup_is_done)
+{
+    auto vault{MakeFileVault(m_node.chain.get(), m_path_root / "good")};
+    BOOST_CHECK(vault->GetBackupState() == BackupState::NEEDED);
+    const BackupCheck check{BackUpAndCheck(*vault, m_path_root / "good.bak")};
+    BOOST_CHECK(check.result == BackupCheckResult::OK);
+    BOOST_CHECK(!check.encrypted);
+    BOOST_CHECK(!check.passphrase_tested);
+    BOOST_CHECK(check.fingerprint == vault->GetBackupFingerprint());
+    BOOST_CHECK(vault->GetBackupState() == BackupState::DONE);
+}
+
+BOOST_AUTO_TEST_CASE(backup_check_unreadable_files)
+{
+    auto vault{MakeFileVault(m_node.chain.get(), m_path_root / "unreadable")};
+    const fs::path good{m_path_root / "unreadable.bak"};
+    BOOST_REQUIRE(vault->BackupVault(fs::PathToString(good)));
+
+    BOOST_CHECK(vault->VerifyBackup(m_path_root / "missing.bak", nullptr).result == BackupCheckResult::UNREADABLE);
+
+    const fs::path garbage{m_path_root / "garbage.bak"};
+    {
+        std::ofstream out{garbage, std::ios::binary};
+        out << std::string(8192, 'x');
+    }
+    BOOST_CHECK(vault->VerifyBackup(garbage, nullptr).result == BackupCheckResult::UNREADABLE);
+
+    const fs::path truncated{m_path_root / "truncated.bak"};
+    fs::copy_file(good, truncated, fs::copy_options::none);
+    fs::resize_file(truncated, fs::file_size(good) / 2);
+    BOOST_CHECK(vault->VerifyBackup(truncated, nullptr).result == BackupCheckResult::UNREADABLE);
+
+    // A failed check is recorded, and it leaves the backup Needed.
+    BOOST_REQUIRE(vault->RecordBackupCheck(vault->VerifyBackup(garbage, nullptr)));
+    BOOST_CHECK(vault->GetBackupState() == BackupState::NEEDED);
+}
+
+BOOST_AUTO_TEST_CASE(backup_check_other_vault_is_different_vault)
+{
+    auto vault{MakeFileVault(m_node.chain.get(), m_path_root / "mine")};
+    auto other{MakeFileVault(m_node.chain.get(), m_path_root / "other")};
+    const fs::path other_backup{m_path_root / "other.bak"};
+    BOOST_REQUIRE(other->BackupVault(fs::PathToString(other_backup)));
+    BOOST_CHECK(vault->VerifyBackup(other_backup, nullptr).result == BackupCheckResult::DIFFERENT_VAULT);
+}
+
+BOOST_AUTO_TEST_CASE(backup_check_after_agent_allotment_is_older_copy)
+{
+    auto vault{MakeFileVault(m_node.chain.get(), m_path_root / "allot")};
+    const fs::path file{m_path_root / "allot.bak"};
+    BOOST_CHECK(BackUpAndCheck(*vault, file).result == BackupCheckResult::OK);
+    BOOST_CHECK(vault->GetBackupState() == BackupState::DONE);
+
+    BOOST_REQUIRE(vault->RecordAgentAllotmentSetup("backup-agent", COIN, 0));
+    BOOST_CHECK(vault->GetBackupState() == BackupState::NEEDED);
+    BOOST_CHECK(vault->VerifyBackup(file, nullptr).result == BackupCheckResult::OLDER_COPY);
+}
+
+// F-567: encrypting makes a new seed and new descriptors, so a backup made before it lacks every key used afterwards.
+BOOST_AUTO_TEST_CASE(encrypt_after_backup_needs_new_backup)
+{
+    auto vault{MakeFileVault(m_node.chain.get(), m_path_root / "encrypt")};
+    const fs::path file{m_path_root / "before-encrypt.bak"};
+    BOOST_CHECK(BackUpAndCheck(*vault, file).result == BackupCheckResult::OK);
+    BOOST_CHECK(vault->GetBackupState() == BackupState::DONE);
+
+    BOOST_REQUIRE(vault->EncryptVault(SecureString{"test"}));
+    BOOST_CHECK(vault->GetBackupState() == BackupState::NEEDED);
+    BOOST_CHECK(vault->VerifyBackup(file, nullptr).result == BackupCheckResult::OLDER_COPY);
+}
+
+BOOST_AUTO_TEST_CASE(passphrase_change_after_backup_is_protection_differs)
+{
+    auto vault{MakeFileVault(m_node.chain.get(), m_path_root / "rekey")};
+    BOOST_REQUIRE(vault->EncryptVault(SecureString{"old"}));
+    const fs::path file{m_path_root / "rekey.bak"};
+    BOOST_CHECK(BackUpAndCheck(*vault, file).result == BackupCheckResult::OK);
+    BOOST_CHECK(vault->GetBackupState() == BackupState::DONE);
+
+    BOOST_REQUIRE(vault->ChangeVaultPassphrase(SecureString{"old"}, SecureString{"new"}));
+    BOOST_CHECK(vault->GetBackupState() == BackupState::NEEDED);
+    BOOST_CHECK(vault->VerifyBackup(file, nullptr).result == BackupCheckResult::PROTECTION_DIFFERS);
+}
+
+BOOST_AUTO_TEST_CASE(backup_check_passphrase)
+{
+    auto vault{MakeFileVault(m_node.chain.get(), m_path_root / "phrase")};
+    const SecureString right{"right"};
+    const SecureString wrong{"wrong"};
+    BOOST_REQUIRE(vault->EncryptVault(right));
+    BOOST_REQUIRE(vault->IsLocked());
+    const fs::path file{m_path_root / "phrase.bak"};
+    BOOST_REQUIRE(vault->BackupVault(fs::PathToString(file)));
+
+    // Steps 1-3 only.
+    const BackupCheck skipped{vault->VerifyBackup(file, nullptr)};
+    BOOST_CHECK(skipped.result == BackupCheckResult::OK);
+    BOOST_CHECK(skipped.encrypted);
+    BOOST_CHECK(!skipped.passphrase_tested);
+
+    // A wrong passphrase is its own result, not a damaged file, and it leaves the vault locked.
+    const BackupCheck bad{vault->VerifyBackup(file, &wrong)};
+    BOOST_CHECK(bad.result == BackupCheckResult::WRONG_PASSPHRASE);
+    BOOST_CHECK(bad.StepsPassed());
+    BOOST_CHECK(vault->IsLocked());
+
+    const BackupCheck good{vault->VerifyBackup(file, &right)};
+    BOOST_CHECK(good.result == BackupCheckResult::OK);
+    BOOST_CHECK(good.passphrase_tested);
+    BOOST_CHECK(vault->IsLocked());
+
+    // The check reads the backup's master key: an unlocked vault stays unlocked, and the live key is not used.
+    BOOST_REQUIRE(vault->Unlock(right));
+    BOOST_CHECK(vault->VerifyBackup(file, &wrong).result == BackupCheckResult::WRONG_PASSPHRASE);
+    BOOST_CHECK(!vault->IsLocked());
+
+    // Skip records Done; a passed passphrase test records Done (passphrase checked).
+    BOOST_REQUIRE(vault->RecordBackupCheck(bad));
+    BOOST_CHECK(vault->GetBackupState() == BackupState::DONE);
+    BOOST_REQUIRE(vault->RecordBackupCheck(skipped));
+    BOOST_CHECK(vault->GetBackupState() == BackupState::DONE);
+    BOOST_REQUIRE(vault->RecordBackupCheck(good));
+    BOOST_CHECK(vault->GetBackupState() == BackupState::DONE_PASSPHRASE);
+}
+
+BOOST_AUTO_TEST_CASE(legacy_backup_flag_is_not_checked)
+{
+    auto vault{MakeFileVault(m_node.chain.get(), m_path_root / "legacy")};
+    BOOST_REQUIRE(vault->SetBackupRecorded(true));
+    BOOST_CHECK(vault->GetBackupState() == BackupState::NOT_CHECKED);
+
+    // A recorded check replaces the legacy flag.
+    BackUpAndCheck(*vault, m_path_root / "legacy.bak");
+    BOOST_CHECK(vault->GetBackupState() == BackupState::DONE);
+}
+
+// F-567: a legacy flag says a backup was made but not when, so the node's load ties it to the vault as it is then.
+// Encrypting afterwards makes new keys that backup lacks, so the row must drop to Needed, not stay at Saved, not checked.
+BOOST_AUTO_TEST_CASE(legacy_backup_flag_then_encrypt_needs_new_backup)
+{
+    const fs::path dir{m_path_root / "legacy-encrypt"};
+    {
+        auto vault{MakeFileVault(m_node.chain.get(), dir)};
+        BOOST_REQUIRE(vault->SetBackupRecorded(true));
+    }
+    DatabaseOptions options;
+    options.require_existing = true;
+    DatabaseStatus status;
+    bilingual_str error;
+    auto database{MakeDatabase(dir, options, status, error)};
+    BOOST_REQUIRE_MESSAGE(database, error.original);
+    VaultContext context;
+    context.args = &m_args;
+    context.chain = m_node.chain.get();
+    auto vault{TestLoadVault(std::move(database), context, VAULT_FLAG_DESCRIPTORS)};
+    BOOST_REQUIRE(vault);
+    BOOST_CHECK(vault->GetBackupState() == BackupState::NOT_CHECKED);
+
+    BOOST_REQUIRE(vault->EncryptVault(SecureString{"test"}));
+    BOOST_CHECK(vault->GetBackupState() == BackupState::NEEDED);
+    TestUnloadVault(std::move(vault));
+}
+
+BOOST_AUTO_TEST_CASE(restored_backup_starts_needed)
+{
+    auto vault{MakeFileVault(m_node.chain.get(), m_path_root / "source")};
+    BackUpAndCheck(*vault, m_path_root / "source.bak");
+    BOOST_CHECK(vault->GetBackupState() == BackupState::DONE);
+
+    const fs::path restored_dir{m_path_root / "restored"};
+    fs::create_directories(restored_dir);
+    fs::copy_file(m_path_root / "source.bak", restored_dir / "vault.dat", fs::copy_options::none);
+    DatabaseOptions options;
+    options.require_existing = true;
+    DatabaseStatus status;
+    bilingual_str error;
+    auto database{MakeDatabase(restored_dir, options, status, error)};
+    BOOST_REQUIRE_MESSAGE(database, error.original);
+    CVault restored(m_node.chain.get(), "", std::move(database));
+    BOOST_REQUIRE(restored.LoadVault() == DBErrors::LOAD_OK);
+    BOOST_CHECK(!restored.IsBackupRecorded());
+    BOOST_CHECK(restored.GetBackupState() == BackupState::NEEDED);
+}
+
+// F-567 Q4 through the real restore: a copy carries whatever backup state the live vault held when it was made (the record
+// of the check before it, or a pre-F-567 flag), and the restored vault must still start at Needed.
+BOOST_AUTO_TEST_CASE(restore_starts_needed_whatever_the_copy_carries)
+{
+    const fs::path carries_record{m_path_root / "carries-record.bak"};
+    {
+        auto vault{MakeFileVault(m_node.chain.get(), m_path_root / "record-source")};
+        BackUpAndCheck(*vault, m_path_root / "first.bak");
+        BackUpAndCheck(*vault, carries_record);
+        BOOST_REQUIRE(vault->GetBackupState() == BackupState::DONE);
+    }
+    const fs::path carries_flag{m_path_root / "carries-flag.bak"};
+    {
+        auto vault{MakeFileVault(m_node.chain.get(), m_path_root / "flag-source")};
+        BOOST_REQUIRE(vault->SetBackupRecorded(true));
+        BOOST_REQUIRE(vault->BackupVault(fs::PathToString(carries_flag)));
+    }
+
+    VaultContext context;
+    context.args = &m_args;
+    context.chain = m_node.chain.get();
+    for (const auto& [file, name] : {std::pair{carries_record, "restored-record"}, std::pair{carries_flag, "restored-flag"}}) {
+        DatabaseStatus status;
+        bilingual_str error;
+        std::vector<bilingual_str> warnings;
+        auto restored{RestoreVault(context, file, name, /*load_on_start=*/std::nullopt, status, error, warnings)};
+        BOOST_REQUIRE_MESSAGE(restored, error.original);
+        BOOST_CHECK_MESSAGE(restored->GetBackupState() == BackupState::NEEDED, name);
+        BOOST_CHECK(RemoveVault(context, restored, /*load_on_start=*/std::nullopt, warnings));
+        WaitForDeleteVault(std::move(restored));
+    }
 }
 
 BOOST_AUTO_TEST_CASE(agent_allotment_setup_clears_backup_recorded)

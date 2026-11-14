@@ -70,6 +70,7 @@
 #include <vault/scriptpubkeyman.h>
 #include <vault/transaction.h>
 #include <vault/types.h>
+#include <vault/sqlite.h>
 #include <vault/vaultdb.h>
 #include <vault/vaultutil.h>
 
@@ -497,6 +498,10 @@ std::shared_ptr<CVault> RestoreVault(VaultContext& context, const fs::path& back
 
         if (load_after_restore) {
             vault = LoadVault(context, vault_name, load_on_start, options, status, error, warnings);
+            // F-567 Q4: the copy carries the backup state of the vault it came from; this vault's own backup is still to make.
+            if (vault && !WITH_LOCK(vault->cs_vault, return vault->ForgetBackupState())) {
+                warnings.push_back(_("Vault restored, but its backup status could not be reset. Please create a new backup for this vault."));
+            }
         }
     } catch (const std::exception& e) {
         assert(!vault);
@@ -2959,6 +2964,8 @@ std::shared_ptr<CVault> CVault::Create(VaultContext& context, const std::string&
     // Try to top up keypool. No-op if the vault is locked.
     vaultInstance->TopUpKeyPool();
 
+    WITH_LOCK(vaultInstance->cs_vault, vaultInstance->MigrateLegacyBackupFlag());
+
     // Cache the first key time
     std::optional<int64_t> time_first_key;
     for (auto spk_man : vaultInstance->GetAllScriptPubKeyMans()) {
@@ -3134,11 +3141,6 @@ void CVault::postInitProcess()
 
 bool CVault::BackupVault(const std::string& strDest) const
 {
-    const bool was_recorded = IsBackupRecorded();
-    if (!was_recorded && !SetBackupRecorded(true)) {
-        return false;
-    }
-
     if (m_chain) {
         CBlockLocator loc;
         WITH_LOCK(cs_vault, chain().findBlock(m_last_block_processed, FoundBlock().locator(loc)));
@@ -3147,11 +3149,140 @@ bool CVault::BackupVault(const std::string& strDest) const
             batch.WriteBestBlock(loc);
         }
     }
-    const bool backed_up = GetDatabase().Backup(strDest);
-    if (!backed_up && !was_recorded) {
-        SetBackupRecorded(false);
+    return GetDatabase().Backup(strDest);
+}
+
+BackupCheck CVault::VerifyBackup(const fs::path& file, const SecureString* passphrase) const
+{
+    BackupCheck check;
+
+    // Check 1: a readable vault database for this network.
+    BackupIdentity backup;
+    try {
+        if (!fs::is_regular_file(file) || !IsSQLiteFile(file)) return check;
+        DatabaseOptions options;
+        options.read_only = true;
+        SQLiteDatabase database{file.parent_path(), file, options};
+        bilingual_str error;
+        if (!database.Verify(error)) return check;
+        std::unique_ptr<DatabaseBatch> batch{database.MakeBatch(/*flush_on_close=*/false)};
+        if (!batch || !ReadBackupIdentity(*batch, backup)) return check;
+    } catch (const std::exception&) {
+        return check;
     }
-    return backed_up;
+    check.encrypted = backup.HasMasterKeys();
+    check.fingerprint = backup.Fingerprint();
+
+    BackupIdentity live;
+    {
+        LOCK(cs_vault);
+        VaultBatch batch(GetDatabase());
+        if (!batch.ReadBackupIdentity(live)) return check;
+    }
+
+    // Check 2: this vault, with the keys it uses now.
+    if (backup.descriptor_ids != live.descriptor_ids) {
+        const bool shared{std::ranges::any_of(backup.descriptor_ids, [&](const uint256& id) { return live.descriptor_ids.contains(id); })};
+        const bool subset{std::includes(live.descriptor_ids.begin(), live.descriptor_ids.end(), backup.descriptor_ids.begin(), backup.descriptor_ids.end())};
+        check.result = shared && subset ? BackupCheckResult::OLDER_COPY : BackupCheckResult::DIFFERENT_VAULT;
+        return check;
+    }
+    if (backup.active_spkms != live.active_spkms) {
+        check.result = BackupCheckResult::OLDER_COPY;
+        return check;
+    }
+
+    // Check 3: the same protection, byte for byte.
+    if (backup.master_keys != live.master_keys) {
+        check.result = BackupCheckResult::PROTECTION_DIFFERS;
+        return check;
+    }
+
+    check.result = BackupCheckResult::OK;
+    if (!passphrase || !check.encrypted) return check;
+
+    // Check 4: the typed passphrase opens the backup's own master key and one of its encrypted keys.
+    if (!backup.crypted_key) {
+        check.result = BackupCheckResult::UNREADABLE;
+        return check;
+    }
+    check.passphrase_tested = true;
+    const auto& [pubkey, crypted_secret]{*backup.crypted_key};
+    for (const auto& [id, bytes] : backup.master_keys) {
+        CMasterKey master_key;
+        try {
+            SpanReader{bytes} >> master_key;
+        } catch (const std::exception&) {
+            check.result = BackupCheckResult::UNREADABLE;
+            return check;
+        }
+        CCrypter crypter;
+        CKeyingMaterial master_secret;
+        if (!crypter.SetKeyFromPassphrase(*passphrase, master_key.vchSalt, master_key.nDeriveIterations)) continue;
+        if (!crypter.Decrypt(master_key.vchCryptedKey, master_secret)) continue;
+        CKey key;
+        if (DecryptKey(master_secret, crypted_secret, pubkey, key)) return check;
+    }
+    check.result = BackupCheckResult::WRONG_PASSPHRASE;
+    return check;
+}
+
+bool CVault::RecordBackupCheck(const BackupCheck& check) const
+{
+    BackupRecord record;
+    record.saved_time = GetTime();
+    record.checked = check.StepsPassed();
+    record.passphrase_checked = check.result == BackupCheckResult::OK && check.passphrase_tested;
+    record.fingerprint = check.fingerprint;
+    LOCK(cs_vault);
+    VaultBatch batch(GetDatabase());
+    return batch.WriteBackupRecord(record);
+}
+
+uint256 CVault::GetBackupFingerprint() const
+{
+    LOCK(cs_vault);
+    BackupIdentity identity;
+    VaultBatch batch(GetDatabase());
+    if (!batch.ReadBackupIdentity(identity)) return uint256::ZERO;
+    return identity.Fingerprint();
+}
+
+BackupState CVault::GetBackupState() const
+{
+    BackupRecord record;
+    bool has_record;
+    bool legacy{false};
+    {
+        LOCK(cs_vault);
+        VaultBatch batch(GetDatabase());
+        has_record = batch.ReadBackupRecord(record);
+        if (!has_record) batch.ReadBackupRecorded(legacy);
+    }
+    if (!has_record) return legacy ? BackupState::NOT_CHECKED : BackupState::NEEDED;
+    if (record.legacy) return record.fingerprint == GetBackupFingerprint() ? BackupState::NOT_CHECKED : BackupState::NEEDED;
+    if (!record.checked || record.fingerprint.IsNull() || record.fingerprint != GetBackupFingerprint()) return BackupState::NEEDED;
+    return record.passphrase_checked ? BackupState::DONE_PASSPHRASE : BackupState::DONE;
+}
+
+void CVault::MigrateLegacyBackupFlag() const
+{
+    AssertLockHeld(cs_vault);
+    VaultBatch batch(GetDatabase());
+    BackupRecord record;
+    bool legacy{false};
+    if (batch.ReadBackupRecord(record) || !batch.ReadBackupRecorded(legacy) || !legacy) return;
+    BackupIdentity identity;
+    if (!batch.ReadBackupIdentity(identity)) return;
+    record.legacy = true;
+    record.fingerprint = identity.Fingerprint();
+    batch.WriteBackupRecord(record);
+}
+
+bool CVault::ForgetBackupState() const
+{
+    AssertLockHeld(cs_vault);
+    return VaultBatch(GetDatabase()).EraseBackupState();
 }
 
 bool CVault::IsBackupRecorded() const

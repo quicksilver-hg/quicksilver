@@ -17,6 +17,7 @@
 
 #include <consensus/amount.h>
 #include <serialize.h>
+#include <uint256.h>
 
 #include <cstdint>
 #include <string>
@@ -55,6 +56,58 @@ using isminefilter = std::underlying_type<isminetype>::type;
 enum class AddressPurpose {
     RECEIVE,
     SEND,
+};
+
+//! F-567: what reopening a saved backup found. Each failure names the first check that failed.
+enum class BackupCheckResult {
+    OK,                 //!< Every check that ran passed.
+    UNREADABLE,         //!< Not a readable vault database for this network.
+    DIFFERENT_VAULT,    //!< It holds none of this vault's descriptors.
+    OLDER_COPY,         //!< An older copy of this vault: it lacks keys or active address sets the vault uses now.
+    PROTECTION_DIFFERS, //!< Same keys, but its encryption or passphrase record differs from the vault's.
+    WRONG_PASSPHRASE,   //!< The file is good; the typed passphrase does not open it.
+};
+
+struct BackupCheck {
+    BackupCheckResult result{BackupCheckResult::UNREADABLE};
+    //! The backup is encrypted (meaningful once the file was readable).
+    bool encrypted{false};
+    //! A typed passphrase was tried against the backup.
+    bool passphrase_tested{false};
+    //! The backup's fingerprint, set once the file was readable.
+    uint256 fingerprint;
+
+    //! The file is readable, this vault's, current and equally protected (checks 1-3).
+    bool StepsPassed() const { return result == BackupCheckResult::OK || result == BackupCheckResult::WRONG_PASSPHRASE; }
+};
+
+//! F-567: the backup state Home shows.
+enum class BackupState {
+    NEEDED,          //!< No checked backup matches the vault's keys and protection.
+    NOT_CHECKED,     //!< A backup was saved before checks existed; nothing has reopened it.
+    DONE,            //!< A checked backup matches the vault.
+    DONE_PASSPHRASE, //!< As DONE, and the typed passphrase opened it.
+};
+
+//! F-567: the record of the last backup check, kept only in the live vault.
+struct BackupRecord {
+    static constexpr int CURRENT_VERSION{1};
+
+    int64_t saved_time{0};
+    bool checked{false};
+    bool passphrase_checked{false};
+    //! Made at load from a pre-F-567 backup_recorded flag: nothing reopened that backup, and the fingerprint is the vault's at
+    //! that load, so any later change to its keys or protection makes the row Needed.
+    bool legacy{false};
+    uint256 fingerprint;
+
+    SERIALIZE_METHODS(BackupRecord, obj)
+    {
+        int version{CURRENT_VERSION};
+        READWRITE(version);
+        SER_READ(obj, if (version != CURRENT_VERSION) throw std::ios_base::failure("Unsupported backup record version"));
+        READWRITE(obj.saved_time, obj.checked, obj.passphrase_checked, obj.legacy, obj.fingerprint);
+    }
 };
 
 struct AgentAllotmentRecord {

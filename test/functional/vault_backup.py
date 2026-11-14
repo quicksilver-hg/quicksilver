@@ -157,6 +157,36 @@ class VaultBackupTest(QuicksilverTestFramework):
         # the backup to load successfully this close to the prune height
         node.restorevault('pruned', node.datadir_path / 'vault_pruned.bak')
 
+    def test_backup_check_failure(self):
+        self.log.info("Test backupvault reports a saved file that fails its check")
+        node = self.nodes[0]
+        # -test=corruptbackup damages each saved backup before it is checked, standing in for a bad disk or card.
+        self.restart_node(0, self.extra_args[0] + ['-test=corruptbackup'])
+        backup_path = node.datadir_path / 'corrupted.bak'
+        assert_raises_rpc_error(-4, "Error: The backup was saved, but checking it failed: the saved file cannot be read as a vault.",
+                                node.backupvault, backup_path)
+        # The file stays where it was saved; the check does not delete user files.
+        assert backup_path.exists()
+        self.restart_node(0, self.extra_args[0])
+        assert_equal(node.backupvault(node.datadir_path / 'uncorrupted.bak'), None)
+
+    def test_encrypted_vault_backup_check(self):
+        self.log.info("Test backupvault checks an encrypted, locked vault's backup without its passphrase")
+        node = self.nodes[0]
+        node.createvault(vault_name='encrypted_backup', passphrase='backup-pass')
+        vault = node.get_vault_rpc('encrypted_backup')
+        assert_equal(vault.getvaultinfo()['unlocked_until'], 0)
+        backup_path = node.datadir_path / 'encrypted_backup.bak'
+        assert_equal(vault.backupvault(backup_path), None)
+        # The check reopened the file without unlocking the vault.
+        assert_equal(vault.getvaultinfo()['unlocked_until'], 0)
+        assert 'does not test it' in node.help('backupvault')
+        node.unloadvault('encrypted_backup')
+        node.restorevault('encrypted_backup_restored', backup_path)
+        restored = node.get_vault_rpc('encrypted_backup_restored')
+        assert_equal(restored.getvaultinfo()['unlocked_until'], 0)
+        node.unloadvault('encrypted_backup_restored')
+
     def run_test(self):
         self.log.info("Generating initial blockchain")
         self.generate(self.nodes[0], 1)
@@ -238,6 +268,8 @@ class VaultBackupTest(QuicksilverTestFramework):
         for sourcePath in sourcePaths:
             assert_raises_rpc_error(-4, "backup failed", self.nodes[0].backupvault, sourcePath)
 
+        self.test_encrypted_vault_backup_check()
+        self.test_backup_check_failure()
         self.test_pruned_vault_backup()
 
 

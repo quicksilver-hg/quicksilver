@@ -10,6 +10,8 @@
 #include <QString>
 #include <QWidget>
 
+#include <vault/types.h>
+
 #include <cstdint>
 #include <functional>
 
@@ -48,7 +50,8 @@ public:
     //! no agent setups.
     void setVaultSummary(bool has_vault, const QString& vault_name, const QString& agent_summary = QString());
     void setVaultRuntimeAvailable(bool available);
-    void setBackupState(bool has_vault, bool backup_done);
+    //! encrypted: the vault is encrypted, so a Done without a passphrase test says so on a quiet line.
+    void setBackupState(bool has_vault, vault::BackupState state, bool encrypted);
     void setConsensusEnabled(bool enabled);
     void setConsensusStartupFailed(bool failed);
     //! Connection count, or -1 while it is not known yet.
@@ -166,6 +169,7 @@ private:
     QWidget* m_backup_panel{nullptr};
     QLabel* m_backup_state{nullptr};
     QLabel* m_backup_summary{nullptr};
+    QLabel* m_backup_note{nullptr};
     QPushButton* m_backup_button{nullptr};
 
     QString m_vault_display_name;

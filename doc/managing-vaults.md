@@ -90,6 +90,8 @@ To backup the vault, the `backupvault` RPC or the `Backup Vault…` GUI menu ite
 
 In the RPC, the destination parameter must include the name of the file. Otherwise, the command will return an error message like "Error: Vault backup failed!".
 
+After copying, `backupvault` reopens the saved file and checks that it is a readable copy of this vault. If the check fails, it returns an error naming the cause; the file may still have been written, so make a new backup.
+
 ```
 $ quicksilver-cli -rpcvault="vault-01" backupvault /home/node01/Backups/backup-01.dat
 ```

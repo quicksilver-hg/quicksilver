@@ -163,8 +163,12 @@ public:
     }
     void abortRescan() override { m_vault->AbortRescan(); }
     bool backupVault(const std::string& filename) override { return m_vault->BackupVault(filename); }
-    bool isBackupRecorded() override { return m_vault->IsBackupRecorded(); }
-    bool setBackupRecorded(bool recorded) override { return m_vault->SetBackupRecorded(recorded); }
+    BackupCheck verifyBackup(const std::string& filename, const SecureString* passphrase) override
+    {
+        return m_vault->VerifyBackup(fs::PathFromString(filename), passphrase);
+    }
+    bool recordBackupCheck(const BackupCheck& check) override { return m_vault->RecordBackupCheck(check); }
+    BackupState getBackupState() override { return m_vault->GetBackupState(); }
     util::Result<AgentAllotmentRecord> recordAgentAllotmentSetup(const std::string& label, CAmount funding_limit, CAmount daily_limit) override
     {
         return m_vault->RecordAgentAllotmentSetup(label, funding_limit, daily_limit);

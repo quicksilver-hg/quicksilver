@@ -38,6 +38,8 @@ private Q_SLOTS:
     void agentAllotmentCosignUnlockDiesWithItsReview();
     void agentAllotmentStoppedAllotmentOffersNoFunding();
     void vaultTests();
+    void backupChecksTheSavedFile();
+    void agentAllotmentMakesHomeBackupNeeded();
     void benchTickerMatchesVaultBalances();
     void homeAndMineLinksFollowRail();
     void homeLedgerListsVaultTransactions();

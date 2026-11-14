@@ -879,9 +879,28 @@ public:
      */
     void postInitProcess();
 
+    //! Copy the vault to strDest. The copy alone records nothing; see VerifyBackup and RecordBackupCheck (F-567).
     bool BackupVault(const std::string& strDest) const;
+    //! The pre-F-567 flag. Read only to tell a legacy backup (NOT_CHECKED) from none.
     bool IsBackupRecorded() const;
     bool SetBackupRecorded(bool recorded) const;
+    /**
+     * F-567: reopen a saved backup read-only and check that it is a readable vault database, that it is this
+     * vault with the keys and active address sets it uses now, and that its encryption records match. With a
+     * passphrase and an encrypted backup, also check that the passphrase opens the backup's own master key and
+     * one of its encrypted keys. Never writes to the file, and never touches the live vault's keys or lock state.
+     */
+    BackupCheck VerifyBackup(const fs::path& file, const SecureString* passphrase) const EXCLUSIVE_LOCKS_REQUIRED(!cs_vault);
+    //! Record a check in the live vault. A check that failed checks 1-3 records an unchecked backup.
+    bool RecordBackupCheck(const BackupCheck& check) const EXCLUSIVE_LOCKS_REQUIRED(!cs_vault);
+    //! The state Home shows, from the record and the vault's current fingerprint.
+    BackupState GetBackupState() const EXCLUSIVE_LOCKS_REQUIRED(!cs_vault);
+    //! The live vault's backup fingerprint (BackupIdentity::Fingerprint).
+    uint256 GetBackupFingerprint() const EXCLUSIVE_LOCKS_REQUIRED(!cs_vault);
+    //! F-567: turn a pre-F-567 backup_recorded flag into a legacy record holding today's fingerprint. Run once by Create.
+    void MigrateLegacyBackupFlag() const EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
+    //! F-567 Q4: forget the backup state a restored copy carried in, so it starts at Needed.
+    bool ForgetBackupState() const EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
     util::Result<AgentAllotmentRecord> RecordAgentAllotmentSetup(const std::string& label, CAmount funding_limit, CAmount daily_limit);
     //! Stop an allotment once. A second call leaves the recorded time unchanged.
     bool StopAgentAllotment(const std::string& id);

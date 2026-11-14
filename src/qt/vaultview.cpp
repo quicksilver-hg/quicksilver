@@ -9,6 +9,7 @@
 #include <qt/agentallotmentpage.h>
 #include <qt/askpassphrasedialog.h>
 #include <qt/clientmodel.h>
+#include <qt/guiconstants.h>
 #include <qt/guiutil.h>
 #include <qt/minemintpage.h>
 #include <qt/miningmodel.h>
@@ -23,10 +24,14 @@
 #include <qt/vaultmodel.h>
 
 #include <interfaces/node.h>
+#include <interfaces/vault.h>
+#include <support/allocators/secure.h>
 #include <node/interface_ui.h>
 #include <util/strencodings.h>
 
 #include <QAction>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QPointer>
 #include <QProgressDialog>
 #include <QVBoxLayout>
@@ -260,6 +265,29 @@ void VaultView::encryptVault()
     GUIUtil::ShowModalDialogAsynchronously(dlg);
 }
 
+namespace {
+//! F-567: why a saved backup failed its check.
+QString BackupCheckFailure(vault::BackupCheckResult result)
+{
+    switch (result) {
+    case vault::BackupCheckResult::UNREADABLE: return VaultView::tr("the saved file cannot be read as a vault.");
+    case vault::BackupCheckResult::DIFFERENT_VAULT: return VaultView::tr("the saved file is a different vault.");
+    case vault::BackupCheckResult::OLDER_COPY: return VaultView::tr("the saved file is an older copy of this vault.");
+    case vault::BackupCheckResult::PROTECTION_DIFFERS: return VaultView::tr("the saved file's encryption does not match this vault.");
+    case vault::BackupCheckResult::OK:
+    case vault::BackupCheckResult::WRONG_PASSPHRASE:
+        break;
+    }
+    return QString();
+}
+
+//! F-567: the message for a saved file that failed its check.
+QString BackupCheckFailedMessage(const QString& filename, vault::BackupCheckResult result)
+{
+    return VaultView::tr("The vault data was saved to %1, but checking it failed: %2").arg(filename, BackupCheckFailure(result));
+}
+} // namespace
+
 void VaultView::backupVault(std::function<void(bool)> done)
 {
     QPointer<VaultView> self{this};
@@ -272,16 +300,83 @@ void VaultView::backupVault(std::function<void(bool)> done)
                 if (done) done(false);
                 return;
             }
-            if (!self->vaultModel->vault().backupVault(filename.toLocal8Bit().data())) {
+            const std::string path{filename.toLocal8Bit().data()};
+            interfaces::Vault& vault{self->vaultModel->vault()};
+            if (!vault.backupVault(path)) {
                 Q_EMIT self->message(self->tr("Backup Failed"), self->tr("There was an error trying to save the vault data to %1.").arg(filename),
                     CClientUIInterface::MSG_ERROR);
                 if (done) done(false);
                 return;
             }
-            Q_EMIT self->message(self->tr("Backup Successful"), self->tr("The vault data was successfully saved to %1.").arg(filename),
+            // F-567: reopen the saved file before saying anything about it.
+            const vault::BackupCheck check{vault.verifyBackup(path, /*passphrase=*/nullptr)};
+            if (!check.StepsPassed()) {
+                vault.recordBackupCheck(check);
+                Q_EMIT self->message(self->tr("Backup Check Failed"),
+                    BackupCheckFailedMessage(filename, check.result),
+                    CClientUIInterface::MSG_ERROR);
+                if (done) done(true);
+                return;
+            }
+            if (!check.encrypted) {
+                vault.recordBackupCheck(check);
+                Q_EMIT self->message(self->tr("Backup Successful"), self->tr("The vault data was saved to %1 and checked.").arg(filename),
+                    CClientUIInterface::MSG_INFORMATION);
+                if (done) done(true);
+                return;
+            }
+            self->askBackupPassphrase(filename, path, check, done, /*retry=*/false);
+        });
+}
+
+void VaultView::askBackupPassphrase(const QString& filename, const std::string& path, const vault::BackupCheck& check, std::function<void(bool)> done, bool retry)
+{
+    auto* dialog = new QInputDialog(this);
+    dialog->setObjectName(QStringLiteral("backupPassphraseDialog"));
+    dialog->setWindowTitle(tr("Check Backup"));
+    dialog->setLabelText(retry
+        ? tr("That passphrase does not open this backup. The file is fine. Type your passphrase to try again.")
+        : tr("Type your passphrase to confirm it opens this backup"));
+    dialog->setTextEchoMode(QLineEdit::Password);
+    dialog->setOkButtonText(tr("Check"));
+    dialog->setCancelButtonText(tr("Skip"));
+    QPointer<VaultView> self{this};
+    connect(dialog, &QInputDialog::finished, this, [self, dialog, filename, path, check, done](int result) {
+        SecureString passphrase;
+        if (result == QDialog::Accepted) {
+            passphrase.reserve(MAX_PASSPHRASE_SIZE);
+            passphrase.assign(std::string_view{dialog->textValue().toStdString()});
+        }
+        dialog->setTextValue(QString());
+        if (!self || !self->vaultModel) {
+            if (done) done(false);
+            return;
+        }
+        interfaces::Vault& vault{self->vaultModel->vault()};
+        if (result != QDialog::Accepted) {
+            vault.recordBackupCheck(check);
+            Q_EMIT self->message(self->tr("Backup Successful"), self->tr("The vault data was saved to %1 and checked. The passphrase was not tested.").arg(filename),
                 CClientUIInterface::MSG_INFORMATION);
             if (done) done(true);
-        });
+            return;
+        }
+        const vault::BackupCheck tested{vault.verifyBackup(path, &passphrase)};
+        if (tested.result == vault::BackupCheckResult::WRONG_PASSPHRASE) {
+            self->askBackupPassphrase(filename, path, check, done, /*retry=*/true);
+            return;
+        }
+        vault.recordBackupCheck(tested);
+        if (tested.result != vault::BackupCheckResult::OK) {
+            Q_EMIT self->message(self->tr("Backup Check Failed"),
+                BackupCheckFailedMessage(filename, tested.result),
+                CClientUIInterface::MSG_ERROR);
+        } else {
+            Q_EMIT self->message(self->tr("Backup Successful"), self->tr("The vault data was saved to %1 and checked, and your passphrase opens it.").arg(filename),
+                CClientUIInterface::MSG_INFORMATION);
+        }
+        if (done) done(true);
+    });
+    GUIUtil::ShowModalDialogAsynchronously(dialog);
 }
 
 void VaultView::changePassphrase()

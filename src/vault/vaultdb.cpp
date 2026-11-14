@@ -9,6 +9,7 @@
 #include <vault/vaultdb.h>
 
 #include <common/system.h>
+#include <hash.h>
 #include <key_io.h>
 #include <protocol.h>
 #include <script/script.h>
@@ -110,6 +111,102 @@ bool VaultBatch::WriteBackupRecorded(bool recorded)
 bool VaultBatch::ReadBackupRecorded(bool& recorded)
 {
     return m_batch->Read(std::make_pair(DBKeys::SETTINGS, std::string{"backup_recorded"}), recorded);
+}
+
+bool VaultBatch::WriteBackupRecord(const BackupRecord& record)
+{
+    return WriteIC(std::make_pair(DBKeys::SETTINGS, std::string{"backup_check"}), record);
+}
+
+bool VaultBatch::ReadBackupRecord(BackupRecord& record)
+{
+    return m_batch->Read(std::make_pair(DBKeys::SETTINGS, std::string{"backup_check"}), record);
+}
+
+bool VaultBatch::EraseBackupState()
+{
+    return EraseIC(std::make_pair(DBKeys::SETTINGS, std::string{"backup_check"})) &&
+           EraseIC(std::make_pair(DBKeys::SETTINGS, std::string{"backup_recorded"}));
+}
+
+bool VaultBatch::ReadBackupIdentity(BackupIdentity& identity)
+{
+    return vault::ReadBackupIdentity(*m_batch, identity);
+}
+
+uint256 BackupIdentity::Fingerprint() const
+{
+    HashWriter hasher{};
+    hasher << descriptor_ids << active_spkms << master_keys;
+    return hasher.GetSHA256();
+}
+
+//! Visit every record under one key type. False if the cursor cannot be made or a read fails.
+template <typename Visit>
+static bool ForEachRecord(DatabaseBatch& batch, const std::string& type, Visit visit)
+{
+    DataStream prefix;
+    prefix << type;
+    std::unique_ptr<DatabaseCursor> cursor{batch.GetNewPrefixCursor(prefix)};
+    if (!cursor) return false;
+    DataStream key;
+    DataStream value;
+    while (true) {
+        const DatabaseCursor::Status status{cursor->Next(key, value)};
+        if (status == DatabaseCursor::Status::DONE) return true;
+        if (status == DatabaseCursor::Status::FAIL) return false;
+        std::string record_type;
+        key >> record_type;
+        if (record_type != type) return false;
+        visit(key, value);
+    }
+}
+
+bool ReadBackupIdentity(DatabaseBatch& batch, BackupIdentity& identity)
+{
+    identity = BackupIdentity{};
+    try {
+        if (!ForEachRecord(batch, DBKeys::VAULTDESCRIPTOR, [&](DataStream& key, DataStream&) {
+                uint256 id;
+                key >> id;
+                identity.descriptor_ids.insert(id);
+            })) {
+            return false;
+        }
+        for (const auto& [type, internal] : {std::pair{DBKeys::ACTIVEEXTERNALSPK, false}, std::pair{DBKeys::ACTIVEINTERNALSPK, true}}) {
+            if (!ForEachRecord(batch, type, [&, internal = internal](DataStream& key, DataStream& value) {
+                    uint8_t output_type;
+                    key >> output_type;
+                    uint256 id;
+                    value >> id;
+                    identity.active_spkms[{internal, output_type}] = id;
+                })) {
+                return false;
+            }
+        }
+        if (!ForEachRecord(batch, DBKeys::MASTER_KEY, [&](DataStream& key, DataStream& value) {
+                unsigned int id;
+                key >> id;
+                const auto bytes{std::span{value}};
+                identity.master_keys[id] = std::vector<unsigned char>{UCharCast(bytes.data()), UCharCast(bytes.data()) + bytes.size()};
+            })) {
+            return false;
+        }
+        if (!ForEachRecord(batch, DBKeys::VAULTDESCRIPTORCKEY, [&](DataStream& key, DataStream& value) {
+                if (identity.crypted_key) return;
+                uint256 desc_id;
+                CPubKey pubkey;
+                key >> desc_id >> pubkey;
+                std::vector<unsigned char> secret;
+                value >> secret;
+                identity.crypted_key.emplace(pubkey, std::move(secret));
+            })) {
+            return false;
+        }
+    } catch (const std::exception&) {
+        return false;
+    }
+    return true;
 }
 
 bool VaultBatch::WriteAgentAllotmentRecords(const std::vector<AgentAllotmentRecord>& records)

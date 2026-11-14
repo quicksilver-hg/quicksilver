@@ -12,14 +12,18 @@
 #include <vault/types.h>
 #include <vault/vaultutil.h>
 #include <key.h>
+#include <uint256.h>
 
+#include <map>
+#include <optional>
+#include <set>
 #include <stdint.h>
 #include <string>
+#include <utility>
 #include <vector>
 
 class CScript;
 class uint160;
-class uint256;
 struct CBlockLocator;
 
 namespace vault {
@@ -27,6 +31,28 @@ class CMasterKey;
 class CVault;
 class CVaultTx;
 struct VaultContext;
+
+/**
+ * F-567: the records that say which vault a database is and which keys protect it.
+ * The same reader runs on the live vault and on a saved backup, so the two compare byte for byte.
+ */
+struct BackupIdentity {
+    //! VAULTDESCRIPTOR record ids.
+    std::set<uint256> descriptor_ids;
+    //! ACTIVEEXTERNALSPK / ACTIVEINTERNALSPK records: (internal, stored output type) -> descriptor id.
+    std::map<std::pair<bool, uint8_t>, uint256> active_spkms;
+    //! MASTER_KEY records: id -> serialized CMasterKey, as stored.
+    std::map<unsigned int, std::vector<unsigned char>> master_keys;
+    //! One VAULTDESCRIPTORCKEY record (public key, encrypted secret), for the passphrase test.
+    std::optional<std::pair<CPubKey, std::vector<unsigned char>>> crypted_key;
+
+    bool HasMasterKeys() const { return !master_keys.empty(); }
+    //! SHA256 over the descriptor ids, the active set and the master-key records, in that order.
+    uint256 Fingerprint() const;
+};
+
+//! Read the BackupIdentity records from any vault database batch. False if a cursor or record fails.
+bool ReadBackupIdentity(DatabaseBatch& batch, BackupIdentity& identity);
 
 /**
  * Overview of vault database classes:
@@ -166,6 +192,13 @@ public:
 
     bool WriteBackupRecorded(bool recorded);
     bool ReadBackupRecorded(bool& recorded);
+    bool WriteBackupRecord(const BackupRecord& record);
+    //! False when no record exists or it cannot be read.
+    bool ReadBackupRecord(BackupRecord& record);
+    //! F-567: drop both the check record and the legacy flag (a restored vault starts at Needed).
+    bool EraseBackupState();
+    //! Read the records that make up this vault's backup identity (F-567).
+    bool ReadBackupIdentity(BackupIdentity& identity);
     bool WriteAgentAllotmentRecords(const std::vector<AgentAllotmentRecord>& records);
     bool ReadAgentAllotmentRecords(std::vector<AgentAllotmentRecord>& records);
     //! True when the records key is present, including when its value cannot be deserialized.

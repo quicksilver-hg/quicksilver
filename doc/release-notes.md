@@ -49,6 +49,62 @@ Notable changes
   node that cannot reach Tor needs an explicit peer configured with `-addnode`,
   `-connect`, or `-seednode`; see `doc/bootstrapping.md`.
 
+Changes in 0.1.9
+================
+
+- On Linux, logging out with Quicksilver running now completes on the first
+  try. The node shuts down cleanly, and the desktop session ends instead of
+  being cancelled, including when minimize-on-close is set.
+- When a desktop session tries to restore Quicksilver from a saved session,
+  that copy now exits quietly, without opening a window or starting a node.
+  The autostart entry starts the only running copy, so a session saved by an
+  older version no longer causes a "Quicksilver is probably already running"
+  error.
+- On Linux, starting the desktop with no display now reads `No display was
+  detected. For a headless environment, install the quicksilver-devtools
+  package and use quicksilver-daemon.` when `quicksilver-daemon` is not
+  installed. If it is installed, the 0.1.8 message is unchanged.
+- After `Enable consensus` on the Mine page, the sidebar and title now follow
+  the page to Network.
+- After saving a vault backup, Quicksilver now reopens the saved file and
+  checks that it is a readable copy of this vault, with the keys and
+  encryption the vault uses now. For an encrypted vault, the desktop then
+  offers to check that your passphrase opens the backup; you can skip that
+  step. `backupvault` runs the same check, never the passphrase test, and
+  returns `Error: The backup was saved, but checking it failed: …` if the
+  check fails.
+- Home's Backup row now reads `Needed`, `Saved, not checked`, `Done` or
+  `Done (passphrase checked)`. It goes back to `Needed` when the vault changes
+  in a way an earlier backup does not hold, such as encrypting the vault or
+  changing its passphrase. A backup made by an earlier version shows as
+  `Saved, not checked` until you back up again, and a restored vault starts
+  at `Needed`.
+- An incoming transfer to an address you have labelled now reads
+  `Received at ‹label›` on Home, in the Ledger and in the transaction
+  details, so the label is not taken for the sender's name.
+- With debug logging on, the transaction details' Inputs list no longer
+  shows the other party's address for an input this vault does not own. It
+  shows the outpoint the coins came from and the amount.
+- A vault that receives a payment at an address far beyond the last one it
+  used no longer stalls for minutes while it records the addresses it
+  skipped.
+- Quitting Quicksilver while a graphics card listing is hung now stops the
+  helper process doing the listing, instead of leaving it running.
+- The storage figures on the first-run screen, the launch and consensus pages
+  and the low-disk warning are now an estimate from the measured chain (about
+  1 GB of block data and 1 GB of chain state a year) instead of the
+  full-traffic capacity of 128 GB and 26 GB. The startup warning still waits
+  for OK.
+- The consensus screens now say what the vault cannot do without consensus:
+  it keeps keys and addresses but does not see incoming payments or send.
+  `Enable consensus` is now the highlighted choice.
+- Quicksilver now recommends waiting for 20 confirmations (about 100 minutes)
+  before treating a payment as received. Getting Started says so, and the
+  Ledger counts a payment as Confirming until it has 20 confirmations,
+  instead of 6.
+- A new page, `doc/founding-vault-and-developer-vault.md`, lists the
+  developer addresses and says what changes at height 20000.
+
 Changes in 0.1.8
 ================
 

@@ -705,6 +705,7 @@ std::string HelpMessageOpt(const std::string &option, const std::string &message
 
 const std::vector<std::string> TEST_OPTIONS_DOC{
     "addrman (use deterministic addrman)",
+    "corruptbackup (damage each file backupvault saves before it is checked)",
 };
 
 bool HasTestOption(const ArgsManager& args, const std::string& test_option)

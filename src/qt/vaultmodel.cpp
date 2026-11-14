@@ -373,7 +373,11 @@ bool VaultModel::setVaultLocked(bool locked, const SecureString& passPhrase)
 bool VaultModel::changePassphrase(const SecureString& oldPass, const SecureString& newPass)
 {
     m_vault->lock(); // Make sure vault is locked before attempting pass change
-    return m_vault->changeVaultPassphrase(oldPass, newPass);
+    const bool changed{m_vault->changeVaultPassphrase(oldPass, newPass)};
+    // The lock status is Locked before and after, so updateStatus() would not notice; but the master key
+    // records changed, and with them the backup state (F-567: an earlier backup no longer matches).
+    if (changed) Q_EMIT backupStateChanged();
+    return changed;
 }
 
 // Handlers for core signals
@@ -565,19 +569,18 @@ QString VaultModel::getDisplayName() const
     return GUIUtil::VaultDisplayName(getVaultName());
 }
 
-bool VaultModel::backupRecorded() const
+vault::BackupState VaultModel::backupState() const
 {
-    return m_vault->isBackupRecorded();
-}
-
-bool VaultModel::setBackupRecorded(bool recorded)
-{
-    return m_vault->setBackupRecorded(recorded);
+    return m_vault->getBackupState();
 }
 
 util::Result<vault::AgentAllotmentRecord> VaultModel::recordAgentAllotmentSetup(const QString& label, CAmount funding_limit, CAmount daily_limit)
 {
-    return m_vault->recordAgentAllotmentSetup(label.toStdString(), funding_limit, daily_limit);
+    auto record{m_vault->recordAgentAllotmentSetup(label.toStdString(), funding_limit, daily_limit)};
+    // The allotment adds a descriptor an earlier backup does not hold. An unencrypted or unlocked vault
+    // asks for no unlock, so no lock change tells Home (F-567).
+    if (record) Q_EMIT backupStateChanged();
+    return record;
 }
 
 std::vector<vault::AgentAllotmentRecord> VaultModel::listAgentAllotmentRecords() const
