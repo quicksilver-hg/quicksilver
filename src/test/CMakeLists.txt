@@ -157,6 +157,11 @@ target_raw_data_sources(test_quicksilver NAMESPACE test::data
   data/f265_nonce84_prepow.raw
 )
 
+# DebugLogHelper reports through Boost.Test, so it is built into the unit test
+# binary only. In test_util it would be linked into the fuzz and bench builds too,
+# and the Windows fuzz build does not install boost-test.
+target_sources(test_quicksilver PRIVATE util/logging.cpp)
+
 target_link_libraries(test_quicksilver
   core_interface
   test_util

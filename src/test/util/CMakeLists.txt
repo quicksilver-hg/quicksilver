@@ -8,7 +8,6 @@ add_library(test_util STATIC EXCLUDE_FROM_ALL
   coins.cpp
   index.cpp
   json.cpp
-  logging.cpp
   mining.cpp
   net.cpp
   random.cpp
