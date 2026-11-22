@@ -50,8 +50,11 @@ BOOST_FIXTURE_TEST_CASE(vault_load_descriptors, TestingSetup)
 {
     std::unique_ptr<VaultDatabase> database = CreateMockableVaultDatabase();
     {
-        // Write unknown active descriptor
+        // Write unknown active descriptor. The descriptors flag is set too:
+        // without it the load would stop on an assertion before reaching
+        // what this case checks.
         VaultBatch batch(*database, false);
+        BOOST_CHECK(batch.WriteVaultFlags(VAULT_FLAG_DESCRIPTORS));
         std::string unknown_desc = "trx(squb6UShJgvLuWbXj3LDnxhVTYLQkhu1KEK3EoKQBcF5rB3YZLVTqhVKEJXtYBfS5gpN1nvLJuEc8RoiCVeER3uLK9jSq9cbWgvWBULetj1FNAg/86'/1'/0'/0/*)#nndh6usm";
         VaultDescriptor vault_descriptor(std::make_shared<DummyDescriptor>(unknown_desc), 0, 0, 0, 0);
         BOOST_CHECK(batch.WriteDescriptor(uint256(), vault_descriptor));
@@ -59,9 +62,24 @@ BOOST_FIXTURE_TEST_CASE(vault_load_descriptors, TestingSetup)
     }
 
     {
-        // Now try to load the vault and verify the error.
+        // Now try to load the vault and verify the error. The return code alone
+        // would stay UNKNOWN_DESCRIPTOR without the early return too (std::max
+        // over CORRUPT), so also show the load stopped at the descriptor and
+        // never read the active-manager record written above (S0210-B-01).
+        bool descriptor_logged{false};
+        DebugLogHelper descriptor_log("Unrecognized descriptor found", [&](const std::string* s) {
+            if (s) descriptor_logged = true;
+            return false;
+        });
+        bool active_record_read{false};
+        DebugLogHelper active_log("Unknown stored address type", [&](const std::string* s) {
+            if (s) active_record_read = true;
+            return false;
+        });
         const std::shared_ptr<CVault> vault(new CVault(m_node.chain.get(), "", std::move(database)));
         BOOST_CHECK_EQUAL(vault->LoadVault(), DBErrors::UNKNOWN_DESCRIPTOR);
+        BOOST_CHECK(descriptor_logged);
+        BOOST_CHECK(!active_record_read);
     }
 
     // Test 2
@@ -218,8 +236,55 @@ BOOST_FIXTURE_TEST_CASE(load_rejects_pre_quicksilver_master_key, TestingSetup)
 
     CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
     std::string err;
-    BOOST_CHECK(!LoadEncryptionKey(&vault, ssKey, ssValue, err));
+    {
+        DataStream key_copy{ssKey};
+        DataStream value_copy{ssValue};
+        BOOST_CHECK(!LoadEncryptionKey(&vault, key_copy, value_copy, err));
+    }
     BOOST_CHECK(err.find("Pre-Quicksilver master key record; this vault cannot be opened") != std::string::npos);
+    BOOST_CHECK(WITH_LOCK(vault.cs_vault, return vault.mapMasterKeys.empty()));
+
+    // Positive control (S0210-B-02): the current three-field record loads and
+    // fills the key map, so the refusal above is about the old layout, not
+    // every record.
+    CMasterKey current;
+    current.vchCryptedKey = crypted_key;
+    current.vchSalt = salt;
+    current.nDeriveIterations = rounds;
+    {
+        DataStream key{};
+        key << unsigned(1);
+        DataStream value{};
+        value << current;
+        std::string ok_err;
+        BOOST_CHECK(LoadEncryptionKey(&vault, key, value, ok_err));
+        BOOST_CHECK_EQUAL(ok_err, "");
+        LOCK(vault.cs_vault);
+        BOOST_REQUIRE_EQUAL(vault.mapMasterKeys.count(1), 1U);
+        BOOST_CHECK(vault.mapMasterKeys.at(1).vchSalt == salt);
+        BOOST_CHECK_EQUAL(vault.mapMasterKeys.at(1).nDeriveIterations, rounds);
+    }
+
+    // And through LoadVault: the old record maps to CORRUPT, the current one
+    // does not.
+    const auto stored = [](const DataStream& value) {
+        DataStream key{};
+        key << std::make_pair(DBKeys::MASTER_KEY, unsigned(1));
+        MockableData records;
+        records.emplace(SerializeData(key.begin(), key.end()), SerializeData(value.begin(), value.end()));
+        return records;
+    };
+    {
+        CVault old_layout(m_node.chain.get(), "", CreateMockableVaultDatabase(stored(ssValue)));
+        BOOST_CHECK_EQUAL(old_layout.LoadVault(), DBErrors::CORRUPT);
+    }
+    {
+        DataStream value{};
+        value << current;
+        CVault current_layout(m_node.chain.get(), "", CreateMockableVaultDatabase(stored(value)));
+        BOOST_CHECK(current_layout.LoadVault() != DBErrors::CORRUPT);
+        BOOST_CHECK_EQUAL(WITH_LOCK(current_layout.cs_vault, return current_layout.mapMasterKeys.count(1)), 1U);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

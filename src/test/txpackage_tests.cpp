@@ -34,8 +34,8 @@ struct TxPackageTest : TestChain100Setup {
     explicit TxPackageTest(TestOpts opts = {})
         : TestChain100Setup{ChainType::SANDBOX, std::move(opts)}
     {
-        // Quicksilver is feeless (#5b) and every spend carries a per-tx Cuckatoo proof
-        // (#5c-1). These package tests submit many txs through ProcessNewPackage (the real
+        // Quicksilver is feeless and every spend carries a per-tx Cuckatoo proof
+        // (per-transaction PoW anchor). These package tests submit many txs through ProcessNewPackage (the real
         // acceptance path), so opt into trivial-but-real per-tx PoW: the cycle solve is
         // skipped, but the per-tx target + anchor checks still apply (see ProveTxPow). This
         // matches the miner_tests / validation_block_tests mining fixtures.
@@ -129,7 +129,7 @@ inline CTransactionRef create_placeholder_tx(size_t num_inputs, size_t num_outpu
         mtx.vin[i].scriptSig = random_script;
     }
     for (size_t o{0}; o < num_outputs; ++o) {
-        mtx.vout[o].nValue = 1 * CENT;
+        mtx.vout[o].nValue = 1 * (COIN / 100);
         mtx.vout[o].scriptPubKey = random_script;
     }
     return MakeTransactionRef(mtx);
@@ -140,25 +140,19 @@ BOOST_FIXTURE_TEST_SUITE(txpackage_tests, TxPackageTest)
 
 BOOST_AUTO_TEST_CASE(package_hash_tests)
 {
-    // Random real segwit transaction
-    DataStream stream_1{
-        "02000000000101964b8aa63509579ca6086e6012eeaa4c2f4dd1e283da29b67c8eea38b3c6fd220000000000fdffffff0294c618000000000017a9145afbbb42f4e83312666d0697f9e66259912ecde38768fa2c0000000000160014897388a0889390fd0e153a22bb2cf9d8f019faf50247304402200547406380719f84d68cf4e96cc3e4a1688309ef475b150be2b471c70ea562aa02206d255f5acc40fd95981874d77201d2eb07883657ce1c796513f32b6079545cdf0121023ae77335cefcb5ab4c1dc1fb0d2acfece184e593727d7d5906c78e564c7c11d125cf0c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"_hex,
+    // Synthetic transactions keep this test focused on package hashing.
+    auto make_hash_fixture = [](uint8_t outpoint_id, bool with_witness) {
+        CMutableTransaction tx;
+        tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256{outpoint_id}), 0});
+        tx.vout.emplace_back(COIN, CScript{} << OP_TRUE);
+        if (with_witness) tx.vin[0].scriptWitness.stack.push_back({1, 2, 3});
+        return tx;
     };
-    CTransaction tx_1(deserialize, TX_WITH_WITNESS, stream_1);
+    CTransaction tx_1{make_hash_fixture(1, true)};
     CTransactionRef ptx_1{MakeTransactionRef(tx_1)};
-
-    // Random real nonsegwit transaction
-    DataStream stream_2{
-        "01000000010b26e9b7735eb6aabdf358bab62f9816a21ba9ebdb719d5299e88607d722c190000000008b4830450220070aca44506c5cef3a16ed519d7c3c39f8aab192c4e1c90d065f37b8a4af6141022100a8e160b856c2d43d27d8fba71e5aef6405b8643ac4cb7cb3c462aced7f14711a0141046d11fee51b0e60666d5049a9101a72741df480b96ee26488a4d3466b95c9a40ac5eeef87e10a5cd336c19a84565f80fa6c547957b7700ff4dfbdefe76036c339ffffffff021bff3d11000000001976a91404943fdd508053c75000106d3bc6e2754dbcff1988ac2f15de00000000001976a914a266436d2965547608b9e15d9032a7b9d64fa43188ac000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"_hex,
-    };
-    CTransaction tx_2(deserialize, TX_WITH_WITNESS, stream_2);
+    CTransaction tx_2{make_hash_fixture(2, false)};
     CTransactionRef ptx_2{MakeTransactionRef(tx_2)};
-
-    // Random real segwit transaction
-    DataStream stream_3{
-        "0200000000010177862801f77c2c068a70372b4c435ef8dd621291c36a64eb4dd491f02218f5324600000000fdffffff014a0100000000000022512035ea312034cfac01e956a269f3bf147f569c2fbb00180677421262da042290d803402be713325ff285e66b0380f53f2fae0d0fb4e16f378a440fed51ce835061437566729d4883bc917632f3cff474d6384bc8b989961a1d730d4a87ed38ad28bd337b20f1d658c6c138b1c312e072b4446f50f01ae0da03a42e6274f8788aae53416a7fac0063036f7264010118746578742f706c61696e3b636861727365743d7574662d3800357b2270223a226272632d3230222c226f70223a226d696e74222c227469636b223a224342414c222c22616d74223a2236393639227d6821c1f1d658c6c138b1c312e072b4446f50f01ae0da03a42e6274f8788aae53416a7f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"_hex,
-    };
-    CTransaction tx_3(deserialize, TX_WITH_WITNESS, stream_3);
+    CTransaction tx_3{make_hash_fixture(3, true)};
     CTransactionRef ptx_3{MakeTransactionRef(tx_3)};
 
     // tx_1 and tx_3 are segwit (wtxid != txid); tx_2 is non-segwit (wtxid == txid), so the
@@ -269,8 +263,8 @@ BOOST_AUTO_TEST_CASE(package_sanitization_tests)
     tx_zero_1.vin.emplace_back(same_prevout);
     tx_zero_2.vin.emplace_back(same_prevout);
     // Different vouts (not the same tx)
-    tx_zero_1.vout.emplace_back(CENT, P2WSH_OP_TRUE);
-    tx_zero_2.vout.emplace_back(2 * CENT, P2WSH_OP_TRUE);
+    tx_zero_1.vout.emplace_back((COIN / 100), P2WSH_OP_TRUE);
+    tx_zero_2.vout.emplace_back(2 * (COIN / 100), P2WSH_OP_TRUE);
     Package package_conflicts{MakeTransactionRef(tx_zero_1), MakeTransactionRef(tx_zero_2)};
     BOOST_CHECK(!IsConsistentPackage(package_conflicts));
     // Transactions are considered sorted when they have no dependencies.
@@ -316,7 +310,7 @@ BOOST_AUTO_TEST_CASE(package_validation_tests)
         auto it_parent = result_parent_child.m_tx_results.find(tx_parent->GetWitnessHash());
         auto it_child = result_parent_child.m_tx_results.find(tx_child->GetWitnessHash());
 
-        // Feeless: each tx is its own singleton validation group (no package aggregation, #5c-2).
+        // Feeless: each tx is its own singleton validation group (no package aggregation, surplus-work ranking).
         BOOST_REQUIRE(it_parent != result_parent_child.m_tx_results.end());
         BOOST_REQUIRE(it_child != result_parent_child.m_tx_results.end());
         BOOST_CHECK(it_parent->second.m_result_type == RelayPoolAcceptResult::ResultType::VALID ||
@@ -366,11 +360,11 @@ BOOST_AUTO_TEST_CASE(noncontextual_package_tests)
     // Parent and Child Package
     {
         auto mtx_parent = CreateValidRelayPoolTransaction(m_coinbase_txns[0], 0, 0, coinbaseKey, spk,
-                                                        CAmount(49 * COIN), /*submit=*/false);
+                                                        m_coinbase_txns[0]->vout[0].nValue, /*submit=*/false);
         CTransactionRef tx_parent = MakeTransactionRef(mtx_parent);
 
         auto mtx_child = CreateValidRelayPoolTransaction(tx_parent, 0, 101, placeholder_key, spk2,
-                                                       CAmount(48 * COIN), /*submit=*/false);
+                                                       tx_parent->vout[0].nValue, /*submit=*/false);
         CTransactionRef tx_child = MakeTransactionRef(mtx_child);
 
         PackageValidationState state;
@@ -393,11 +387,13 @@ BOOST_AUTO_TEST_CASE(noncontextual_package_tests)
         CMutableTransaction child;
         for (int i{0}; i < 24; ++i) {
             auto parent = MakeTransactionRef(CreateValidRelayPoolTransaction(m_coinbase_txns[i + 1],
-                                             0, 0, coinbaseKey, spk, CAmount(48 * COIN), false));
+                                             0, 0, coinbaseKey, spk, m_coinbase_txns[i + 1]->vout[0].nValue, false));
             package.emplace_back(parent);
             child.vin.emplace_back(COutPoint(parent->GetHash(), 0));
         }
-        child.vout.emplace_back(47 * COIN, spk2);
+        CAmount child_value{0};
+        for (const auto& parent : package) child_value += parent->vout[0].nValue;
+        child.vout.emplace_back(child_value, spk2);
 
         // The child must be in the package.
         BOOST_CHECK(!IsChildWithParents(package));
@@ -424,19 +420,20 @@ BOOST_AUTO_TEST_CASE(noncontextual_package_tests)
     {
         CMutableTransaction mtx_parent;
         mtx_parent.vin.emplace_back(COutPoint(m_coinbase_txns[0]->GetHash(), 0));
-        mtx_parent.vout.emplace_back(20 * COIN, spk);
-        mtx_parent.vout.emplace_back(20 * COIN, spk2);
+        const CAmount parent_value{m_coinbase_txns[0]->vout[0].nValue};
+        mtx_parent.vout.emplace_back(parent_value / 2, spk);
+        mtx_parent.vout.emplace_back(parent_value - parent_value / 2, spk2);
         CTransactionRef tx_parent = MakeTransactionRef(mtx_parent);
 
         CMutableTransaction mtx_parent_also_child;
         mtx_parent_also_child.vin.emplace_back(COutPoint(tx_parent->GetHash(), 0));
-        mtx_parent_also_child.vout.emplace_back(20 * COIN, spk);
+        mtx_parent_also_child.vout.emplace_back(tx_parent->vout[0].nValue, spk);
         CTransactionRef tx_parent_also_child = MakeTransactionRef(mtx_parent_also_child);
 
         CMutableTransaction mtx_child;
         mtx_child.vin.emplace_back(COutPoint(tx_parent->GetHash(), 1));
         mtx_child.vin.emplace_back(COutPoint(tx_parent_also_child->GetHash(), 0));
-        mtx_child.vout.emplace_back(39 * COIN, spk);
+        mtx_child.vout.emplace_back(tx_parent->vout[1].nValue + tx_parent_also_child->vout[0].nValue, spk);
         CTransactionRef tx_child = MakeTransactionRef(mtx_child);
 
         PackageValidationState state;
@@ -507,7 +504,7 @@ BOOST_AUTO_TEST_CASE(package_submission_tests)
         BOOST_CHECK_EQUAL(m_node.relaypool->size(), expected_pool_size);
     }
 
-    // Parent and child package where transactions are invalid for reasons other than fee and
+    // Parent and child package where transactions are invalid for reasons other than value balance and
     // missing inputs, so the package validation isn't expected to happen.
     {
         CScriptWitness bad_witness;
@@ -603,7 +600,7 @@ BOOST_AUTO_TEST_CASE(package_single_tx)
     auto expected_pool_size{m_node.relaypool->size()};
 
     // No unconfirmed parents. Pin this incumbent with a HIGH surplus so the lower-surplus
-    // conflict submitted at the end of the test is deterministically rejected (#6).
+    // conflict submitted at the end of the test is deterministically rejected.
     CKey single_key = GenerateRandomKey();
     CScript single_locking_script = GetScriptForDestination(PKHash(single_key.GetPubKey()));
     CTransactionRef tx_single = MakeFeelessHighSurplusTx(/*input_tx=*/m_coinbase_txns[0], /*vout=*/0,
@@ -701,8 +698,9 @@ BOOST_AUTO_TEST_CASE(package_witness_swap_tests)
     //
     // The same-txid pairs are built by grinding the per-tx proof ONCE on the base variant and
     // then copying it and swapping only the witness: the witness is excluded from both the
-    // proof pre-image and the txid, so the copy keeps the same txid (and valid proof) while
-    // getting a different wtxid.
+    // proof pre-image and the txid, so the copy keeps the same txid while getting a
+    // different wtxid. Its larger witness may change its required work target; this
+    // case exercises deduplication before individual proof validation.
     mineBlocks(5);
     LOCK(cs_main);
 
@@ -759,7 +757,7 @@ BOOST_AUTO_TEST_CASE(package_witness_swap_tests)
             BOOST_ERROR(err_witness1.value());
         }
 
-        // Child2 would have been validated individually.
+        // Child2 is recognized by txid before individual proof validation.
         Package package_parent_child2{ptx_parent, ptx_child2};
         const auto submit_witness2 = ProcessNewPackage(m_node.chainman->ActiveChainstate(), *m_node.relaypool,
                                                        package_parent_child2, /*test_accept=*/false);
@@ -925,7 +923,7 @@ BOOST_AUTO_TEST_CASE(package_witness_swap_tests)
 
 BOOST_AUTO_TEST_CASE(package_no_work_subsidy_tests)
 {
-    // Quicksilver is feeless (#5b) — there is no relay floor to rescue a parent from — and per-tx
+    // Quicksilver is feeless — there is no relay floor to rescue a parent from — and per-tx
     // surplus work is non-aggregatable (5c-2 decision 1.1.1). RelayPool acceptance is therefore
     // purely per-tx: each transaction stands or falls on its own per-tx PoW, and neither a child
     // nor a parent can subsidize the other. (The mining/eviction side of non-aggregation — that a

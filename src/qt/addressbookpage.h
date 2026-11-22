@@ -43,6 +43,7 @@ public:
     ~AddressBookPage();
 
     void setModel(AddressTableModel *model);
+    void setKeyHashOnly(bool enabled) { m_key_hash_only = enabled; }
     const QString &getReturnValue() const { return returnValue; }
 
 public Q_SLOTS:
@@ -57,6 +58,7 @@ private:
     AddressBookSortFilterProxyModel *proxyModel;
     QMenu *contextMenu;
     QString newAddressToSelect;
+    bool m_key_hash_only{false};
     void updateWindowsTitleWithVaultName();
 
 private Q_SLOTS:

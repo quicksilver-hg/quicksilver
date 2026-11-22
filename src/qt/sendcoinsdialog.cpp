@@ -196,6 +196,7 @@ void SendCoinsDialog::showEvent(QShowEvent* event)
 
 SendCoinsDialog::~SendCoinsDialog()
 {
+    if (auto attempt = m_current_attempt.lock()) attempt->cancel();
     delete ui;
 }
 
@@ -387,7 +388,7 @@ void SendCoinsDialog::presentPSQT(PartiallySignedQuicksilverTransaction& psqtx)
                 tr("Partially Signed Transaction (Binary)") + QLatin1String(" (*.psqt)"),
                 [self, serialized](const QString& filename) {
                     if (self && !filename.isEmpty()) {
-                        std::ofstream out{filename.toLocal8Bit().data(), std::ofstream::out | std::ofstream::binary};
+                        std::ofstream out{GUIUtil::QStringToPath(filename), std::ofstream::out | std::ofstream::binary};
                         out << serialized;
                         out.close();
                         //: Popup message when a PSQT has been saved to a file
@@ -780,8 +781,10 @@ void SendCoinsDialog::startAsyncSendPrepare(std::unique_ptr<VaultModelTransactio
     beginSendWorkProgress();
 
     VaultModel* vault_model = model;
+    auto attempt = vault_model->beginProofOfWorkAttempt();
+    m_current_attempt = attempt;
     QPointer<SendCoinsDialog> self(this);
-    QThread* thread = QThread::create([self, vault_model, transaction = std::move(transaction), coin_control, generation, unlock = std::move(unlock)]() mutable {
+    QThread* thread = QThread::create([self, vault_model, transaction = std::move(transaction), coin_control, generation, unlock = std::move(unlock), attempt = std::move(attempt)]() mutable {
         auto progress_callback = [self, generation](uint32_t nonce) {
             if (!self) return;
             QMetaObject::invokeMethod(self, [self, generation, nonce]() {
@@ -789,7 +792,7 @@ void SendCoinsDialog::startAsyncSendPrepare(std::unique_ptr<VaultModelTransactio
                 self->updateSendWorkGraphs(nonce);
             }, Qt::QueuedConnection);
         };
-        VaultModel::SendCoinsReturn status = vault_model->prepareTransaction(*transaction, coin_control, progress_callback);
+        VaultModel::SendCoinsReturn status = vault_model->prepareTransaction(*transaction, coin_control, progress_callback, attempt);
         // Signed or failed: the keys are no longer needed, so relock now (F-519).
         unlock.reset();
         auto result = QSharedPointer<PreparedSendResult>::create(PreparedSendResult{
@@ -797,6 +800,7 @@ void SendCoinsDialog::startAsyncSendPrepare(std::unique_ptr<VaultModelTransactio
             status,
             generation,
         });
+        attempt.reset();
 
         if (!self) {
             return;
@@ -836,7 +840,7 @@ void SendCoinsDialog::bumpSolveGeneration()
     ++m_solve_generation;
     // Reach into the grind as well as disowning its result. Whoever asked for this
     // is entitled to have the machine stop working on their behalf.
-    if (model) model->requestProofOfWorkCancel();
+    if (auto attempt = m_current_attempt.lock()) attempt->cancel();
 }
 
 void SendCoinsDialog::cancelSendWork()

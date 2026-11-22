@@ -23,6 +23,9 @@ public:
 
     private Q_SLOTS:
     void rpcNestedTests();
+    void consoleFiltersSecretBearingCommands();
+    void consoleReturnWithoutClientModel();
+    void consoleRejectsEmptyBracketGroups();
 };
 
 #endif // QUICKSILVER_QT_TEST_RPCNESTEDTESTS_H

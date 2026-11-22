@@ -232,6 +232,10 @@ BOOST_AUTO_TEST_CASE(merkle_test_BlockWitness)
     for (std::size_t pos = 0; pos < block.vtx.size(); pos++) {
         CMutableTransaction mtx;
         mtx.nLockTime = pos;
+        if (pos == 1) {
+            mtx.vin.resize(1);
+            mtx.vin[0].scriptWitness.stack.push_back({1, 2, 3});
+        }
         block.vtx[pos] = MakeTransactionRef(std::move(mtx));
     }
 
@@ -240,7 +244,8 @@ BOOST_AUTO_TEST_CASE(merkle_test_BlockWitness)
     std::vector<uint256> hashes;
     hashes.resize(block.vtx.size());
     hashes[0].SetNull();
-    hashes[1] = block.vtx[1]->GetHash();
+    hashes[1] = block.vtx[1]->GetWitnessHash().ToUint256();
+    BOOST_CHECK(hashes[1] != block.vtx[1]->GetHash().ToUint256());
 
     uint256 merkleRootofHashes = ComputeMerkleRoot(hashes);
 

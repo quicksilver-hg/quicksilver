@@ -47,6 +47,7 @@ QUICKSILVER_2009_CALL_RE = re.compile(
     r"\bCopyrightHolders\s*\((?:(?!;).){0,500}?\b2009\b",
     re.DOTALL,
 )
+HOLDERLESS_NOTICE_RE = re.compile(r"Copyright \(c\) [0-9]{4}(?:[-, ][0-9]{4})*\s*$", re.IGNORECASE)
 
 
 def quicksilver_2009_lines(contents):
@@ -174,13 +175,34 @@ def check_insert_header_holder():
     return 0
 
 
+def check_source_header_holders():
+    """Reject year-only source notices in the header tool's first-party scope."""
+    tool_globals = runpy.run_path(str(TOOL))
+    failures = []
+    for name in tracked_files_to_scan(tool_globals):
+        path = PRODUCT_ROOT / name
+        if not path.is_file() or not any(path.match(pattern) for pattern in tool_globals["INCLUDE"]):
+            continue
+        try:
+            lines = path.read_text(encoding="utf8").splitlines()
+        except (UnicodeDecodeError, OSError):
+            continue
+        for number, line in enumerate(lines, 1):
+            if HOLDERLESS_NOTICE_RE.search(line):
+                failures.append(f"{name}:{number}: copyright notice has no holder")
+    for failure in failures:
+        print(failure)
+    return bool(failures)
+
+
 def main():
     result = subprocess.run(
         [sys.executable, str(TOOL), "verify", str(PRODUCT_ROOT)], text=True
     )
     insert_result = check_insert_header_holder()
     start_year_result = check_quicksilver_start_year()
-    sys.exit(result.returncode or insert_result or start_year_result)
+    holder_result = check_source_header_holders()
+    sys.exit(result.returncode or insert_result or start_year_result or holder_result)
 
 
 if __name__ == "__main__":

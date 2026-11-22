@@ -6,6 +6,7 @@
 #include <addresstype.h>
 #include <clientversion.h>
 #include <coins.h>
+#include <dbwrapper.h>
 #include <streams.h>
 #include <test/util/poolresourcetester.h>
 #include <test/util/random.h>
@@ -29,6 +30,12 @@ void UpdateCoins(const CTransaction& tx, CCoinsViewCache& inputs, CTxUndo &txund
 
 namespace
 {
+struct TestCoinDBKey {
+    COutPoint* outpoint;
+    uint8_t key{'C'};
+    SERIALIZE_METHODS(TestCoinDBKey, obj) { READWRITE(obj.key, obj.outpoint->hash, VARINT(obj.outpoint->n)); }
+};
+
 //! equality test
 bool operator==(const Coin &a, const Coin &b) {
     // Empty Coin objects are always equal.
@@ -106,6 +113,24 @@ public:
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(coins_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(corrupt_coin_record_throws)
+{
+    const fs::path path = m_args.GetDataDirBase() / "corrupt_coin";
+    const DBParams params{.path = path, .cache_bytes = 1 << 20, .memory_only = false,
+                          .wipe_data = false, .obfuscate = false};
+    COutPoint outpoint{Txid::FromUint256(uint256{1}), 0};
+    {
+        CDBWrapper db{{.path = path, .cache_bytes = 1 << 20, .memory_only = false,
+                       .wipe_data = true, .obfuscate = false}};
+        BOOST_REQUIRE(db.Write(TestCoinDBKey{&outpoint}, uint8_t{7}));
+    }
+    CCoinsViewDB coins{params, {}};
+    BOOST_CHECK_THROW(coins.GetCoin(outpoint), dbwrapper_error);
+    BOOST_CHECK(!coins.GetCoin(COutPoint{Txid::FromUint256(uint256{2}), 0}));
+    BOOST_CHECK(coins.GetBestBlock().IsNull());
+    BOOST_CHECK(coins.GetHeadBlocks().empty());
+}
 
 static const unsigned int NUM_SIMULATION_ITERATIONS = 40000;
 
@@ -903,7 +928,7 @@ void TestFlushBehavior(
             // hashBlock must be filled before flushing to disk; value is
             // unimportant here. This is normally done during connect/disconnect block.
             cache->SetBestBlock(m_rng.rand256());
-            erase ? cache->Flush() : cache->Sync();
+            BOOST_REQUIRE(erase ? cache->Flush() : cache->Sync());
         }
     };
 

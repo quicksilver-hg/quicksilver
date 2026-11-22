@@ -95,7 +95,7 @@ public:
 
 /** \class CompareTxRelayPoolEntryByTxWorkRate
  *
- *  #5c-2 per-tx individual inclusion ranking. Sort by surplus per-tx work rate
+ *  per-tx surplus-work inclusion ranking. Sort by surplus per-tx work rate
  *  (surplus/vsize) in DESCENDING order: the highest-rate tx is begin() (mined
  *  first), the lowest-rate tx is the last element (evicted first). Ties (equal
  *  rate) break by entry time, oldest first.
@@ -261,7 +261,7 @@ public:
                 boost::multi_index::identity<CTxRelayPoolEntry>,
                 CompareTxRelayPoolEntryByEntryTime
             >,
-            // #5c-2: sorted by surplus per-tx work rate (descending: begin() = highest)
+            // surplus-work ranking: sorted by surplus per-tx work rate (descending: begin() = highest)
             boost::multi_index::ordered_non_unique<
                 boost::multi_index::tag<txwork_rate>,
                 boost::multi_index::identity<CTxRelayPoolEntry>,

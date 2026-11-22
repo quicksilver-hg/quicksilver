@@ -67,7 +67,9 @@ BOOST_FIXTURE_TEST_CASE(chainstatemanager_rebalance_caches, TestChain100Setup)
     BOOST_CHECK_EQUAL(c1.m_coinsdb_cache_size_bytes, max_cache);
 }
 
-//! Test LoadBlockIndex behavior for a single fully-validating chain.
+//! Test candidate repopulation from the manager's existing in-memory block index.
+//! test/functional/feature_blockfilter_agreement.py exercises -reindex, which
+//! rebuilds the block index from disk after a restart.
 BOOST_FIXTURE_TEST_CASE(chainstatemanager_loadblockindex, TestChain100Setup)
 {
     ChainstateManager& chainman = *Assert(m_node.chainman);

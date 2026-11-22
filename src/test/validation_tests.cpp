@@ -33,7 +33,7 @@
 
 BOOST_FIXTURE_TEST_SUITE(validation_tests, TestingSetup)
 
-// Quicksilver tail emission (#5a): GetBlockSubsidy is a near-linear, front-loaded ramp from
+// Quicksilver tail-subsidy ramp: GetBlockSubsidy is a near-linear, front-loaded ramp from
 // the genesis subsidy S0 down to a perpetual tail, reaching the tail at N = nBootstrapBlocks.
 // Mainnet/publictest magnitudes are calibrated in the tail-emission spec. These tests use
 // sandbox's deliberately small N so the sums/sweeps are cheap, and pin curve shape.
@@ -315,7 +315,7 @@ BOOST_AUTO_TEST_CASE(block_malleation)
             mtx.vout[0].scriptPubKey.resize(4);  // upstream: exactly 64 bytes
             block.vtx.push_back(MakeTransactionRef(mtx));
             block.hashMerkleRoot = block.vtx.back()->GetHash();
-            assert(block.vtx.back()->IsCoinBase());
+            BOOST_REQUIRE(block.vtx.back()->IsCoinBase());
 
             // Structural invariant that closes the 64-byte malleation vector:
             // the smallest constructible transaction still exceeds 64 bytes, so
@@ -323,7 +323,7 @@ BOOST_AUTO_TEST_CASE(block_malleation)
             // merkle node. If a future change to the per-tx PoW tail drops the
             // floor to 64, this assertion fails and forces a re-review of the
             // CVE-2012-2459 masquerade vector.
-            assert(GetSerializeSize(TX_NO_WITNESS(block.vtx.back())) > 64);
+            BOOST_REQUIRE(GetSerializeSize(TX_NO_WITNESS(block.vtx.back())) > 64);
         }
         BOOST_CHECK(is_not_mutated(block, /*check_witness_root=*/false));
     }
@@ -408,19 +408,21 @@ BOOST_AUTO_TEST_CASE(publictest_has_fresh_minimum_chain_work)
 }
 
 // ---------------------------------------------------------------------------
-// Frame-B mint (#4): full-block consensus behavior of the raised coinbase
+// Frame-B mint: full-block consensus behavior of the raised coinbase
 // ceiling, and the inherited replay protection (transplant / double-include).
 // ---------------------------------------------------------------------------
 
-// Sign a value-preserving (in==out, feeless #5b-1) spend of a mature coinbase, then grind
+// Sign a value-preserving (in==out, feeless) spend of a mature coinbase, then grind
 // its per-tx PoW. The per-tx pre-image excludes scriptSig, so grinding AFTER signing is sound.
 static CMutableTransaction MakeProvenSpend(TestChain100Setup& setup, const CTransactionRef& coinbase,
-                                           const Consensus::Params& cp)
+                                           const Consensus::Params& cp, bool alternate_output = false)
 {
+    CScript output_script{coinbase->vout[0].scriptPubKey};
+    if (alternate_output) output_script << OP_NOP;
     CMutableTransaction spend = setup.CreateValidRelayPoolTransaction(
         coinbase, /*input_vout=*/0, /*input_height=*/0, setup.coinbaseKey,
-        coinbase->vout[0].scriptPubKey, /*output_amount=*/coinbase->vout[0].nValue, /*submit=*/false);
-    // #5c-1: anchor the proof to the current active tip (in-window) and grind over its hash.
+        output_script, /*output_amount=*/coinbase->vout[0].nValue, /*submit=*/false);
+    // per-transaction PoW anchor: anchor the proof to the current active tip (in-window) and grind over its hash.
     const CBlockIndex* tip = WITH_LOCK(::cs_main, return setup.m_node.chainman->ActiveChain().Tip());
     spend.nAnchorHeight = static_cast<uint32_t>(tip->nHeight);
     const auto pre = CTransaction(spend).PowPreimage(tip->GetBlockHash());
@@ -441,7 +443,7 @@ static CMutableTransaction MakeFeeSpend(TestChain100Setup& setup, const CTransac
         coinbase, /*input_vout=*/0, /*input_height=*/0, setup.coinbaseKey,
         coinbase->vout[0].scriptPubKey,
         /*output_amount=*/coinbase->vout[0].nValue - 1 * COIN, /*submit=*/false);
-    // #5c-1: anchor the proof to the current active tip (in-window) and grind over its hash.
+    // per-transaction PoW anchor: anchor the proof to the current active tip (in-window) and grind over its hash.
     const CBlockIndex* tip = WITH_LOCK(::cs_main, return setup.m_node.chainman->ActiveChain().Tip());
     spend.nAnchorHeight = static_cast<uint32_t>(tip->nHeight);
     const auto pre = CTransaction(spend).PowPreimage(tip->GetBlockHash());
@@ -470,6 +472,16 @@ static CBlock SealWithCoinbaseValue(TestChain100Setup& setup,
     return block;
 }
 
+static void CheckBlockRejectReason(TestChain100Setup& setup, const CBlock& block, const std::string& reason)
+{
+    BlockValidationState state;
+    const bool valid = WITH_LOCK(::cs_main, return TestBlockValidity(
+        state, setup.m_node.chainman->GetParams(), setup.m_node.chainman->ActiveChainstate(),
+        block, setup.m_node.chainman->ActiveChain().Tip()));
+    BOOST_CHECK(!valid);
+    BOOST_CHECK_EQUAL(state.GetRejectReason(), reason);
+}
+
 BOOST_FIXTURE_TEST_CASE(mint_ceiling_allows_exact_and_rejects_excess, TestChain100Setup)
 {
     const Consensus::Params& cp = m_node.chainman->GetConsensus();
@@ -495,7 +507,9 @@ BOOST_FIXTURE_TEST_CASE(mint_ceiling_allows_exact_and_rejects_excess, TestChain1
     {
         // Re-spend coinbase 1 so inputs are unspent on this fork tip's view.
         CMutableTransaction spend2 = MakeProvenSpend(*this, m_coinbase_txns[1], cp);
-        CBlock bad = SealWithCoinbaseValue(*this, {spend2}, spk, ceiling + 1);
+        const CAmount next_ceiling = GetBlockSubsidy(102, cp) + cp.nTxPowMint;
+        CBlock bad = SealWithCoinbaseValue(*this, {spend2}, spk, next_ceiling + 1);
+        CheckBlockRejectReason(*this, bad, "bad-cb-amount");
         auto pblock = std::make_shared<const CBlock>(bad);
         m_node.chainman->ProcessNewBlock(pblock, true, true, nullptr);
         LOCK(cs_main);
@@ -506,18 +520,20 @@ BOOST_FIXTURE_TEST_CASE(mint_ceiling_allows_exact_and_rejects_excess, TestChain1
 BOOST_FIXTURE_TEST_CASE(double_include_same_spend_cannot_double_mint, TestChain100Setup)
 {
     const Consensus::Params& cp = m_node.chainman->GetConsensus();
-    const CScript spk = m_coinbase_txns[2]->vout[0].scriptPubKey;
+    const CScript spk = m_coinbase_txns[0]->vout[0].scriptPubKey;
 
-    // One proven spend included TWICE in the same block. The second copy double-
+    // Two distinct proven spends of the same mature input. The second double-
     // spends the first's input, so the block is invalid -> no double-mint. Replay
     // protection is inherited from UTXO uniqueness, not from mint-specific state.
-    CMutableTransaction spend = MakeProvenSpend(*this, m_coinbase_txns[2], cp);
+    CMutableTransaction spend = MakeProvenSpend(*this, m_coinbase_txns[0], cp);
     const CAmount subsidy = GetBlockSubsidy(101, cp);  // fresh fixture: tip=100, next block=101
-    // Claim as if BOTH copies minted (2*C) to make the block attractive if the rule
-    // were broken; feeless, so no fee term. It must still be rejected.
-    const CAmount over = subsidy + 2 * cp.nTxPowMint;
-    CBlock block = SealWithCoinbaseValue(*this, {spend, spend}, spk, over);
+    // Claim only one mint so the coinbase ceiling cannot mask the duplicate input.
+    const CAmount over = subsidy + cp.nTxPowMint;
+    CMutableTransaction spend2 = MakeProvenSpend(*this, m_coinbase_txns[0], cp, /*alternate_output=*/true);
+    BOOST_REQUIRE(spend.GetHash() != spend2.GetHash());
+    CBlock block = SealWithCoinbaseValue(*this, {spend, spend2}, spk, over);
 
+    CheckBlockRejectReason(*this, block, "bad-txns-inputs-missingorspent");
     auto pblock = std::make_shared<const CBlock>(block);
     m_node.chainman->ProcessNewBlock(pblock, true, true, nullptr);
     LOCK(cs_main);
@@ -536,8 +552,9 @@ BOOST_FIXTURE_TEST_CASE(feeless_rule_rejects_fee, TestChain100Setup)
     // feeless rule (not a premature-coinbase-spend).
     CMutableTransaction fee_spend = MakeFeeSpend(*this, m_coinbase_txns[0], cp);
     const CAmount subsidy = GetBlockSubsidy(101, cp);
-    CBlock block = SealWithCoinbaseValue(*this, {fee_spend}, spk, subsidy + 1 * COIN + cp.nTxPowMint);
+    CBlock block = SealWithCoinbaseValue(*this, {fee_spend}, spk, subsidy + cp.nTxPowMint);
 
+    CheckBlockRejectReason(*this, block, "bad-txns-not-feeless");
     auto pblock = std::make_shared<const CBlock>(block);
     m_node.chainman->ProcessNewBlock(pblock, true, true, nullptr);
     LOCK(cs_main);
@@ -564,7 +581,7 @@ BOOST_FIXTURE_TEST_CASE(congestion_multiplier_is_cached_and_floored, TestChain10
 
 BOOST_FIXTURE_TEST_CASE(congestion_multiplier_consensus_rule_rejects_both_directions, TestChain100Setup)
 {
-    // #5c-1 Phase 2: ConnectBlock no longer COMPUTES the multiplier, it CHECKS the one
+    // header-field congestion pricing: ConnectBlock no longer COMPUTES the multiplier, it CHECKS the one
     // the header carries. Prove the check bites, in both directions, before trusting any
     // green run that depends on it — a check that only ever sees correct values is
     // indistinguishable from no check at all.

@@ -19,6 +19,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 static const size_t DBWRAPPER_PREALLOC_KEY_SIZE = 64;
@@ -144,6 +146,7 @@ public:
     ~CDBIterator();
 
     bool Valid() const;
+    void CheckStatus() const;
 
     void SeekToFirst();
 
@@ -179,6 +182,8 @@ public:
 };
 
 struct LevelDBContext;
+
+[[noreturn]] void ThrowCorruptDBRecord();
 
 class CDBWrapper
 {
@@ -235,6 +240,37 @@ public:
             ssValue >> value;
         } catch (const std::exception&) {
             return false;
+        }
+        return true;
+    }
+
+    /** Return false only for an absent key; a present undecodable record is fatal. */
+    template <typename K, typename V>
+    bool ReadChecked(const K& key, V& value) const
+    {
+        DataStream ssKey{};
+        ssKey.reserve(DBWRAPPER_PREALLOC_KEY_SIZE);
+        ssKey << key;
+        const auto strValue{ReadImpl(ssKey)};
+        if (!strValue) return false;
+        if constexpr (std::is_move_assignable_v<V>) {
+            V decoded{};
+            try {
+                DataStream ssValue{MakeByteSpan(*strValue)};
+                ssValue.Xor(obfuscate_key);
+                ssValue >> decoded;
+            } catch (const std::exception&) {
+                ThrowCorruptDBRecord();
+            }
+            value = std::move(decoded);
+        } else {
+            try {
+                DataStream ssValue{MakeByteSpan(*strValue)};
+                ssValue.Xor(obfuscate_key);
+                ssValue >> value;
+            } catch (const std::exception&) {
+                ThrowCorruptDBRecord();
+            }
         }
         return true;
     }

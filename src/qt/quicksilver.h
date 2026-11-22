@@ -166,6 +166,7 @@ private:
     void createVaultController();
 #endif
     void cleanupFailedConsensusInitialization();
+    void finishShutdown();
     void launchPendingRestart();
 };
 

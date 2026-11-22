@@ -106,6 +106,19 @@ BOOST_AUTO_TEST_CASE(fsbridge_fstream)
     }
 }
 
+// F-614: GetFileSize takes a path, not narrow bytes. A narrow string on Windows is the ANSI code page,
+// which cannot hold these characters, so the old char* form could not open this file there.
+BOOST_AUTO_TEST_CASE(get_file_size_unicode_path)
+{
+    const fs::path file{m_args.GetDataDirBase() / fs::u8path("fs_tests_José_☿_🏃.psqt")};
+    {
+        std::ofstream out{file, std::ios::binary};
+        out << "0123456789";
+    }
+    BOOST_CHECK_EQUAL(GetFileSize(file), std::streampos{10});
+    BOOST_CHECK_EQUAL(GetFileSize(file, 4), std::streampos{4});
+}
+
 BOOST_AUTO_TEST_CASE(rename)
 {
     const fs::path tmpfolder{m_args.GetDataDirBase()};

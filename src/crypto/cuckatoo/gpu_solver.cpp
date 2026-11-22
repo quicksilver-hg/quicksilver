@@ -117,10 +117,16 @@ std::vector<std::string> solver_argv(const std::string& solver, const std::strin
 
 int no_progress_timeout_sec() {
     const char* t = std::getenv("CUCKATOO_GPU_TIMEOUT");
-    if (t && t[0]) { long v = std::strtol(t, nullptr, 10); if (v > 0) return (int)v; }
+    if (t && t[0]) {
+        char* end{nullptr};
+        const long v = std::strtol(t, &end, 10);
+        if (end != t && *end == '\0') return static_cast<int>(std::clamp(v, 1L, 86400L));
+    }
     return 30;
 }
 } // namespace
+
+int NoProgressTimeoutMs() { return no_progress_timeout_sec() * 1000; }
 
 bool GpuHelperConfigured(uint8_t edgebits)
 {
@@ -236,7 +242,7 @@ bool GpuSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
         util::SpawnFaultFromEnv("CUCKATOO_GPU_FAULT"));
     if (!child) { report(GpuSolveStatus::kSolverError); return false; }
 
-    const int timeout_ms = no_progress_timeout_sec() * 1000;
+    const int timeout_ms = NoProgressTimeoutMs();
     // Wait in short slices rather than one long poll. The no-progress window is
     // 30s by default, and a healthy solver is silent for most of it, so polling
     // the whole window at once means shutdown has to wait it out. Slicing bounds

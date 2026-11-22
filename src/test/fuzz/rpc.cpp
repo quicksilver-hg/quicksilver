@@ -82,6 +82,8 @@ const std::vector<std::string> RPC_COMMANDS_NOT_SAFE_FOR_FUZZING{
     "importrelaypool", // avoid reading from disk
     "loadvault",   // avoid reading from disk
     "saverelaypool",           // disabled as a precautionary measure: may take a file path argument in the future
+    "startmining", // starts worker threads
+    "stopmining",  // changes mining service state
     "setban",                // avoid DNS lookups
     "stop",                  // avoid shutdown state
 };
@@ -105,7 +107,6 @@ const std::vector<std::string> RPC_COMMANDS_SAFE_FOR_FUZZING{
     "echo",
     "echojson",
     "finalizepsqt",
-    "generate",
     "generateblock",
     "getaddednodeinfo",
     "getaddrmaninfo",
@@ -133,6 +134,7 @@ const std::vector<std::string> RPC_COMMANDS_SAFE_FOR_FUZZING{
     "getrelaypoolentry",
     "getrelaypoolinfo",
     "getmininginfo",
+    "getminingstatus",
     "getnettotals",
     "getnetworkworkps",
     "getnetworkinfo",
@@ -316,7 +318,9 @@ std::string ConsumeArrayRPCArgument(FuzzedDataProvider& fuzzed_data_provider, bo
     {
         scalar_arguments.push_back(ConsumeScalarRPCArgument(fuzzed_data_provider, good_data));
     }
-    return "[\"" + Join(scalar_arguments, "\",\"") + "\"]";
+    UniValue result{UniValue::VARR};
+    for (const auto& argument : scalar_arguments) result.push_back(argument);
+    return result.write();
 }
 
 std::string ConsumeRPCArgument(FuzzedDataProvider& fuzzed_data_provider, bool& good_data)

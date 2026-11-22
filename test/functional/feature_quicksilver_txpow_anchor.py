@@ -2,7 +2,7 @@
 # Copyright (c) 2026 The Quicksilver developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""#5c-1 Phase 1: per-tx PoW anchor — end-to-end on a sandbox node.
+"""per-transaction PoW anchor: per-tx PoW anchor — end-to-end on a sandbox node.
 
 Covers the two anchor behaviours that are reachable without a Python Cuckatoo
 solver (the vault grinds the proof in C++):
@@ -94,7 +94,7 @@ class TxPowAnchorTest(QuicksilverTestFramework):
         assert_raises_rpc_error(-26, "bad-txns-pow-anchor",
                                 node.sendrawtransaction, signed["hex"])
 
-        self.log.info("Quicksilver #5c-1 per-tx anchor (mine + stale-reject): PASS")
+        self.log.info("Quicksilver per-tx PoW anchor (mine + stale-reject): PASS")
 
 
 if __name__ == "__main__":

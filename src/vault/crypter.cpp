@@ -73,6 +73,11 @@ bool CCrypter::SetKey(const CKeyingMaterial& new_key, const std::span<const unsi
 
 bool CCrypter::Encrypt(const CKeyingMaterial& vchPlaintext, std::vector<unsigned char> &vchCiphertext) const
 {
+    return Encrypt(std::span{vchPlaintext}, vchCiphertext);
+}
+
+bool CCrypter::Encrypt(std::span<const unsigned char> vchPlaintext, std::vector<unsigned char>& vchCiphertext) const
+{
     if (!fKeySet)
         return false;
 
@@ -102,6 +107,17 @@ bool CCrypter::Decrypt(const std::span<const unsigned char> ciphertext, CKeyingM
     if (len == 0) {
         return false;
     }
+    plaintext.resize(len);
+    return true;
+}
+
+bool CCrypter::Decrypt(const std::span<const unsigned char> ciphertext, std::vector<unsigned char>& plaintext) const
+{
+    if (!fKeySet) return false;
+    plaintext.resize(ciphertext.size());
+    AES256CBCDecrypt dec(vchKey.data(), vchIV.data(), true);
+    const int len{dec.Decrypt(ciphertext.data(), ciphertext.size(), plaintext.data())};
+    if (len == 0) return false;
     plaintext.resize(len);
     return true;
 }

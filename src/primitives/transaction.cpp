@@ -111,8 +111,8 @@ std::vector<unsigned char> CTransaction::PowPreimage(const uint256& anchor_hash)
         ss << out;
     }
     ss << nLockTime;
-    ss << nAnchorHeight;     // #5c-1: commit the anchor height
-    ss << anchor_hash;       // #5c-1: AND the anchor block hash (precompute resistance)
+    ss << nAnchorHeight;     // per-transaction PoW anchor: commit the anchor height
+    ss << anchor_hash;       // per-transaction PoW anchor: AND the anchor block hash (precompute resistance)
     ss << nPowNonce;         // trailing 4 bytes (LE) — the grind slot
     const auto* p = reinterpret_cast<const unsigned char*>(ss.data());
     return std::vector<unsigned char>(p, p + ss.size());

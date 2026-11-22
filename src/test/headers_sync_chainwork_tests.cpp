@@ -130,7 +130,7 @@ BOOST_AUTO_TEST_CASE(headers_sync_state)
     BOOST_CHECK(result.success);
     BOOST_CHECK(!result.request_more);
     // All headers should be ready for acceptance:
-    BOOST_CHECK(result.pow_validated_headers.size() == first_chain.size());
+    BOOST_REQUIRE_EQUAL(result.pow_validated_headers.size(), first_chain.size());
     for (size_t i = 0; i < first_chain.size(); ++i) {
         DataStream original;
         DataStream released;

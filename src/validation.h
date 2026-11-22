@@ -897,6 +897,13 @@ public:
     /** Best header we've seen so far (used for getheaders queries' starting points). */
     CBlockIndex* m_best_header GUARDED_BY(::cs_main){nullptr};
 
+    /** F-610: set once a peer has sent a headers message this node accepted,
+     *  including an empty one (the peer has nothing newer than our locator).
+     *  Until then best header == tip proves nothing about being current: a node
+     *  that has just started knows only its own chain. The background miner on
+     *  main waits for this (node::MiningShouldWaitForSync). Never cleared. */
+    std::atomic<bool> m_peer_headers_received{false};
+
     //! The total number of bytes available for the in-memory coins cache.
     size_t m_total_coinstip_cache{0};
     //

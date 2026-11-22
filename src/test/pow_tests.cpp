@@ -463,66 +463,53 @@ BOOST_AUTO_TEST_CASE(first_retarget_anchors_on_genesis)
 
 BOOST_AUTO_TEST_CASE(CheckProofOfWork_test_negative_target)
 {
-    const auto consensus = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
-    uint256 hash;
-    unsigned int nBits;
-    nBits = UintToArith256(consensus.powLimit).GetCompact(true);
-    hash = uint256{1};
-    CBlockHeader pow_hdr; pow_hdr.SetNull(); pow_hdr.nVersion = 1; pow_hdr.nNonce = 1; pow_hdr.nBits = nBits;
-    (void)hash;
-    BOOST_CHECK(!CheckProofOfWork(pow_hdr, consensus));  // bad target (or invalid cycle) rejected
+    const auto consensus = CreateChainParams(*m_node.args, ChainType::SANDBOX)->GetConsensus();
+    BOOST_REQUIRE(consensus.fBlockPowNoCycle);
+    CBlockHeader hdr; hdr.SetNull(); hdr.nBits = UintToArith256(consensus.powLimit).GetCompact(true);
+    BOOST_CHECK(!DeriveTarget(hdr.nBits, consensus.powLimit));
+    BOOST_CHECK(!CheckProofOfWork(hdr, consensus));
 }
 
 BOOST_AUTO_TEST_CASE(CheckProofOfWork_test_overflow_target)
 {
-    const auto consensus = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
-    uint256 hash;
-    unsigned int nBits{~0x00800000U};
-    hash = uint256{1};
-    CBlockHeader pow_hdr; pow_hdr.SetNull(); pow_hdr.nVersion = 1; pow_hdr.nNonce = 1; pow_hdr.nBits = nBits;
-    (void)hash;
-    BOOST_CHECK(!CheckProofOfWork(pow_hdr, consensus));  // bad target (or invalid cycle) rejected
+    const auto consensus = CreateChainParams(*m_node.args, ChainType::SANDBOX)->GetConsensus();
+    BOOST_REQUIRE(consensus.fBlockPowNoCycle);
+    CBlockHeader hdr; hdr.SetNull(); hdr.nBits = ~0x00800000U;
+    BOOST_CHECK(!DeriveTarget(hdr.nBits, consensus.powLimit));
+    BOOST_CHECK(!CheckProofOfWork(hdr, consensus));
 }
 
 BOOST_AUTO_TEST_CASE(CheckProofOfWork_test_too_easy_target)
 {
-    const auto consensus = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
-    uint256 hash;
-    unsigned int nBits;
-    arith_uint256 nBits_arith = UintToArith256(consensus.powLimit);
-    nBits_arith *= 2;
-    nBits = nBits_arith.GetCompact();
-    hash = uint256{1};
-    CBlockHeader pow_hdr; pow_hdr.SetNull(); pow_hdr.nVersion = 1; pow_hdr.nNonce = 1; pow_hdr.nBits = nBits;
-    (void)hash;
-    BOOST_CHECK(!CheckProofOfWork(pow_hdr, consensus));  // bad target (or invalid cycle) rejected
+    const auto consensus = CreateChainParams(*m_node.args, ChainType::SANDBOX)->GetConsensus();
+    BOOST_REQUIRE(consensus.fBlockPowNoCycle);
+    arith_uint256 target = UintToArith256(consensus.powLimit);
+    target *= 2;
+    CBlockHeader hdr; hdr.SetNull(); hdr.nBits = target.GetCompact();
+    BOOST_CHECK(!DeriveTarget(hdr.nBits, consensus.powLimit));
+    BOOST_CHECK(!CheckProofOfWork(hdr, consensus));
 }
 
 BOOST_AUTO_TEST_CASE(CheckProofOfWork_test_biger_hash_than_target)
 {
-    const auto consensus = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
-    uint256 hash;
-    unsigned int nBits;
-    arith_uint256 hash_arith = UintToArith256(consensus.powLimit);
-    nBits = hash_arith.GetCompact();
-    hash_arith *= 2; // hash > nBits
-    hash = ArithToUint256(hash_arith);
-    CBlockHeader pow_hdr; pow_hdr.SetNull(); pow_hdr.nVersion = 1; pow_hdr.nNonce = 1; pow_hdr.nBits = nBits;
-    (void)hash;
-    BOOST_CHECK(!CheckProofOfWork(pow_hdr, consensus));  // bad target (or invalid cycle) rejected
+    const auto consensus = CreateChainParams(*m_node.args, ChainType::SANDBOX)->GetConsensus();
+    BOOST_REQUIRE(consensus.fBlockPowNoCycle);
+    CBlockHeader hdr; hdr.SetNull(); hdr.nBits = UintToArith256(consensus.powLimit).GetCompact();
+    const auto target = DeriveTarget(hdr.nBits, consensus.powLimit);
+    BOOST_REQUIRE(target);
+    // The cycle is deliberately irrelevant on sandbox. Choose proof bytes whose
+    // hash exceeds a valid target, then the target comparison is the sole failure.
+    while (UintToArith256(cuckatoo::CuckatooProofHash(hdr.nCycle)) <= *target) ++hdr.nCycle[0];
+    BOOST_CHECK(!CheckProofOfWork(hdr, consensus));
 }
 
 BOOST_AUTO_TEST_CASE(CheckProofOfWork_test_zero_target)
 {
-    const auto consensus = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
-    uint256 hash;
-    unsigned int nBits;
-    arith_uint256 hash_arith{0};
-    nBits = hash_arith.GetCompact();
-    hash = ArithToUint256(hash_arith);
-    CBlockHeader pow_hdr; pow_hdr.SetNull(); pow_hdr.nVersion = 1; pow_hdr.nNonce = 1; pow_hdr.nBits = nBits;
-    (void)hash;
-    BOOST_CHECK(!CheckProofOfWork(pow_hdr, consensus));  // bad target (or invalid cycle) rejected
+    const auto consensus = CreateChainParams(*m_node.args, ChainType::SANDBOX)->GetConsensus();
+    BOOST_REQUIRE(consensus.fBlockPowNoCycle);
+    CBlockHeader hdr; hdr.SetNull(); hdr.nBits = 0;
+    BOOST_CHECK(!DeriveTarget(hdr.nBits, consensus.powLimit));
+    BOOST_CHECK(!CheckProofOfWork(hdr, consensus));
 }
 
 BOOST_AUTO_TEST_CASE(GetBlockProofEquivalentTime_test)
@@ -756,12 +743,46 @@ BOOST_AUTO_TEST_CASE(quicksilver_private_genesis_is_zero_cycle_trust_anchor)
     BOOST_CHECK_NE(sandbox->GenesisBlock().GetHash().ToString(), "5199caf02a08c6e3a6817a8871d1f97e9f9fbbfab0ddd9de4f634d2095382028");
 }
 
-BOOST_AUTO_TEST_CASE(quicksilver_public_trust_anchors_are_reset)
+// quicksilver_public_trust_anchors_are_reset used to assert null trust anchors on
+// main as well. That was the fresh-chain spec, now outdated: the owner's rulings of
+// 2026-11-12 and 2026-11-16 (F-565 (a)) pin main per release, as F-425 does for
+// ChainTxData. Main is pinned below; publictest stays reset.
+BOOST_AUTO_TEST_CASE(quicksilver_main_trust_anchor_is_pinned)
 {
     const auto main = CreateChainParams(*m_node.args, ChainType::MAIN);
-    const auto publictest = CreateChainParams(*m_node.args, ChainType::PUBLIC_TEST);
+    const auto& anchors = main->TrustAnchors();
+    // Exact values, re-pinned every release.
+    BOOST_REQUIRE_EQUAL(anchors.size(), 1U);
+    BOOST_CHECK_EQUAL(anchors[0].height, 17000);
+    BOOST_CHECK_EQUAL(anchors[0].hash.ToString(), "ff79c0ed2df2c3156141aeb0fe507a0d616218fe5eef55d694fd172ac38c439e");
+    BOOST_CHECK_EQUAL(anchors[0].chain_work.ToString(), "0000000000000000000000000000000000000000000000000000000000020553");
+    BOOST_CHECK_EQUAL(main->GetConsensus().defaultAssumeValid, anchors.back().hash);
+    BOOST_CHECK_EQUAL(main->GetConsensus().nMinimumChainWork, anchors.back().chain_work);
+}
 
-    check_public_chain_trust_anchors_reset(*main);
+BOOST_AUTO_TEST_CASE(quicksilver_trust_anchor_lists_are_well_formed)
+{
+    for (const ChainType chain : {ChainType::MAIN, ChainType::PUBLIC_TEST, ChainType::SANDBOX}) {
+        const auto params = CreateChainParams(*m_node.args, chain);
+        const auto& anchors = params->TrustAnchors();
+        for (size_t i = 0; i < anchors.size(); ++i) {
+            BOOST_TEST_CONTEXT(ChainTypeToString(chain) << " anchor " << i)
+            {
+                BOOST_CHECK_GT(anchors[i].height, 0);
+                BOOST_CHECK(!anchors[i].hash.IsNull());
+                if (i > 0) {
+                    BOOST_CHECK_GT(anchors[i].height, anchors[i - 1].height);
+                    BOOST_CHECK(UintToArith256(anchors[i].chain_work) > UintToArith256(anchors[i - 1].chain_work));
+                }
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(quicksilver_publictest_trust_anchors_are_reset)
+{
+    const auto publictest = CreateChainParams(*m_node.args, ChainType::PUBLIC_TEST);
+    BOOST_CHECK(publictest->TrustAnchors().empty());
     check_public_chain_trust_anchors_reset(*publictest);
     // Mainnet ChainTxData is filled per release (F-425). Public test stays unset.
     check_chain_tx_data_left_unset(*publictest);
@@ -822,6 +843,21 @@ BOOST_AUTO_TEST_CASE(publictest_matches_mainnet_retarget_and_pow_params)
     BOOST_CHECK_EQUAL(publictest.nTxWorkCouplingK, main.nTxWorkCouplingK);
     BOOST_CHECK_EQUAL(publictest.nEdgeBits, main.nEdgeBits);
     BOOST_CHECK_EQUAL(publictest.nMinerConfirmationWindow, main.nMinerConfirmationWindow);
+    BOOST_CHECK_EQUAL(publictest.nTxEdgeBits, main.nTxEdgeBits);
+    BOOST_CHECK(publictest.txPowLimit == main.txPowLimit);
+    BOOST_CHECK_EQUAL(publictest.nMaxAnchorAge, main.nMaxAnchorAge);
+    BOOST_CHECK_EQUAL(publictest.fTxPowNoCycle, main.fTxPowNoCycle);
+    BOOST_CHECK_EQUAL(publictest.fBlockPowNoCycle, main.fBlockPowNoCycle);
+    BOOST_CHECK_EQUAL(publictest.nCongestionTargetPermille, main.nCongestionTargetPermille);
+    BOOST_CHECK_EQUAL(publictest.nCongestionStepDenom, main.nCongestionStepDenom);
+    BOOST_CHECK_EQUAL(publictest.nCongestionMaxMultiplier, main.nCongestionMaxMultiplier);
+    BOOST_CHECK_EQUAL(publictest.nTxPowMint, main.nTxPowMint);
+    BOOST_CHECK_EQUAL(publictest.nTxWorkRefBytes, main.nTxWorkRefBytes);
+    BOOST_CHECK_EQUAL(publictest.nTxUtxoRefCount, main.nTxUtxoRefCount);
+    BOOST_CHECK_EQUAL(publictest.nMaxBlockMint, main.nMaxBlockMint);
+    BOOST_CHECK_EQUAL(publictest.nInitialSubsidy, main.nInitialSubsidy);
+    BOOST_CHECK_EQUAL(publictest.nTailSubsidy, main.nTailSubsidy);
+    BOOST_CHECK_EQUAL(publictest.nBootstrapBlocks, main.nBootstrapBlocks);
 
     // Absolute values, so a change to BOTH chains cannot pass this test silently.
     BOOST_CHECK_EQUAL(main.nPowTargetSpacing, 5 * 60);
@@ -900,7 +936,7 @@ BOOST_AUTO_TEST_CASE(mainnet_retarget_step_off_powlimit_is_safe_and_agreed)
                                               pindexLast.nBits, next_nbits));
 }
 
-// Quicksilver (#5c-1 Phase 3): sandbox block PoW is trivial-but-real, mirroring
+// Quicksilver calibrated PoW: sandbox block PoW is trivial-but-real, mirroring
 // upstream's easy-target sandbox. The Cuckatoo migration accidentally made block
 // PoW require a real 42-cycle regardless of target (making the 100-block maturity
 // fixtures take ~6 min). The fBlockPowNoCycle flag restores the upstream invariant
@@ -910,6 +946,8 @@ BOOST_AUTO_TEST_CASE(sandbox_block_pow_skips_cycle_but_keeps_target)
 {
     const auto sandbox = CreateChainParams(*m_node.args, ChainType::SANDBOX);
     Consensus::Params consensus = sandbox->GetConsensus();
+    BOOST_CHECK(!CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus().fBlockPowNoCycle);
+    BOOST_CHECK(!CreateChainParams(*m_node.args, ChainType::PUBLIC_TEST)->GetConsensus().fBlockPowNoCycle);
 
     // A degenerate "cycle": 42 distinct ascending edges that do NOT form a real
     // 42-cycle in the graph. We then grind ONLY the cheap proof-hash threshold
@@ -970,14 +1008,14 @@ BOOST_AUTO_TEST_CASE(e28_flag_day_sizes_and_floor)
 }
 
 // ---------------------------------------------------------------------------
-// Quicksilver (#5c-1 Phase 2): the congestion multiplier is a HEADER field.
+// Quicksilver header-field congestion pricing: the congestion multiplier is a HEADER field.
 // These cases fence the format properties that make that safe. They are not
 // arithmetic checks — they are the load-bearing invariants of the byte layout.
 // ---------------------------------------------------------------------------
 
 BOOST_AUTO_TEST_CASE(congestion_header_prepow_layout_keeps_nonce_at_the_tail)
 {
-    // THE hazard of #5c-1 Phase 2. Every Cuckatoo solver entry point grinds the last
+    // THE hazard of header-field congestion pricing. Every Cuckatoo solver entry point grinds the last
     // four bytes of the pre-pow in place: solve_19/solve_28 via mutate_nonce,
     // Solve28Bytes explicitly, dispatch.cpp's key reconstruction, the bench
     // KeyedPrepow helpers, and the external CUDA solver gpu/qsgpusolve-cuda.cu. Appending

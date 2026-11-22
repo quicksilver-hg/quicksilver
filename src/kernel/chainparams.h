@@ -27,6 +27,17 @@
  *
  * See also: CChainParams::TxData, GuessVerificationProgress.
  */
+/**
+ * A block the release vouches for: a header at `height` must have `hash`, and
+ * `chain_work` is the total work up to and including it. Each chain carries an
+ * append-only list of these, ascending by height (F-565 (a)).
+ */
+struct TrustAnchor {
+    int height;
+    uint256 hash;
+    uint256 chain_work;
+};
+
 struct ChainTxData {
     int64_t nTime;    //!< UNIX timestamp of last known number of transactions
     uint64_t tx_count; //!< total number of transactions between genesis and that timestamp
@@ -92,6 +103,8 @@ public:
     const std::vector<uint8_t>& FixedSeeds() const { return vFixedSeeds; }
 
     const ChainTxData& TxData() const { return chainTxData; }
+    /** The chain's trust anchors, ascending by height; the newest is last. */
+    const std::vector<TrustAnchor>& TrustAnchors() const { return m_trust_anchors; }
 
     /**
      * VersionBitsParameters holds activation parameters
@@ -110,6 +123,8 @@ public:
         std::unordered_map<Consensus::BuriedDeployment, int> activation_heights{};
         bool fastprune{false};
         bool tx_pow_no_cycle{false};
+        //! Tests only: no command-line argument feeds this.
+        std::vector<TrustAnchor> trust_anchors{};
     };
 
     static std::unique_ptr<const CChainParams> Sandbox(const SandboxOptions& options);
@@ -136,6 +151,22 @@ protected:
     bool fDefaultConsistencyChecks;
     bool m_is_mockable_chain;
     ChainTxData chainTxData;
+    std::vector<TrustAnchor> m_trust_anchors;
+
+    /**
+     * Install the chain's trust anchors. When the list is non-empty, the newest
+     * (last) anchor supplies consensus.defaultAssumeValid and
+     * consensus.nMinimumChainWork; they are never set by hand. With no anchors
+     * both fields keep the values the constructor gave them.
+     */
+    void SetTrustAnchors(std::vector<TrustAnchor> anchors)
+    {
+        m_trust_anchors = std::move(anchors);
+        if (!m_trust_anchors.empty()) {
+            consensus.nMinimumChainWork = m_trust_anchors.back().chain_work;
+            consensus.defaultAssumeValid = m_trust_anchors.back().hash;
+        }
+    }
 };
 
 #endif // QUICKSILVER_KERNEL_CHAINPARAMS_H

@@ -75,7 +75,10 @@ std::optional<std::string> CheckPackageRelayPoolAcceptResult(const Package& txns
             return strprintf("Package validation unexpectedly succeeded. %s", result.m_state.ToString());
         }
     }
-    if (result.m_state.GetResult() != PackageValidationResult::PCKG_POLICY && txns.size() != result.m_tx_results.size()) {
+    // A package-wide failure has no per-transaction results, regardless of
+    // which package result type reports it.
+    if (!expect_valid && result.m_tx_results.empty()) return std::nullopt;
+    if (txns.size() != result.m_tx_results.size()) {
         return strprintf("txns size %u does not match tx results size %u", txns.size(), result.m_tx_results.size());
     }
     for (const auto& tx : txns) {

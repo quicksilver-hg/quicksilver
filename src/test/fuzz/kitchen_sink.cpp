@@ -28,6 +28,7 @@ constexpr TransactionError ALL_TRANSACTION_ERROR[] = {
     TransactionError::CONSENSUS_INVALID,
     TransactionError::RELAYPOOL_ERROR,
     TransactionError::MAX_BURN_EXCEEDED,
+    TransactionError::INVALID_PACKAGE,
 };
 }; // namespace
 
@@ -43,7 +44,7 @@ FUZZ_TARGET(kitchen_sink)
     (void)RPCErrorFromTransactionError(transaction_error);
     (void)TransactionErrorString(transaction_error);
 
-    // Quicksilver feeless (#5b-2): no fee estimate horizons to fuzz.
+    // Quicksilver feeless: no fee estimate horizons to fuzz.
 
     const OutputType output_type = fuzzed_data_provider.PickValueInArray(OUTPUT_TYPES);
     const std::string& output_type_string = FormatOutputType(output_type);

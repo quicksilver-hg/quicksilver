@@ -58,16 +58,23 @@ FUZZ_TARGET(coincontrol, .init = initialize_coincontrol)
             },
             [&] {
                 (void)coin_control.Select(out_point);
+                assert(coin_control.HasSelected());
+                assert(coin_control.IsSelected(out_point));
             },
             [&] {
                 const CTxOut tx_out{ConsumeMoney(fuzzed_data_provider), ConsumeScript(fuzzed_data_provider)};
                 (void)coin_control.Select(out_point).SetTxOut(tx_out);
+                assert(coin_control.IsSelected(out_point));
+                assert(coin_control.IsExternalSelected(out_point));
+                assert(coin_control.GetExternalOutput(out_point) == tx_out);
             },
             [&] {
                 (void)coin_control.UnSelect(out_point);
+                assert(!coin_control.IsSelected(out_point));
             },
             [&] {
                 (void)coin_control.UnSelectAll();
+                assert(!coin_control.HasSelected());
             },
             [&] {
                 (void)coin_control.ListSelected();

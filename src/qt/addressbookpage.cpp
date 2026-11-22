@@ -12,6 +12,7 @@
 #include <qt/editaddressdialog.h>
 #include <qt/guiutil.h>
 #include <qt/platformstyle.h>
+#include <key_io.h>
 
 #include <QIcon>
 #include <QLayout>
@@ -31,9 +32,10 @@ class AddressBookSortFilterProxyModel final : public QSortFilterProxyModel
     const QString m_type;
 
 public:
-    AddressBookSortFilterProxyModel(const QString& type, QObject* parent)
+    AddressBookSortFilterProxyModel(const QString& type, bool key_hash_only, QObject* parent)
         : QSortFilterProxyModel(parent)
         , m_type(type)
+        , m_key_hash_only(key_hash_only)
     {
         setDynamicSortFilter(true);
         setFilterCaseSensitivity(Qt::CaseInsensitive);
@@ -51,6 +53,9 @@ protected:
         }
 
         auto address = model->index(row, AddressTableModel::Address, parent);
+        if (m_key_hash_only && !std::holds_alternative<PKHash>(DecodeDestination(model->data(address).toString().toStdString()))) {
+            return false;
+        }
 
 #if (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0))
         const auto pattern = filterRegularExpression();
@@ -60,6 +65,9 @@ protected:
         return (model->data(address).toString().contains(pattern) ||
                 model->data(label).toString().contains(pattern));
     }
+
+private:
+    const bool m_key_hash_only;
 };
 
 AddressBookPage::AddressBookPage(const PlatformStyle *platformStyle, Mode _mode, Tabs _tab, QWidget *parent) :
@@ -150,7 +158,7 @@ void AddressBookPage::setModel(AddressTableModel *_model)
         return;
 
     auto type = tab == ReceivingTab ? AddressTableModel::Receive : AddressTableModel::Send;
-    proxyModel = new AddressBookSortFilterProxyModel(type, this);
+    proxyModel = new AddressBookSortFilterProxyModel(type, m_key_hash_only, this);
     proxyModel->setSourceModel(_model);
 
     connect(ui->searchLineEdit, &QLineEdit::textChanged, proxyModel, &QSortFilterProxyModel::setFilterWildcard);

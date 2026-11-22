@@ -91,8 +91,10 @@ FUZZ_TARGET(txorphan, .init = initialize_orphanage)
             // Check that all txns returned from GetChildrenFrom* are indeed a direct child of this tx.
             NodeId peer_id = fuzzed_data_provider.ConsumeIntegral<NodeId>();
             for (const auto& child : orphanage.GetChildrenFromSamePeer(ptx_potential_parent, peer_id)) {
+                assert(orphanage.HaveTxFromPeer(child->GetWitnessHash(), peer_id));
                 assert(std::any_of(child->vin.cbegin(), child->vin.cend(), [&](const auto& input) {
-                    return input.prevout.hash == ptx_potential_parent->GetHash();
+                    return input.prevout.hash == ptx_potential_parent->GetHash() &&
+                           input.prevout.n < ptx_potential_parent->vout.size();
                 }));
             }
         }

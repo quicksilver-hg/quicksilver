@@ -2,7 +2,7 @@
 # Copyright (c) 2026 The Quicksilver developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Stage 2 flag day: transaction work is priced by bytes and UTXO creation.
+"""byte-pricing flag day: transaction work is priced by bytes and UTXO creation.
 
 Three rules, end to end on a sandbox node:
 

@@ -23,12 +23,9 @@ Files: src/qt/res/icons/add.png
        src/qt/res/icons/editpaste.png
        src/qt/res/icons/export.png
        src/qt/res/icons/eye.png
-       src/qt/res/icons/history.png
        src/qt/res/icons/lock_*.png
        src/qt/res/icons/overview.png
-       src/qt/res/icons/receive.png
        src/qt/res/icons/remove.png
-       src/qt/res/icons/send.png
        src/qt/res/icons/transaction*.png
        src/qt/res/icons/tx_output.png
        src/qt/res/icons/warning.png
@@ -77,11 +74,14 @@ Files: src/qt/res/icons/quicksilver.*
 Copyright: 2026, The Quicksilver developers
 License: Expat
 Comment: Original artwork (the Quicksilver Mercury brand mark and its
-         desaturated public-test variant); not derived from Bitcoin Core's logo.
+         hue-shifted public-test variant); not derived from Bitcoin Core's logo.
          See src/qt/res/src/quicksilver.svg for the design and
          contrib/devtools/gen-brand-icons.sh for regeneration.
 
 Files: src/qt/res/icons/agent.png
+       src/qt/res/icons/history.png
+       src/qt/res/icons/receive.png
+       src/qt/res/icons/send.png
        src/qt/res/src/hud_agent.svg
        src/qt/res/src/hud_ledger.svg
        src/qt/res/src/hud_request.svg
@@ -90,6 +90,14 @@ Copyright: 2026, The Quicksilver developers
 License: Expat
 Comment: Original artwork (the Quicksilver GUI heads-up-display glyph set).
          See contrib/devtools/gen-qt-hud-icons.py for regeneration.
+
+Files: src/qt/res/icons/spin_up.png
+       src/qt/res/icons/spin_down.png
+       src/qt/res/icons/spin_up_off.png
+       src/qt/res/icons/spin_down_off.png
+Copyright: 2026, The Quicksilver developers
+License: Expat
+Comment: Original artwork (the Quicksilver GUI spin arrows), drawn in-project.
 
 Files: src/qt/res/icons/proxy.png
        src/qt/res/src/proxy.svg

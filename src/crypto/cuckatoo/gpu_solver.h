@@ -51,6 +51,7 @@ const char* GpuSolveStatusName(GpuSolveStatus status);
  * solver that no solve attempt can actually start.
  */
 bool GpuHelperConfigured(uint8_t edgebits);
+int NoProgressTimeoutMs();
 std::string DescribeDiscovery(const GpuDiscovery& discovery);
 
 //! If CUCKATOO_GPU_SOLVER is set, runs the helper for `device` as

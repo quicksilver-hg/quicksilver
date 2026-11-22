@@ -24,6 +24,7 @@ static void PrePadded(benchmark::Bench& bench)
         CSHA256 h = hasher;
         h.Write(data.begin(), 32);
         h.Finalize(out);
+        ankerl::nanobench::doNotOptimizeAway(out);
     });
 }
 
@@ -42,6 +43,7 @@ static void RegularPadded(benchmark::Bench& bench)
         h.Write(nonce.begin(), 32);
         h.Write(data.begin(), 32);
         h.Finalize(out);
+        ankerl::nanobench::doNotOptimizeAway(out);
     });
 }
 

@@ -2,10 +2,10 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 //
-// Frame-B mint (#4): a valid per-tx PoW authorizes a capped mint C to the block
+// Frame-B mint: a valid per-tx PoW authorizes a capped mint C to the block
 // miner. These tests cover the inflation arithmetic in isolation — the most
 // dangerous code in the coin — plus the adversarial replay/transplant cases.
-// #5c-1: the allowance now resolves each tx's anchor against a branch tip, so a
+// per-transaction PoW anchor: the allowance now resolves each tx's anchor against a branch tip, so a
 // tx mints only when its anchor is on-branch/in-window AND its proof verifies
 // against that anchor's block hash.
 
@@ -142,7 +142,7 @@ BOOST_AUTO_TEST_CASE(allowance_excludes_unproven_and_tampered_tx)
 
 BOOST_AUTO_TEST_CASE(allowance_excludes_bad_anchor_tx)
 {
-    // #5c-1: a tx whose proof is otherwise valid but whose anchor does NOT resolve
+    // per-transaction PoW anchor: a tx whose proof is otherwise valid but whose anchor does NOT resolve
     // on-branch (here: future/out-of-window anchor height) mints nothing.
     SelectParams(ChainType::SANDBOX);
     const Consensus::Params& cp = Params().GetConsensus();
@@ -228,7 +228,7 @@ BOOST_AUTO_TEST_CASE(allowance_tolerates_null_coinbase_slot)
     BOOST_CHECK_EQUAL(GetBlockMintAllowance(block, cp, &tip), 1 * cp.nTxPowMint);
 }
 
-// #5c-1 Phase 2 — MINT-SAFETY FLOOR BINDING (the catastrophic-bug gate, economics §5).
+// header-field congestion pricing — MINT-SAFETY FLOOR BINDING (the catastrophic-bug gate, economics §5).
 // A mint is authorized for a tx IFF that tx clears its OWN per-tx congestion target — the
 // SAME GetTxPowTarget the validity predicate uses. So a proof that fails its congestion
 // floor mints NOTHING: a miner cannot manufacture cheap self-txs to harvest free C once the

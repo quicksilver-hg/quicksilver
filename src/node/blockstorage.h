@@ -325,6 +325,10 @@ public:
     /** Calculate the amount of disk space the block & undo files currently use */
     uint64_t CalculateCurrentUsage();
 
+    //! Returns the block-index entry of the highest trust anchor whose hash is in
+    //! the block index, or nullptr. The list need not be sorted.
+    const CBlockIndex* GetLastTrustAnchor(const std::vector<TrustAnchor>& anchors) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+
     //! Check if all blocks in the [upper_block, lower_block] range have data available.
     //! The caller is responsible for ensuring that lower_block is an ancestor of upper_block
     //! (part of the same chain).

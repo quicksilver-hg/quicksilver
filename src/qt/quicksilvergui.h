@@ -22,6 +22,7 @@
 #include <QMap>
 #include <QMenu>
 #include <QPoint>
+#include <QPointer>
 #include <QSystemTrayIcon>
 #include <QTimer>
 
@@ -423,7 +424,7 @@ protected:
     void changeEvent(QEvent* e) override;
 
 private:
-    OptionsModel* optionsModel{nullptr};
+    QPointer<OptionsModel> optionsModel;
     QMenu* menu{nullptr};
     const PlatformStyle* m_platform_style;
 

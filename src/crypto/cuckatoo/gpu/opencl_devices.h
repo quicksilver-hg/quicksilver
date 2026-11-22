@@ -18,7 +18,8 @@ struct ListedDevice {
     ListingFields fields;
     // The enumeration-order id this device would have had without a slot address
     // ("opencl:<platform>:<index>"). Kept so a choice saved under an older listing still
-    // selects this card; never printed -- listing_format.h is the node's contract.
+    // selects this card; printed as alias= when it differs from the PCI id so
+    // the node can canonicalize old saved choices before invoking the helper.
     std::string enumeration_id;
 };
 

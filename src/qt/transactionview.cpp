@@ -190,6 +190,7 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
 
 TransactionView::~TransactionView()
 {
+    closeOpenedDialogs();
     QSettings settings;
     settings.setValue("TransactionViewHeaderState", transactionView->horizontalHeader()->saveState());
 }
@@ -532,7 +533,7 @@ void TransactionView::showDetails()
         TransactionDescDialog *dlg = new TransactionDescDialog(selection.at(0));
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         m_opened_dialogs.append(dlg);
-        connect(dlg, &QObject::destroyed, [this, dlg] {
+        connect(dlg, &QObject::destroyed, this, [this, dlg] {
             m_opened_dialogs.removeOne(dlg);
         });
         dlg->show();

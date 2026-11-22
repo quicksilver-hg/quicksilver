@@ -21,18 +21,22 @@ FUZZ_TARGET(secp256k1_ec_seckey_import_export_der)
     secp256k1_context* secp256k1_context_sign = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
     {
         std::vector<uint8_t> out32(32);
-        (void)ec_seckey_import_der(secp256k1_context_sign, out32.data(), ConsumeFixedLengthByteVector(fuzzed_data_provider, CKey::SIZE).data(), CKey::SIZE);
+        const auto der = ConsumeRandomLengthByteVector(fuzzed_data_provider, 279);
+        (void)ec_seckey_import_der(secp256k1_context_sign, out32.data(), der.data(), der.size());
     }
     {
-        std::vector<uint8_t> seckey(CKey::SIZE);
+        std::vector<uint8_t> seckey(279);
         const std::vector<uint8_t> key32 = ConsumeFixedLengthByteVector(fuzzed_data_provider, 32);
-        size_t seckeylen = CKey::SIZE;
+        size_t seckeylen = seckey.size();
         const bool compressed = fuzzed_data_provider.ConsumeBool();
         const bool exported = ec_seckey_export_der(secp256k1_context_sign, seckey.data(), &seckeylen, key32.data(), compressed);
         if (exported) {
             std::vector<uint8_t> out32(32);
-            const bool imported = ec_seckey_import_der(secp256k1_context_sign, out32.data(), seckey.data(), seckey.size()) == 1;
+            const bool imported = ec_seckey_import_der(secp256k1_context_sign, out32.data(), seckey.data(), seckeylen) == 1;
             assert(imported && key32 == out32);
+            if (seckeylen > 0) {
+                (void)ec_seckey_import_der(secp256k1_context_sign, out32.data(), seckey.data(), seckeylen - 1);
+            }
         }
     }
     secp256k1_context_destroy(secp256k1_context_sign);

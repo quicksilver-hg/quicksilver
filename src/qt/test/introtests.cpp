@@ -13,6 +13,8 @@
 #include <fstream>
 
 #include <QCheckBox>
+#include <QDialogButtonBox>
+#include <QPushButton>
 #include <QDir>
 #include <QLabel>
 #include <QRegularExpression>
@@ -20,7 +22,7 @@
 #include <QString>
 #include <QTemporaryDir>
 
-//! The Phase 6 S2 walk found both of these live on the first screen of a clean install.
+//! The first-run walk found both of these live on the first screen of a clean install.
 void IntroTests::explanationLeavesNoPlaceholderAndNoInheritedYear()
 {
     Intro intro(nullptr, /*blockchain_size_gb=*/1, /*chain_state_size_gb=*/1);
@@ -41,7 +43,7 @@ void IntroTests::explanationLeavesNoPlaceholderAndNoInheritedYear()
     QVERIFY(text.contains(QStringLiteral("The block data is estimated at up to about 1 GB a year.")));
 }
 
-//! Phase 6 S1-8: the first screen still described the initial block download of the
+//! First-run walk: the first screen still described the initial block download of the
 //! chain this one forked from.
 //!
 //! The sentences around the figures were inherited, and they promised a download of
@@ -121,13 +123,14 @@ void IntroTests::pruneSuffixReadsGrammaticallyWithNoCatalogue()
     QCOMPARE(text, QStringLiteral("(sufficient to restore backups 730 days old)"));
 }
 
-//! Phase 6 S3. The free-space line sits directly under the data-directory chooser on
+//! First-run walk. The free-space line sits directly under the data-directory chooser on
 //! the same first screen, and it carried three more numerus strings. Its counts are
 //! whole gigabytes, so a count of one is reachable in all three -- and was rendering
 //! "1 GB(s)".
 //!
 //! FreespaceChecker::ST_OK is 0; the enum is defined inside intro.cpp and is not
-//! nameable from here.
+//! nameable from here. freeSpaceStatusCodesAreOkThenError pins the value through
+//! the dialog's own behaviour.
 void IntroTests::freeSpaceLabelReadsGrammaticallyWithNoCatalogue()
 {
     constexpr int ST_OK{0};
@@ -181,6 +184,40 @@ void IntroTests::freeSpaceLabelReadsGrammaticallyWithNoCatalogue()
         QVERIFY2(!text.contains(QStringLiteral("%n")), qPrintable(text));
         QVERIFY2(!text.contains(QRegularExpression(QStringLiteral("%[0-9]"))), qPrintable(text));
     }
+}
+
+//! S0292-C-03: the checker's status values are private to intro.cpp, so the tests
+//! pass them as numbers. Pin what each number does through what the dialog shows:
+//! 0 is the OK path (message as given, free space shown, OK enabled), 1 the error
+//! path (message marked as an error, free space cleared, OK disabled). A reordered
+//! enum fails here rather than silently turning the free-space test into an error
+//! case.
+void IntroTests::freeSpaceStatusCodesAreOkThenError()
+{
+    constexpr int ST_OK{0};
+    constexpr int ST_ERROR{1};
+    Intro intro(nullptr, /*blockchain_size_gb=*/128, /*chain_state_size_gb=*/26);
+    QLabel* free_space = intro.findChild<QLabel*>(QStringLiteral("freeSpace"));
+    QLabel* error_message = intro.findChild<QLabel*>(QStringLiteral("errorMessage"));
+    QDialogButtonBox* buttons = intro.findChild<QDialogButtonBox*>(QStringLiteral("buttonBox"));
+    QVERIFY(free_space);
+    QVERIFY(error_message);
+    QVERIFY(buttons);
+    QPushButton* ok = buttons->button(QDialogButtonBox::Ok);
+    QVERIFY(ok);
+    QCheckBox* prune = intro.findChild<QCheckBox*>(QStringLiteral("prune"));
+    QVERIFY(prune);
+    prune->setChecked(false);
+
+    intro.setStatus(ST_ERROR, QStringLiteral("cannot create"), 500 * GB_BYTES);
+    QCOMPARE(error_message->text(), QStringLiteral("Error: cannot create"));
+    QCOMPARE(free_space->text(), QString());
+    QVERIFY(!ok->isEnabled());
+
+    intro.setStatus(ST_OK, QStringLiteral("will be created"), 500 * GB_BYTES);
+    QCOMPARE(error_message->text(), QStringLiteral("will be created"));
+    QCOMPARE(free_space->text(), QStringLiteral("500 GB of space available."));
+    QVERIFY(ok->isEnabled());
 }
 
 //! F-123. The dialog is the desktop's first-run experience, not a data directory picker,

@@ -7,6 +7,10 @@
 #define QUICKSILVER_HTTPSERVER_H
 
 #include <functional>
+#include <cassert>
+#include <condition_variable>
+#include <sync.h>
+#include <unordered_map>
 #include <optional>
 #include <span>
 #include <string>
@@ -29,9 +33,65 @@ static const int DEFAULT_HTTP_WORKQUEUE=64;
 static const int DEFAULT_HTTP_SERVER_TIMEOUT=30;
 
 struct evhttp_request;
+struct evhttp_connection;
 struct event_base;
 class CService;
 class HTTPRequest;
+
+namespace http_detail {
+class HTTPRequestTracker
+{
+    mutable Mutex m_mutex;
+    mutable std::condition_variable m_cv;
+    std::unordered_map<const evhttp_connection*, size_t> m_tracker GUARDED_BY(m_mutex);
+    bool m_closing GUARDED_BY(m_mutex){false};
+
+    void RemoveConnectionInternal(const decltype(m_tracker)::iterator it) EXCLUSIVE_LOCKS_REQUIRED(m_mutex)
+    {
+        m_tracker.erase(it);
+        if (m_tracker.empty()) m_cv.notify_all();
+    }
+public:
+    bool AddRequest(const evhttp_connection* conn) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    {
+        LOCK(m_mutex);
+        if (m_closing) return false;
+        ++m_tracker[conn];
+        return true;
+    }
+    void RemoveRequest(const evhttp_connection* conn) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    {
+        LOCK(m_mutex);
+        auto it{m_tracker.find(conn)};
+        if (it != m_tracker.end() && it->second > 0 && --it->second == 0) RemoveConnectionInternal(it);
+    }
+    void RemoveConnection(const evhttp_connection* conn) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    {
+        LOCK(m_mutex);
+        auto it{m_tracker.find(conn)};
+        if (it != m_tracker.end()) RemoveConnectionInternal(it);
+    }
+    void Close() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    {
+        WITH_LOCK(m_mutex, m_closing = true);
+    }
+    void Open() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    {
+        LOCK(m_mutex);
+        assert(m_tracker.empty());
+        m_closing = false;
+    }
+    size_t CountActiveConnections() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    {
+        return WITH_LOCK(m_mutex, return m_tracker.size());
+    }
+    void WaitUntilEmpty() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    {
+        WAIT_LOCK(m_mutex, lock);
+        m_cv.wait(lock, [this]() EXCLUSIVE_LOCKS_REQUIRED(m_mutex) { return m_tracker.empty(); });
+    }
+};
+} // namespace http_detail
 
 /** Initialize HTTP server.
  * Call this before RegisterHTTPHandler or EventBase().

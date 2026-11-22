@@ -48,7 +48,7 @@ static CTransactionRef add_descendants(const CTransactionRef& tx, int32_t num_de
     // Assumes this isn't already spent in relaypool
     auto tx_to_spend = tx;
     for (int32_t i{0}; i < num_descendants; ++i) {
-        auto next_tx = make_tx(/*inputs=*/{tx_to_spend}, /*output_values=*/{(50 - i) * CENT});
+        auto next_tx = make_tx(/*inputs=*/{tx_to_spend}, /*output_values=*/{tx_to_spend->vout[0].nValue});
         AddToRelayPool(pool, entry.FromTx(next_tx));
         tx_to_spend = next_tx;
     }
@@ -64,27 +64,27 @@ BOOST_FIXTURE_TEST_CASE(replacement_helper_functions, TestChain100Setup)
     TestRelayPoolEntryHelper entry;
 
     // Create a parent tx1 and child tx2.
-    const auto tx1 = make_tx(/*inputs=*/ {m_coinbase_txns[0]}, /*output_values=*/ {10 * COIN});
+    const auto tx1 = make_tx(/*inputs=*/ {m_coinbase_txns[0]}, /*output_values=*/ {m_coinbase_txns[0]->vout[0].nValue});
     AddToRelayPool(pool, entry.FromTx(tx1));
-    const auto tx2 = make_tx(/*inputs=*/ {tx1}, /*output_values=*/ {995 * CENT});
+    const auto tx2 = make_tx(/*inputs=*/ {tx1}, /*output_values=*/ {tx1->vout[0].nValue});
     AddToRelayPool(pool, entry.FromTx(tx2));
 
     // Create a parent tx3 and child tx4.
-    const auto tx3 = make_tx(/*inputs=*/ {m_coinbase_txns[1]}, /*output_values=*/ {1099 * CENT});
+    const auto tx3 = make_tx(/*inputs=*/ {m_coinbase_txns[1]}, /*output_values=*/ {m_coinbase_txns[1]->vout[0].nValue});
     AddToRelayPool(pool, entry.FromTx(tx3));
-    const auto tx4 = make_tx(/*inputs=*/ {tx3}, /*output_values=*/ {999 * CENT});
+    const auto tx4 = make_tx(/*inputs=*/ {tx3}, /*output_values=*/ {tx3->vout[0].nValue});
     AddToRelayPool(pool, entry.FromTx(tx4));
 
     // Create a parent tx5 and child tx6.
-    const auto tx5 = make_tx(/*inputs=*/ {m_coinbase_txns[2]}, /*output_values=*/ {1099 * CENT});
+    const auto tx5 = make_tx(/*inputs=*/ {m_coinbase_txns[2]}, /*output_values=*/ {m_coinbase_txns[2]->vout[0].nValue});
     AddToRelayPool(pool, entry.FromTx(tx5));
-    const auto tx6 = make_tx(/*inputs=*/ {tx5}, /*output_values=*/ {1098 * CENT});
+    const auto tx6 = make_tx(/*inputs=*/ {tx5}, /*output_values=*/ {tx5->vout[0].nValue});
     AddToRelayPool(pool, entry.FromTx(tx6));
 
     // Two independent transactions, tx7 and tx8.
-    const auto tx7 = make_tx(/*inputs=*/ {m_coinbase_txns[3]}, /*output_values=*/ {999 * CENT});
+    const auto tx7 = make_tx(/*inputs=*/ {m_coinbase_txns[3]}, /*output_values=*/ {m_coinbase_txns[3]->vout[0].nValue});
     AddToRelayPool(pool, entry.FromTx(tx7));
-    const auto tx8 = make_tx(/*inputs=*/ {m_coinbase_txns[4]}, /*output_values=*/ {999 * CENT});
+    const auto tx8 = make_tx(/*inputs=*/ {m_coinbase_txns[4]}, /*output_values=*/ {m_coinbase_txns[4]->vout[0].nValue});
     AddToRelayPool(pool, entry.FromTx(tx8));
 
 
@@ -119,7 +119,9 @@ BOOST_FIXTURE_TEST_CASE(replacement_helper_functions, TestChain100Setup)
     CTxRelayPool::setEntries all_children{entry2_normal, entry4_high, entry6_low_prioritised};
     const std::vector<CTransactionRef> parent_inputs({m_coinbase_txns[0], m_coinbase_txns[1], m_coinbase_txns[2],
                                                 m_coinbase_txns[3], m_coinbase_txns[4]});
-    const auto conflicts_with_parents = make_tx(parent_inputs, {50 * CENT});
+    CAmount parent_total{0};
+    for (const auto& input : parent_inputs) parent_total += input->vout[0].nValue;
+    const auto conflicts_with_parents = make_tx(parent_inputs, {parent_total});
     CTxRelayPool::setEntries all_conflicts;
     BOOST_CHECK(GetEntriesForConflicts(/*tx=*/ *conflicts_with_parents.get(),
                                        /*pool=*/ pool,
@@ -159,7 +161,7 @@ BOOST_FIXTURE_TEST_CASE(replacement_helper_functions, TestChain100Setup)
     BOOST_CHECK(GetEntriesForConflicts(*conflicts_with_parents.get(), pool, all_parents, all_conflicts).has_value());
 
     // Tests for HasNoNewUnconfirmed
-    const auto spends_unconfirmed = make_tx({tx1}, {36 * CENT});
+    const auto spends_unconfirmed = make_tx({tx1}, {tx1->vout[0].nValue});
     for (const auto& input : spends_unconfirmed->vin) {
         // Spends unconfirmed inputs.
         BOOST_CHECK(pool.exists(GenTxid::Txid(input.prevout.hash)));
@@ -170,11 +172,12 @@ BOOST_FIXTURE_TEST_CASE(replacement_helper_functions, TestChain100Setup)
     BOOST_CHECK(HasNoNewUnconfirmed(*spends_unconfirmed.get(), pool, {entry2_normal}) == std::nullopt);
     BOOST_CHECK(HasNoNewUnconfirmed(*spends_unconfirmed.get(), pool, empty_set).has_value());
 
-    const auto spends_new_unconfirmed = make_tx({tx1, tx8}, {36 * CENT});
+    const auto spends_new_unconfirmed = make_tx({tx1, tx8}, {tx1->vout[0].nValue + tx8->vout[0].nValue});
     BOOST_CHECK(HasNoNewUnconfirmed(*spends_new_unconfirmed.get(), pool, {entry2_normal}).has_value());
     BOOST_CHECK(HasNoNewUnconfirmed(*spends_new_unconfirmed.get(), pool, all_entries).has_value());
 
-    const auto spends_conflicting_confirmed = make_tx({m_coinbase_txns[0], m_coinbase_txns[1]}, {45 * CENT});
+    const auto spends_conflicting_confirmed = make_tx({m_coinbase_txns[0], m_coinbase_txns[1]},
+        {m_coinbase_txns[0]->vout[0].nValue + m_coinbase_txns[1]->vout[0].nValue});
     BOOST_CHECK(HasNoNewUnconfirmed(*spends_conflicting_confirmed.get(), pool, {entry1_normal, entry3_low}) == std::nullopt);
 
 }
@@ -187,7 +190,7 @@ BOOST_FIXTURE_TEST_CASE(pays_more_work_rate, TestChain100Setup)
     TestRelayPoolEntryHelper entry;
 
     // A conflict carrying a known surplus. Its rate is surplus/vsize.
-    const auto txc = make_tx(/*inputs=*/{m_coinbase_txns[0]}, /*output_values=*/{10 * COIN});
+    const auto txc = make_tx(/*inputs=*/{m_coinbase_txns[0]}, /*output_values=*/{m_coinbase_txns[0]->vout[0].nValue});
     AddToRelayPool(pool, entry.TxWorkSurplus(arith_uint256(1000)).FromTx(txc));
     const auto entryc = pool.GetIter(txc->GetHash()).value();
     const double rate_c = entryc->GetTxWorkRate();
@@ -202,7 +205,7 @@ BOOST_FIXTURE_TEST_CASE(pays_more_work_rate, TestChain100Setup)
     BOOST_CHECK(PaysMoreWorkThanConflicts(conflicts, /*replacement_work_rate=*/rate_c * 0.99, txid).has_value());
 
     // Must beat EVERY conflict: a second, higher-rate conflict raises the bar.
-    const auto txc2 = make_tx(/*inputs=*/{m_coinbase_txns[1]}, /*output_values=*/{10 * COIN});
+    const auto txc2 = make_tx(/*inputs=*/{m_coinbase_txns[1]}, /*output_values=*/{m_coinbase_txns[1]->vout[0].nValue});
     AddToRelayPool(pool, entry.TxWorkSurplus(arith_uint256(2000)).FromTx(txc2));
     const auto entryc2 = pool.GetIter(txc2->GetHash()).value();
     const double rate_c2 = entryc2->GetTxWorkRate();

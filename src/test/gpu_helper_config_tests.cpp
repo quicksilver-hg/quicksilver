@@ -8,7 +8,10 @@
 #include <boost/test/unit_test.hpp>
 
 #include <cstdlib>
+#include <optional>
 #include <set>
+#include <utility>
+#include <vector>
 
 namespace {
 std::string Env(const char* n)
@@ -24,11 +27,30 @@ void Unset(const char* n)
     unsetenv(n);
 #endif
 }
+void SetEnv(const char* n, const std::string& value)
+{
+#ifdef WIN32
+    _putenv_s(n, value.c_str());
+#else
+    setenv(n, value.c_str(), 1);
+#endif
+}
 struct EnvGuard {
+    std::vector<std::pair<const char*, std::optional<std::string>>> saved;
+    EnvGuard()
+    {
+        for (const char* n : {"CUCKATOO_GPU_SOLVER", "CUCKATOO_GPU_BUNDLED", "CUCKATOO_GPU_DEVICES", "CUCKATOO_GPU_TIMEOUT"}) {
+            const char* value = std::getenv(n);
+            saved.emplace_back(n, value ? std::optional<std::string>{value} : std::nullopt);
+            Unset(n);
+        }
+    }
     ~EnvGuard()
     {
-        for (const char* n : {"CUCKATOO_GPU_SOLVER", "CUCKATOO_GPU_BUNDLED", "CUCKATOO_GPU_DEVICES", "CUCKATOO_GPU_TIMEOUT"})
-            Unset(n);
+        for (const auto& [name, value] : saved) {
+            if (value) SetEnv(name, *value);
+            else Unset(name);
+        }
     }
 };
 //! An ArgsManager holding exactly `argv` (argv[0] is a dummy program name).
@@ -42,6 +64,28 @@ void Parse(ArgsManager& args, std::vector<const char*> argv)
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(gpu_helper_config_tests)
+
+BOOST_AUTO_TEST_CASE(environment_guard_restores_value_and_absence)
+{
+    constexpr const char* name{"CUCKATOO_GPU_TIMEOUT"};
+    const char* original = std::getenv(name);
+    const std::optional<std::string> saved = original ? std::optional<std::string>{original} : std::nullopt;
+    SetEnv(name, "inherited-timeout");
+    {
+        EnvGuard guard;
+        BOOST_CHECK(std::getenv(name) == nullptr);
+        SetEnv(name, "changed-timeout");
+    }
+    BOOST_CHECK_EQUAL(Env(name), "inherited-timeout");
+    Unset(name);
+    {
+        EnvGuard guard;
+        SetEnv(name, "changed-timeout");
+    }
+    BOOST_CHECK(std::getenv(name) == nullptr);
+    if (saved) SetEnv(name, *saved);
+    else Unset(name);
+}
 
 BOOST_AUTO_TEST_CASE(bundled_helper_search_order)
 {
@@ -99,6 +143,26 @@ BOOST_AUTO_TEST_CASE(cpu_only_reaches_the_environment)
     Parse(args, {"-cuckatoodevice=cpu"});
     BOOST_REQUIRE(gpu::ApplyGpuHelperArgs(args, std::nullopt));
     BOOST_CHECK_EQUAL(Env("CUCKATOO_GPU_DEVICES"), "cpu");
+}
+
+BOOST_AUTO_TEST_CASE(solver_timeout_is_validated)
+{
+    EnvGuard guard;
+    for (const char* value : {"1", "30", "86400", " 45 "}) {
+        ArgsManager args;
+        const std::string option = std::string{"-cuckatoosolvertimeout="} + value;
+        Parse(args, {option.c_str()});
+        BOOST_REQUIRE(gpu::ApplyGpuHelperArgs(args, std::nullopt));
+    }
+    for (const char* value : {"0", "-5", "abc", "45s", "86401", "99999999999", "\t45\t"}) {
+        ArgsManager args;
+        const std::string option = std::string{"-cuckatoosolvertimeout="} + value;
+        Parse(args, {option.c_str()});
+        const std::string before = Env("CUCKATOO_GPU_TIMEOUT");
+        const auto result = gpu::ApplyGpuHelperArgs(args, std::nullopt);
+        BOOST_CHECK(!result);
+        BOOST_CHECK_EQUAL(Env("CUCKATOO_GPU_TIMEOUT"), before);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -156,56 +156,8 @@ static std::vector<evhttp_bound_socket *> boundSockets;
  * @brief Helps keep track of open `evhttp_connection`s with active `evhttp_requests`
  *
  */
-class HTTPRequestTracker
-{
-private:
-    mutable Mutex m_mutex;
-    mutable std::condition_variable m_cv;
-    //! For each connection, keep a counter of how many requests are open
-    std::unordered_map<const evhttp_connection*, size_t> m_tracker GUARDED_BY(m_mutex);
-
-    void RemoveConnectionInternal(const decltype(m_tracker)::iterator it) EXCLUSIVE_LOCKS_REQUIRED(m_mutex)
-    {
-        m_tracker.erase(it);
-        if (m_tracker.empty()) m_cv.notify_all();
-    }
-public:
-    //! Increase request counter for the associated connection by 1
-    void AddRequest(evhttp_request* req) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
-    {
-        const evhttp_connection* conn{Assert(evhttp_request_get_connection(Assert(req)))};
-        WITH_LOCK(m_mutex, ++m_tracker[conn]);
-    }
-    //! Decrease request counter for the associated connection by 1, remove connection if counter is 0
-    void RemoveRequest(evhttp_request* req) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
-    {
-        const evhttp_connection* conn{Assert(evhttp_request_get_connection(Assert(req)))};
-        LOCK(m_mutex);
-        auto it{m_tracker.find(conn)};
-        if (it != m_tracker.end() && it->second > 0) {
-            if (--(it->second) == 0) RemoveConnectionInternal(it);
-        }
-    }
-    //! Remove a connection entirely
-    void RemoveConnection(const evhttp_connection* conn) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
-    {
-        LOCK(m_mutex);
-        auto it{m_tracker.find(Assert(conn))};
-        if (it != m_tracker.end()) RemoveConnectionInternal(it);
-    }
-    size_t CountActiveConnections() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
-    {
-        return WITH_LOCK(m_mutex, return m_tracker.size());
-    }
-    //! Wait until there are no more connections with active requests in the tracker
-    void WaitUntilEmpty() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
-    {
-        WAIT_LOCK(m_mutex, lock);
-        m_cv.wait(lock, [this]() EXCLUSIVE_LOCKS_REQUIRED(m_mutex) { return m_tracker.empty(); });
-    }
-};
 //! Track active requests
-static HTTPRequestTracker g_requests;
+static http_detail::HTTPRequestTracker g_requests;
 
 /** Check if a network address is allowed to access the HTTP server */
 static bool ClientAllowed(const CNetAddr& netaddr)
@@ -265,9 +217,12 @@ static void http_request_cb(struct evhttp_request* req, void* arg)
     evhttp_connection* conn{evhttp_request_get_connection(req)};
     // Track active requests
     {
-        g_requests.AddRequest(req);
+        if (!g_requests.AddRequest(conn)) {
+            evhttp_send_reply(req, HTTP_SERVICE_UNAVAILABLE, nullptr, nullptr);
+            return;
+        }
         evhttp_request_set_on_complete_cb(req, [](struct evhttp_request* req, void*) {
-            g_requests.RemoveRequest(req);
+            g_requests.RemoveRequest(evhttp_request_get_connection(req));
         }, nullptr);
         evhttp_connection_set_closecb(conn, [](evhttp_connection* conn, void* arg) {
             g_requests.RemoveConnection(conn);
@@ -466,6 +421,8 @@ bool InitHTTPServer(const util::SignalInterrupt& interrupt)
         return false;
     }
 
+    g_requests.Open();
+
     LogDebug(HgLog::HTTP, "Initialized HTTP server\n");
     int workQueueDepth = std::max((long)gArgs.GetIntArg("-rpcworkqueue", DEFAULT_HTTP_WORKQUEUE), 1L);
     LogDebug(HgLog::HTTP, "creating work queue of depth %d\n", workQueueDepth);
@@ -516,6 +473,7 @@ void StartHTTPServer()
 void InterruptHTTPServer()
 {
     LogDebug(HgLog::HTTP, "Interrupting HTTP server\n");
+    g_requests.Close();
     if (eventHTTP) {
         // Reject requests on current connections
         evhttp_set_gencb(eventHTTP, http_reject_request_cb, nullptr);

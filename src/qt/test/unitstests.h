@@ -26,6 +26,7 @@ private Q_SLOTS:
     void cinnabarGlyphUsesTheBundledFace();
     void unitGlyphCmapHasWindowsBmpEncoding();
     void failedFontLoadsChangeNothing();
+    void amountFieldUnitChangeSignalsAClearedValue();
 };
 
 #endif // QUICKSILVER_QT_TEST_UNITSTESTS_H

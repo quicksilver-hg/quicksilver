@@ -141,6 +141,9 @@ BOOST_AUTO_TEST_CASE(selection_fails_when_total_value_is_insufficient)
     auto result{SelectCoinsExactOrLargest(groups, 6 * CENT, MAX_STANDARD_TX_WEIGHT)};
 
     BOOST_CHECK(!result);
+    // Insufficient funds carries no message; the weight failure below does.
+    // Pinning both keeps the two causes apart (S0205-B-02).
+    BOOST_CHECK_EQUAL(util::ErrorString(result).original, "");
 }
 
 BOOST_AUTO_TEST_CASE(exact_search_is_bounded)
@@ -155,13 +158,19 @@ BOOST_AUTO_TEST_CASE(exact_search_is_bounded)
         available += value;
     }
 
+    // The target is every coin together, so an exact match exists. The search
+    // visits sums smallest first and needs 2^17 - 1 evaluations to reach the
+    // one that adds the last (smallest) coin to all the others; the cap stops
+    // it first, and the largest-first fallback takes the same coins. Without
+    // the cap this would come back EXACT (S0205-B-01). 100'000 is
+    // MAX_EXACT_SELECTION_TRIES, which is file-static in coinselection.cpp.
     auto groups{GroupCoins(available_coins.All())};
-    auto result{SelectCoinsExactOrLargest(groups, available - 1, MAX_STANDARD_TX_WEIGHT)};
+    auto result{SelectCoinsExactOrLargest(groups, available, MAX_STANDARD_TX_WEIGHT)};
 
     BOOST_REQUIRE(result);
     BOOST_CHECK_EQUAL(result->GetAlgo(), SelectionAlgorithm::LARGEST_FIRST);
     BOOST_CHECK_EQUAL(result->GetSelectedValue(), available);
-    BOOST_CHECK_EQUAL(result->GetChange(), 1);
+    BOOST_CHECK_EQUAL(result->GetChange(), 0);
     BOOST_CHECK_EQUAL(result->GetSelectionsEvaluated(), 100'000);
     BOOST_CHECK(!result->GetAlgoCompleted());
 }
@@ -170,9 +179,12 @@ BOOST_AUTO_TEST_CASE(attempt_selection_prefers_exact_match_across_output_types)
 {
     auto vault{NewVault(m_node)};
 
+    // The only exact combination spans both buckets: 60 (BECH32) + 40 (BASE58).
+    // Neither bucket alone holds it, so the EXACT result can only come from the
+    // mixed pool (S0205-B-03).
     OutputGroupTypeMap groups;
     groups.groups_by_type[OutputType::BECH32].positive_group.push_back(MakeGroup(*vault, 101 * CENT, /*n_input=*/0, /*input_bytes=*/68));
-    groups.groups_by_type[OutputType::BASE58].positive_group.push_back(MakeGroup(*vault, 60 * CENT, /*n_input=*/1, /*input_bytes=*/68));
+    groups.groups_by_type[OutputType::BECH32].positive_group.push_back(MakeGroup(*vault, 60 * CENT, /*n_input=*/1, /*input_bytes=*/68));
     groups.groups_by_type[OutputType::BASE58].positive_group.push_back(MakeGroup(*vault, 40 * CENT, /*n_input=*/2, /*input_bytes=*/68));
     groups.all_groups.positive_group.insert(groups.all_groups.positive_group.end(),
                                             groups.groups_by_type[OutputType::BECH32].positive_group.begin(),
@@ -190,6 +202,14 @@ BOOST_AUTO_TEST_CASE(attempt_selection_prefers_exact_match_across_output_types)
     BOOST_CHECK_EQUAL(result->GetSelectedValue(), 100 * CENT);
     BOOST_CHECK_EQUAL(result->GetChange(), 0);
     BOOST_CHECK_EQUAL(result->GetInputSet().size(), 2);
+
+    // Control: with mixing disallowed the BECH32 bucket falls back to its
+    // largest coin, with change.
+    auto unmixed{AttemptSelection(100 * CENT, groups, params, /*allow_mixed_output_types=*/false)};
+    BOOST_REQUIRE(unmixed);
+    BOOST_CHECK_EQUAL(unmixed->GetAlgo(), SelectionAlgorithm::LARGEST_FIRST);
+    BOOST_CHECK_EQUAL(unmixed->GetSelectedValue(), 101 * CENT);
+    BOOST_CHECK_EQUAL(unmixed->GetChange(), 1 * CENT);
 }
 
 BOOST_AUTO_TEST_CASE(largest_first_reserves_change_output_weight)
@@ -211,8 +231,20 @@ BOOST_AUTO_TEST_CASE(largest_first_reserves_change_output_weight)
 
     auto result{ChooseSelectionResult(75 * CENT, groups, params)};
 
+    // Two inputs fit the no-change weight but not once the change output is
+    // reserved, and no exact 75 exists: the weight error, by name (S0205-B-02).
     BOOST_CHECK(!result);
-    BOOST_CHECK(!util::ErrorString(result).empty());
+    BOOST_CHECK_EQUAL(util::ErrorString(result).original,
+                      "The inputs size exceeds the maximum weight. Please try sending a smaller amount or manually consolidating your vault's UTXOs");
+
+    // Positive control: room for the change output too, and the same two
+    // inputs are taken.
+    params.m_max_tx_weight = no_input_weight + two_input_weight + params.change_output_size * WITNESS_SCALE_FACTOR;
+    auto with_room{ChooseSelectionResult(75 * CENT, groups, params)};
+    BOOST_REQUIRE(with_room);
+    BOOST_CHECK_EQUAL(with_room->GetAlgo(), SelectionAlgorithm::LARGEST_FIRST);
+    BOOST_CHECK_EQUAL(with_room->GetSelectedValue(), 110 * CENT);
+    BOOST_CHECK_EQUAL(with_room->GetChange(), 35 * CENT);
 }
 
 BOOST_AUTO_TEST_CASE(exact_match_does_not_reserve_change_output_weight)

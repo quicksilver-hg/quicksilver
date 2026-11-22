@@ -1272,7 +1272,7 @@ bool FinalizeAndExtractPSQT(PartiallySignedQuicksilverTransaction& psqtx, CMutab
  *
  * @param[out] out   the combined PSQT, if successful
  * @param[in]  psqtxs the PSQTs to combine
- * @return True if we successfully combined the transactions, false if they were not compatible
+ * @return True if we successfully combined the transactions, false if they were not compatible or psqtxs is empty
  */
 [[nodiscard]] bool CombinePSQTs(PartiallySignedQuicksilverTransaction& out, const std::vector<PartiallySignedQuicksilverTransaction>& psqtxs);
 

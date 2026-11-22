@@ -127,6 +127,10 @@ private:
     //! not accuse the user of being offline.
     int m_peers{-1};
     int64_t m_blocks_found{0};
+    //! F-610: whether this node may mine before a peer's headers arrive. Read
+    //! from each status; until the first one, the chain's default (main never
+    //! does: node::MineWithoutPeersDefault).
+    bool m_mines_without_peers;
     int64_t m_coins_minted_session{0};
     QuicksilverUnit m_display_unit{QuicksilverUnit::HGS};
 };

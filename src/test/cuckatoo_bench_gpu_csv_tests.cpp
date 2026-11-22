@@ -26,7 +26,7 @@ const char* kHeader = "edgebits,nonce,seconds,found,device,cycle\n";
 
 std::vector<unsigned char> CalibrationPrepow()
 {
-    std::vector<unsigned char> prepow(80, 0);
+    std::vector<unsigned char> prepow(84, 0); // Same width as qsgpucalibrate.
     std::memcpy(prepow.data(), "quicksilver-calibration-vector", 30);
     return prepow;
 }
@@ -143,6 +143,25 @@ BOOST_AUTO_TEST_CASE(ties_to_the_consensus_verifier_at_e19)
     BOOST_CHECK_MESSAGE(v.consensus_checked == 1u,
                         "an E19 row must be checked against CuckatooVerify, "
                         "not only against the bench verifier");
+}
+
+BOOST_AUTO_TEST_CASE(e28_rows_are_cross_checked_and_e29_rows_are_not)
+{
+    cuckatoo::Cycle invalid{};
+    for (unsigned bits : {28U, 29U}) {
+        std::istringstream in(std::string{kHeader} + Row(bits, 0, true, CycleField(invalid)));
+        const auto v = cuckatoo::bench::VerifyGpuCsv(in, CalibrationPrepow());
+        BOOST_CHECK_MESSAGE(v.error.empty(), v.error);
+        BOOST_CHECK_EQUAL(v.consensus_checked, bits == 28 ? 1U : 0U);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(header_only_csv_is_refused)
+{
+    std::istringstream in{kHeader};
+    const auto v = cuckatoo::bench::VerifyGpuCsv(in, CalibrationPrepow());
+    BOOST_CHECK(!v.error.empty());
+    BOOST_CHECK_EQUAL(v.rows, 0U);
 }
 
 // A row claiming no cycle has nothing to verify, and must not be counted as if

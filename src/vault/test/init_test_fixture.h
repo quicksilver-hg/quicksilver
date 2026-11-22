@@ -11,19 +11,31 @@
 #include <node/context.h>
 #include <test/util/setup_common.h>
 #include <util/chaintype.h>
+#include <util/fs.h>
 
+#include <map>
+#include <memory>
+#include <string>
 
 namespace vault {
 struct InitVaultDirTestingSetup: public BasicTestingSetup {
+    //! Restores the working directory on destruction. A member, so it runs
+    //! even when the constructor throws after changing directory (S0206-B-06).
+    struct ScopedCurrentPath {
+        fs::path saved{fs::current_path()};
+        ~ScopedCurrentPath() { fs::current_path(saved); }
+    };
+
     explicit InitVaultDirTestingSetup(const ChainType chain_type = ChainType::MAIN);
     ~InitVaultDirTestingSetup();
     void SetVaultDir(const fs::path& vaultdir_path);
 
+    ScopedCurrentPath m_restore_cwd;
     fs::path m_datadir;
-    fs::path m_cwd;
     std::map<std::string, fs::path> m_vaultdir_path_cases;
     std::unique_ptr<interfaces::VaultLoader> m_vault_loader;
 };
 
-#endif // QUICKSILVER_VAULT_TEST_INIT_TEST_FIXTURE_H
 } // namespace vault
+
+#endif // QUICKSILVER_VAULT_TEST_INIT_TEST_FIXTURE_H

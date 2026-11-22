@@ -184,7 +184,7 @@ void TxToUniv(const CTransaction& tx, const uint256& block_hash, UniValue& entry
     entry.pushKV("locktime", (int64_t)tx.nLockTime);
 
     // Quicksilver: the per-tx Cuckatoo proof (grind nonce + 42-cycle) and the
-    // block height its PoW is anchored to (#5c-1).
+    // block height its PoW is anchored to (per-transaction PoW anchor).
     entry.pushKV("anchor_height", (uint64_t)tx.nAnchorHeight);
     // #6: actual per-tx PoW work from the proof (2^256/(CuckatooProofHash+1)). Pure
     // function of the tx — no chainstate. Lets clients order conflicting txs by work;

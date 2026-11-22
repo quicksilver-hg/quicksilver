@@ -203,6 +203,17 @@ static UniValue FinishTransaction(const std::shared_ptr<CVault> pvault, const Un
     return result;
 }
 
+//! The spend RPCs other than sendtoaddress (which takes an explicit argument) follow
+//! the vault's avoid_reuse flag (F-667). A default CCoinControl says "do not avoid
+//! reuse", and AvailableCoins reads a non-null coin control's false as permission to
+//! spend dirty coins, so without this every one of them spent from used addresses on a
+//! vault that had asked not to. Partial-spend avoidance follows it, as in sendtoaddress.
+static void ApplyVaultAvoidReuse(const CVault& vault, CCoinControl& coin_control)
+{
+    coin_control.m_avoid_address_reuse = GetAvoidReuseFlag(vault, NullUniValue);
+    coin_control.m_avoid_partial_spends |= coin_control.m_avoid_address_reuse;
+}
+
 static void PreventOutdatedOptions(const UniValue& options)
 {
     if (options.exists("changeAddress")) {
@@ -353,6 +364,7 @@ RPCHelpMan sendmany()
         mapValue["comment"] = request.params[1].get_str();
 
     CCoinControl coin_control;
+    ApplyVaultAvoidReuse(*pvault, coin_control);
     std::vector<CRecipient> recipients = CreateRecipients(ParseOutputs(sendTo));
     return SendMoney(*pvault, coin_control, recipients, std::move(mapValue));
 },
@@ -681,6 +693,7 @@ RPCHelpMan fundrawtransaction()
     }
     std::vector<CRecipient> recipients = CreateRecipients(destinations);
     CCoinControl coin_control;
+    ApplyVaultAvoidReuse(*pvault, coin_control);
     // Automatically select (additional) coins. Can be overridden by options.add_inputs.
     coin_control.m_allow_other_inputs = true;
     // Clear tx.vout since it is not meant to be used now that we are passing outputs directly.
@@ -891,6 +904,7 @@ RPCHelpMan send()
             std::vector<CRecipient> recipients = CreateRecipients(ParseOutputs(outputs));
             CMutableTransaction rawTx = ConstructTransaction(options["inputs"], request.params[0], options["locktime"]);
             CCoinControl coin_control;
+            ApplyVaultAvoidReuse(*pvault, coin_control);
             // Automatically select coins, unless at least one is manually selected. Can
             // be overridden by options.add_inputs.
             coin_control.m_allow_other_inputs = rawTx.vin.size() == 0;
@@ -1006,7 +1020,7 @@ RPCHelpMan sendall()
             }
 
             CCoinControl coin_control;
-
+            ApplyVaultAvoidReuse(*pvault, coin_control);
 
             if (options.exists("minconf")) {
                 if (options["minconf"].getInt<int>() < 0)
@@ -1274,6 +1288,7 @@ RPCHelpMan vaultcreatefundedpsqt()
     outputs = NormalizeOutputs(request.params[1]);
     std::vector<CRecipient> recipients = CreateRecipients(ParseOutputs(outputs));
     CCoinControl coin_control;
+    ApplyVaultAvoidReuse(vault, coin_control);
     // Automatically select coins, unless at least one is manually selected. Can
     // be overridden by options.add_inputs.
     coin_control.m_allow_other_inputs = rawTx.vin.size() == 0;

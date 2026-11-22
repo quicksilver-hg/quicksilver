@@ -32,7 +32,7 @@ BOOST_FIXTURE_TEST_CASE(tx_relaypool_reject_coinbase, TestChain100Setup)
     coinbaseTx.vin.resize(1);
     coinbaseTx.vout.resize(1);
     coinbaseTx.vin[0].scriptSig = CScript() << OP_11 << OP_EQUAL;
-    coinbaseTx.vout[0].nValue = 1 * CENT;
+    coinbaseTx.vout[0].nValue = 1 * (COIN / 100);
     coinbaseTx.vout[0].scriptPubKey = scriptPubKey;
 
     BOOST_CHECK(CTransaction(coinbaseTx).IsCoinBase());
@@ -91,7 +91,7 @@ static inline CTransactionRef make_tx(const std::vector<COutPoint>& inputs, int3
 }
 
 // Quicksilver is feeless/exact-change: the ephemeral-dust feature and its machinery were
-// removed in Class C, so make_ephemeral_tx + the ephemeral_tests suite are gone.
+// removed, so the obsolete ephemeral tests are gone.
 
 BOOST_FIXTURE_TEST_CASE(version3_tests, SandboxingSetup)
 {

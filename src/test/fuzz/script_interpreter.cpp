@@ -30,10 +30,8 @@ FUZZ_TARGET(script_interpreter)
                 auto amount = ConsumeMoney(fuzzed_data_provider);
                 auto sigversion = fuzzed_data_provider.PickValueInArray({SigVersion::BASE, SigVersion::WITNESS_V0});
                 (void)SignatureHash(script_code, tx_to, in, n_hash_type, amount, sigversion, nullptr);
-                const std::optional<CMutableTransaction> mtx_precomputed = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider, TX_WITH_WITNESS);
-                if (mtx_precomputed) {
-                    const CTransaction tx_precomputed{*mtx_precomputed};
-                    const PrecomputedTransactionData precomputed_transaction_data{tx_precomputed};
+                if (fuzzed_data_provider.ConsumeBool()) {
+                    const PrecomputedTransactionData precomputed_transaction_data{tx_to};
                     n_hash_type = fuzzed_data_provider.ConsumeIntegral<int>();
                     amount = ConsumeMoney(fuzzed_data_provider);
                     sigversion = fuzzed_data_provider.PickValueInArray({SigVersion::BASE, SigVersion::WITNESS_V0});

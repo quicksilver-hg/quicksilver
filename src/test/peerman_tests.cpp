@@ -60,9 +60,14 @@ BOOST_AUTO_TEST_CASE(connections_desirable_service_flags)
     // By now, we tested that the connections desirable services flags change based on the node's time proximity to the tip.
     // Now, perform the same tests for when the node receives a block.
     m_node.validation_signals->RegisterValidationInterface(peerman.get());
+    struct UnregisterOnExit {
+        ValidationSignals& signals;
+        PeerManager& manager;
+        ~UnregisterOnExit() { signals.UnregisterValidationInterface(&manager); }
+    } unregister{*m_node.validation_signals, *peerman};
 
     // First, verify a block in the past doesn't enable limited peers connections
-    // At this point, our time is (NODE_NETWORK_LIMITED_ALLOW_CONN_BLOCKS + 1) * 10 minutes ahead the tip's time.
+    // At this point, our time is (NODE_NETWORK_LIMITED_ALLOW_CONN_BLOCKS + 1) target spacings ahead of the tip.
     mineBlock(m_node, /*block_time=*/std::chrono::seconds{tip_block_time + 1});
     BOOST_CHECK(peerman->GetDesirableServiceFlags(peer_flags) == ServiceFlags(NODE_NETWORK | NODE_WITNESS));
 

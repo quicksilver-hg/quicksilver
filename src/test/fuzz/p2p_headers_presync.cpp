@@ -8,6 +8,9 @@
 #include <net.h>
 #include <net_processing.h>
 #include <netmessagemaker.h>
+#include <node/blockstorage.h>
+#include <node/chainstatemanager_args.h>
+#include <node/kernel_notifications.h>
 #include <node/peerman_args.h>
 #include <pow.h>
 #include <test/fuzz/FuzzedDataProvider.h>
@@ -29,6 +32,32 @@ class HeadersSyncSetup : public TestingSetup
 public:
     HeadersSyncSetup(const ChainType chain_type, TestOpts opts) : TestingSetup(chain_type, opts)
     {
+        // TestingSetup builds its chainman without reading the arguments, so an
+        // -minimumchainwork in extra_args would be ignored. Rebuild the chainman
+        // with them applied, before the peer manager takes a reference to it.
+        m_node.chainman.reset();
+        ChainstateManager::Options chainman_opts{
+            .chainparams = Params(),
+            .datadir = m_args.GetDataDirNet(),
+            .check_block_index = 1,
+            .notifications = *m_node.notifications,
+            .signals = m_node.validation_signals.get(),
+            .worker_threads_num = 2,
+        };
+        Assert(node::ApplyArgsManOptions(*m_node.args, chainman_opts));
+        const node::BlockManager::Options blockman_opts{
+            .chainparams = chainman_opts.chainparams,
+            .blocks_dir = m_args.GetBlocksDirPath(),
+            .notifications = chainman_opts.notifications,
+            .block_tree_db_params = DBParams{
+                .path = m_args.GetDataDirNet() / "blocks" / "index",
+                .cache_bytes = m_kernel_cache_sizes.block_tree_db,
+                .memory_only = true,
+            },
+        };
+        m_node.chainman = std::make_unique<ChainstateManager>(*Assert(m_node.shutdown_signal), chainman_opts, blockman_opts);
+        LoadVerifyActivateChainstate();
+
         PeerManager::Options peerman_opts;
         node::ApplyArgsManOptions(*m_node.args, peerman_opts);
         peerman_opts.max_headers_result = FUZZ_MAX_HEADERS_RESULTS;
@@ -97,14 +126,14 @@ CBlockHeader ConsumeHeader(FuzzedDataProvider& fuzzed_data_provider, const uint2
     header.nNonce = 0;
     // Either use the previous difficulty or let the fuzzer choose. The range is
     // Quicksilver mainnet's own: the upper target is the chain powLimit
-    // (compact 0x207fffff, the one-GPU floor), the lower target is 2^32 times
+    // (compact 0x203fffff), the lower target is 2^32 times
     // harder — far beyond any plausible early-chain difficulty, which is the
     // point of a fuzz range.
     if (fuzzed_data_provider.ConsumeBool()) {
         header.nBits = prev_nbits;
     } else {
-        arith_uint256 lower_target = UintToArith256(uint256{"000000007fffffffffffffffffffffffffffffffffffffffffffffffffffffff"});
-        arith_uint256 upper_target = UintToArith256(uint256{"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"});
+        arith_uint256 lower_target = UintToArith256(uint256{"000000003fffffffffffffffffffffffffffffffffffffffffffffffffffffff"});
+        arith_uint256 upper_target = UintToArith256(uint256{"3fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"});
         arith_uint256 target = ConsumeArithUInt256InRange(fuzzed_data_provider, lower_target, upper_target);
         header.nBits = target.GetCompact();
     }
@@ -143,7 +172,19 @@ HeadersSyncSetup* g_testing_setup;
 
 void initialize()
 {
-    static auto setup = MakeNoLogFileContext<HeadersSyncSetup>(ChainType::MAIN);
+    // The target asserts that the chain it generates has less work than
+    // MinimumChainWork(), so presync must hold every header back. Main's default
+    // now comes from its newest trust anchor (0x20553 at height 17000) and that
+    // margin does not hold. The generator sends at most 1600 headers
+    // (FUZZ_MAX_HEADERS_RESULTS * 100). At main's genesis nBits (0x203fffff) a
+    // header carries 4 work, so 1600 of them carry 6400. But ConsumeHeader may
+    // pick a target as low as 0x000000007fff...ff (~2^223), worth ~2^33 work per
+    // header, so the most the generator can produce is about
+    // 4 + 1600 * (2^33 + 2^12) ~= 1.37e13, far above 0x20553 (one input reached
+    // 0x1a000034ab with 32 headers). Pin minimum work at 2^44 (~1.76e13), above
+    // that bound and independent of the anchor that each release re-pins.
+    // HeadersSyncSetup applies it; TestingSetup alone would not.
+    static auto setup = MakeNoLogFileContext<HeadersSyncSetup>(ChainType::MAIN, {.extra_args = {"-minimumchainwork=0x100000000000"}});
     g_testing_setup = setup.get();
 }
 } // namespace

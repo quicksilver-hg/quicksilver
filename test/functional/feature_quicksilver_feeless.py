@@ -3,7 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-"""Quicksilver feeless core (#5b-1): vault sends pay zero fee (in == out), relay and
+"""Quicksilver feeless core: vault sends pay zero fee (in == out), relay and
 mining accept them, and exact-change (including sub-dust) construction works."""
 from decimal import Decimal
 

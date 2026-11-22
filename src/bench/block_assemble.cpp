@@ -12,6 +12,7 @@
 #include <random.h>
 #include <script/script.h>
 #include <sync.h>
+#include <txrelaypool.h>
 #include <util/check.h>
 #include <test/util/mining.h>
 #include <test/util/script.h>
@@ -21,6 +22,8 @@
 #include <array>
 #include <cassert>
 #include <cstddef>
+#include <deque>
+#include <iostream>
 #include <memory>
 #include <vector>
 
@@ -57,8 +60,8 @@ static void AssembleBlock(benchmark::Bench& bench)
 
         // Quicksilver transactions carry their own proof of work, so prove each one
         // before submitting. The anchor has to be the tip we submit against, not the
-        // tip each transaction was built on: these span 200 blocks and nMaxAnchorAge
-        // is 100, so anchoring at build time would leave the earliest ones too old.
+        // tip each transaction was built on: these span 200 blocks and sandbox's
+        // nMaxAnchorAge is 20, so anchoring at build time would leave most of them too old.
         const CBlockIndex& anchor{*Assert(test_setup->m_node.chainman->ActiveChain().Tip())};
         const Consensus::Params& consensus{Params().GetConsensus()};
 
@@ -72,22 +75,79 @@ static void AssembleBlock(benchmark::Bench& bench)
             ProveTxPowForTest(tx, anchor, consensus);
             const RelayPoolAcceptResult res =
                 test_setup->m_node.chainman->ProcessTransaction(MakeTransactionRef(tx));
-            assert(res.m_result_type == RelayPoolAcceptResult::ResultType::VALID);
+            if (res.m_result_type != RelayPoolAcceptResult::ResultType::VALID) {
+                std::cerr << "AssembleBlock: fixture transaction rejected: " << res.m_state.ToString() << std::endl;
+            }
+            Assert(res.m_result_type == RelayPoolAcceptResult::ResultType::VALID);
         }
     }
+
+    // The template must hold every submitted transaction plus the coinbase; otherwise
+    // the benchmark would time a smaller (or empty) assembly than its name claims.
+    Assert(PrepareBlock(test_setup->m_node, options)->vtx.size() == 1 + mutable_txs.size());
 
     bench.run([&] {
         PrepareBlock(test_setup->m_node, options);
     });
 }
+
+/**
+ * Stage num_transactions random transactions spending the setup's coinbases, the way
+ * TestChain100Setup::PopulateRelayPool does, but anchored at the current tip. The
+ * shared helper leaves nAnchorHeight at 0, which is outside sandbox's nMaxAnchorAge
+ * window at height 100, so BlockAssembler would skip every package. Values are split
+ * exactly (feeless). Staging is unchecked, as in the shared helper: no per-tx proof.
+ */
+static void PopulateAnchoredRelayPool(TestChain100Setup& setup, FastRandomContext& det_rand, size_t num_transactions)
+{
+    LOCK2(cs_main, setup.m_node.relaypool->cs);
+    const uint32_t anchor_height{static_cast<uint32_t>(Assert(setup.m_node.chainman->ActiveChain().Tip())->nHeight)};
+    std::deque<std::pair<COutPoint, CAmount>> unspent_prevouts;
+    for (const auto& tx : setup.m_coinbase_txns) unspent_prevouts.emplace_back(COutPoint(tx->GetHash(), 0), tx->vout[0].nValue);
+    while (num_transactions > 0 && !unspent_prevouts.empty()) {
+        CMutableTransaction mtx;
+        mtx.nAnchorHeight = anchor_height;
+        const size_t num_inputs = det_rand.randrange(24) + 1;
+        CAmount total_in{0};
+        for (size_t n{0}; n < num_inputs && !unspent_prevouts.empty(); ++n) {
+            const auto& [prevout, amount] = unspent_prevouts.front();
+            mtx.vin.emplace_back(prevout, CScript());
+            total_in += amount;
+            unspent_prevouts.pop_front();
+        }
+        const size_t num_outputs = det_rand.randrange(24) + 1;
+        const CAmount amount_per_output = total_in / num_outputs;
+        const CAmount remainder = total_in - amount_per_output * num_outputs;
+        for (size_t n{0}; n < num_outputs; ++n) {
+            CScript spk = CScript() << CScriptNum(num_transactions + n);
+            mtx.vout.emplace_back(amount_per_output + (n == 0 ? remainder : 0), spk);
+        }
+        CTransactionRef ptx = MakeTransactionRef(mtx);
+        if (amount_per_output > 3000) {
+            for (size_t n{0}; n < num_outputs; ++n) {
+                unspent_prevouts.emplace_back(COutPoint(ptx->GetHash(), n), ptx->vout[n].nValue);
+                std::swap(unspent_prevouts.back(), unspent_prevouts[det_rand.randrange(unspent_prevouts.size())]);
+            }
+        }
+        LockPoints lp;
+        auto changeset = setup.m_node.relaypool->GetChangeSet();
+        changeset->StageAddition(ptx, /*time=*/0, /*entry_height=*/1, /*entry_sequence=*/0,
+                                 /*spends_coinbase=*/false, /*sigops_cost=*/4, lp);
+        changeset->Apply();
+        --num_transactions;
+    }
+}
 static void BlockAssemblerAddPackageTxns(benchmark::Bench& bench)
 {
     FastRandomContext det_rand{true};
     auto testing_setup{MakeNoLogFileContext<TestChain100Setup>()};
-    testing_setup->PopulateRelayPool(det_rand, /*num_transactions=*/1000, /*submit=*/true);
+    PopulateAnchoredRelayPool(*testing_setup, det_rand, /*num_transactions=*/1000);
     BlockAssembler::Options assembler_options;
     assembler_options.test_block_validity = false;
     assembler_options.coinbase_output_script = P2WSH_OP_TRUE;
+
+    // test_block_validity is off, so nothing else would notice a coinbase-only template.
+    Assert(PrepareBlock(testing_setup->m_node, assembler_options)->vtx.size() > 1);
 
     bench.run([&] {
         PrepareBlock(testing_setup->m_node, assembler_options);

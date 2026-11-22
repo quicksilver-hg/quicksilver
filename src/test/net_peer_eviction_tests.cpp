@@ -28,6 +28,12 @@ bool IsProtected(int num_peers,
                  const std::unordered_set<NodeId>& unprotected_peer_ids,
                  FastRandomContext& random_context)
 {
+    for (const NodeId id : protected_peer_ids) {
+        if (id < 0 || id >= num_peers || unprotected_peer_ids.count(id)) return false;
+    }
+    for (const NodeId id : unprotected_peer_ids) {
+        if (id < 0 || id >= num_peers) return false;
+    }
     std::vector<NodeEvictionCandidate> candidates{GetRandomNodeEvictionCandidates(num_peers, random_context)};
     for (NodeEvictionCandidate& candidate : candidates) {
         candidate_setup_fn(candidate);
@@ -190,11 +196,11 @@ BOOST_AUTO_TEST_CASE(peer_protection_test)
     BOOST_CHECK(IsProtected(
         4, [](NodeEvictionCandidate& c) {
             c.m_connected = std::chrono::seconds{c.id};
-            c.m_is_local = (c.id == 4);
+            c.m_is_local = (c.id == 2);
             c.m_network = (c.id == 3) ? NET_ONION : NET_IPV4;
         },
-        /*protected_peer_ids=*/{0, 4},
-        /*unprotected_peer_ids=*/{1, 2},
+        /*protected_peer_ids=*/{0, 2},
+        /*unprotected_peer_ids=*/{1, 3},
         random_context));
 
     // Combined test: expect having 1 localhost and 1 onion peer out of 7 to
@@ -295,7 +301,7 @@ BOOST_AUTO_TEST_CASE(peer_protection_test)
             c.m_is_local = false;
             if (c.id == 8 || c.id == 10) {
                 c.m_network = NET_ONION;
-            } else if (c.id == 6 || c.id == 9 || c.id == 11 || c.id == 12) {
+            } else if (c.id == 6 || c.id == 7 || c.id == 9 || c.id == 11) {
                 c.m_network = NET_I2P;
             } else {
                 c.m_network = NET_IPV4;
@@ -364,7 +370,7 @@ BOOST_AUTO_TEST_CASE(peer_protection_test)
         /*unprotected_peer_ids=*/{2, 3, 4, 7},
         random_context));
 
-    // Combined test: expect having 4 localhost, 2 I2P, and 2 onion peers out of
+    // Combined test: expect having 5 localhost, 2 I2P, and 2 onion peers out of
     // 16 to protect 1 localhost, 2 I2P, and 1 onion (4/16 total), plus 4 others
     // for 8 total, sorted by longest uptime.
     BOOST_CHECK(IsProtected(
@@ -512,7 +518,7 @@ BOOST_AUTO_TEST_CASE(peer_protection_test)
     BOOST_CHECK(IsProtected(
         8, [](NodeEvictionCandidate& c) {
             c.m_connected = std::chrono::seconds{c.id};
-            c.m_is_local = (c.id == 3);
+            c.m_is_local = (c.id == 4);
             if (c.id == 5) {
                 c.m_network = NET_CJDNS;
             } else if (c.id == 6) {
@@ -527,7 +533,7 @@ BOOST_AUTO_TEST_CASE(peer_protection_test)
         /*unprotected_peer_ids=*/{2, 3, 4, 7},
         random_context));
 
-    // Combined test: expect having 2 CJDNS, 2 I2P, 4 localhost, and 2 onion
+    // Combined test: expect having 2 CJDNS, 2 I2P, 10 localhost, and 2 onion
     // peers out of 16 to protect 1 CJDNS, 1 I2P, 1 localhost, 1 onion (4/16
     // total), plus 4 others for 8 total, sorted by longest uptime.
     BOOST_CHECK(IsProtected(

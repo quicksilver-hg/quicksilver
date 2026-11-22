@@ -53,7 +53,8 @@ static void VaultCreate(benchmark::Bench& bench, bool encrypted)
         assert(vault != nullptr);
 
         // Release vault
-        RemoveVault(context, vault, /*load_on_start=*/ std::nullopt);
+        const bool removed{RemoveVault(context, vault, /*load_on_start=*/ std::nullopt)};
+        assert(removed); // otherwise the wait below would block on a vault someone else still holds
         WaitForDeleteVault(std::move(vault));
         fs::remove_all(vault_path);
     });

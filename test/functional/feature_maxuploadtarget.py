@@ -29,7 +29,7 @@ from test_framework.util import (
 from test_framework.vault import MiniVault
 
 
-UPLOAD_TARGET_MB = 800
+UPLOAD_TARGET_MB = 1400
 
 
 class TestP2PConn(P2PInterface):
@@ -110,12 +110,12 @@ class MaxUploadTest(QuicksilverTestFramework):
         getdata_request.inv.append(CInv(MSG_BLOCK, big_old_block))
 
         max_bytes_per_day = UPLOAD_TARGET_MB * 1024 *1024
-        daily_buffer = 144 * 4000000
+        daily_buffer = (24 * 60 * 60 // 300) * 4000000
         max_bytes_available = max_bytes_per_day - daily_buffer
         success_count = max_bytes_available // old_block_size
 
-        # 576MB will be reserved for relaying new blocks, so expect this to
-        # succeed for ~235 tries.
+        # Reserve 288 maximum-sized blocks for relay; the remaining target
+        # allows roughly 260 historical requests for this test block.
         for i in range(success_count):
             p2p_conns[0].send_and_ping(getdata_request)
             assert_equal(p2p_conns[0].block_receive_map[big_old_block], i+1)
@@ -135,9 +135,9 @@ class MaxUploadTest(QuicksilverTestFramework):
 
         # Requesting the current block on p2p_conns[1] should succeed indefinitely,
         # even when over the max upload target.
-        # We'll try 800 times
+        # Keep serving recent blocks until the larger total target is exhausted.
         getdata_request.inv = [CInv(MSG_BLOCK, big_new_block)]
-        for i in range(800):
+        for i in range(1500):
             p2p_conns[1].send_and_ping(getdata_request)
             assert_equal(p2p_conns[1].block_receive_map[big_new_block], i+1)
 

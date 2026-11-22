@@ -18,6 +18,7 @@ private Q_SLOTS:
     void explanationDoesNotPromiseADownloadOfHistoryThatMayNotExist();
     void pruneSuffixReadsGrammaticallyWithNoCatalogue();
     void freeSpaceLabelReadsGrammaticallyWithNoCatalogue();
+    void freeSpaceStatusCodesAreOkThenError();
     void datadirExistenceIsNotTheFirstRunQuestion();
     void chainDataIsFoundUnderTheNetworkSubdirectoryOnly();
     void pruneChoiceIsWithheldFromADataDirThatAlreadyHoldsAChain();

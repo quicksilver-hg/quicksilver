@@ -13,6 +13,7 @@ namespace qsgpu {
 struct ListingFields {
     std::string backend;
     std::string id;
+    std::string alias;
     std::string type;
     bool integrated{false};
     uint64_t mem{0};
@@ -51,6 +52,7 @@ inline std::string FormatListingLine(const ListingFields& fields)
     out += mem;
     out += " status=" + fields.status;
     if (fields.status != "ok") out += " reason=" + ReasonToken(fields.reason);
+    if (!fields.alias.empty() && fields.alias != fields.id) out += " alias=" + fields.alias;
     out += " name=" + name;
     return out;
 }

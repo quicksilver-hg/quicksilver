@@ -13,6 +13,8 @@
 #include <txdb.h>
 #include <validation.h>
 
+#include <map>
+
 namespace {
 
 const BasicTestingSetup* g_setup;
@@ -31,7 +33,7 @@ bool operator==(const CBlockFileInfo& a, const CBlockFileInfo& b)
         a.nTimeLast == b.nTimeLast;
 }
 
-CBlockHeader ConsumeBlockHeader(FuzzedDataProvider& provider)
+CBlockHeader ConsumeBlockHeader(FuzzedDataProvider& provider, int index)
 {
     CBlockHeader header;
     header.nVersion = provider.ConsumeIntegral<decltype(header.nVersion)>();
@@ -39,7 +41,8 @@ CBlockHeader ConsumeBlockHeader(FuzzedDataProvider& provider)
     header.hashMerkleRoot = g_block_hash;
     header.nTime = provider.ConsumeIntegral<decltype(header.nTime)>();
     header.nBits = Params().GenesisBlock().nBits;
-    header.nNonce = provider.ConsumeIntegral<decltype(header.nNonce)>();
+    // Fuzz PoW accepts only nonces with bit 7 clear. Keep each stored hash distinct.
+    header.nNonce = (provider.ConsumeIntegral<decltype(header.nNonce)>() & 0x7fU) | (static_cast<uint32_t>(index + 1) << 8);
     return header;
 }
 
@@ -80,12 +83,18 @@ FUZZ_TARGET(block_index, .init = init_block_index)
     int blocks_count = fuzzed_data_provider.ConsumeIntegralInRange(files_count * 10, files_count * 100);
     std::vector<std::unique_ptr<CBlockIndex>> blocks;
     blocks.reserve(blocks_count);
+    CBlockIndex genesis{Params().GenesisBlock()};
+    genesis.phashBlock = &g_block_hash;
+    std::vector<uint256> block_hashes;
+    block_hashes.reserve(blocks_count);
     std::vector<const CBlockIndex*> blocks_info;
     blocks_info.reserve(blocks_count);
     for (int i = 0; i < blocks_count; i++) {
-        CBlockHeader header{ConsumeBlockHeader(fuzzed_data_provider)};
+        CBlockHeader header{ConsumeBlockHeader(fuzzed_data_provider, i)};
+        block_hashes.push_back(header.GetHash());
         blocks.push_back(std::make_unique<CBlockIndex>(std::move(header)));
-        blocks.back()->phashBlock = &g_block_hash;
+        blocks.back()->pprev = &genesis;
+        blocks.back()->phashBlock = &block_hashes.back();
         blocks_info.push_back(blocks.back().get());
     }
 
@@ -127,8 +136,19 @@ FUZZ_TARGET(block_index, .init = init_block_index)
     // We should be able to load everything we've previously stored. Note to assert on the
     // return value we need to make sure all blocks pass the pow check.
     const auto params{Params().GetConsensus()};
-    const auto inserter = [&](const uint256&) {
-        return blocks.back().get();
+    std::map<uint256, std::unique_ptr<CBlockIndex>> reloaded;
+    const auto inserter = [&](const uint256& hash) {
+        auto [it, inserted] = reloaded.try_emplace(hash);
+        if (inserted) {
+            it->second = std::make_unique<CBlockIndex>();
+            it->second->phashBlock = &it->first;
+        }
+        return it->second.get();
     };
     WITH_LOCK(::cs_main, assert(block_index.LoadBlockIndexGuts(params, inserter, g_setup->m_interrupt)));
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        const auto it = reloaded.find(block_hashes[i]);
+        assert(it != reloaded.end());
+        assert(it->second->GetBlockHeader().GetHash() == block_hashes[i]);
+    }
 }

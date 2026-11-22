@@ -34,6 +34,7 @@
 #include <qt/clientmodel.h>
 #include <qt/coincontroldialog.h>
 #include <qt/addressbookpage.h>
+#include <qt/addresstablemodel.h>
 #include <qt/desktoplaunchpage.h>
 #include <qt/developeroptionstoggle.h>
 #include <qt/fittingscrollarea.h>
@@ -49,6 +50,7 @@
 #include <qt/optionsdialog.h>
 #include <qt/optionsmodel.h>
 #include <qt/platformstyle.h>
+#include <qt/psqtoperationsdialog.h>
 #include <qt/rpcconsole.h>
 #include <qt/vaultcontroller.h>
 #include <qt/quicksilveramountfield.h>
@@ -57,6 +59,9 @@
 #include <qt/qvalidatedlineedit.h>
 #include <qt/receivecoinsdialog.h>
 #include <qt/peertablemodel.h>
+#include <qt/paymentserver.h>
+#include <qt/bantablemodel.h>
+#include <netbase.h>
 #include <qt/signverifymessagedialog.h>
 #include <qt/receiverequestdialog.h>
 #include <qt/recentrequeststablemodel.h>
@@ -64,6 +69,7 @@
 #include <qt/sendcoinsentry.h>
 #include <qt/transactionrecord.h>
 #include <qt/transactiondesc.h>
+#include <qt/transactiondescdialog.h>
 #include <qt/ledgerrows.h>
 #include <qt/transactiontablemodel.h>
 #include <qt/transactionview.h>
@@ -72,6 +78,9 @@
 #include <qt/vaultmodel.h>
 #include <qt/vaultview.h>
 #include <qt/utilitydialog.h>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <QTemporaryFile>
 #include <QTextBrowser>
 #include <QTextBlock>
 #include <QTextDocumentFragment>
@@ -95,18 +104,21 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <future>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <thread>
 
 #include <QAbstractButton>
+#include <QAbstractItemModelTester>
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
 #include <QDialog>
+#include <QDataStream>
 #include <QDialogButtonBox>
 #include <QElapsedTimer>
 #include <QFile>
@@ -122,8 +134,11 @@
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
+#include <QtNetwork/QLocalSocket>
 #include <QListView>
 #include <QMenuBar>
+#include <QMenu>
+#include <QProgressDialog>
 #include <QObject>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -168,6 +183,14 @@ using vault::VaultRescanReserver;
 void VaultTests::init()
 {
     ResetGpuCardTables();
+    for (const char* name : ProbeEnvironmentNames()) qunsetenv(name);
+}
+
+void VaultTests::cleanup()
+{
+    // init() covers the next slot of this class; this covers the next class,
+    // which may not reset the probe variables itself (S0298-A-02).
+    for (const char* name : ProbeEnvironmentNames()) qunsetenv(name);
 }
 
 void VaultTests::gpuCardTablesPolluter()
@@ -181,6 +204,103 @@ void VaultTests::gpuCardTablesPolluter()
 void VaultTests::gpuCardTablesStartClean()
 {
     QVERIFY(cuckatoo::GetGpuDeviceStats().empty());
+}
+
+//! A check that fails mid-slot returns before the slot's own unset. The slot's
+//! guard puts the variables back regardless; the expected failure stands in for
+//! a real one so the run stays green.
+void VaultTests::probeEnvironmentPolluter()
+{
+    const ScopedEnvironment probe_env{ProbeEnvironmentNames()};
+    qputenv("QS_PROBE_STUB_EXIT", "4");
+    qputenv("QS_PROBE_STUB_SLEEP_MS", "3000");
+    qputenv("QS_PROBE_STUB_LISTING", "/nonexistent/qs-probe-listing");
+    QEXPECT_FAIL("", "stands in for a check that fails before the slot's own restore", Abort);
+    QVERIFY(false);
+    qunsetenv("QS_PROBE_STUB_EXIT");
+    qunsetenv("QS_PROBE_STUB_SLEEP_MS");
+    qunsetenv("QS_PROBE_STUB_LISTING");
+}
+
+void VaultTests::probeEnvironmentStartsClean()
+{
+    for (const char* name : ProbeEnvironmentNames()) {
+        QVERIFY2(!qEnvironmentVariableIsSet(name), name);
+    }
+    // The guard alone, without init() or cleanup(), restores on every exit.
+    {
+        const ScopedEnvironment probe_env{ProbeEnvironmentNames()};
+        qputenv("QS_PROBE_STUB_EXIT", "4");
+    }
+    QVERIFY(!qEnvironmentVariableIsSet("QS_PROBE_STUB_EXIT"));
+    qputenv("QS_PROBE_STUB_SLEEP_MS", "7");
+    {
+        const ScopedEnvironment probe_env{ProbeEnvironmentNames()};
+        qunsetenv("QS_PROBE_STUB_SLEEP_MS");
+    }
+    QCOMPARE(qgetenv("QS_PROBE_STUB_SLEEP_MS"), QByteArray{"7"});
+    qunsetenv("QS_PROBE_STUB_SLEEP_MS");
+}
+
+namespace {
+struct StubRun {
+    int exit_code{-1};
+    QProcess::ExitStatus exit_status{QProcess::CrashExit};
+    QByteArray out;
+    QByteArray err;
+};
+
+StubRun RunProbeStub(const QStringList& env)
+{
+    QProcess process;
+    QProcessEnvironment environment{QProcessEnvironment::systemEnvironment()};
+    for (const char* name : ProbeEnvironmentNames()) environment.remove(QString::fromLatin1(name));
+    for (const QString& entry : env) {
+        const int eq = entry.indexOf(QLatin1Char('='));
+        environment.insert(entry.left(eq), entry.mid(eq + 1));
+    }
+    process.setProcessEnvironment(environment);
+    process.start(SolverProbeStubPath(), {QStringLiteral("--list-devices")});
+    StubRun run;
+    if (!process.waitForFinished(30000)) return run;
+    run.exit_code = process.exitCode();
+    run.exit_status = process.exitStatus();
+    run.out = process.readAllStandardOutput();
+    run.err = process.readAllStandardError();
+    return run;
+}
+} // namespace
+
+//! S0296-A-01/-A-02: the stub must not wrap an out-of-range number into some
+//! other exit code or delay, and a listing it was told to copy but cannot read
+//! must not look like a machine with no cards.
+void VaultTests::solverProbeStubRejectsBadInput()
+{
+    QVERIFY_SOLVER_PROBE_STUB();
+    QTemporaryFile listing_file;
+    QVERIFY(listing_file.open());
+    QVERIFY(listing_file.write("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=X\n") > 0);
+    listing_file.close();
+    const QString listing{listing_file.fileName()};
+
+    StubRun run = RunProbeStub({QStringLiteral("QS_PROBE_STUB_LISTING=") + listing, QStringLiteral("QS_PROBE_STUB_EXIT=4")});
+    QCOMPARE(run.exit_status, QProcess::NormalExit);
+    QCOMPARE(run.exit_code, 4);
+    QVERIFY(run.out.contains("name=X"));
+
+    for (const QString& bad : {QStringLiteral("QS_PROBE_STUB_EXIT=99999999999"), QStringLiteral("QS_PROBE_STUB_EXIT=4x"),
+                               QStringLiteral("QS_PROBE_STUB_EXIT=-1"), QStringLiteral("QS_PROBE_STUB_SLEEP_MS=99999999999")}) {
+        run = RunProbeStub({QStringLiteral("QS_PROBE_STUB_LISTING=") + listing, bad});
+        QCOMPARE(run.exit_status, QProcess::NormalExit);
+        QVERIFY2(run.exit_code == 97, qPrintable(bad + QStringLiteral(" exited %1").arg(run.exit_code)));
+        QVERIFY2(run.err.contains("QS_PROBE_STUB_"), qPrintable(bad));
+    }
+
+    run = RunProbeStub({QStringLiteral("QS_PROBE_STUB_LISTING=/nonexistent/qs-probe-listing")});
+    QCOMPARE(run.exit_status, QProcess::NormalExit);
+    QVERIFY2(run.exit_code == 98, qPrintable(QStringLiteral("unreadable listing exited %1").arg(run.exit_code)));
+    QVERIFY(run.out.isEmpty());
+    QVERIFY(run.err.contains("/nonexistent/qs-probe-listing"));
 }
 
 namespace {
@@ -203,24 +323,6 @@ cuckatoo::GpuDiscovery Discover(const QStringList& lines, const QByteArray& devi
     cuckatoo::ResetGpuDiscoveryForTesting();
     return cuckatoo::DiscoverGpus(19);
 }
-
-class ScopedNodeContext
-{
-public:
-    ScopedNodeContext(interfaces::Node& node, node::NodeContext& context) : m_node(node), m_previous_context(node.context())
-    {
-        m_node.setContext(&context);
-    }
-
-    ~ScopedNodeContext()
-    {
-        m_node.setContext(m_previous_context);
-    }
-
-private:
-    interfaces::Node& m_node;
-    node::NodeContext* const m_previous_context;
-};
 
 class PollMarkerVault final : public interfaces::Vault
 {
@@ -268,7 +370,11 @@ public:
     VaultModel* vault_model_under_test{nullptr};
     bool in_flight_during_create{false};
     bool cancel_requested_during_create{false};
+    std::atomic<bool> create_entered{false};
+    bool in_flight_during_relock{false};
+    std::string name{"poll-marker-vault"};
     std::optional<bool> remove_load_on_start{true}; // an unset value the calls cannot produce
+    bool remove_result{true};
     //! Closed by a test to hold createTransaction until the GUI thread has run on.
     std::atomic<bool> create_gate_open{true};
     std::atomic<bool> locked_during_create{false};
@@ -277,6 +383,7 @@ public:
     bool isCrypted() override { return crypted; }
     bool lock() override
     {
+        if (vault_model_under_test) in_flight_during_relock = vault_model_under_test->proofOfWorkInFlight();
         locked = true;
         return true;
     }
@@ -310,7 +417,7 @@ public:
         for (auto& record : agent_records) if (record.id == id) { record.stopped_time = 1; return true; }
         return false;
     }
-    std::string getVaultName() override { return "poll-marker-vault"; }
+    std::string getVaultName() override { return name; }
     util::Result<CTxDestination> getNewDestination(const OutputType, const std::string& label) override
     {
         if (label == "mining") ++new_mining_destination_calls;
@@ -339,6 +446,7 @@ public:
     util::Result<CTransactionRef> createTransaction(const std::vector<vault::CRecipient>&, const vault::CCoinControl&, bool, int&, const std::function<void(uint32_t nonce)>& = {}, const std::function<bool()>& tx_proof_cancel = {}) override
     {
         ++create_calls;
+        create_entered = true;
         for (int i = 0; !create_gate_open && i < 1000; ++i) std::this_thread::sleep_for(std::chrono::milliseconds{10});
         // Signing needs the keys, so the vault must still be unlocked here.
         locked_during_create = locked.load();
@@ -374,7 +482,11 @@ public:
         num_blocks = 0;
         return true;
     }
-    std::optional<common::PSQTError> fillPSQT(int, bool, bool, size_t*, PartiallySignedQuicksilverTransaction&, bool&) override { return {}; }
+    std::optional<common::PSQTError> fillPSQT(int, bool, bool, size_t* could_sign, PartiallySignedQuicksilverTransaction&, bool&) override
+    {
+        if (could_sign) *could_sign = 0;
+        return {};
+    }
     interfaces::VaultBalances getBalances() override
     {
         interfaces::VaultBalances balances;
@@ -435,7 +547,7 @@ public:
     bool taprootEnabled() override { return true; }
     bool hasExternalSigner() override { return false; }
     OutputType getDefaultAddressType() override { return OutputType::BECH32M; }
-    void remove(std::optional<bool> load_on_start = false) override { remove_load_on_start = load_on_start; }
+    bool remove(std::optional<bool> load_on_start = false) override { remove_load_on_start = load_on_start; return remove_result; }
 
     std::unique_ptr<interfaces::Handler> handleUnload(UnloadFn) override
     {
@@ -465,6 +577,10 @@ public:
     {
         return interfaces::MakeCleanupHandler([] {});
     }
+    std::unique_ptr<interfaces::Handler> handleBackupStateChanged(BackupStateChangedFn) override
+    {
+        return interfaces::MakeCleanupHandler([] {});
+    }
     std::vector<uint256> takeExpiredTransfers() override { return {}; }
 };
 
@@ -489,10 +605,25 @@ uint256 SendCoins(CVault& vault, SendCoinsDialog& sendCoinsDialog, const CTxDest
                   QMessageBox::StandardButton confirm_type = QMessageBox::Yes,
                   QString* confirmation_text = nullptr)
 {
+    // A failed check records a QtTest failure and returns a null txid; the
+    // caller stops on QTest::currentTestFailed(). A C assertion would abort the
+    // whole binary, so no later class would report (S0298-A-01).
+#define SENDCOINS_REQUIRE(cond)                                    \
+    do {                                                           \
+        if (!(cond)) {                                             \
+            QTest::qFail("SendCoins: " #cond, __FILE__, __LINE__); \
+            return {};                                             \
+        }                                                          \
+    } while (0)
     QVBoxLayout* entries = sendCoinsDialog.findChild<QVBoxLayout*>("entries");
+    SENDCOINS_REQUIRE(entries && entries->itemAt(0));
     SendCoinsEntry* entry = qobject_cast<SendCoinsEntry*>(entries->itemAt(0)->widget());
-    entry->findChild<QValidatedLineEdit*>("payTo")->setText(QString::fromStdString(EncodeDestination(address)));
-    entry->findChild<QuicksilverAmountField*>("payAmount")->setValue(amount);
+    SENDCOINS_REQUIRE(entry);
+    auto* pay_to = entry->findChild<QValidatedLineEdit*>("payTo");
+    auto* pay_amount = entry->findChild<QuicksilverAmountField*>("payAmount");
+    SENDCOINS_REQUIRE(pay_to && pay_amount);
+    pay_to->setText(QString::fromStdString(EncodeDestination(address)));
+    pay_amount->setValue(amount);
     uint256 txid;
     boost::signals2::scoped_connection c(vault.NotifyTransactionChanged.connect([&txid](const uint256& hash, ChangeType status) {
         if (status == CT_NEW) txid = hash;
@@ -514,31 +645,33 @@ uint256 SendCoins(CVault& vault, SendCoinsDialog& sendCoinsDialog, const CTxDest
         });
     });
 
-    bool invoked = QMetaObject::invokeMethod(&sendCoinsDialog, "sendButtonClicked", Q_ARG(bool, false));
-    assert(invoked);
+    const bool invoked = QMetaObject::invokeMethod(&sendCoinsDialog, "sendButtonClicked", Q_ARG(bool, false));
+    SENDCOINS_REQUIRE(invoked);
+    // From here a send preparation is running. A failed check is recorded and
+    // reported once it has settled: returning mid-flight leaves its completion
+    // to land on a dialog the caller has destroyed.
+    QStringList problems;
+    const auto check = [&problems](bool ok, const char* what) {
+        if (!ok) problems << QString::fromLatin1(what);
+    };
+#define SENDCOINS_CHECK(cond) check((cond), #cond)
+    const auto text_of = [](const QLabel* label) { return label ? label->text() : QStringLiteral("<missing>"); };
     QFrame* progress_panel = sendCoinsDialog.findChild<QFrame*>(QStringLiteral("sendWorkProgressPanel"));
     QLabel* progress_status = sendCoinsDialog.findChild<QLabel*>(QStringLiteral("sendWorkStatusLabel"));
     QLabel* progress_elapsed = sendCoinsDialog.findChild<QLabel*>(QStringLiteral("sendWorkElapsedLabel"));
     QLabel* progress_graphs = sendCoinsDialog.findChild<QLabel*>(QStringLiteral("sendWorkGraphsLabel"));
     QProgressBar* progress_bar = sendCoinsDialog.findChild<QProgressBar*>(QStringLiteral("sendWorkProgressBar"));
     QPushButton* progress_cancel = sendCoinsDialog.findChild<QPushButton*>(QStringLiteral("sendWorkCancelButton"));
-    assert(progress_panel);
-    assert(progress_status);
-    assert(progress_elapsed);
-    assert(progress_graphs);
-    assert(progress_bar);
-    assert(progress_cancel);
-    assert(!progress_panel->isHidden());
-    assert(progress_status->text() == QStringLiteral("Solving transfer proof-of-work"));
-    assert(progress_elapsed->text().startsWith(QStringLiteral("Elapsed: ")));
-    assert(progress_graphs->text() == QStringLiteral("Graphs tried: pending"));
-    assert(progress_bar->minimum() == 0);
-    assert(progress_bar->maximum() == 0);
-    assert(progress_cancel->isEnabled());
+    SENDCOINS_CHECK(progress_panel && !progress_panel->isHidden());
+    SENDCOINS_CHECK(text_of(progress_status) == QStringLiteral("Solving transfer proof-of-work"));
+    SENDCOINS_CHECK(text_of(progress_elapsed).startsWith(QStringLiteral("Elapsed: ")));
+    SENDCOINS_CHECK(text_of(progress_graphs) == QStringLiteral("Graphs tried: pending"));
+    SENDCOINS_CHECK(progress_bar && progress_bar->minimum() == 0 && progress_bar->maximum() == 0);
+    SENDCOINS_CHECK(progress_cancel && progress_cancel->isEnabled());
     if (prepare_finished.count() == 0 && !prepare_finished.wait(30000)) {
         const QString diagnostic = QStringLiteral("send preparation did not finish in 30 seconds (no_cycle=%1, status='%2', graphs='%3')")
                                        .arg(Params().GetConsensus().fTxPowNoCycle)
-                                       .arg(progress_status->text(), progress_graphs->text());
+                                       .arg(text_of(progress_status), text_of(progress_graphs));
         QTest::qFail(qPrintable(diagnostic), __FILE__, __LINE__);
         return {};
     }
@@ -563,12 +696,18 @@ uint256 SendCoins(CVault& vault, SendCoinsDialog& sendCoinsDialog, const CTxDest
             QTest::qWait(10);
         }
     }
-    assert(progress_graphs->text().startsWith(QStringLiteral("Graphs tried:")));
+    SENDCOINS_CHECK(text_of(progress_graphs).startsWith(QStringLiteral("Graphs tried:")));
     for (int i = 0; i < 300 && txid.IsNull() && confirm_type == QMessageBox::Yes; ++i) {
         QTest::qWait(100);
     }
-    assert(!txid.IsNull() || confirm_type != QMessageBox::Yes);
+    SENDCOINS_CHECK(!txid.IsNull() || confirm_type != QMessageBox::Yes);
+#undef SENDCOINS_CHECK
+    if (!problems.isEmpty()) {
+        QTest::qFail(qPrintable(QStringLiteral("SendCoins: ") + problems.join(QStringLiteral("; "))), __FILE__, __LINE__);
+        return {};
+    }
     return txid;
+#undef SENDCOINS_REQUIRE
 }
 
 //! Find index of txid in transaction list.
@@ -653,11 +792,17 @@ std::shared_ptr<CVault> SetupDescriptorsVault(interfaces::Node& node, TestChain1
     FlatSigningProvider provider;
     std::string error;
     auto descs = Parse("combo(" + EncodeSecret(test.coinbaseKey) + ")", provider, error, /* require_checksum=*/false);
-    assert(!descs.empty());
-    assert(descs.size() == 1);
+    // A failure returns null, which every caller checks (S0298-A-01).
+    if (descs.size() != 1) {
+        QTest::qFail(qPrintable(QStringLiteral("coinbase descriptor parsed to %1 descriptors: %2").arg(descs.size()).arg(QString::fromStdString(error))), __FILE__, __LINE__);
+        return nullptr;
+    }
     auto& desc = descs.at(0);
     VaultDescriptor w_desc(std::move(desc), 0, 0, 1, 1);
-    if (!vault->AddVaultDescriptor(w_desc, provider, "", false)) assert(false);
+    if (!vault->AddVaultDescriptor(w_desc, provider, "", false)) {
+        QTest::qFail("AddVaultDescriptor refused the coinbase descriptor", __FILE__, __LINE__);
+        return nullptr;
+    }
     CTxDestination dest{WitnessV0KeyHash(test.coinbaseKey.GetPubKey())};
     vault->SetAddressBook(dest, "", vault::AddressPurpose::RECEIVE);
     vault->SetLastBlockProcessed(105, WITH_LOCK(node.context()->chainman->GetMutex(), return node.context()->chainman->ActiveChain().Tip()->GetBlockHash()));
@@ -766,6 +911,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QCOMPARE(transactionTableModel->rowCount({}), 105);
     QString send_confirmation_text;
     uint256 txid1 = SendCoins(*vault.get(), sendCoinsDialog, PKHash(), 5 * COIN, QMessageBox::Yes, &send_confirmation_text);
+    if (QTest::currentTestFailed()) return;
     QVERIFY(send_confirmation_text.contains(QStringLiteral("Sending uses proof-of-work")));
     QVERIFY(send_confirmation_text.contains(QStringLiteral("Nothing is deducted from the amount")));
     QVERIFY(send_confirmation_text.contains(QStringLiteral("Proof-of-work completed after")));
@@ -786,6 +932,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QCOMPARE(SendCoinsDialog::sendWorkGraphsConfirmationTextForTesting(2), QStringLiteral("Proof-of-work completed after 2 graphs tried."));
     QVERIFY(send_work_progress->isHidden());
     uint256 txid2 = SendCoins(*vault.get(), sendCoinsDialog, PKHash(), 10 * COIN);
+    if (QTest::currentTestFailed()) return;
     QVERIFY(send_work_progress->isHidden());
     // Transaction table model updates on a QueuedConnection, so process events to ensure it's updated.
     qApp->processEvents();
@@ -1435,6 +1582,7 @@ void TestGUI(interfaces::Node& node)
 
     // "Full" GUI tests, use vault
     const std::shared_ptr<CVault>& desc_vault = SetupDescriptorsVault(node, test);
+    QVERIFY(desc_vault);
     TestGUI(node, desc_vault);
 }
 
@@ -1494,6 +1642,7 @@ void VaultTests::agentAllotmentSetupAsksToUnlock()
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext context(m_node, test.m_node);
     const auto vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
     const SecureString passphrase{"test unlock"};
     QVERIFY(vault->EncryptVault(passphrase));
     QVERIFY(vault->IsLocked());
@@ -1548,6 +1697,7 @@ void VaultTests::agentAllotmentStopAsksThenRefusesCosign()
     test.m_node.vault_loader = loader.get();
     ScopedNodeContext context(m_node, test.m_node);
     auto vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
     std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
     MiniGUI gui(m_node, style.get());
     gui.initModelForVault(m_node, vault, style.get());
@@ -1818,6 +1968,7 @@ void VaultTests::agentsPageHasNoSideScrollAt1200()
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext scoped_context(m_node, test.m_node);
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
 
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
@@ -1863,6 +2014,7 @@ void VaultTests::pagesKeepTheirTextInsidePanels()
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext scoped_context(m_node, test.m_node);
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
 
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
@@ -2164,6 +2316,170 @@ void VaultTests::agentAllotmentMakesHomeBackupNeeded()
     QCOMPARE(status->text(), QStringLiteral("Vault not encrypted · backup needed"));
 }
 
+// F-613: the RPCs change what a backup covers without going through the model: importdescriptors and
+// importvaultarchive add descriptors, importdescriptors with active=false changes the active set, and
+// vaultpassphrasechange rewrites the master key of a vault that is locked before and after. Home must
+// follow each one without a vault switch or a restart. These call the vault functions those RPCs call.
+void VaultTests::rpcChangesMakeHomeBackupNeeded()
+{
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    TestChain100Setup test;
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+
+    vault::DatabaseOptions db_options;
+    db_options.require_create = true;
+    db_options.require_format = vault::DatabaseFormat::SQLITE;
+    vault::DatabaseStatus db_status;
+    bilingual_str db_error;
+    auto database{vault::MakeDatabase(test.m_path_root / "backup-rpc", db_options, db_status, db_error)};
+    QVERIFY2(database, db_error.original.c_str());
+    auto vault{std::make_shared<CVault>(m_node.context()->chain.get(), "", std::move(database))};
+    QVERIFY(vault->LoadVault() == vault::DBErrors::LOAD_OK);
+    {
+        LOCK(vault->cs_vault);
+        vault->SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
+        vault->SetupDescriptorScriptPubKeyMans();
+    }
+
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    OptionsModel options_model(m_node);
+    bilingual_str error;
+    QVERIFY(options_model.Init(error));
+    VaultContext& vault_context = *m_node.vaultLoader().context();
+    AddVault(vault_context, vault);
+    VaultModel model(interfaces::MakeVault(vault_context, vault), m_node, &options_model, platform_style.get());
+    RemoveVault(vault_context, vault, /*load_on_start=*/std::nullopt);
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(&model, platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(&model);
+    frame->gotoLaunchPage();
+
+    QLabel* row = frame->findChild<QLabel*>(QStringLiteral("desktopLaunchBackupState"));
+    QLabel* status = window.findChild<QLabel*>(QStringLiteral("benchStatusVault"));
+    QVERIFY(row && status);
+    QTemporaryDir backup_dir;
+    QVERIFY(backup_dir.isValid());
+    QSignalSpy messages(view, &VaultView::message);
+    QVERIFY(messages.isValid());
+
+    // An imported descriptor (importdescriptors, importvaultarchive) is not in the backup.
+    QVERIFY(SaveBackupThroughFrame(*frame, *view, backup_dir.filePath(QStringLiteral("before-import.dat"))));
+    QTRY_COMPARE(messages.count(), 1);
+    QCOMPARE(row->text(), QStringLiteral("Done"));
+    {
+        LOCK(vault->cs_vault);
+        FlatSigningProvider provider;
+        std::string parse_error;
+        auto descs = Parse("combo(" + EncodeSecret(GenerateRandomKey()) + ")", provider, parse_error, /*require_checksum=*/false);
+        QCOMPARE(descs.size(), size_t{1});
+        VaultDescriptor w_desc(std::move(descs.at(0)), 0, 0, 1, 1);
+        QVERIFY(vault->AddVaultDescriptor(w_desc, provider, "", false));
+    }
+    QCOMPARE(vault->GetBackupState(), vault::BackupState::NEEDED);
+    QTRY_COMPARE(row->text(), QStringLiteral("Needed"));
+    QCOMPARE(status->text(), QStringLiteral("Vault not encrypted · backup needed"));
+
+    // importdescriptors with active=false takes a descriptor out of the active set.
+    QVERIFY(SaveBackupThroughFrame(*frame, *view, backup_dir.filePath(QStringLiteral("before-deactivate.dat"))));
+    QTRY_COMPARE(messages.count(), 2);
+    QCOMPARE(row->text(), QStringLiteral("Done"));
+    {
+        LOCK(vault->cs_vault);
+        vault::ScriptPubKeyMan* active{vault->GetScriptPubKeyMan(OutputType::BECH32, /*internal=*/true)};
+        QVERIFY(active);
+        vault->DeactivateScriptPubKeyMan(active->GetID(), OutputType::BECH32, /*internal=*/true);
+    }
+    QCOMPARE(vault->GetBackupState(), vault::BackupState::NEEDED);
+    QTRY_COMPARE(row->text(), QStringLiteral("Needed"));
+
+    // vaultpassphrasechange on a locked vault: Locked before and after, so no lock change tells Home.
+    const SecureString passphrase{"rpc change"};
+    QVERIFY(vault->EncryptVault(passphrase));
+    model.updateStatus();
+    QVERIFY(SaveBackupThroughFrame(*frame, *view, backup_dir.filePath(QStringLiteral("before-change.dat"))));
+    QTRY_VERIFY(VisibleChild<QInputDialog>(view, QStringLiteral("backupPassphraseDialog")));
+    VisibleChild<QInputDialog>(view, QStringLiteral("backupPassphraseDialog"))->reject();
+    QTRY_COMPARE(messages.count(), 3);
+    QCOMPARE(row->text(), QStringLiteral("Done"));
+    QVERIFY(vault->IsLocked());
+    QVERIFY(vault->ChangeVaultPassphrase(passphrase, SecureString{"rpc changed"}));
+    QVERIFY(vault->IsLocked());
+    QCOMPARE(vault->GetBackupState(), vault::BackupState::NEEDED);
+    QTRY_COMPARE(row->text(), QStringLiteral("Needed"));
+    QCOMPARE(status->text(), QStringLiteral("Vault locked · backup needed"));
+}
+
+// F-614: a backup to a folder whose name is not ASCII. On Windows the old code turned the chosen name into
+// ANSI code-page bytes and handed them to readers that expect UTF-8, so the save failed or wrote a mangled
+// name. "é" is in the Western code page but is not UTF-8 there; "☿" is in no ANSI code page.
+void VaultTests::backupToANonAsciiFolder()
+{
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    TestChain100Setup test;
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+
+    vault::DatabaseOptions db_options;
+    db_options.require_create = true;
+    db_options.require_format = vault::DatabaseFormat::SQLITE;
+    vault::DatabaseStatus db_status;
+    bilingual_str db_error;
+    auto database{vault::MakeDatabase(test.m_path_root / "backup-unicode", db_options, db_status, db_error)};
+    QVERIFY2(database, db_error.original.c_str());
+    auto vault{std::make_shared<CVault>(m_node.context()->chain.get(), "", std::move(database))};
+    QVERIFY(vault->LoadVault() == vault::DBErrors::LOAD_OK);
+    {
+        LOCK(vault->cs_vault);
+        vault->SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
+        vault->SetupDescriptorScriptPubKeyMans();
+    }
+
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    OptionsModel options_model(m_node);
+    bilingual_str error;
+    QVERIFY(options_model.Init(error));
+    VaultContext& vault_context = *m_node.vaultLoader().context();
+    AddVault(vault_context, vault);
+    VaultModel model(interfaces::MakeVault(vault_context, vault), m_node, &options_model, platform_style.get());
+    RemoveVault(vault_context, vault, /*load_on_start=*/std::nullopt);
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(&model, platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(&model);
+    frame->gotoLaunchPage();
+
+    QLabel* row = frame->findChild<QLabel*>(QStringLiteral("desktopLaunchBackupState"));
+    QVERIFY(row);
+    QTemporaryDir backup_dir;
+    QVERIFY(backup_dir.isValid());
+    const QString folder{backup_dir.filePath(QStringLiteral("Jos\u00e9 \u263f"))};
+    QVERIFY(QDir().mkpath(folder));
+    const QString file{QDir(folder).filePath(QStringLiteral("vault-\u263f.dat"))};
+    QSignalSpy messages(view, &VaultView::message);
+    QVERIFY(messages.isValid());
+
+    QVERIFY(SaveBackupThroughFrame(*frame, *view, file));
+    QTRY_COMPARE(messages.count(), 1);
+    QCOMPARE(messages.at(0).at(0).toString(), QStringLiteral("Backup Successful"));
+    QCOMPARE(messages.at(0).at(1).toString(), QStringLiteral("The vault data was saved to %1 and checked.").arg(QDir::toNativeSeparators(file)));
+    // Written under the name chosen, and nothing else beside it.
+    QVERIFY(QFileInfo::exists(file));
+    QCOMPARE(QDir(folder).entryList(QDir::Files), QStringList{QStringLiteral("vault-\u263f.dat")});
+    QCOMPARE(row->text(), QStringLiteral("Done"));
+}
+
 void VaultTests::benchTickerMatchesVaultBalances()
 {
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
@@ -2451,6 +2767,7 @@ void VaultTests::homeLedgerListsVaultTransactions()
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext scoped_context(m_node, test.m_node);
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
 
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     QSettings().remove(QStringLiteral("TransactionViewHeaderState"));
@@ -2459,6 +2776,7 @@ void VaultTests::homeLedgerListsVaultTransactions()
     mini_gui.initModelForVault(m_node, vault, platform_style.get());
     // One transfer still waiting for a block, beside mature and maturing rewards.
     const uint256 pending_txid = SendCoins(*vault, mini_gui.sendCoinsDialog, PKHash(), COIN);
+    if (QTest::currentTestFailed()) return;
     QVERIFY(!pending_txid.IsNull());
     qApp->processEvents();
     TransactionTableModel* source = mini_gui.vaultModel->getTransactionTableModel();
@@ -2614,6 +2932,7 @@ void VaultTests::homeLedgerListsVaultTransactions()
         // it; the count in the head follows. Both transfers are pending at the
         // same mock time, so either may sort first.
         const uint256 second_txid = SendCoins(*vault, mini_gui.sendCoinsDialog, PKHash(), COIN);
+        if (QTest::currentTestFailed()) return;
         QVERIFY(!second_txid.IsNull());
         QTRY_COMPARE(source->rowCount({}), all_rows + 1);
         QTRY_COMPARE(count->text(), QStringLiteral("10 of %1 entries").arg(all_rows + 1));
@@ -2887,6 +3206,7 @@ void VaultTests::ledgerPageNamesItsFiltersAndFitsItsColumns()
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext scoped_context(m_node, test.m_node);
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
 
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     QSettings().remove(QStringLiteral("TransactionViewHeaderState"));
@@ -2992,6 +3312,7 @@ void VaultTests::homeAndLedgerReadTransactionsAlike()
     // so no label. One reward to the key's P2WPKH address gives a labelled row.
     test.CreateAndProcessBlock({}, GetScriptForDestination(WitnessV0KeyHash(test.coinbaseKey.GetPubKey())));
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
     const QString known_label = QStringLiteral("household-budget-02");
     {
         LOCK(vault->cs_vault);
@@ -3105,6 +3426,7 @@ void VaultTests::homeLaysOutLedgerBesideInstruments()
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext scoped_context(m_node, test.m_node);
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
 
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
@@ -3181,6 +3503,7 @@ void VaultTests::sendConfirmationNamesUnconfirmedChange()
     ScopedNodeContext scoped_context(m_node, test.m_node);
 
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
     std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
     MiniGUI mini_gui(m_node, platformStyle.get());
     mini_gui.initModelForVault(m_node, vault, platformStyle.get());
@@ -3193,6 +3516,7 @@ void VaultTests::sendConfirmationNamesUnconfirmedChange()
 
     QString confirmed_text;
     const uint256 confirmed_txid = SendCoins(*vault, sendCoinsDialog, PKHash(), COIN, QMessageBox::Cancel, &confirmed_text);
+    if (QTest::currentTestFailed()) return;
     QVERIFY(confirmed_txid.IsNull());
     QVERIFY(confirmed_text.contains(QStringLiteral("Sending uses proof-of-work")));
     QVERIFY(!confirmed_text.contains(warning));
@@ -3215,6 +3539,7 @@ void VaultTests::sendConfirmationNamesUnconfirmedChange()
 
     QString parent_text;
     const uint256 parent_txid = SendCoins(*vault, sendCoinsDialog, PKHash(), COIN, QMessageBox::Yes, &parent_text);
+    if (QTest::currentTestFailed()) return;
     QVERIFY(!parent_txid.IsNull());
     QVERIFY(!parent_text.contains(warning));
 
@@ -3229,6 +3554,7 @@ void VaultTests::sendConfirmationNamesUnconfirmedChange()
 
     QString unconfirmed_text;
     const uint256 unconfirmed_txid = SendCoins(*vault, sendCoinsDialog, PKHash(), COIN, QMessageBox::Cancel, &unconfirmed_text);
+    if (QTest::currentTestFailed()) return;
     QVERIFY(unconfirmed_txid.IsNull());
     QVERIFY(unconfirmed_text.contains(QStringLiteral("Sending uses proof-of-work")));
     QVERIFY(unconfirmed_text.contains(warning));
@@ -3247,11 +3573,13 @@ void VaultTests::coinControlMarksUnconfirmedChange()
     ScopedNodeContext scoped_context(m_node, test.m_node);
 
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
     std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
     MiniGUI mini_gui(m_node, platformStyle.get());
     mini_gui.initModelForVault(m_node, vault, platformStyle.get());
 
     const uint256 parent_txid = SendCoins(*vault, mini_gui.sendCoinsDialog, PKHash(), COIN);
+    if (QTest::currentTestFailed()) return;
     QVERIFY(!parent_txid.IsNull());
 
     COutPoint change_outpoint;
@@ -3911,6 +4239,77 @@ void VaultTests::mineMintPageRefusesToPresentIsolatedMiningAsSuccess()
     QCOMPARE(start_spy.takeFirst().at(0).toString(), QStringLiteral("hg1qexample"));
 }
 
+//! F-610: a main node never mines before a peer's headers show it has caught up,
+//! so with no peers nothing is mined at all. The isolation copy above, which
+//! says coins mined now will vanish, is true only where the node may mine
+//! alone (the test chains), and the confirmation asks about a risk main no
+//! longer has.
+void VaultTests::mineMintPageOnMainSaysMiningWaitsForPeers()
+{
+    MineMintPage page;
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+    QWidget* panel = page.findChild<QWidget*>(QStringLiteral("mineMintIsolationPanel"));
+    QLabel* banner = page.findChild<QLabel*>(QStringLiteral("mineMintIsolationBanner"));
+    QLabel* blocks = page.findChild<QLabel*>(QStringLiteral("blocksFoundValue"));
+    QPushButton* start = page.findChild<QPushButton*>(QStringLiteral("startMiningButton"));
+    QVERIFY(panel && banner && blocks && start);
+
+    interfaces::MiningStatus st;
+    st.mines_without_peers = false;
+    st.blocks_found = 1;
+    st.gpu_solver = true;
+    page.setStatus(st);
+    page.setPeerCount(0);
+
+    // Still shown: no peer is still the thing to fix, and the route to it stays.
+    QVERIFY(panel->isVisibleTo(&page));
+    QVERIFY(banner->text().contains(QStringLiteral("awaiting peers")));
+    QVERIFY(banner->text().contains(QStringLiteral("Mining is paused")));
+    QVERIFY(!banner->text().contains(QStringLiteral("separate chain")));
+    // A block found before the peers dropped was found on the network's chain.
+    QCOMPARE(blocks->text(), QStringLiteral("1"));
+
+    // No confirmation: there is no private chain to warn about.
+    QSignalSpy start_spy(&page, &MineMintPage::startRequested);
+    QVERIFY(start_spy.isValid());
+    page.setPayoutAddress(QStringLiteral("hg1qexample"));
+    QVERIFY(start->isEnabled());
+    start->click();
+    QCOMPARE(start_spy.count(), 1);
+    QVERIFY(!QApplication::activeModalWidget());
+    for (QWidget* widget : QApplication::topLevelWidgets()) {
+        QVERIFY(!(widget->isVisible() && widget->objectName() == QStringLiteral("isolatedMiningWarning")));
+    }
+}
+
+//! Armed and waiting looks, on every other row, exactly like armed and working
+//! on a first graph. The miner says which it is (getminingstatus
+//! waiting_for_sync), and the page has to repeat it.
+void VaultTests::mineMintPageSaysWhenTheMinerIsWaitingToCatchUp()
+{
+    interfaces::MiningStatus st;
+    st.active = true;
+    st.gpu_solver = true;
+    st.block_solving_possible = true;
+    st.waiting_for_sync = true;
+    auto rows = MineMintPage::statusTextForTesting(st);
+    QCOMPARE(rows.block_mining, QStringLiteral("Waiting"));
+    QCOMPARE(rows.attempts, QStringLiteral("Waiting"));
+    QVERIFY(rows.health.contains(QStringLiteral("synchronized with the network")));
+
+    // Halted is the more specific truth: nothing could solve even once synced.
+    st.gpu_solver = false;
+    st.block_solving_possible = false;
+    rows = MineMintPage::statusTextForTesting(st);
+    QCOMPARE(rows.block_mining, QStringLiteral("Halted"));
+
+    // Stopped is Idle, whatever the last worker was doing.
+    st.active = false;
+    rows = MineMintPage::statusTextForTesting(st);
+    QCOMPARE(rows.block_mining, QStringLiteral("Idle"));
+}
+
 void VaultTests::mineMintPageShowsARawScriptPayout()
 {
     MineMintPage page;
@@ -4053,7 +4452,7 @@ void VaultTests::networkPageDiagnosesBootstrapAndAddsPeers()
     QVERIFY(diagnosis->isVisibleTo(&page));
     // Sandbox ships no fixed seeds at all, which is a different obstacle from the one
     // main and publictest have, and it must not be described as a Tor problem.
-    QVERIFY(diagnosis->text().contains(QStringLiteral("no seed addresses")));
+    QCOMPARE(diagnosis->text(), QStringLiteral("This network ships no seed addresses. Unless this node already knows peers from an earlier run or from its settings, it has nothing to look for: name a peer below to connect to one."));
     QVERIFY(!diagnosis->text().contains(QStringLiteral("Tor")));
     QVERIFY(peer_button->isEnabled());
 
@@ -4514,6 +4913,34 @@ void VaultTests::launchPageSaysWhenConsensusHasNoPeers()
     QCOMPARE(state->text(), QStringLiteral("Restart needed"));
     page.setPeerCount(0);
     QCOMPARE(state->text(), QStringLiteral("Restart needed"));
+}
+
+//! F-610: the launch page's isolated-mining line, on a node that never mines alone.
+void VaultTests::launchPageOnMainSaysMiningWaitsForPeers()
+{
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    DesktopLaunchPage page(platform_style.get(), /*blockchain_size_gb=*/128, /*chain_state_size_gb=*/26, nullptr);
+    QLabel* mining_body = page.findChild<QLabel*>(QStringLiteral("launchMiningCardBody"));
+    QVERIFY(mining_body);
+
+    page.setConsensusEnabled(true);
+    interfaces::MiningStatus st;
+    st.active = true;
+    st.gpu_solver = true;
+    st.block_solving_possible = true;
+    st.mines_without_peers = false;
+    st.waiting_for_sync = true;
+    page.setMiningStatus(st);
+    page.setPeerCount(0);
+    QVERIFY(mining_body->text().contains(QStringLiteral("will begin once")));
+    QVERIFY(!mining_body->text().contains(QStringLiteral("chain of this computer's own")));
+    QVERIFY(page.findChild<QPushButton*>(QStringLiteral("launchMiningCardButton"))->isEnabled());
+
+    // Where the node may mine alone, the existing warning stands.
+    st.mines_without_peers = true;
+    st.waiting_for_sync = false;
+    page.setMiningStatus(st);
+    QVERIFY(mining_body->text().contains(QStringLiteral("chain of this computer's own")));
 }
 
 //! The mining model wraps the node handle a client model handed over and polls it
@@ -5180,7 +5607,6 @@ void VaultTests::vaultModelPassesCancelRequestIntoTheGrind()
     // transfer: the user who pressed Cancel was talking about the transfer they could
     // see, and the one they start afterwards has to be allowed to finish.
     vault_model.requestProofOfWorkCancel();
-    QVERIFY(vault_model.proofOfWorkCancelRequested());
     {
         VaultModelTransaction stale_request(recipients);
         vault_model.prepareTransaction(stale_request, coin_control);
@@ -5190,11 +5616,11 @@ void VaultTests::vaultModelPassesCancelRequestIntoTheGrind()
     // A cancel asked for while a grind is running does reach it.
     vault_ptr->cancel_requested_during_create = false;
     {
-        VaultModel::ProofOfWorkScope scope(vault_model);
+        auto attempt = vault_model.beginProofOfWorkAttempt();
         QVERIFY(vault_model.proofOfWorkInFlight());
         vault_model.requestProofOfWorkCancel();
         VaultModelTransaction live_request(recipients);
-        vault_model.prepareTransaction(live_request, coin_control);
+        vault_model.prepareTransaction(live_request, coin_control, {}, attempt);
     }
     QVERIFY(vault_ptr->cancel_requested_during_create);
     QVERIFY(!vault_model.proofOfWorkInFlight());
@@ -5319,6 +5745,8 @@ void VaultTests::sendGenerationGuardDropsStaleResult()
 
 void VaultTests::gpuSituationWordingIsExact()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
+    const ScopedEnvironment probe_env{ProbeEnvironmentNames()};
     using gpusituation::SendNoteFor;
     using gpusituation::StartupNoticeFor;
     const QString rx480{QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")};
@@ -5402,6 +5830,8 @@ void VaultTests::gpuSituationWordingIsExact()
 
 void VaultTests::discoveryRunsOffTheGuiThread()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
+    const ScopedEnvironment probe_env{ProbeEnvironmentNames()};
     qputenv("QS_PROBE_STUB_SLEEP_MS", "3000");
     const QString listing{Listing({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")})};
     qputenv("CUCKATOO_GPU_SOLVER", SolverProbeStubPath().toUtf8());
@@ -5422,6 +5852,8 @@ void VaultTests::discoveryRunsOffTheGuiThread()
 
 void VaultTests::cpuFallbackWarningFollowsDiscovery()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
+    const ScopedEnvironment probe_env{ProbeEnvironmentNames()};
     QVERIFY(!gpusituation::CardWillWork(std::nullopt));
     QVERIFY(gpusituation::CardWillWork(Discover({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=X")})));
     QVERIFY(!gpusituation::CardWillWork(Discover({})));
@@ -5458,6 +5890,8 @@ void VaultTests::cpuFallbackWarningFollowsDiscovery()
 
 void VaultTests::faultedCardsShowSendWarningDetails()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
+    const ScopedEnvironment probe_env{ProbeEnvironmentNames()};
     const auto discovery = Discover({
         QStringLiteral("device backend=stub id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=First Card"),
         QStringLiteral("device backend=stub id=pci:0000:05:00.0 type=gpu integrated=0 mem=0 status=ok name=Second Card")});
@@ -5654,6 +6088,7 @@ void VaultTests::captureBenchPageScreenshots()
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext scoped_context(m_node, test.m_node);
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
     MiniGUI mini_gui(m_node, platform_style.get());
     mini_gui.initModelForVault(m_node, vault, platform_style.get());
     QVERIFY(!SendCoins(*vault, mini_gui.sendCoinsDialog, PKHash(), 3 * COIN).IsNull());
@@ -5707,7 +6142,7 @@ void VaultTests::transferPageShowsItsFormAndTransmitButtonTogether()
     frame->setCurrentVault(&vault_model);
     content.setWidget(frame);
     // A 1080p desktop's work area, less the menu bar and the status bar. This is
-    // the size the Phase 6 first-run walk had, on a machine larger than most.
+    // the size the first-run walk had, on a machine larger than most.
     content.resize(1920, 965);
     frame->gotoSendCoinsPage();
     content.show();
@@ -6290,6 +6725,7 @@ void VaultTests::transferKeepsTheAddressReadableAndReviewInReach()
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext scoped_context(m_node, test.m_node);
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
 
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
@@ -6430,6 +6866,7 @@ void VaultTests::transferLabelFieldHoldsAReferenceLabel()
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext scoped_context(m_node, test.m_node);
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
 
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
@@ -6535,6 +6972,8 @@ void VaultTests::remainingPagesUseTheBenchGrammar()
 
 void VaultTests::transferSolverTextNamesRealMenuAndSetting()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
+    const ScopedEnvironment probe_env{ProbeEnvironmentNames()};
     TestChain100Setup test;
     ScopedNodeContext scoped_context(m_node, test.m_node);
     std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
@@ -6649,6 +7088,222 @@ public:
     }
 };
 } // namespace
+
+void VaultTests::cancelBeforeGrindStartsIsHonoured()
+{
+    TransferPrecheckFixture fixture(m_node);
+    fixture.vault->balance = 2 * COIN;
+    auto attempt = fixture.model->beginProofOfWorkAttempt();
+    attempt->cancel();
+    QList<SendCoinsRecipient> recipients;
+    recipients.append(SendCoinsRecipient(fixture.address, QString{}, COIN, QString{}));
+    VaultModelTransaction transaction(recipients);
+    fixture.model->prepareTransaction(transaction, *fixture.dialog->getCoinControl(), {}, attempt);
+    QVERIFY(fixture.vault->cancel_requested_during_create);
+}
+
+void VaultTests::cancelDuringWindDownDoesNotReachNextSend()
+{
+    TransferPrecheckFixture fixture(m_node);
+    fixture.vault->balance = 2 * COIN;
+    fixture.vault->create_gate_open = false;
+    auto first = fixture.model->beginProofOfWorkAttempt();
+    QList<SendCoinsRecipient> recipients;
+    recipients.append(SendCoinsRecipient(fixture.address, QString{}, COIN, QString{}));
+    std::thread worker([&] {
+        VaultModelTransaction transaction(recipients);
+        fixture.model->prepareTransaction(transaction, *fixture.dialog->getCoinControl(), {}, first);
+    });
+    QTRY_VERIFY(fixture.vault->create_entered.load());
+    fixture.model->requestProofOfWorkCancel();
+    auto second = fixture.model->beginProofOfWorkAttempt();
+    QVERIFY(first->cancelRequested());
+    QVERIFY(!second->cancelRequested());
+    fixture.vault->create_gate_open = true;
+    worker.join();
+    QVERIFY(fixture.vault->cancel_requested_during_create);
+    fixture.vault->cancel_requested_during_create = false;
+    VaultModelTransaction next(recipients);
+    fixture.model->prepareTransaction(next, *fixture.dialog->getCoinControl(), {}, second);
+    QVERIFY(!fixture.vault->cancel_requested_during_create);
+}
+
+void VaultTests::closeVaultCancelsOnlyThatVault()
+{
+    TestChain100Setup test;
+    auto loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    VaultController controller(m_node, &options, style.get(), nullptr);
+    auto a = std::make_unique<PollMarkerVault>();
+    a->name = "a";
+    auto b = std::make_unique<PollMarkerVault>();
+    b->name = "b";
+    VaultModel* model_a = controller.getOrCreateVault(std::move(a));
+    VaultModel* model_b = controller.getOrCreateVault(std::move(b));
+    auto attempt_b = model_b->beginProofOfWorkAttempt();
+    bool done = false;
+    controller.stopProofOfWork(model_a, [&] { done = true; });
+    QVERIFY(done);
+    QVERIFY(!attempt_b->cancelRequested());
+    attempt_b.reset();
+}
+
+void VaultTests::sendDialogDestructorCancelsItsAttempt()
+{
+    TransferPrecheckFixture fixture(m_node);
+    auto attempt = fixture.model->beginProofOfWorkAttempt();
+    fixture.dialog->setCurrentAttemptForTesting(attempt);
+    fixture.dialog.reset();
+    QVERIFY(attempt->cancelRequested());
+}
+
+void VaultTests::quitDuringTransferGrindCancelsAndWaits()
+{
+    TestChain100Setup test;
+    auto loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    auto controller = std::make_unique<VaultController>(m_node, &options, style.get(), nullptr);
+    auto vault = std::make_unique<PollMarkerVault>();
+    PollMarkerVault* observed = vault.get();
+    observed->balance = 2 * COIN;
+    observed->transaction_creation_available = true;
+    VaultModel* model = controller->getOrCreateVault(std::move(vault));
+    auto attempt = model->beginProofOfWorkAttempt();
+    observed->create_gate_open = false;
+    CKey key;
+    key.MakeNewKey(true);
+    QList<SendCoinsRecipient> recipients;
+    recipients.append(SendCoinsRecipient(QString::fromStdString(EncodeDestination(WitnessV0KeyHash(key.GetPubKey()))), QString{}, COIN, QString{}));
+    std::thread worker([model, recipients, attempt = std::move(attempt)]() mutable {
+        VaultModelTransaction transaction(recipients);
+        vault::CCoinControl coin_control;
+        model->prepareTransaction(transaction, coin_control, {}, attempt);
+        attempt.reset();
+    });
+    QTRY_VERIFY(observed->create_entered.load());
+    bool done = false;
+    controller->prepareForShutdown([&] { done = true; });
+    QApplication::processEvents();
+    const bool waited = !done;
+    observed->create_gate_open = true;
+    worker.join();
+    QTRY_VERIFY(done);
+    QVERIFY(waited);
+    QVERIFY(observed->cancel_requested_during_create);
+    controller.reset();
+}
+
+void VaultTests::unloadDuringTransferGrindDefersDeletion()
+{
+    TestChain100Setup test;
+    auto loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    VaultController controller(m_node, &options, style.get(), nullptr);
+    auto vault = std::make_unique<PollMarkerVault>();
+    PollMarkerVault* observed = vault.get();
+    observed->balance = 2 * COIN;
+    observed->transaction_creation_available = true;
+    VaultModel* model = controller.getOrCreateVault(std::move(vault));
+    QPointer<VaultModel> live(model);
+    auto attempt = model->beginProofOfWorkAttempt();
+    observed->create_gate_open = false;
+    CKey key;
+    key.MakeNewKey(true);
+    QList<SendCoinsRecipient> recipients;
+    recipients.append(SendCoinsRecipient(QString::fromStdString(EncodeDestination(WitnessV0KeyHash(key.GetPubKey()))), QString{}, COIN, QString{}));
+    std::thread worker([model, recipients, attempt = std::move(attempt)]() mutable {
+        VaultModelTransaction transaction(recipients);
+        vault::CCoinControl coin_control;
+        model->prepareTransaction(transaction, coin_control, {}, attempt);
+        attempt.reset();
+    });
+    QTRY_VERIFY(observed->create_entered.load());
+    QVERIFY(QMetaObject::invokeMethod(model, "unload"));
+    QApplication::processEvents();
+    const bool deferred = !live.isNull();
+    observed->create_gate_open = true;
+    worker.join();
+    QTRY_VERIFY(live.isNull());
+    QVERIFY(deferred);
+}
+
+void VaultTests::unlockReleaseIsInsideTheInFlightWindow()
+{
+    TransferPrecheckFixture fixture(m_node);
+    fixture.recipient(COIN);
+    fixture.vault->balance = 2 * COIN;
+    fixture.vault->vault_model_under_test = fixture.model.get();
+    QObject::connect(fixture.model.get(), &VaultModel::requireUnlock, fixture.dialog.get(), [&] {
+        fixture.vault->locked = false;
+    });
+    QSignalSpy finished(fixture.dialog.get(), &SendCoinsDialog::sendPreparationFinishedForTesting);
+    fixture.transmit();
+    QTRY_COMPARE(finished.size(), 1);
+    QVERIFY(fixture.vault->in_flight_during_relock);
+    QVERIFY(!fixture.model->proofOfWorkInFlight());
+}
+
+void VaultTests::vaultLoadFromWorkerDoesNotHoldControllerMutexAcrossGuiCall()
+{
+    TestChain100Setup test;
+    auto loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    VaultController controller(m_node, &options, style.get(), nullptr);
+    std::atomic<bool> started{false};
+    std::atomic<bool> done{false};
+    std::thread worker([&] {
+        started = true;
+        controller.getOrCreateVault(std::make_unique<PollMarkerVault>());
+        done = true;
+    });
+    while (!started) std::this_thread::yield();
+    const bool available = controller.controllerMutexAvailableForTesting(2000);
+    QTRY_VERIFY(done.load());
+    worker.join();
+    QVERIFY(available);
+}
+
+void VaultTests::handoverReportsFailedRemove()
+{
+    TestChain100Setup test;
+    auto loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    VaultController controller(m_node, &options, style.get(), nullptr);
+    auto vault = std::make_unique<PollMarkerVault>();
+    PollMarkerVault* observed = vault.get();
+    observed->remove_result = false;
+    controller.getOrCreateVault(std::move(vault));
+    std::optional<bool> result;
+    controller.closeAllVaultsForHandover([&](bool ok) { result = ok; });
+    QVERIFY(result.has_value());
+    QVERIFY(!*result);
+    QVERIFY(!observed->remove_load_on_start.has_value());
+}
 
 void VaultTests::transferPrecheckRefusesOverBalanceBeforeUnlock()
 {
@@ -6797,7 +7452,9 @@ void VaultTests::requestPageNamesFormatsAndShowsGeneratedFormat()
 
     std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
     MiniGUI mini_gui(m_node, platformStyle.get());
-    mini_gui.initModelForVault(m_node, SetupDescriptorsVault(m_node, test), platformStyle.get());
+    const std::shared_ptr<CVault> setup_vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(setup_vault);
+    mini_gui.initModelForVault(m_node, setup_vault, platformStyle.get());
 
     ReceiveCoinsDialog receive(platformStyle.get());
     receive.setModel(mini_gui.vaultModel.get());
@@ -6865,7 +7522,9 @@ void VaultTests::signVerifyMessageRejectsNonBase58WithoutBitcoinVocabulary()
 
     std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
     MiniGUI mini_gui(m_node, platformStyle.get());
-    mini_gui.initModelForVault(m_node, SetupDescriptorsVault(m_node, test), platformStyle.get());
+    const std::shared_ptr<CVault> setup_vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(setup_vault);
+    mini_gui.initModelForVault(m_node, setup_vault, platformStyle.get());
 
     SignVerifyMessageDialog dialog(platformStyle.get(), nullptr);
     dialog.setModel(mini_gui.vaultModel.get());
@@ -6917,6 +7576,7 @@ void VaultTests::sendEntryAddressBookFillsDestinationWithoutNestedEventLoop()
     ScopedNodeContext scoped_context(m_node, test.m_node);
 
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
     CKey send_key = GenerateRandomKey();
     CTxDestination send_dest{PKHash(send_key.GetPubKey())};
     const QString send_address = QString::fromStdString(EncodeDestination(send_dest));
@@ -6973,6 +7633,7 @@ void VaultTests::signVerifyAddressBookDoesNotNestEventLoop()
     ScopedNodeContext scoped_context(m_node, test.m_node);
 
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
     CKey send_key = GenerateRandomKey();
     CTxDestination send_dest{PKHash(send_key.GetPubKey())};
     {
@@ -7068,7 +7729,9 @@ void VaultTests::customChangeAddressConfirmDoesNotNestEventLoop()
 
     std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
     MiniGUI mini_gui(m_node, platformStyle.get());
-    mini_gui.initModelForVault(m_node, SetupDescriptorsVault(m_node, test), platformStyle.get());
+    const std::shared_ptr<CVault> setup_vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(setup_vault);
+    mini_gui.initModelForVault(m_node, setup_vault, platformStyle.get());
     QVERIFY(mini_gui.optionsModel.setOption(OptionsModel::CoinControlFeatures, true));
 
     QCheckBox* check = mini_gui.sendCoinsDialog.findChild<QCheckBox*>(QStringLiteral("checkBoxCoinControlChange"));
@@ -7558,6 +8221,7 @@ void VaultTests::debugInputsNameOnlyOwnedAddresses()
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext scoped_context(m_node, test.m_node);
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
     DebugCategoryOn debug;
 
     const CKey stranger = GenerateRandomKey();
@@ -7595,6 +8259,7 @@ void VaultTests::incomingTransferIsNotNamedByReceivingLabel()
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext scoped_context(m_node, test.m_node);
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
 
     const CTxDestination labelled{WitnessV0KeyHash(test.coinbaseKey.GetPubKey())};
     const QString label = QStringLiteral("from-funder");
@@ -7661,6 +8326,7 @@ void VaultTests::homeLedgerKeepsALabelAtFloor()
     // The longer label is chosen after Home has its actual font and width.
     test.CreateAndProcessBlock({}, GetScriptForDestination(WitnessV0KeyHash(test.coinbaseKey.GetPubKey())));
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
     const QString reference = QStringLiteral("household-budget-02");
     QString long_label = reference;
     {
@@ -7971,6 +8637,7 @@ void VaultTests::transactionBurstPostsOneImmediateNotification()
     test.m_node.vault_loader = vault_loader.get();
     ScopedNodeContext scoped_context(m_node, test.m_node);
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
 
     std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
     QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
@@ -8047,7 +8714,9 @@ void VaultTests::homeLedgerBurstCoalescesColumnFits()
     // it is created, and a vault cannot be replayed, so the two windows have
     // to watch the same new blocks arrive.
     std::shared_ptr<CVault> vault_settled = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault_settled);
     std::shared_ptr<CVault> vault_burst = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault_burst);
 
     std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
     QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
@@ -8289,6 +8958,7 @@ void VaultTests::transferThroughARefusingNodeSaysSavedNotSent()
     ScopedNodeContext scoped_context(m_node, test.m_node);
 
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
     std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
     MiniGUI mini_gui(m_node, platformStyle.get());
     mini_gui.initModelForVault(m_node, vault, platformStyle.get());
@@ -8311,17 +8981,20 @@ void VaultTests::transferThroughARefusingNodeSaysSavedNotSent()
     QObject::connect(&sendCoinsDialog, &SendCoinsDialog::coinsSent, &scope, [&](const uint256&) { ++coins_sent; });
 
     const uint256 parent_txid = SendCoins(*vault, sendCoinsDialog, PKHash(), COIN);
+    if (QTest::currentTestFailed()) return;
     QVERIFY(!parent_txid.IsNull());
     QVERIFY(m_node.context()->chain->isInRelayPool(parent_txid));
     QCOMPARE(coins_sent, 1);
     QCOMPARE(messages.count(), 0);
 
     const uint256 child_txid = SendCoins(*vault, sendCoinsDialog, PKHash(), COIN);
+    if (QTest::currentTestFailed()) return;
     QVERIFY(m_node.context()->chain->isInRelayPool(child_txid));
     QCOMPARE(coins_sent, 2);
     QCOMPARE(messages.count(), 0);
 
     const uint256 grandchild_txid = SendCoins(*vault, sendCoinsDialog, PKHash(), COIN);
+    if (QTest::currentTestFailed()) return;
     QVERIFY(!grandchild_txid.IsNull());
     QVERIFY(!m_node.context()->chain->isInRelayPool(grandchild_txid));
     QCOMPARE(WITH_LOCK(vault->cs_vault, return vault->mapVault.count(grandchild_txid)), size_t{1});
@@ -8374,6 +9047,7 @@ void VaultTests::expiredTransferNoticeSaysItFailed()
     ScopedNodeContext scoped_context(m_node, test.m_node);
 
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
     std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
     MiniGUI mini_gui(m_node, platformStyle.get());
     mini_gui.initModelForVault(m_node, vault, platformStyle.get());
@@ -8412,6 +9086,7 @@ void VaultTests::expiredTransferNoticeWaitsForTheVaultToOpen()
     ScopedNodeContext scoped_context(m_node, test.m_node);
 
     std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
     const CTransactionRef tx{KeepATransferAndLetItExpire(test, *vault)};
     QVERIFY(tx);
     vault->ResubmitVaultTransactions(/*relay=*/false, /*force=*/true);
@@ -8927,4 +9602,486 @@ void VaultTests::paymentConfirmsAtTheRecommendedTwentyConfirmations()
     }
     QCOMPARE(status_at(20), TransactionStatus::Confirmed);
     QCOMPARE(status_at(21), TransactionStatus::Confirmed);
+}
+
+// Slice GN
+void VaultTests::banTableUnbanFollowsTheSelectedSubnetAcrossRefresh()
+{
+    TestChain100Setup test;
+    ScopedNodeContext context(m_node, test.m_node);
+    const auto first = LookupHost("198.51.100.10", false).value();
+    const auto selected = LookupHost("198.51.100.20", false).value();
+    const auto before = LookupHost("198.51.100.05", false).value();
+    const CSubNet selected_subnet{selected};
+    QVERIFY(m_node.ban(first, 3600));
+    QVERIFY(m_node.ban(selected, 3600));
+    BanTableModel model(m_node, nullptr);
+    model.sort(BanTableModel::Address, Qt::AscendingOrder);
+    QModelIndex selected_index;
+    for (int row = 0; row < model.rowCount({}); ++row) {
+        const auto candidate = model.index(row, 0, {});
+        if (candidate.data().toString() == QString::fromStdString(selected_subnet.ToString())) selected_index = candidate;
+    }
+    QVERIFY(selected_index.isValid());
+    QPersistentModelIndex persistent{selected_index};
+    QVERIFY(m_node.ban(before, 3600));
+    model.refresh();
+    QVERIFY(persistent.isValid());
+    QCOMPARE(persistent.data().toString(), QString::fromStdString(selected_subnet.ToString()));
+    QVERIFY(model.unban(persistent));
+    model.refresh();
+    QVERIFY(!persistent.isValid());
+    QVERIFY(!model.unban(persistent));
+    banmap_t banned;
+    QVERIFY(m_node.getBanned(banned));
+    QVERIFY(banned.count(CSubNet{first}) == 1);
+    QVERIFY(banned.count(CSubNet{before}) == 1);
+    m_node.unban(CSubNet{first});
+    m_node.unban(CSubNet{before});
+}
+
+void VaultTests::peerAndBanTablesPassTheModelTester()
+{
+    TestChain100Setup test;
+    ScopedNodeContext context(m_node, test.m_node);
+    PeerTableModel peers(m_node, nullptr);
+    BanTableModel bans(m_node, nullptr);
+    QAbstractItemModelTester peer_tester(&peers, QAbstractItemModelTester::FailureReportingMode::QtTest);
+    QAbstractItemModelTester ban_tester(&bans, QAbstractItemModelTester::FailureReportingMode::QtTest);
+    peers.refresh();
+    bans.refresh();
+    const auto addr = LookupHost("198.51.100.31", false).value();
+    QVERIFY(m_node.ban(addr, 3600));
+    bans.refresh();
+    m_node.unban(CSubNet{addr});
+    bans.refresh();
+}
+
+void VaultTests::signChooserLeavesTheSharedAddressTableWhole()
+{
+    TestChain100Setup test;
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    auto vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
+    const auto bech32 = CTxDestination{WitnessV0KeyHash(GenerateRandomKey().GetPubKey())};
+    const QString bech32_address = QString::fromStdString(EncodeDestination(bech32));
+    {
+        LOCK(vault->cs_vault);
+        vault->SetAddressBook(bech32, "bech32", vault::AddressPurpose::RECEIVE);
+    }
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    MiniGUI gui(m_node, style.get());
+    gui.initModelForVault(m_node, vault, style.get());
+    auto* table = gui.vaultModel->getAddressTableModel();
+    AddressBookPage book(style.get(), AddressBookPage::ForEditing, AddressBookPage::ReceivingTab);
+    book.setModel(table);
+    SignVerifyMessageDialog dialog(style.get(), nullptr);
+    dialog.setModel(gui.vaultModel.get());
+    dialog.findChild<QPushButton*>(QStringLiteral("addressBookButton_SM"))->click();
+    QCOMPARE(gui.vaultModel->getAddressTableModel(), table);
+    QVERIFY(table->lookupAddress(bech32_address) >= 0);
+    const auto later = CTxDestination{WitnessV0KeyHash(GenerateRandomKey().GetPubKey())};
+    const QString later_address = QString::fromStdString(EncodeDestination(later));
+    {
+        LOCK(vault->cs_vault);
+        vault->SetAddressBook(later, "later", vault::AddressPurpose::RECEIVE);
+    }
+    QTRY_VERIFY(table->lookupAddress(later_address) >= 0);
+    auto* view = book.findChild<QTableView*>(QStringLiteral("tableView"));
+    QVERIFY(view);
+    QVERIFY(view->model()->rowCount() >= 2);
+}
+
+void VaultTests::messageChoosersListOnlyKeyHashAddresses()
+{
+    TestChain100Setup test;
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    auto vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
+    const auto receive_legacy = CTxDestination{PKHash(GenerateRandomKey().GetPubKey())};
+    const auto receive_bech32 = CTxDestination{WitnessV0KeyHash(GenerateRandomKey().GetPubKey())};
+    const auto send_legacy = CTxDestination{PKHash(GenerateRandomKey().GetPubKey())};
+    const auto send_bech32 = CTxDestination{WitnessV0KeyHash(GenerateRandomKey().GetPubKey())};
+    {
+        LOCK(vault->cs_vault);
+        for (const auto& dest : {receive_legacy, receive_bech32}) {
+            vault->SetAddressBook(dest, "receive", vault::AddressPurpose::RECEIVE);
+        }
+        for (const auto& dest : {send_legacy, send_bech32}) {
+            vault->SetAddressBook(dest, "send", vault::AddressPurpose::SEND);
+        }
+    }
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    MiniGUI gui(m_node, style.get());
+    gui.initModelForVault(m_node, vault, style.get());
+    SignVerifyMessageDialog dialog(style.get(), nullptr);
+    dialog.setModel(gui.vaultModel.get());
+    for (const auto* button_name : {"addressBookButton_VM", "addressBookButton_SM"}) {
+        dialog.findChild<QPushButton*>(QString::fromLatin1(button_name))->click();
+        auto pages = dialog.findChildren<AddressBookPage*>();
+        QVERIFY(!pages.isEmpty());
+        auto* page = pages.last();
+        auto* view = page->findChild<QTableView*>(QStringLiteral("tableView"));
+        QVERIFY(view);
+        const auto expected = QString::fromStdString(EncodeDestination(QString::fromLatin1(button_name).endsWith("SM") ? receive_legacy : send_legacy));
+        QStringList listed;
+        for (int row = 0; row < view->model()->rowCount(); ++row) {
+            const QString address = view->model()->index(row, AddressTableModel::Address).data().toString();
+            QVERIFY(std::holds_alternative<PKHash>(DecodeDestination(address.toStdString())));
+            listed.append(address);
+        }
+        QVERIFY(listed.contains(expected));
+        page->reject();
+    }
+}
+
+void VaultTests::agentSaveReceiptsAsksToUnlock()
+{
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    for (int i = 0; i < 5; ++i) test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+    auto loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+    auto vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    MiniGUI gui(m_node, style.get());
+    gui.initModelForVault(m_node, vault, style.get());
+    VaultModel& model = *gui.vaultModel;
+    auto record = model.recordAgentAllotmentSetup("receipt agent", COIN, 0);
+    QVERIFY(record);
+    const auto funding_dest = DecodeDestination(record->funding_address);
+    auto funding = vault::CreateTransaction(*vault, {vault::CRecipient{funding_dest, COIN}}, std::nullopt, vault::CCoinControl{});
+    QVERIFY2(funding, util::ErrorString(funding).original.c_str());
+    QVERIFY(vault->CommitTransaction(funding->tx, {}, {}));
+    test.CreateAndProcessBlock({CMutableTransaction{*funding->tx}}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+    const SecureString passphrase{"receipt unlock"};
+    QVERIFY(vault->EncryptVault(passphrase));
+    QVERIFY(vault->IsLocked());
+    AgentAllotmentPage page;
+    page.setModel(&model);
+    auto* button = page.findChild<QPushButton*>("agentAllotmentSaveFundingReceiptsButton");
+    QVERIFY(button);
+    QVERIFY(button->isEnabled());
+    const fs::path inbox = gArgs.GetDataDirNet() / "agent" / "payment-receipts.d";
+    const auto before = fs::exists(inbox) ? std::distance(fs::directory_iterator(inbox), fs::directory_iterator{}) : 0;
+    QSignalSpy unlock(&model, &VaultModel::requireUnlock);
+    connect(&model, &VaultModel::requireUnlock, &page, [&] { model.notifyUnlockDialogShown(); });
+    button->click();
+    QCOMPARE(unlock.count(), 1);
+    QCOMPARE(fs::exists(inbox) ? std::distance(fs::directory_iterator(inbox), fs::directory_iterator{}) : 0, before);
+    QVERIFY(vault->Unlock(passphrase));
+    model.completePendingUnlock();
+    QVERIFY(vault->IsLocked());
+    QVERIFY(fs::exists(inbox));
+    QVERIFY(std::distance(fs::directory_iterator(inbox), fs::directory_iterator{}) > before);
+}
+
+void VaultTests::receiveRequestRefusesAnUnparseableAmount()
+{
+    TestChain100Setup test;
+    auto loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    MiniGUI gui(m_node, style.get());
+    gui.initModelForVault(m_node, SetupDescriptorsVault(m_node, test), style.get());
+    ReceiveCoinsDialog receive(style.get());
+    receive.setModel(gui.vaultModel.get());
+    auto* amount = receive.findChild<QuicksilverAmountField*>("reqAmount");
+    auto* edit = amount->findChild<QLineEdit*>();
+    auto* button = receive.findChild<QPushButton*>("receiveButton");
+    auto* addresses = gui.vaultModel->getAddressTableModel();
+    auto* requests = gui.vaultModel->getRecentRequestsTableModel();
+    QVERIFY(amount && edit && button && addresses && requests);
+    for (const QString& invalid : {QStringLiteral("1,5"), QStringLiteral("100000000000000001")}) {
+        edit->setText(invalid);
+        const int address_count = addresses->rowCount({});
+        const int request_count = requests->rowCount({});
+        button->click();
+        QCOMPARE(addresses->rowCount({}), address_count);
+        QCOMPARE(requests->rowCount({}), request_count);
+    }
+    amount->setValue(COIN);
+    const int request_count = requests->rowCount({});
+    button->click();
+    QCOMPARE(requests->rowCount({}), request_count + 1);
+    amount->clear();
+    button->click();
+    QCOMPARE(requests->rowCount({}), request_count + 2);
+}
+
+void VaultTests::paymentServerFrameDecoding()
+{
+    using Status = PaymentServerFrame::Status;
+    QString decoded;
+    const char* reason = nullptr;
+    QCOMPARE(PaymentServerFrame::decode({}, &decoded, &reason), Status::Incomplete);
+    QCOMPARE(PaymentServerFrame::decode(QByteArray(3, '\0'), &decoded, &reason), Status::Incomplete);
+    QByteArray frame;
+    QDataStream stream(&frame, QIODevice::WriteOnly);
+    stream.setVersion(QDataStream::Qt_4_0);
+    stream << QStringLiteral("quicksilver:test");
+    QCOMPARE(PaymentServerFrame::decode(frame, &decoded, &reason), Status::Complete);
+    QCOMPARE(decoded, QStringLiteral("quicksilver:test"));
+    QCOMPARE(PaymentServerFrame::decode(frame + QByteArray(1, '\0'), &decoded, &reason), Status::Invalid);
+    QCOMPARE(QString::fromLatin1(reason), QStringLiteral("malformed"));
+    QCOMPARE(PaymentServerFrame::decode(QByteArray::fromHex("00010002"), &decoded, &reason), Status::Invalid);
+    QCOMPARE(QString::fromLatin1(reason), QStringLiteral("too large"));
+    QCOMPARE(PaymentServerFrame::decode(QByteArray::fromHex("00000003"), &decoded, &reason), Status::Invalid);
+    QCOMPARE(QString::fromLatin1(reason), QStringLiteral("malformed"));
+    QCOMPARE(PaymentServerFrame::decode(QByteArray::fromHex("ffffffff"), &decoded, &reason), Status::Invalid);
+    QCOMPARE(QString::fromLatin1(reason), QStringLiteral("malformed"));
+}
+
+void VaultTests::paymentServerSecondInstanceKeepsTheLiveEndpoint()
+{
+    TestChain100Setup test;
+    ScopedNodeContext context(m_node, test.m_node);
+    PaymentServer first(nullptr, true);
+    first.uiReady();
+    int received = 0;
+    QString address;
+    connect(&first, &PaymentServer::receivedPaymentRequest, &first, [&](const SendCoinsRecipient& recipient) {
+        ++received;
+        address = recipient.address;
+    });
+    PaymentServer second(nullptr, true);
+    const QString uri = QStringLiteral("quicksilver:%1").arg(QString::fromStdString(EncodeDestination(PKHash(GenerateRandomKey().GetPubKey()))));
+    QByteArray uri_bytes = uri.toUtf8();
+    char program[] = "qs-uri-test";
+    char* argv[] = {program, uri_bytes.data()};
+    PaymentServer::ipcParseCommandLine(2, argv);
+    // A real sender is another process, so the live instance's event loop keeps running while it
+    // blocks. Send from a worker thread for the same reason: on Windows the probe above holds the
+    // only pipe instance until the server re-arms in its event loop, and a send from this thread
+    // would starve that loop and time out.
+    auto sent = std::async(std::launch::async, [] { return PaymentServer::ipcSendCommandLine(); });
+    QTRY_VERIFY_WITH_TIMEOUT(sent.wait_for(std::chrono::seconds{0}) == std::future_status::ready, 5000);
+    QVERIFY(sent.get());
+    QTRY_COMPARE(received, 1);
+    QCOMPARE(address, uri.mid(QStringLiteral("quicksilver:").size()));
+    second.uiReady();
+}
+
+void VaultTests::paymentServerShortClientDoesNotBlock()
+{
+    TestChain100Setup test;
+    ScopedNodeContext context(m_node, test.m_node);
+    PaymentServer server(nullptr, true);
+    QLocalSocket client;
+    const QString server_name = QStringLiteral("Quicksilver") + QString::number(qHash(GUIUtil::PathToQString(gArgs.GetDataDirNet())));
+    client.connectToServer(server_name);
+    QVERIFY(client.waitForConnected(1000));
+    QCOMPARE(client.write(QByteArray(2, '\0')), qint64{2});
+    QTimer timer;
+    timer.setSingleShot(true);
+    timer.start(100);
+    QTRY_VERIFY_WITH_TIMEOUT(!timer.isActive(), 500);
+    QTRY_COMPARE_WITH_TIMEOUT(client.state(), QLocalSocket::UnconnectedState, 3000);
+}
+
+// Slice GM
+void VaultTests::unitControlSelectsWithoutClientModel()
+{
+    std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate("other")};
+    UnitDisplayStatusBarControl control(style.get());
+    QMenu* menu = control.findChild<QMenu*>();
+    QVERIFY(menu && menu->actions().size() > 1);
+    menu->actions().at(1)->trigger(); // No model must be harmless.
+
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    control.setOptionsModel(&options);
+    menu->actions().at(1)->trigger();
+    QCOMPARE(options.getDisplayUnit(), menu->actions().at(1)->data().value<QuicksilverUnit>());
+    control.setOptionsModel(nullptr);
+    menu->actions().at(0)->trigger();
+}
+
+static PartiallySignedQuicksilverTransaction GMPSQT(CAmount output, bool with_utxo = false)
+{
+    CMutableTransaction tx;
+    tx.vin.emplace_back(Txid::FromUint256(ArithToUint256(2)), 0);
+    tx.vout.emplace_back(output, CScript{});
+    PartiallySignedQuicksilverTransaction psqt{tx};
+    if (with_utxo) psqt.inputs[0].witness_utxo = CTxOut(output, CScript{});
+    return psqt;
+}
+
+void VaultTests::psqtDialogWorksWithoutClientModel()
+{
+    TestChain100Setup test;
+    ScopedNodeContext context(m_node, test.m_node);
+    std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate("other")};
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    VaultModel model(std::make_unique<PollMarkerVault>(), m_node, &options, style.get());
+    PSQTOperationsDialog dialog(nullptr, &model, nullptr);
+    dialog.openWithPSQT(GMPSQT(COIN, true));
+    auto* description = dialog.findChild<QTextEdit*>("transactionDescription");
+    auto* broadcast = dialog.findChild<QPushButton*>("broadcastTransactionButton");
+    QVERIFY(description && broadcast);
+    QVERIFY2(description->toPlainText().contains("Total Amount"), qPrintable(description->toPlainText()));
+    QVERIFY(!broadcast->isEnabled());
+    QVERIFY(broadcast->toolTip().contains("consensus"));
+}
+
+void VaultTests::psqtDialogRefusesOutOfRangeOutputs()
+{
+    PSQTOperationsDialog dialog(nullptr, nullptr, nullptr);
+    for (auto psqt : {GMPSQT(-1), GMPSQT(MAX_MONEY)}) {
+        if (psqt.tx->vout[0].nValue == MAX_MONEY) {
+            CMutableTransaction tx{*psqt.tx};
+            tx.vout.emplace_back(MAX_MONEY, CScript{});
+            psqt = PartiallySignedQuicksilverTransaction{tx};
+        }
+        dialog.openWithPSQT(psqt);
+        auto* status = dialog.findChild<QLabel*>("statusBar");
+        auto* description = dialog.findChild<QTextEdit*>("transactionDescription");
+        auto* sign = dialog.findChild<QPushButton*>("signTransactionButton");
+        auto* broadcast = dialog.findChild<QPushButton*>("broadcastTransactionButton");
+        QVERIFY(status && description && sign && broadcast);
+        QVERIFY(status->text().contains("PSQT is not valid. Output amount invalid"));
+        QVERIFY(description->toPlainText().isEmpty());
+        QVERIFY(!sign->isEnabled() && !broadcast->isEnabled());
+    }
+}
+
+void VaultTests::psqtSaveReportsAWriteFailure()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const fs::path directory = fs::PathFromString(temp.path().toStdString());
+    QVERIFY(!WritePSQTFile(directory, "bytes"));
+    const fs::path file = directory / "test.psqt";
+    QVERIFY(WritePSQTFile(file, "bytes"));
+    const auto read = ReadBinaryFile(file);
+    QVERIFY(read.first);
+    QCOMPARE(read.second, std::string{"bytes"});
+}
+
+void VaultTests::psqtBroadcastFailureNamesTheReason()
+{
+    QCOMPARE(PSQTBroadcastFailureMessage("rejected", ""), QStringLiteral("Transaction broadcast failed: rejected"));
+    QCOMPARE(PSQTBroadcastFailureMessage("rejected", "node reason"), QStringLiteral("Transaction broadcast failed: rejected (node reason)"));
+}
+
+void VaultTests::vaultViewRescanProgressIsOwnedAndSingle()
+{
+    TestChain100Setup test;
+    ScopedNodeContext context(m_node, test.m_node);
+    std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate("other")};
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    VaultModel model(std::make_unique<PollMarkerVault>(), m_node, &options, style.get());
+    auto view = std::make_unique<VaultView>(&model, style.get(), nullptr);
+    view->showProgress(QStringLiteral("Scan"), 0);
+    view->showProgress(QStringLiteral("Scan"), 0);
+    QCOMPARE(view->findChildren<QProgressDialog*>().size(), 1);
+    QPointer<QProgressDialog> progress = view->findChild<QProgressDialog*>();
+    view.reset();
+    QVERIFY(progress.isNull());
+}
+
+static TransactionDescDialog* GMDetailDialog()
+{
+    for (QWidget* window : QApplication::topLevelWidgets()) {
+        if (auto* dialog = qobject_cast<TransactionDescDialog*>(window)) return dialog;
+    }
+    return nullptr;
+}
+
+void VaultTests::transactionViewClosesDetailDialogsWhenDestroyed()
+{
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+    auto vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
+    std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate("other")};
+    MiniGUI mini(m_node, style.get());
+    mini.initModelForVault(m_node, vault, style.get());
+
+    auto view = std::make_unique<TransactionView>(style.get());
+    view->setModel(mini.vaultModel.get());
+    auto* table = view->findChild<QTableView*>("transactionView");
+    QVERIFY(table && table->model());
+    QTRY_VERIFY(table->model()->rowCount() > 0);
+    table->selectRow(0);
+    QVERIFY(QMetaObject::invokeMethod(view.get(), "showDetails"));
+    QPointer<TransactionDescDialog> dialog = GMDetailDialog();
+    QVERIFY(dialog);
+    view.reset();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QVERIFY(dialog.isNull());
+}
+
+void VaultTests::homeLedgerDetailsRespectMaskValues()
+{
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+    auto vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
+    std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate("other")};
+    MiniGUI mini(m_node, style.get());
+    mini.initModelForVault(m_node, vault, style.get());
+
+    DesktopLaunchPage page(style.get(), 128, 26, nullptr);
+    page.setVaultModel(mini.vaultModel.get());
+    auto* table = page.findChild<QTableView*>("homeLedgerTable");
+    QVERIFY(table && table->model());
+    QTRY_VERIFY(table->model()->rowCount() > 0);
+    const QModelIndex row = table->model()->index(0, 0);
+    page.setPrivacy(true);
+    QVERIFY(QMetaObject::invokeMethod(table, "doubleClicked", Q_ARG(QModelIndex, row)));
+    QVERIFY(!GMDetailDialog());
+    page.setPrivacy(false);
+    QVERIFY(QMetaObject::invokeMethod(table, "doubleClicked", Q_ARG(QModelIndex, row)));
+    QPointer<TransactionDescDialog> dialog = GMDetailDialog();
+    QVERIFY(dialog);
+    page.setPrivacy(true);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QVERIFY(dialog.isNull());
+}
+
+void VaultTests::networkPageShowsNetworkingOff()
+{
+    NetworkPage page;
+    page.setNetworkActive(false);
+    page.updateStatus(0, ClientModel::SyncState::Synchronized, 1.0);
+    QCOMPARE(page.findChild<QLabel*>("networkStatusValue")->text(), QStringLiteral("Network disabled"));
+    QVERIFY(page.findChild<QLabel*>("networkIntro")->text().contains("Network activity is disabled"));
+    QCOMPARE(page.findChild<QLabel*>("peerCountValue")->text(), QStringLiteral("0"));
+    QVERIFY(!page.findChild<QLabel*>("bootstrapDiagnosis")->isVisibleTo(&page));
+    QVERIFY(!page.findChild<QPushButton*>("addPeerButton")->isEnabled());
+    page.setNetworkActive(true);
+    page.updateStatus(0, ClientModel::SyncState::Synchronized, 1.0);
+    QCOMPARE(page.findChild<QLabel*>("networkStatusValue")->text(), QStringLiteral("Offline"));
+    QVERIFY(page.findChild<QPushButton*>("addPeerButton")->isEnabled());
+}
+
+void VaultTests::networkPageAddPeerRejectsAnyWhitespace()
+{
+    NetworkPage page;
+    page.updateStatus(0, ClientModel::SyncState::Synchronized, 1.0);
+    auto* edit = page.findChild<QLineEdit*>("addPeerEdit");
+    auto* button = page.findChild<QPushButton*>("addPeerButton");
+    QSignalSpy added(&page, &NetworkPage::addPeerRequested);
+    QVERIFY(edit && button && added.isValid());
+    for (const QString& input : {QStringLiteral("a\tb"), QString::fromUtf8("a b"), QString::fromUtf8("a b")}) {
+        edit->setText(input);
+        button->click();
+        QCOMPARE(added.count(), 0);
+    }
 }

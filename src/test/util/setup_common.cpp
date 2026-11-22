@@ -26,6 +26,7 @@
 #include <net.h>
 #include <net_processing.h>
 #include <node/blockstorage.h>
+#include <node/chainstatemanager_args.h>
 #include <node/chainstate.h>
 #include <node/context.h>
 #include <node/kernel_notifications.h>
@@ -46,6 +47,7 @@
 #include <test/util/random.h>
 #include <test/util/transaction_utils.h>
 #include <test/util/txrelaypool.h>
+#include <test/util/validation.h>
 #include <txdb.h>
 #include <txrelaypool.h>
 #include <util/chaintype.h>
@@ -108,7 +110,7 @@ void ProveTxPowForTest(CMutableTransaction& tx, const CBlockIndex& anchor, const
     tx.nAnchorHeight = static_cast<uint32_t>(anchor.nHeight);
     tx.nPowNonce = 0;
     for (uint32_t i = 0; i < tx.nCycle.size(); ++i) tx.nCycle[i] = i + 1;
-    // Stage 2: required work depends on the transaction's own bytes and outputs, so
+    // Per-transaction work pricing: required work depends on the transaction's own bytes and outputs, so
     // the target must be taken from the transaction AS IT WILL BE SUBMITTED. nCycle is
     // filled first because it is part of the serialization it is being charged for.
     const uint256 target{GetTxPowTarget(consensus, &anchor, CTransaction(tx))};
@@ -284,6 +286,7 @@ ChainTestingSetup::ChainTestingSetup(const ChainType chainType, TestOpts opts)
             chainman_opts.script_execution_cache_bytes = 0;
             chainman_opts.signature_cache_bytes = 0;
         }
+        Assert(ApplyArgsManOptions(*m_node.args, chainman_opts));
         const BlockManager::Options blockman_opts{
             .chainparams = chainman_opts.chainparams,
             .blocks_dir = m_args.GetBlocksDirPath(),
@@ -295,7 +298,7 @@ ChainTestingSetup::ChainTestingSetup(const ChainType chainType, TestOpts opts)
                 .wipe_data = m_args.GetBoolArg("-reindex", false),
             },
         };
-        m_node.chainman = std::make_unique<ChainstateManager>(*Assert(m_node.shutdown_signal), chainman_opts, blockman_opts);
+        m_node.chainman = std::make_unique<TestChainstateManager>(*Assert(m_node.shutdown_signal), chainman_opts, blockman_opts);
     };
     m_make_chainman();
 }
@@ -310,7 +313,7 @@ ChainTestingSetup::~ChainTestingSetup()
     m_node.netgroupman.reset();
     m_node.args = nullptr;
     m_node.relaypool.reset();
-    // Quicksilver feeless (#5b-2): no fee estimator.
+    // Quicksilver feeless: no fee estimator.
     m_node.chainman.reset();
     m_node.validation_signals.reset();
     m_node.scheduler.reset();
@@ -379,6 +382,8 @@ TestChain100Setup::TestChain100Setup(
     TestOpts opts)
     : TestingSetup{ChainType::SANDBOX, opts}
 {
+    // This fixture mines 100 blocks with sandbox's CPU-only PoW path.
+    Assert(chain_type == ChainType::SANDBOX);
     // Quicksilver: the sandbox genesis time is 1750000000 (set in #1); the test
     // mocktime must be >= it, or BlockAssembler-derived block times land >2h past
     // mocktime and CreateNewBlock fails "time-too-new".
@@ -392,11 +397,11 @@ TestChain100Setup::TestChain100Setup(
 
     {
         LOCK(::cs_main);
-        // Quicksilver: regenerated for the #5a emission ramp — the per-block subsidy now
+        // Quicksilver: regenerated for the tail-subsidy ramp — the per-block subsidy now
         // decays with height, so the 100 fixture coinbases (hence the tip hash) differ from
-        // the flat-50-COIN value baked in at #3. Empty-block fixture, so #5b's in==out rule
-        // does not move it again. Re-regenerated at #5c-1: the +4B nAnchorHeight field grew
-        // every coinbase serialization, shifting the tip hash again. Re-regenerated at #5c-1
+        // the former flat-50-COIN value. Empty-block fixture, so the feeless in==out rule
+        // does not move it again. Re-regenerated at per-transaction PoW anchor: the +4B nAnchorHeight field grew
+        // every coinbase serialization, shifting the tip hash again. Re-regenerated at per-transaction PoW anchor
         // Phase 3: sandbox block PoW is now trivial-but-real (fBlockPowNoCycle), so every
         // block header carries a fixed degenerate nCycle instead of a real-solved one —
         // changing the header serialization, and thus every block hash, deterministically.
@@ -453,7 +458,8 @@ CBlock TestChain100Setup::CreateBlock(
 CBlock TestChain100Setup::CreateAndProcessBlock(
     const std::vector<CMutableTransaction>& txns,
     const CScript& scriptPubKey,
-    Chainstate* chainstate)
+    Chainstate* chainstate,
+    bool require_processed)
 {
     if (!chainstate) {
         chainstate = &Assert(m_node.chainman)->ActiveChainstate();
@@ -461,7 +467,12 @@ CBlock TestChain100Setup::CreateAndProcessBlock(
 
     CBlock block = this->CreateBlock(txns, scriptPubKey, *chainstate);
     std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(block);
-    Assert(m_node.chainman)->ProcessNewBlock(shared_pblock, true, true, nullptr);
+    const bool processed{Assert(m_node.chainman)->ProcessNewBlock(shared_pblock, true, true, nullptr)};
+    if (require_processed) {
+        Assert(processed);
+        LOCK(cs_main);
+        Assert(m_node.chainman->ActiveChain().Tip()->GetBlockHash() == block.GetHash());
+    }
 
     return block;
 }
@@ -517,8 +528,17 @@ CMutableTransaction TestChain100Setup::CreateValidRelayPoolTransaction(const std
     // If submit=true, add transaction to the relaypool.
     if (submit) {
         LOCK(cs_main);
+        const CBlockIndex* tip = Assert(m_node.chainman->ActiveChain().Tip());
+        relaypool_txn.nAnchorHeight = static_cast<uint32_t>(tip->nHeight);
+        const auto pre = CTransaction(relaypool_txn).PowPreimage(tip->GetBlockHash());
+        cuckatoo::Cycle cycle{};
+        uint32_t nonce{0};
+        Assert(cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), m_node.chainman->GetConsensus().nTxEdgeBits,
+                                            0, 1u << 20, cycle, nonce));
+        relaypool_txn.nCycle = cycle;
+        relaypool_txn.nPowNonce = nonce;
         const RelayPoolAcceptResult result = m_node.chainman->ProcessTransaction(MakeTransactionRef(relaypool_txn));
-        assert(result.m_result_type == RelayPoolAcceptResult::ResultType::VALID);
+        Assert(result.m_result_type == RelayPoolAcceptResult::ResultType::VALID);
     }
     return relaypool_txn;
 }

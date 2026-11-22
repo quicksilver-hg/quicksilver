@@ -92,6 +92,8 @@ class AvoidReuseTest(QuicksilverTestFramework):
         reset_balance(self.nodes[1], self.nodes[0].getnewaddress())
         self.test_sending_from_reused_address_fails("bech32")
         reset_balance(self.nodes[1], self.nodes[0].getnewaddress())
+        self.test_spend_rpcs_follow_avoid_reuse()
+        reset_balance(self.nodes[1], self.nodes[0].getnewaddress())
         self.test_getbalances_used()
         reset_balance(self.nodes[1], self.nodes[0].getnewaddress())
         self.test_full_destination_group_is_preferred()
@@ -259,6 +261,41 @@ class AvoidReuseTest(QuicksilverTestFramework):
         assert_unspent(self.nodes[1], total_count=1, total_sum=5, reused_supported=True, reused_count=0)
         # getbalances should show no used, 5 Hg trusted
         assert_balances(self.nodes[1], mine={"used": 0, "trusted": 5})
+
+    def test_spend_rpcs_follow_avoid_reuse(self):
+        '''
+        F-667: with the avoid_reuse flag set, every spend RPC leaves dirty coins alone
+        by default, not only sendtoaddress. [1] holds 5 Hg clean and 10 Hg on a reused
+        address, so an 8 Hg spend has to fail and sendall has to take only the 5.
+        '''
+        self.log.info("Test every spend RPC follows the avoid_reuse flag")
+
+        fundaddr = self.nodes[1].getnewaddress()
+        retaddr = self.nodes[0].getnewaddress()
+
+        self.nodes[0].sendtoaddress(fundaddr, 10)
+        self.generate(self.nodes[0], 1)
+        self.nodes[1].sendtoaddress(retaddr, 5)
+        self.generate(self.nodes[0], 1)
+        self.nodes[0].sendtoaddress(fundaddr, 10)
+        self.generate(self.nodes[0], 1)
+
+        # One clean output (5 Hg change) and one reused (10 Hg on fundaddr).
+        assert_unspent(self.nodes[1], total_count=2, total_sum=15, reused_count=1, reused_sum=10)
+        assert_balances(self.nodes[1], mine={"used": 10, "trusted": 5})
+
+        assert_raises_rpc_error(-6, "Insufficient funds", self.nodes[1].sendtoaddress, retaddr, 8)
+        assert_raises_rpc_error(-6, "Insufficient funds", self.nodes[1].sendmany, {retaddr: 8})
+        assert_raises_rpc_error(-4, "Insufficient funds", self.nodes[1].send, [{retaddr: 8}])
+        raw = self.nodes[1].createrawtransaction([], [{retaddr: 8}])
+        assert_raises_rpc_error(-4, "Insufficient funds", self.nodes[1].fundrawtransaction, raw)
+        assert_raises_rpc_error(-4, "Insufficient funds", self.nodes[1].vaultcreatefundedpsqt, [], [{retaddr: 8}])
+
+        # sendall without explicit inputs sweeps the clean 5 Hg and leaves the reused 10 Hg.
+        self.nodes[1].sendall([retaddr])
+        self.generate(self.nodes[0], 1)
+        assert_unspent(self.nodes[1], total_count=1, total_sum=10, reused_count=1, reused_sum=10)
+        assert_balances(self.nodes[1], mine={"used": 10, "trusted": 0})
 
     def test_getbalances_used(self):
         '''

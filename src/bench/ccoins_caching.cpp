@@ -42,8 +42,9 @@ static void CCoinsCaching(benchmark::Bench& bench)
     t1.vin[2].prevout.hash = dummyTransactions[1].GetHash();
     t1.vin[2].prevout.n = 1;
     t1.vin[2].scriptSig << std::vector<unsigned char>(65, 0) << std::vector<unsigned char>(33, 4);
-    t1.vout.resize(2);
-    t1.vout[0].nValue = 90 * COIN;
+    // Feeless: the one output carries the full 50 + 21 + 22 Hg of the inputs.
+    t1.vout.resize(1);
+    t1.vout[0].nValue = 93 * COIN;
     t1.vout[0].scriptPubKey << OP_1;
 
     // Benchmark.

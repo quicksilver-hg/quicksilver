@@ -8,6 +8,7 @@
 from decimal import Decimal
 from enum import Enum
 import http.client
+from io import BytesIO
 import json
 import typing
 import urllib.parse
@@ -16,6 +17,8 @@ import urllib.parse
 from test_framework.messages import (
     BLOCK_HEADER_SIZE,
     COIN,
+    CTxOut,
+    deser_compact_size,
 )
 from test_framework.test_framework import QuicksilverTestFramework
 from test_framework.util import (
@@ -158,7 +161,7 @@ class RESTTest (QuicksilverTestFramework):
 
         bin_request = b'\x01\x02'
         for txid, n in [spending, spent]:
-            bin_request += bytes.fromhex(txid)
+            bin_request += bytes.fromhex(txid)[::-1]
             bin_request += n.to_bytes(4, 'little')
 
         bin_response = self.test_rest_request("/getutxos", http_method='POST', req_type=ReqType.BIN, body=bin_request, ret_type=RetType.BYTES)
@@ -167,6 +170,26 @@ class RESTTest (QuicksilverTestFramework):
 
         assert_equal(bb_hash, response_hash)  # check if getutxo's chaintip during calculation was fine
         assert_equal(chain_height, 201)  # chain height must be 201 (pre-mined chain [200] + generated block [1])
+        payload = BytesIO(bin_response[36:])
+        assert_equal(deser_compact_size(payload), 1)
+        assert_equal(payload.read(1), b'\x01')  # first outpoint exists; second is spent
+        assert_equal(deser_compact_size(payload), 1)
+        assert_equal(int.from_bytes(payload.read(4), 'little'), 0)  # dummy tx version
+        assert_equal(int.from_bytes(payload.read(4), 'little'), 201)
+        coin = CTxOut()
+        coin.deserialize(payload)
+        assert_equal(coin.nValue, int(0.1 * COIN))
+        assert_equal(payload.read(), b'')
+
+        hex_response = self.test_rest_request("/getutxos", http_method='POST', req_type=ReqType.HEX,
+                                              body=bin_request.hex(), ret_type=RetType.BYTES)
+        assert_equal(bytes.fromhex(hex_response.decode()), bin_response)
+        self.test_rest_request("/getutxos", http_method='POST', req_type=ReqType.HEX,
+                               body='zz', status=400, ret_type=RetType.OBJ)
+        self.test_rest_request("/getutxos", http_method='POST', req_type=ReqType.BIN,
+                               body=b'\x01\x00', status=400, ret_type=RetType.OBJ)
+        self.test_rest_request("/getutxos", http_method='POST', req_type=ReqType.BIN,
+                               body=bin_request + b'\x00', status=400, ret_type=RetType.OBJ)
 
         self.log.info("Test the /getutxos URI with and without /checkrelaypool")
         # Create a transaction, check that it's found with /checkrelaypool, but

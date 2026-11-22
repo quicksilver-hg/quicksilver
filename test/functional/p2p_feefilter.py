@@ -3,9 +3,9 @@
 # Copyright (c) 2026 The Quicksilver developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Test that a feeless node does not speak BIP133 feefilter (#6).
+"""Test that a feeless node does not speak BIP133 feefilter.
 
-Quicksilver is feeless (#5b): there is no relay-fee floor, so an advertised
+Quicksilver is feeless: there is no relay-fee floor, so an advertised
 feefilter would always be 0 and carries no information. The type is not a
 registered protocol message. BIP324 short id 5 is an unused slot so later
 short ids stay put. MaybeSendFeefilter is gone, so NO peer -- default,

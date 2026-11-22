@@ -4,6 +4,7 @@
 //
 
 #include <boost/test/unit_test.hpp>
+#include <torcontrol.h>
 
 #include <map>
 #include <string>
@@ -13,8 +14,67 @@
 std::pair<std::string, std::string> SplitTorReplyLine(const std::string& s);
 std::map<std::string, std::string> ParseTorReplyMapping(const std::string& s);
 
+struct TorControlConnectionTest {
+    static void CheckReplyBound(const std::string& line, size_t accepted_lines)
+    {
+        TorControlConnection conn{nullptr};
+        int drops{0};
+        conn.disconnected = [&](TorControlConnection&) { ++drops; };
+        conn.connection_active = true;
+        for (size_t i = 0; i < accepted_lines; ++i) {
+            BOOST_REQUIRE(conn.AddReplyLine(line));
+        }
+        BOOST_CHECK(!conn.AddReplyLine(line));
+        BOOST_CHECK_EQUAL(drops, 1);
+        BOOST_CHECK(conn.message.lines.empty());
+        conn.Disconnect();
+        BOOST_CHECK_EQUAL(drops, 1);
+    }
+
+    static void CheckStaleHandlerCleared()
+    {
+        TorControlConnection conn{nullptr};
+        int old_calls{0};
+        int new_calls{0};
+        conn.connection_active = true;
+        conn.reply_handlers.push_back([&](TorControlConnection&, const TorControlReply&) { ++old_calls; });
+        BOOST_REQUIRE(conn.AddReplyLine("250-partial"));
+        conn.Disconnect();
+        BOOST_CHECK(conn.reply_handlers.empty());
+        BOOST_CHECK(conn.message.lines.empty());
+        conn.connection_active = true;
+        conn.reply_handlers.push_back([&](TorControlConnection&, const TorControlReply&) { ++new_calls; });
+        BOOST_REQUIRE(conn.AddReplyLine("250 OK"));
+        BOOST_CHECK_EQUAL(old_calls, 0);
+        BOOST_CHECK_EQUAL(new_calls, 1);
+    }
+};
+
 
 BOOST_AUTO_TEST_SUITE(torcontrol_tests)
+
+BOOST_AUTO_TEST_CASE(reply_bounds_disconnect_and_clear_handlers)
+{
+    TorControlConnectionTest::CheckReplyBound("250-more", 1000);
+    TorControlConnectionTest::CheckReplyBound(std::string(100000, 'x').replace(0, 4, "250-"), 10);
+    TorControlConnectionTest::CheckStaleHandlerCleared();
+}
+
+BOOST_AUTO_TEST_CASE(reconnect_delay_is_capped)
+{
+    float timeout{1.0F};
+    for (int i = 0; i < 100; ++i) {
+        const auto delay = TorController::NextReconnectDelayMillis(timeout);
+        BOOST_CHECK(delay <= 600000);
+    }
+    BOOST_CHECK_EQUAL(timeout, 600.0F);
+    BOOST_CHECK_EQUAL(TorController::NextReconnectDelayMillis(timeout), 600000);
+}
+
+BOOST_AUTO_TEST_CASE(password_is_escaped)
+{
+    BOOST_CHECK_EQUAL(TorController::PasswordAuthCommand("a\\b\"c"), "AUTHENTICATE \"a\\\\b\\\"c\"");
+}
 
 static void CheckSplitTorReplyLine(std::string input, std::string command, std::string args)
 {
@@ -100,8 +160,8 @@ BOOST_AUTO_TEST_CASE(util_ParseTorReplyMapping)
             {"ServiceID", "exampleonion1234"},
         });
     CheckParseTorReplyMapping(
-        "PrivateKey=RSA1024:BLOB", {
-            {"PrivateKey", "RSA1024:BLOB"},
+        "PrivateKey=ED25519-V3:BLOB", {
+            {"PrivateKey", "ED25519-V3:BLOB"},
         });
     CheckParseTorReplyMapping(
         "ClientAuth=bob:BLOB", {
@@ -170,7 +230,7 @@ BOOST_AUTO_TEST_CASE(util_ParseTorReplyMapping)
     // Special handling for null case
     // (needed because string comparison reads the null as end-of-string)
     auto ret = ParseTorReplyMapping("Null=\"\\0\"");
-    BOOST_CHECK_EQUAL(ret.size(), 1U);
+    BOOST_REQUIRE_EQUAL(ret.size(), 1U);
     auto r_it = ret.begin();
     BOOST_CHECK_EQUAL(r_it->first, "Null");
     BOOST_CHECK_EQUAL(r_it->second.size(), 1U);

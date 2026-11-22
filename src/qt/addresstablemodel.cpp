@@ -74,15 +74,12 @@ public:
     explicit AddressTablePriv(AddressTableModel *_parent):
         parent(_parent) {}
 
-    void refreshAddressTable(interfaces::Vault& vault, bool pk_hash_only = false)
+    void refreshAddressTable(interfaces::Vault& vault)
     {
         cachedAddressTable.clear();
         {
             for (const auto& address : vault.getAddresses())
             {
-                if (pk_hash_only && !std::holds_alternative<PKHash>(address.dest)) {
-                    continue;
-                }
                 AddressTableEntry::Type addressType = translateTransactionType(
                         address.purpose, address.is_mine);
                 cachedAddressTable.append(AddressTableEntry(addressType,
@@ -161,12 +158,12 @@ public:
     }
 };
 
-AddressTableModel::AddressTableModel(VaultModel *parent, bool pk_hash_only) :
+AddressTableModel::AddressTableModel(VaultModel *parent) :
     QAbstractTableModel(parent), vaultModel(parent)
 {
     columns << tr("Label") << tr("Address");
     priv = new AddressTablePriv(this);
-    priv->refreshAddressTable(parent->vault(), pk_hash_only);
+    priv->refreshAddressTable(parent->vault());
 }
 
 AddressTableModel::~AddressTableModel()

@@ -51,6 +51,7 @@ public:
     //! Consensus is off. The switch cards stay; health says it is not running.
     void showConsensusOff();
     void updateStatus(int peers, ClientModel::SyncState sync_state, double progress);
+    void setNetworkActive(bool active);
     void setPeerCount(int peers);
     //! Outcome of the last manual peer addition, reported by the container that owns
     //! the node handle.
@@ -91,6 +92,7 @@ private:
     QPushButton* m_add_peer_button{nullptr};
     QPushButton* m_review_consensus_button{nullptr};
     QLabel* m_add_peer_result{nullptr};
+    bool m_network_active{true};
 };
 
 #endif // QUICKSILVER_QT_NETWORKPAGE_H

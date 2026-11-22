@@ -78,7 +78,7 @@ bool BenchSolveOne(void* ctx, const unsigned char* prepow, size_t len,
 
 //! The vendored verifier compiled at this same EDGEBITS. `prepow` must already
 //! carry the nonce at its tail. cuckatoo::CuckatooVerify cannot serve here: it
-//! dispatches over {19, 29} only, and widening it is a consensus change.
+//! dispatches over {19, 28} only, and widening it is a consensus change.
 bool BenchVerifyOne(const cuckatoo::Cycle& cycle, const unsigned char* prepow, size_t len)
 {
     if (len < 4) return false;

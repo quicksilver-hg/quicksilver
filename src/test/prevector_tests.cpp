@@ -11,10 +11,63 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <forward_list>
 #include <ranges>
 #include <vector>
 
 BOOST_FIXTURE_TEST_SUITE(prevector_tests, TestingSetup)
+
+BOOST_AUTO_TEST_CASE(push_back_of_own_element_survives_growth)
+{
+    prevector<2, uint64_t> values(2);
+    values[0] = 1;
+    values[1] = 2;
+    values.push_back(values[0]);
+    const std::vector<uint64_t> expected{1, 2, 1};
+    BOOST_CHECK_EQUAL_COLLECTIONS(values.begin(), values.end(), expected.begin(), expected.end());
+
+    prevector<2, uint64_t> emplaced(2);
+    emplaced[0] = 1;
+    emplaced[1] = 2;
+    emplaced.emplace_back(emplaced[0]);
+    BOOST_CHECK_EQUAL_COLLECTIONS(emplaced.begin(), emplaced.end(), expected.begin(), expected.end());
+}
+
+BOOST_AUTO_TEST_CASE(insert_of_own_element_survives_growth)
+{
+    prevector<2, uint64_t> values(2);
+    values[0] = 1;
+    values[1] = 2;
+    values.insert(values.begin() + 1, values[0]);
+    const std::vector<uint64_t> expected{1, 1, 2};
+    BOOST_CHECK_EQUAL_COLLECTIONS(values.begin(), values.end(), expected.begin(), expected.end());
+
+    prevector<2, uint64_t> repeated(2);
+    repeated[0] = 3;
+    repeated[1] = 4;
+    repeated.insert(repeated.begin(), 2, repeated[1]);
+    const std::vector<uint64_t> expected_repeated{4, 4, 3, 4};
+    BOOST_CHECK_EQUAL_COLLECTIONS(repeated.begin(), repeated.end(), expected_repeated.begin(), expected_repeated.end());
+}
+
+BOOST_AUTO_TEST_CASE(insert_of_own_range_survives_growth)
+{
+    prevector<2, uint64_t> values(2);
+    values[0] = 1;
+    values[1] = 2;
+    values.insert(values.end(), values.begin(), values.end());
+    const std::vector<uint64_t> expected{1, 2, 1, 2};
+    BOOST_CHECK_EQUAL_COLLECTIONS(values.begin(), values.end(), expected.begin(), expected.end());
+}
+
+BOOST_AUTO_TEST_CASE(forward_list_range_constructs_and_inserts)
+{
+    const std::forward_list<uint64_t> source{1, 2, 3};
+    prevector<2, uint64_t> values(source.begin(), source.end());
+    values.insert(values.end(), source.begin(), source.end());
+    const std::vector<uint64_t> expected{1, 2, 3, 1, 2, 3};
+    BOOST_CHECK_EQUAL_COLLECTIONS(values.begin(), values.end(), expected.begin(), expected.end());
+}
 
 template<unsigned int N, typename T>
 class prevector_tester {

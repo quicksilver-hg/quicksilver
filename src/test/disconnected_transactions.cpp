@@ -17,7 +17,7 @@ BOOST_AUTO_TEST_CASE(disconnectpool_memory_limits)
     // transactions would realistically be in a block together, they just need distinct txids and
     // uniform size for this test to work.
     std::vector<CTransactionRef> block_vtx(m_coinbase_txns);
-    BOOST_CHECK_EQUAL(block_vtx.size(), 100);
+    BOOST_REQUIRE_EQUAL(block_vtx.size(), 100);
 
     // Roughly estimate sizes to sanity check that DisconnectedBlockTransactions::DynamicMemoryUsage
     // is within an expected range.
@@ -53,7 +53,7 @@ BOOST_AUTO_TEST_CASE(disconnectpool_memory_limits)
         BOOST_CHECK(disconnectpool.DynamicMemoryUsage() <= MAP_1 + ENTRY_USAGE_ESTIMATE);
 
         // Only 1 transaction can be kept
-        BOOST_CHECK_EQUAL(1, evicted_txns.size());
+        BOOST_REQUIRE_EQUAL(1, evicted_txns.size());
         // Transactions are added from back to front and eviction is FIFO.
         BOOST_CHECK_EQUAL(block_vtx.at(1), evicted_txns.front());
 
@@ -83,7 +83,7 @@ BOOST_AUTO_TEST_CASE(disconnectpool_memory_limits)
         BOOST_CHECK(disconnectpool.DynamicMemoryUsage() <= MAX_MEMUSAGE_99);
 
         // Only 1 transaction needed to be evicted
-        BOOST_CHECK_EQUAL(1, evicted_txns.size());
+        BOOST_REQUIRE_EQUAL(1, evicted_txns.size());
 
         // Transactions are added from back to front and eviction is FIFO.
         // The last transaction of block_vtx should be the first to be evicted.

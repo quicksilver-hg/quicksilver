@@ -71,6 +71,7 @@ struct ConnmanTestMsg : public CConnman {
             delete node;
         }
         m_nodes.clear();
+        m_network_conn_counts.fill(0);
     }
 
     void Handshake(CNode& node,

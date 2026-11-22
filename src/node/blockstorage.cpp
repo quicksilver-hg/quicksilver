@@ -104,54 +104,64 @@ bool BlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, s
     AssertLockHeld(::cs_main);
     std::unique_ptr<CDBIterator> pcursor(NewIterator());
     pcursor->Seek(std::make_pair(DB_BLOCK_INDEX, uint256()));
+    // A corrupt record or scan error is reported as a failed block index load, so the
+    // caller shows the block-database error rather than a generic database failure.
+    try {
 
-    // Load m_block_index
-    while (pcursor->Valid()) {
-        if (interrupt) return false;
-        std::pair<uint8_t, uint256> key;
-        if (pcursor->GetKey(key) && key.first == DB_BLOCK_INDEX) {
-            CDiskBlockIndex diskindex;
-            if (pcursor->GetValue(diskindex)) {
-                // Construct block index object
-                CBlockIndex* pindexNew = insertBlockIndex(diskindex.ConstructBlockHash());
-                pindexNew->pprev          = insertBlockIndex(diskindex.hashPrev);
-                pindexNew->nHeight        = diskindex.nHeight;
-                pindexNew->nFile          = diskindex.nFile;
-                pindexNew->nDataPos       = diskindex.nDataPos;
-                pindexNew->nUndoPos       = diskindex.nUndoPos;
-                pindexNew->nVersion       = diskindex.nVersion;
-                pindexNew->hashMerkleRoot = diskindex.hashMerkleRoot;
-                pindexNew->nTime          = diskindex.nTime;
-                pindexNew->nBits          = diskindex.nBits;
-                pindexNew->nNonce         = diskindex.nNonce;
-                // Quicksilver: the Cuckatoo 42-cycle is part of the header and is required to
-                // reconstruct a valid block header for the PoW re-check below. Without it the
-                // reloaded header carries a zero cycle and CheckProofOfWork fails — so a node
-                // could never restart after mining. (Pre-existing: nCycle was persisted in
-                // CDiskBlockIndex but never restored here; surfaced by the #5c-1 restart test.)
-                pindexNew->nCycle         = diskindex.nCycle;
-                pindexNew->nStatus        = diskindex.nStatus;
-                pindexNew->nTx            = diskindex.nTx;
-                // Quicksilver (#5c-1 Phase 2): the congestion multiplier is a header field, so
-                // like nCycle above it must be restored before the CheckProofOfWork below —
-                // it is inside the pre-pow and therefore inside the block hash.
-                pindexNew->m_congestion   = diskindex.m_congestion;
+        // Load m_block_index
+        while (pcursor->Valid()) {
+            if (interrupt) return false;
+            uint8_t prefix{};
+            if (!pcursor->GetKey(prefix)) ThrowCorruptDBRecord();
+            if (prefix != DB_BLOCK_INDEX) break;
+            std::pair<uint8_t, uint256> key;
+            if (!pcursor->GetKey(key)) ThrowCorruptDBRecord();
+            if (key.first == DB_BLOCK_INDEX) {
+                CDiskBlockIndex diskindex;
+                if (pcursor->GetValue(diskindex)) {
+                    // Construct block index object
+                    CBlockIndex* pindexNew = insertBlockIndex(diskindex.ConstructBlockHash());
+                    pindexNew->pprev          = insertBlockIndex(diskindex.hashPrev);
+                    pindexNew->nHeight        = diskindex.nHeight;
+                    pindexNew->nFile          = diskindex.nFile;
+                    pindexNew->nDataPos       = diskindex.nDataPos;
+                    pindexNew->nUndoPos       = diskindex.nUndoPos;
+                    pindexNew->nVersion       = diskindex.nVersion;
+                    pindexNew->hashMerkleRoot = diskindex.hashMerkleRoot;
+                    pindexNew->nTime          = diskindex.nTime;
+                    pindexNew->nBits          = diskindex.nBits;
+                    pindexNew->nNonce         = diskindex.nNonce;
+                    // Quicksilver: the Cuckatoo 42-cycle is part of the header and is required to
+                    // reconstruct a valid block header for the PoW re-check below. Without it the
+                    // reloaded header carries a zero cycle and CheckProofOfWork fails — so a node
+                    // could never restart after mining. (Pre-existing: nCycle was persisted in
+                    // CDiskBlockIndex but never restored here; surfaced by the per-transaction PoW anchor restart test.)
+                    pindexNew->nCycle         = diskindex.nCycle;
+                    pindexNew->nStatus        = diskindex.nStatus;
+                    pindexNew->nTx            = diskindex.nTx;
+                    // Quicksilver header-field congestion pricing: the congestion multiplier is a header field, so
+                    // like nCycle above it must be restored before the CheckProofOfWork below —
+                    // it is inside the pre-pow and therefore inside the block hash.
+                    pindexNew->m_congestion   = diskindex.m_congestion;
 
-                if (!CheckProofOfWork(pindexNew->GetBlockHeader(), consensusParams)) {
-                    LogError(HgLog::BLOCKSTORE, "%s: CheckProofOfWork failed: %s\n", __func__, pindexNew->ToString());
-                    return false;
+                    if (!CheckProofOfWork(pindexNew->GetBlockHeader(), consensusParams)) {
+                        LogError(HgLog::BLOCKSTORE, "%s: CheckProofOfWork failed: %s\n", __func__, pindexNew->ToString());
+                        return false;
+                    }
+
+                    pcursor->Next();
+                } else {
+                    ThrowCorruptDBRecord();
                 }
-
-                pcursor->Next();
             } else {
-                LogError(HgLog::BLOCKSTORE, "%s: failed to read value\n", __func__);
-                return false;
+                break;
             }
-        } else {
-            break;
         }
+        pcursor->CheckStatus();
+    } catch (const dbwrapper_error& e) {
+        LogError(HgLog::BLOCKSTORE, "%s: %s\n", __func__, e.what());
+        return false;
     }
-
     return true;
 }
 } // namespace kernel
@@ -548,6 +558,19 @@ void BlockManager::ScanAndUnlinkAlreadyPrunedFiles()
     }
 
     UnlinkPrunedFiles(block_files_to_prune);
+}
+
+const CBlockIndex* BlockManager::GetLastTrustAnchor(const std::vector<TrustAnchor>& anchors)
+{
+    AssertLockHeld(::cs_main);
+    const CBlockIndex* last{nullptr};
+    for (const TrustAnchor& anchor : anchors) {
+        // Go by the block-index entry's own height, not the list order or the
+        // anchor's height field.
+        const CBlockIndex* pindex{LookupBlockIndex(anchor.hash)};
+        if (pindex && (!last || pindex->nHeight > last->nHeight)) last = pindex;
+    }
+    return last;
 }
 
 bool BlockManager::IsBlockPruned(const CBlockIndex& block) const

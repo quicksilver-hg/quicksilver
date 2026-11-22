@@ -85,15 +85,20 @@ private:
     bool m_pass;
     bool m_txn_active{false};
     MockableCommitCounters* m_counters{nullptr};
+    bool* m_allotment_read_error{nullptr};
+    bool* m_fail_txn_begin{nullptr};
+    bool* m_fail_master_key_write{nullptr};
+    bool* m_fail_descriptor_key_erase{nullptr};
 
     bool ReadKey(DataStream&& key, DataStream& value) override;
+    ReadStatus ReadKeyStatus(DataStream&& key, DataStream& value) override;
     bool WriteKey(DataStream&& key, DataStream&& value, bool overwrite=true) override;
     bool EraseKey(DataStream&& key) override;
     bool HasKey(DataStream&& key) override;
     bool ErasePrefix(Span<const std::byte> prefix) override;
 
 public:
-    explicit MockableBatch(MockableData& records, bool pass, MockableCommitCounters* counters = nullptr) : m_records(records), m_pass(pass), m_counters(counters) {}
+    explicit MockableBatch(MockableData& records, bool pass, MockableCommitCounters* counters = nullptr, bool* allotment_read_error = nullptr, bool* fail_txn_begin = nullptr, bool* fail_master_key_write = nullptr, bool* fail_descriptor_key_erase = nullptr) : m_records(records), m_pass(pass), m_counters(counters), m_allotment_read_error(allotment_read_error), m_fail_txn_begin(fail_txn_begin), m_fail_master_key_write(fail_master_key_write), m_fail_descriptor_key_erase(fail_descriptor_key_erase) {}
     ~MockableBatch() = default;
 
     void Flush() override {}
@@ -108,7 +113,7 @@ public:
     }
     bool TxnBegin() override
     {
-        if (!m_pass || m_txn_active) return false;
+        if (!m_pass || m_txn_active || (m_fail_txn_begin && *m_fail_txn_begin)) return false;
         m_txn_active = true;
         return true;
     }
@@ -136,6 +141,11 @@ public:
     MockableData m_records;
     bool m_pass{true};
     bool m_backup_pass{true};
+    bool m_allotment_read_error{false};
+    bool m_fail_txn_begin{false};
+    bool m_fail_master_key_write{false};
+    bool m_fail_descriptor_key_erase{false};
+    bool m_fail_rewrite{false};
     MockableCommitCounters m_commits;
 
     MockableDatabase(MockableData records = {}) : VaultDatabase(), m_records(records) {}
@@ -143,7 +153,7 @@ public:
 
     void Open() override {}
 
-    bool Rewrite() override { return m_pass; }
+    bool Rewrite() override { return m_pass && !m_fail_rewrite; }
     bool Backup(const std::string& strDest) const override { return m_pass && m_backup_pass; }
     void Flush() override {}
     void Close() override {}
@@ -153,7 +163,7 @@ public:
 
     std::string Filename() override { return "mockable"; }
     std::string Format() override { return "mock"; }
-    std::unique_ptr<DatabaseBatch> MakeBatch(bool flush_on_close = true) override { return std::make_unique<MockableBatch>(m_records, m_pass, &m_commits); }
+    std::unique_ptr<DatabaseBatch> MakeBatch(bool flush_on_close = true) override { return std::make_unique<MockableBatch>(m_records, m_pass, &m_commits, &m_allotment_read_error, &m_fail_txn_begin, &m_fail_master_key_write, &m_fail_descriptor_key_erase); }
 };
 
 std::unique_ptr<VaultDatabase> CreateMockableVaultDatabase(MockableData records = {});

@@ -23,8 +23,12 @@ class VaultTests : public QObject
 
 private Q_SLOTS:
     void init();
+    void cleanup();
     void gpuCardTablesPolluter();
     void gpuCardTablesStartClean();
+    void probeEnvironmentPolluter();
+    void probeEnvironmentStartsClean();
+    void solverProbeStubRejectsBadInput();
     void agentAllotmentPageScrollsWithinLaptopViewport();
     void agentsPageHasNoSideScrollAt1200();
     void pagesKeepTheirTextInsidePanels();
@@ -40,6 +44,8 @@ private Q_SLOTS:
     void vaultTests();
     void backupChecksTheSavedFile();
     void agentAllotmentMakesHomeBackupNeeded();
+    void backupToANonAsciiFolder();
+    void rpcChangesMakeHomeBackupNeeded();
     void benchTickerMatchesVaultBalances();
     void homeAndMineLinksFollowRail();
     void homeLedgerListsVaultTransactions();
@@ -68,6 +74,9 @@ private Q_SLOTS:
     void aboutDialogLinksSourceOnce();
     void mineMintPageNamesAnArmedMinerWithNoPermittedSolver();
     void mineMintPageRefusesToPresentIsolatedMiningAsSuccess();
+    void mineMintPageOnMainSaysMiningWaitsForPeers();
+    void mineMintPageSaysWhenTheMinerIsWaitingToCatchUp();
+    void launchPageOnMainSaysMiningWaitsForPeers();
     void mineMintStartRequiresPayoutAddress();
     void mineMintPageShowsARawScriptPayout();
     void mineMintPageNamesAnIdleNodeWithNothingPermitted();
@@ -97,6 +106,15 @@ private Q_SLOTS:
     void vaultViewMasksValuesWithoutClientModel();
     void vaultModelReportsProofOfWorkInFlightWhilePreparing();
     void vaultModelPassesCancelRequestIntoTheGrind();
+    void cancelBeforeGrindStartsIsHonoured();
+    void cancelDuringWindDownDoesNotReachNextSend();
+    void closeVaultCancelsOnlyThatVault();
+    void sendDialogDestructorCancelsItsAttempt();
+    void quitDuringTransferGrindCancelsAndWaits();
+    void unloadDuringTransferGrindDefersDeletion();
+    void unlockReleaseIsInsideTheInFlightWindow();
+    void vaultLoadFromWorkerDoesNotHoldControllerMutexAcrossGuiCall();
+    void handoverReportsFailedRemove();
     void vaultModelRejectsSendBeforeConsensusClientModel();
     void vaultModelPollsBalanceFromVaultTipWithoutClientModel();
     void vaultModelCachesEncryptionStatus();
@@ -169,6 +187,27 @@ private Q_SLOTS:
     void mineAnyoneCanSpendAddressScriptStaysAScript();
     void mineSavedScriptNeedsConfiguredMinescript();
     void mineStartWithScriptReachesTheScriptOverload();
+    // Slice GN
+    void banTableUnbanFollowsTheSelectedSubnetAcrossRefresh();
+    void peerAndBanTablesPassTheModelTester();
+    void signChooserLeavesTheSharedAddressTableWhole();
+    void messageChoosersListOnlyKeyHashAddresses();
+    void agentSaveReceiptsAsksToUnlock();
+    void receiveRequestRefusesAnUnparseableAmount();
+    void paymentServerFrameDecoding();
+    void paymentServerSecondInstanceKeepsTheLiveEndpoint();
+    void paymentServerShortClientDoesNotBlock();
+    // slice GM (F-619 … F-631)
+    void unitControlSelectsWithoutClientModel();
+    void psqtDialogWorksWithoutClientModel();
+    void psqtDialogRefusesOutOfRangeOutputs();
+    void psqtSaveReportsAWriteFailure();
+    void psqtBroadcastFailureNamesTheReason();
+    void vaultViewRescanProgressIsOwnedAndSingle();
+    void transactionViewClosesDetailDialogsWhenDestroyed();
+    void homeLedgerDetailsRespectMaskValues();
+    void networkPageShowsNetworkingOff();
+    void networkPageAddPeerRejectsAnyWhitespace();
 };
 
 #endif // QUICKSILVER_QT_TEST_VAULTTESTS_H

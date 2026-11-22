@@ -11,17 +11,19 @@
 #include <util/vector.h>
 
 // The two constants below are node-local anti-DoS policy, computed on
-// 2026-09-25 using contrib/devtools/headerssync-params.py. The model assumes
-// 300-second blocks, 220-byte compact headers, 253-byte wire headers, a
-// conservative 6 Gbit/s attacker bound, and a one-year minimum-chain-work
-// horizon as ruled by the owner on 2026-09-25.
+// 2026-11-16 using contrib/devtools/headerssync-params.py
+// --minchainwork-headers 17000: main's minimum chain work now comes from its
+// newest trust anchor, at height 17000 (F-565 (a)). Re-run the script at every
+// re-pin. The model assumes 300-second blocks, 220-byte compact headers,
+// 253-byte wire headers and a conservative 6 Gbit/s attacker bound. The
+// one-year minimum-chain-work horizon used on 2026-09-25 is superseded.
 
 //! Store one header commitment per HEADER_COMMITMENT_PERIOD blocks.
-constexpr size_t HEADER_COMMITMENT_PERIOD{219};
+constexpr size_t HEADER_COMMITMENT_PERIOD{208};
 
 //! Only feed headers to validation once this many headers on top have been
 //! received and validated against commitments.
-constexpr size_t REDOWNLOAD_BUFFER_SIZE{4889}; // 4889/219 = ~22.3 commitments
+constexpr size_t REDOWNLOAD_BUFFER_SIZE{5174}; // 5174/208 = ~24.9 commitments
 
 // Our memory analysis assumes 220 bytes for a CompressedHeader (so we should
 // re-calculate parameters if this representation changes).

@@ -165,7 +165,8 @@ struct TestChain100Setup : public TestingSetup {
      */
     CBlock CreateAndProcessBlock(const std::vector<CMutableTransaction>& txns,
                                  const CScript& scriptPubKey,
-                                 Chainstate* chainstate = nullptr);
+                                 Chainstate* chainstate = nullptr,
+                                 bool require_processed = true);
 
     /**
      * Create a new block with just given transactions, coinbase paying to
@@ -209,7 +210,7 @@ struct TestChain100Setup : public TestingSetup {
                                                       int input_height,
                                                       const std::vector<CKey>& input_signing_keys,
                                                       const std::vector<CTxOut>& outputs,
-                                                      bool submit = true);
+                                                      bool submit);
 
     /**
      * Create a 1-in-1-out transaction and, optionally, submit to the relaypool.
@@ -227,13 +228,13 @@ struct TestChain100Setup : public TestingSetup {
                                                       int input_height,
                                                       CKey input_signing_key,
                                                       CScript output_destination,
-                                                      CAmount output_amount = CAmount(1 * COIN),
-                                                      bool submit = true);
+                                                      CAmount output_amount,
+                                                      bool submit);
 
-    /** Create transactions spending from m_coinbase_txns. These transactions will only spend coins
-     * that exist in the current chain, but may be premature coinbase spends, have missing
-     * signatures, or violate some other consensus rules. They should only be used for testing
-     * relaypool consistency. All transactions will have some random number of inputs and outputs
+    /** Create synthetic transactions spending from m_coinbase_txns for relaypool consistency tests.
+     * They bypass normal acceptance checks when inserted and may have immature inputs,
+     * missing signatures, or other consensus violations. They are not valid spend fixtures.
+     * All transactions will have some random number of inputs and outputs
      * (between 1 and 24). Transactions may or may not be dependent upon each other; if dependencies
      * exit, every parent will always be somewhere in the list before the child so each transaction
      * can be submitted in the same order they appear in the list.

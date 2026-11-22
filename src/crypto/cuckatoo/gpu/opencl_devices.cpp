@@ -214,12 +214,16 @@ std::vector<RenderNode> ScanRenderNodes(const DrmPaths& paths)
     fs::directory_iterator entries{fs::PathFromString(paths.dev_dri), error};
     if (error) return {};
     std::vector<std::pair<unsigned long, RenderNode>> found;
-    for (const auto& entry : entries) {
-        const std::string name{fs::PathToString(entry.path().filename())};
-        unsigned long minor{0};
-        if (!RenderNodeMinor(name, minor)) continue;
-        const fs::path uevent{fs::PathFromString(paths.sys_class_drm) / fs::u8path(name) / "device" / "uevent"};
-        found.emplace_back(minor, RenderNode{name, PciIdFromSlotName(SlotNameFromUevent(uevent))});
+    try {
+        for (const auto& entry : entries) {
+            const std::string name{fs::PathToString(entry.path().filename())};
+            unsigned long minor{0};
+            if (!RenderNodeMinor(name, minor)) continue;
+            const fs::path uevent{fs::PathFromString(paths.sys_class_drm) / fs::u8path(name) / "device" / "uevent"};
+            found.emplace_back(minor, RenderNode{name, PciIdFromSlotName(SlotNameFromUevent(uevent))});
+        }
+    } catch (const fs::filesystem_error&) {
+        return {};
     }
     std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     std::vector<RenderNode> nodes;
@@ -319,6 +323,9 @@ std::vector<ListedDevice> EnumerateDevices(const OpenClApi& api, bool probe, con
         if (MapsOntoRenderNodes(result, platform_first, render_nodes)) mapped_platforms.push_back(platform_first);
     }
     ApplyRenderNodeIds(result, mapped_platforms, render_nodes);
+    for (auto& device : result) {
+        if (device.fields.id != device.enumeration_id) device.fields.alias = device.enumeration_id;
+    }
     return result;
 }
 } // namespace qsgpu

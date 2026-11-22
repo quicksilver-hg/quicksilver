@@ -148,7 +148,7 @@ BOOST_AUTO_TEST_CASE( comparison ) // <= >= < >
                    uint256{"0000000000000000000000000000000000000000000000000000000000000001"});
 }
 
-BOOST_AUTO_TEST_CASE(methods) // GetHex SetHexDeprecated FromHex begin() end() size() GetLow64 GetSerializeSize, Serialize, Unserialize
+BOOST_AUTO_TEST_CASE(methods) // GetHex, SetHexDeprecated, FromHex, byte access, GetUint64, serialization
 {
     BOOST_CHECK_EQUAL(R1L.GetHex(), R1L.ToString());
     BOOST_CHECK_EQUAL(R2L.GetHex(), R2L.ToString());
@@ -181,6 +181,12 @@ BOOST_AUTO_TEST_CASE(methods) // GetHex SetHexDeprecated FromHex begin() end() s
     BOOST_CHECK_EQUAL(TmpL.begin() + 32, TmpL.end());
     BOOST_CHECK_EQUAL(GetSerializeSize(R1L), 32);
     BOOST_CHECK_EQUAL(GetSerializeSize(ZeroL), 32);
+
+    const uint256 words{"1112131415161718000000000000000000000000000000000102030405060708"};
+    BOOST_CHECK_EQUAL(words.GetUint64(0), 0x0102030405060708ULL);
+    BOOST_CHECK_EQUAL(words.GetUint64(1), 0ULL);
+    BOOST_CHECK_EQUAL(words.GetUint64(2), 0ULL);
+    BOOST_CHECK_EQUAL(words.GetUint64(3), 0x1112131415161718ULL);
 
     DataStream ss{};
     ss << R1L;

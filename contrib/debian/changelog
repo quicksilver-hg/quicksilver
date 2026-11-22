@@ -1,3 +1,11 @@
+quicksilver (0.1.10-1) UNRELEASED; urgency=low
+
+  * Development series after the 0.1.9 release. Not a release: the 0.1.9 tag
+    is what a release build identifies itself as, and this tree carries work
+    that has not been tagged.
+
+ -- The Quicksilver developers <quicksilver.maintainers@gmail.com>  Sun, 15 Nov 2026 00:00:00 +0000
+
 quicksilver (0.1.9-1) unstable; urgency=low
 
   * Quicksilver 0.1.9: logging out on Linux now completes on the first try;

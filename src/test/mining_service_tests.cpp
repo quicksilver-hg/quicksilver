@@ -30,6 +30,9 @@
 #include <test/util/setup_common.h>
 #include <test/util/txrelaypool.h>
 #include <univalue.h>
+#include <util/chaintype.h>
+#include <util/check.h>
+#include <util/result.h>
 #include <util/strencodings.h>
 #include <util/string.h>
 #include <util/time.h>
@@ -48,6 +51,7 @@
 #include <fstream>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -220,6 +224,27 @@ bool WaitUntil(const std::function<bool()>& done, std::chrono::milliseconds budg
 // F-550's stats reset, now on the shared fixture so the discovery cache is
 // cleared too, and without losing the chain this suite needs (F-555).
 struct MiningServiceTestSetup : TestChain100Setup, GpuCardTablesTestSetup {
+    struct EnvAndStatsGuard {
+        static constexpr std::array<const char*, 8> names{
+            "CUCKATOO_GPU_SOLVER", "CUCKATOO_GPU_DEVICES", "CUCKATOO_GPU_TIMEOUT", "CUCKATOO_GPU_BUNDLED",
+            "QS_SOLVER_STUB_LISTING", "QS_SOLVER_STUB_SCRIPT", "QS_SOLVER_STUB_DEVICE_SCRIPTS", "QS_SOLVER_STUB_ARGV_APPEND"};
+        std::array<std::optional<std::string>, names.size()> previous;
+        EnvAndStatsGuard()
+        {
+            for (size_t i = 0; i < names.size(); ++i) {
+                if (const char* value = std::getenv(names[i])) previous[i] = value;
+            }
+        }
+        ~EnvAndStatsGuard()
+        {
+            for (size_t i = 0; i < names.size(); ++i) {
+                if (previous[i]) SetEnvVar(names[i], *previous[i]);
+                else UnsetEnvVar(names[i]);
+            }
+            cuckatoo::ResetGpuDiscoveryForTesting();
+            cuckatoo::ResetGpuDeviceStatsForTesting();
+        }
+    } env_and_stats_guard;
 };
 
 BOOST_FIXTURE_TEST_SUITE(mining_service_tests, MiningServiceTestSetup)
@@ -357,6 +382,10 @@ BOOST_AUTO_TEST_CASE(no_usable_card_waits_for_tip_and_resumes_on_change)
             stalled_windows.fetch_add(1, std::memory_order_relaxed);
         }
     });
+    struct CallbackGuard {
+        decltype(log_connection) connection;
+        ~CallbackGuard() { LogInstance().DeleteCallback(connection); }
+    } callback_guard{log_connection};
     BOOST_REQUIRE(svc.Start(payout, "test-payout"));
     const bool waiting = mining.WaitFor(1, 1, std::chrono::seconds{3});
     const unsigned int before = mining.Templates();
@@ -367,11 +396,235 @@ BOOST_AUTO_TEST_CASE(no_usable_card_waits_for_tip_and_resumes_on_change)
     svc.Interrupt();
     mining.Wake();
     svc.Stop();
-    LogInstance().DeleteCallback(log_connection);
     BOOST_CHECK_MESSAGE(waiting, "no-device window did not enter the tip wait");
     BOOST_CHECK_LE(before, 1U);
     BOOST_CHECK_LE(passes_before_wake, 1U);
     BOOST_CHECK_MESSAGE(resumed, "tip signal did not start a new template within 500 ms");
+}
+
+BOOST_AUTO_TEST_CASE(no_solver_waits_for_tip_and_resumes_on_change)
+{
+    // Count actual template passes while replacing only the tip wait. The
+    // worker must reach that wait after one no-solver window, and a tip signal
+    // must start another pass without waiting for the one-second timeout.
+    class ObservedMining final : public interfaces::Mining {
+        interfaces::Mining& m_real;
+        std::mutex m_mutex;
+        std::condition_variable m_cv;
+        bool m_wake{false};
+        unsigned int m_templates{0};
+        unsigned int m_waits{0};
+    public:
+        explicit ObservedMining(interfaces::Mining& real) : m_real(real) {}
+        bool isTestChain() override { return m_real.isTestChain(); }
+        bool isInitialBlockDownload() override { return m_real.isInitialBlockDownload(); }
+        std::optional<interfaces::BlockRef> getTip() override { return m_real.getTip(); }
+        unsigned int getTransactionsUpdated() override { return m_real.getTransactionsUpdated(); }
+        interfaces::BlockRef waitTipChanged(uint256 tip, MillisecondsDouble timeout) override
+        {
+            std::unique_lock lock{m_mutex};
+            ++m_waits;
+            m_cv.notify_all();
+            m_cv.wait_for(lock, timeout, [&] { return m_wake; });
+            const bool changed = m_wake;
+            m_wake = false;
+            lock.unlock();
+            auto result = m_real.getTip().value();
+            if (changed) result.hash = uint256{};
+            return result;
+        }
+        std::unique_ptr<interfaces::BlockTemplate> createNewBlock(const node::BlockCreateOptions& options) override
+        {
+            auto block = m_real.createNewBlock(options);
+            std::lock_guard lock{m_mutex};
+            ++m_templates;
+            m_cv.notify_all();
+            return block;
+        }
+        void Wake() { std::lock_guard lock{m_mutex}; m_wake = true; m_cv.notify_all(); }
+        bool WaitFor(unsigned int templates, unsigned int waits, std::chrono::milliseconds limit)
+        {
+            std::unique_lock lock{m_mutex};
+            return m_cv.wait_for(lock, limit, [&] { return m_templates >= templates && m_waits >= waits; });
+        }
+        unsigned int Templates() { std::lock_guard lock{m_mutex}; return m_templates; }
+    };
+
+    auto real = interfaces::MakeMining(m_node);
+    BOOST_REQUIRE(real);
+    ObservedMining mining{*real};
+    Consensus::Params& params = const_cast<Consensus::Params&>(Params().GetConsensus());
+    const std::string listing = TempPath("f651-no-solver-" + ProcessIdTag());
+    struct Restore {
+        Consensus::Params& params;
+        uint8_t edge_bits;
+        bool no_cycle;
+        std::string solver, script, bundled, path;
+        ~Restore()
+        {
+            params.nEdgeBits = edge_bits;
+            params.fBlockPowNoCycle = no_cycle;
+            if (solver.empty()) UnsetSolverEnv(); else SetSolverEnv(solver);
+            if (script.empty()) UnsetEnvVar("QS_SOLVER_STUB_LISTING"); else SetEnvVar("QS_SOLVER_STUB_LISTING", script);
+            if (bundled.empty()) UnsetEnvVar("CUCKATOO_GPU_BUNDLED"); else SetEnvVar("CUCKATOO_GPU_BUNDLED", bundled);
+            cuckatoo::ResetGpuDiscoveryForTesting();
+            std::remove(path.c_str());
+        }
+    } restore{params, params.nEdgeBits, params.fBlockPowNoCycle,
+              EnvOrEmpty("CUCKATOO_GPU_SOLVER"), EnvOrEmpty("QS_SOLVER_STUB_LISTING"),
+              EnvOrEmpty("CUCKATOO_GPU_BUNDLED"), listing};
+    params.nEdgeBits = 28;
+    params.fBlockPowNoCycle = false;
+    std::ofstream{listing} << "exit 0\n";
+    UnsetSolverEnv();
+    UnsetEnvVar("CUCKATOO_GPU_BUNDLED");
+    SetEnvVar("QS_SOLVER_STUB_LISTING", listing);
+    cuckatoo::ResetGpuDiscoveryForTesting();
+
+    const CScript payout = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
+    MiningService svc(*m_node.chainman, mining);
+    BOOST_REQUIRE(svc.Start(payout, "test-payout"));
+    const bool waiting = mining.WaitFor(1, 1, std::chrono::seconds{3});
+    BOOST_CHECK(svc.GetStatus().solver_missing);
+    const unsigned int before = mining.Templates();
+    std::this_thread::sleep_for(std::chrono::milliseconds{100});
+    mining.Wake();
+    const bool resumed = mining.WaitFor(2, 1, std::chrono::milliseconds{500});
+    svc.Interrupt();
+    mining.Wake();
+    svc.Stop();
+    BOOST_CHECK_MESSAGE(waiting, "no-solver window did not enter the tip wait");
+    BOOST_CHECK_LE(before, 1U);
+    BOOST_CHECK_MESSAGE(resumed, "tip signal did not start a new template within 500 ms");
+}
+
+BOOST_AUTO_TEST_CASE(all_benched_cards_wait_for_tip_and_resume)
+{
+    // Count actual template passes while replacing only the tip wait. The
+    // worker must reach that wait after the only card faults, and a tip signal
+    // must start another pass without waiting for the one-second timeout.
+    class ObservedMining final : public interfaces::Mining {
+        interfaces::Mining& m_real;
+        std::mutex m_mutex;
+        std::condition_variable m_cv;
+        bool m_wake{false};
+        unsigned int m_templates{0};
+        unsigned int m_waits{0};
+    public:
+        explicit ObservedMining(interfaces::Mining& real) : m_real(real) {}
+        bool isTestChain() override { return m_real.isTestChain(); }
+        bool isInitialBlockDownload() override { return m_real.isInitialBlockDownload(); }
+        std::optional<interfaces::BlockRef> getTip() override { return m_real.getTip(); }
+        unsigned int getTransactionsUpdated() override { return m_real.getTransactionsUpdated(); }
+        interfaces::BlockRef waitTipChanged(uint256 tip, MillisecondsDouble timeout) override
+        {
+            std::unique_lock lock{m_mutex};
+            ++m_waits;
+            m_cv.notify_all();
+            m_cv.wait_for(lock, timeout, [&] { return m_wake; });
+            const bool changed = m_wake;
+            m_wake = false;
+            lock.unlock();
+            auto result = m_real.getTip().value();
+            if (changed) result.hash = uint256{};
+            return result;
+        }
+        std::unique_ptr<interfaces::BlockTemplate> createNewBlock(const node::BlockCreateOptions& options) override
+        {
+            auto block = m_real.createNewBlock(options);
+            std::lock_guard lock{m_mutex};
+            ++m_templates;
+            m_cv.notify_all();
+            return block;
+        }
+        void Wake() { std::lock_guard lock{m_mutex}; m_wake = true; m_cv.notify_all(); }
+        bool WaitFor(unsigned int templates, unsigned int waits, std::chrono::milliseconds limit)
+        {
+            std::unique_lock lock{m_mutex};
+            return m_cv.wait_for(lock, limit, [&] { return m_templates >= templates && m_waits >= waits; });
+        }
+        unsigned int Templates() { std::lock_guard lock{m_mutex}; return m_templates; }
+    };
+
+    auto real = interfaces::MakeMining(m_node);
+    BOOST_REQUIRE(real);
+    ObservedMining mining{*real};
+    Consensus::Params& params = const_cast<Consensus::Params&>(Params().GetConsensus());
+    const std::string listing = TempPath("f651-benched-" + ProcessIdTag());
+    struct Restore {
+        Consensus::Params& params;
+        uint8_t edge_bits;
+        bool no_cycle;
+        std::string solver, script, solve_script, bundled, path;
+        ~Restore()
+        {
+            params.nEdgeBits = edge_bits;
+            params.fBlockPowNoCycle = no_cycle;
+            if (solver.empty()) UnsetSolverEnv(); else SetSolverEnv(solver);
+            if (script.empty()) UnsetEnvVar("QS_SOLVER_STUB_LISTING"); else SetEnvVar("QS_SOLVER_STUB_LISTING", script);
+            if (solve_script.empty()) UnsetEnvVar("QS_SOLVER_STUB_SCRIPT"); else SetEnvVar("QS_SOLVER_STUB_SCRIPT", solve_script);
+            if (bundled.empty()) UnsetEnvVar("CUCKATOO_GPU_BUNDLED"); else SetEnvVar("CUCKATOO_GPU_BUNDLED", bundled);
+            cuckatoo::ResetGpuDiscoveryForTesting();
+            std::remove(path.c_str());
+            std::remove((path + ".solve").c_str());
+        }
+    } restore{params, params.nEdgeBits, params.fBlockPowNoCycle,
+              EnvOrEmpty("CUCKATOO_GPU_SOLVER"), EnvOrEmpty("QS_SOLVER_STUB_LISTING"),
+              EnvOrEmpty("QS_SOLVER_STUB_SCRIPT"), EnvOrEmpty("CUCKATOO_GPU_BUNDLED"), listing};
+    params.nEdgeBits = 28;
+    params.fBlockPowNoCycle = false;
+    std::ofstream{listing} << "echo device backend=opencl id=pci:0000:04:00.0 type=gpu status=ok name=Card\nexit 0\n";
+    std::ofstream{listing + ".solve"} << "exit 5\n";
+    SetEnvVar("QS_SOLVER_STUB_SCRIPT", listing + ".solve");
+    SetSolverEnv(SOLVER_STUB_PATH);
+    UnsetEnvVar("CUCKATOO_GPU_BUNDLED");
+    SetEnvVar("QS_SOLVER_STUB_LISTING", listing);
+    cuckatoo::ResetGpuDiscoveryForTesting();
+
+    const CScript payout = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
+    MiningService svc(*m_node.chainman, mining);
+    BOOST_REQUIRE(svc.Start(payout, "test-payout"));
+    const bool waiting = mining.WaitFor(1, 1, std::chrono::seconds{3});
+    BOOST_CHECK(!svc.GetStatus().solver_ok);
+    const unsigned int before = mining.Templates();
+    std::this_thread::sleep_for(std::chrono::milliseconds{100});
+    mining.Wake();
+    const bool resumed = mining.WaitFor(2, 1, std::chrono::milliseconds{500});
+    svc.Interrupt();
+    mining.Wake();
+    svc.Stop();
+    BOOST_CHECK_MESSAGE(waiting, "all-benched window did not enter the tip wait");
+    BOOST_CHECK_LE(before, 1U);
+    BOOST_CHECK_MESSAGE(resumed, "tip signal did not start a new template within 500 ms");
+}
+
+BOOST_AUTO_TEST_CASE(solved_window_with_a_faulted_card_is_not_a_tip_wait)
+{
+    // F-651 review: the multi-device coordinator reports kSolved with the other
+    // card's fault in the same window (multi_device_tests
+    // fault_in_the_winning_slice_is_still_reported). That window holds a block;
+    // it must reach ProcessNewBlock, not the tip wait. Unreachable end to end in
+    // a unit test: E19 forces the CPU fallback and E28 needs a real cycle.
+    using cuckatoo::GpuSolveStatus;
+    const std::vector<cuckatoo::GpuDeviceFault> one_fault{{"pci:0000:02:00.0", GpuSolveStatus::kDeviceFault}};
+    const std::vector<cuckatoo::GpuDeviceFault> none;
+
+    BOOST_CHECK(!node::WaitForTipAfterWindow(/*solved=*/true, GpuSolveStatus::kSolved, /*cpu_fallback=*/false, one_fault));
+    BOOST_CHECK(!node::WaitForTipAfterWindow(/*solved=*/true, GpuSolveStatus::kSolved, /*cpu_fallback=*/false, none));
+
+    // The three waits the slice named, fallback off.
+    BOOST_CHECK(node::WaitForTipAfterWindow(false, GpuSolveStatus::kNoGpuDevice, false, none));
+    BOOST_CHECK(node::WaitForTipAfterWindow(false, GpuSolveStatus::kNoSolver, false, none));
+    BOOST_CHECK(node::WaitForTipAfterWindow(false, GpuSolveStatus::kDeviceFault, false, one_fault));
+    BOOST_CHECK(node::WaitForTipAfterWindow(false, GpuSolveStatus::kTimedOut, false, one_fault));
+
+    // One card faulted while another ran the window out, or the window was cancelled: keep mining.
+    BOOST_CHECK(!node::WaitForTipAfterWindow(false, GpuSolveStatus::kNoCycle, false, one_fault));
+    BOOST_CHECK(!node::WaitForTipAfterWindow(false, GpuSolveStatus::kCancelled, false, one_fault));
+
+    // With the CPU fallback on, none of these is a wait.
+    BOOST_CHECK(!node::WaitForTipAfterWindow(false, GpuSolveStatus::kNoGpuDevice, true, none));
+    BOOST_CHECK(!node::WaitForTipAfterWindow(false, GpuSolveStatus::kDeviceFault, true, one_fault));
 }
 
 BOOST_AUTO_TEST_CASE(build_mining_status_maps_fields)
@@ -948,7 +1201,9 @@ BOOST_AUTO_TEST_CASE(wait_for_sync_predicate)
     ChainstateManager& chainman = *m_node.chainman;
 
     // At the frontier (best header == active tip): do NOT wait — this is the
-    // genesis-bootstrap case (best == tip == genesis) generalized.
+    // genesis-bootstrap case (best == tip == genesis) generalized. It holds on
+    // this sandbox fixture because sandbox lets a lone node mine by default;
+    // main waits for a peer's headers first (F-610, test below).
     BOOST_CHECK(!node::MiningShouldWaitForSync(chainman));
 
     // Knowing of a more-work header chain we have not connected: WAIT.
@@ -964,6 +1219,85 @@ BOOST_AUTO_TEST_CASE(wait_for_sync_predicate)
     {
         LOCK(cs_main);
         chainman.m_best_header = saved_best;  // restore before fixture teardown
+    }
+}
+
+// F-610 (owner report 2026-11-12): a main node that has just started and has not
+// heard from any peer sits at its own tip with best header == tip, so the
+// frontier rule above let it mine on that stale tip. On main, being at the
+// frontier is not evidence of being current until a peer has sent headers.
+BOOST_FIXTURE_TEST_CASE(main_waits_for_a_peers_headers_before_mining, MainnetMiningSetup)
+{
+    ChainstateManager& chainman = *m_node.chainman;
+    {
+        LOCK(cs_main);
+        BOOST_REQUIRE(chainman.ActiveChain().Tip() != nullptr);
+        BOOST_REQUIRE(chainman.m_best_header == chainman.ActiveChain().Tip());
+    }
+    BOOST_CHECK(node::MiningShouldWaitForSync(chainman));
+    auto mining = interfaces::MakeMining(m_node);
+    BOOST_CHECK(!node::MiningService(chainman, *mining).MineWithoutPeers());
+
+    // Once a peer has sent headers and the tip has caught up with them, mine.
+    chainman.m_peer_headers_received.store(true);
+    BOOST_CHECK(!node::MiningShouldWaitForSync(chainman));
+    chainman.m_peer_headers_received.store(false);
+}
+
+// The predicate with the opt-in given explicitly, on the suite's sandbox chain.
+BOOST_AUTO_TEST_CASE(wait_for_sync_predicate_without_peers_opt_in)
+{
+    ChainstateManager& chainman = *m_node.chainman;
+    BOOST_REQUIRE(!chainman.m_peer_headers_received.load());
+    BOOST_CHECK(node::MineWithoutPeersDefault(ChainType::SANDBOX));
+    auto mining = interfaces::MakeMining(m_node);
+    BOOST_CHECK(node::MiningService(chainman, *mining).MineWithoutPeers());
+
+    // Opt-in off: at the frontier, no peer heard from -> wait.
+    BOOST_CHECK(node::MiningShouldWaitForSync(chainman, /*mine_without_peers=*/false));
+    // Opt-in on: the lone miner mines.
+    BOOST_CHECK(!node::MiningShouldWaitForSync(chainman, /*mine_without_peers=*/true));
+
+    chainman.m_peer_headers_received.store(true);
+    BOOST_CHECK(!node::MiningShouldWaitForSync(chainman, /*mine_without_peers=*/false));
+
+    // A more-work header chain known but not connected: wait either way.
+    CBlockIndex fake_best;
+    CBlockIndex* saved_best;
+    {
+        LOCK(cs_main);
+        saved_best = chainman.m_best_header;
+        fake_best.nChainWork = chainman.ActiveChain().Tip()->nChainWork + 1;
+        chainman.m_best_header = &fake_best;
+    }
+    BOOST_CHECK(node::MiningShouldWaitForSync(chainman, /*mine_without_peers=*/false));
+    BOOST_CHECK(node::MiningShouldWaitForSync(chainman, /*mine_without_peers=*/true));
+    {
+        LOCK(cs_main);
+        chainman.m_best_header = saved_best;  // restore before fixture teardown
+    }
+    chainman.m_peer_headers_received.store(false);
+}
+
+// Owner, 2026-11-13: the opt-in does not exist on main; it defaults on for
+// sandbox and publictest.
+BOOST_AUTO_TEST_CASE(read_mine_without_peers_per_chain)
+{
+    {
+        ArgsManager args;
+        BOOST_CHECK_EQUAL(*Assert(node::ReadMineWithoutPeers(args, ChainType::MAIN)), false);
+        BOOST_CHECK_EQUAL(*Assert(node::ReadMineWithoutPeers(args, ChainType::SANDBOX)), true);
+        BOOST_CHECK_EQUAL(*Assert(node::ReadMineWithoutPeers(args, ChainType::PUBLIC_TEST)), true);
+    }
+    for (const char* value : {"0", "1"}) {
+        ArgsManager args;
+        args.ForceSetArg("-minewithoutpeers", value);
+        const auto main_result{node::ReadMineWithoutPeers(args, ChainType::MAIN)};
+        BOOST_CHECK(!main_result);
+        BOOST_CHECK(util::ErrorString(main_result).original.find("not available on main") != std::string::npos);
+        const bool want{std::string{value} == "1"};
+        BOOST_CHECK_EQUAL(*Assert(node::ReadMineWithoutPeers(args, ChainType::SANDBOX)), want);
+        BOOST_CHECK_EQUAL(*Assert(node::ReadMineWithoutPeers(args, ChainType::PUBLIC_TEST)), want);
     }
 }
 
@@ -983,7 +1317,7 @@ BOOST_AUTO_TEST_CASE(mining_status_reports_base_tx_work_at_the_floor)
     // TestChain100Setup's tip sits at the sandbox floor, so mean block work is
     // 2 cycles; 2/106 truncates to 0 and the floor is what survives. This holds
     // whatever the congestion multiplier is, since it scales a zero base.
-    // The published number is the CHAIN-dependent scalar. After the Stage 2 flag day
+    // The published number is the CHAIN-dependent scalar. After the byte-pricing flag day
     // there is no single "required work" at a tip -- a 400-byte payment and a 100 kB
     // bloat transaction owe different amounts -- so publishing one under that name
     // would be publishing a fiction, and it is the one number every sender reads.
@@ -1174,7 +1508,9 @@ BOOST_AUTO_TEST_CASE(solved_block_time_follows_the_clock_not_the_template)
     params.fBlockPowNoCycle = true;
     KillSolverStubChildren();
 
-    BOOST_REQUIRE(WaitUntil([&] { return svc.GetStatus().blocks_found >= 1; }, std::chrono::seconds(5)));
+    // A killed helper now takes the bounded tip wait before rebuilding the
+    // template. Allow that five-second pause plus the next solve window.
+    BOOST_REQUIRE(WaitUntil([&] { return svc.GetStatus().blocks_found >= 1; }, std::chrono::seconds(8)));
     svc.Stop();
 
     const CBlockIndex* mined{WITH_LOCK(cs_main, return m_node.chainman->ActiveChain()[start_height + 1])};
@@ -1407,7 +1743,7 @@ BOOST_AUTO_TEST_CASE(concurrent_start_stop_does_not_terminate)
     BOOST_CHECK(!svc.IsActive());
 }
 
-BOOST_AUTO_TEST_CASE(a_no_device_solve_window_lists_the_cards_once)
+BOOST_AUTO_TEST_CASE(mining_status_poll_does_not_rediscover)
 {
     // F-554: MultiDeviceSolveBytes discovers the cards at the top of every solve
     // attempt and still holds the result when it returns kNoGpuDevice. The warn-once
@@ -1490,6 +1826,22 @@ BOOST_AUTO_TEST_CASE(a_no_device_solve_window_lists_the_cards_once)
     size_t listings{0};
     std::ifstream recorded{spawns};
     for (std::string line; std::getline(recorded, line);) {
+        if (TrimAscii(line) == "--list-devices") ++listings;
+    }
+    BOOST_CHECK_EQUAL(listings, 1U);
+
+    // A failed listing is deliberately not cached for the next solve window.
+    // Status polling must only read the last observation.
+    MiningService svc(*m_node.chainman, *mining);
+    cuckatoo::SetGpuDeviceStatsForTesting({
+        {"pci:0000:04:00.0", cuckatoo::GpuDeviceState::kFaulted,
+         cuckatoo::GpuSolveStatus::kDeviceFault, 0, 0.0},
+    });
+    for (int i = 0; i < 3; ++i) node::BuildMiningStatus(svc, *m_node.chainman);
+    cuckatoo::ResetGpuDeviceStatsForTesting();
+    listings = 0;
+    std::ifstream after_poll{spawns};
+    for (std::string line; std::getline(after_poll, line);) {
         if (TrimAscii(line) == "--list-devices") ++listings;
     }
     BOOST_CHECK_EQUAL(listings, 1U);

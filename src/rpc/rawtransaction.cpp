@@ -92,8 +92,8 @@ static std::vector<RPCResult> DecodeTxDoc(const std::string& txid_field_doc)
         {RPCResult::Type::NUM, "weight", "The transaction's weight (between vsize*4-3 and vsize*4)"},
         {RPCResult::Type::NUM, "version", "The version"},
         {RPCResult::Type::NUM_TIME, "locktime", "The lock time"},
-        {RPCResult::Type::NUM, "anchor_height", "Quicksilver: block height the per-tx PoW is anchored to (#5c-1)"},
-        {RPCResult::Type::STR, "txwork", "Quicksilver: actual per-tx PoW work from the proof (hex arith_uint256, like chainwork) (#6)"},
+        {RPCResult::Type::NUM, "anchor_height", "Quicksilver: block height the per-tx PoW is anchored to"},
+        {RPCResult::Type::STR, "txwork", "Quicksilver: actual per-tx PoW work from the proof (hex arith_uint256, like chainwork)"},
         {RPCResult::Type::NUM, "pow_nonce", "Quicksilver: per-tx Cuckatoo grind nonce"},
         {RPCResult::Type::ARR, "cuckatoo_cycle", "Quicksilver: the per-tx Cuckatoo 42-cycle proof",
         {

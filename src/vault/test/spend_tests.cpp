@@ -8,7 +8,7 @@
 #include <chainparams.h>
 #include <consensus/amount.h>
 #include <crypto/cuckatoo/cuckatoo.h>
-#include <key_io.h>
+#include <crypto/cuckatoo/gpu_devices.h>
 #include <pow.h>
 #include <script/descriptor.h>
 #include <script/solver.h>
@@ -22,12 +22,67 @@
 #include <boost/test/unit_test.hpp>
 
 #include <atomic>
+#include <cstdlib>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace vault {
-BOOST_FIXTURE_TEST_SUITE(spend_tests, VaultTestingSetup)
+namespace {
+//! The grinds below run the real Cuckatoo solver, which asks GPU discovery for a
+//! helper first. A helper is only ever named by these variables, so clearing them
+//! keeps every grind on the CPU whatever the developer's shell exports, and never
+//! starts a card (S0207-C-06). Restored on exit.
+class CpuOnlyGrind
+{
+public:
+    CpuOnlyGrind()
+    {
+        for (const char* name : {"CUCKATOO_GPU_SOLVER", "CUCKATOO_GPU_BUNDLED"}) {
+            const char* value{std::getenv(name)};
+            m_saved.emplace_back(name, value ? std::optional<std::string>{value} : std::nullopt);
+            SetEnv(name, std::nullopt);
+        }
+        cuckatoo::ResetGpuDiscoveryForTesting();
+    }
+    ~CpuOnlyGrind()
+    {
+        for (const auto& [name, value] : m_saved) SetEnv(name, value);
+        cuckatoo::ResetGpuDiscoveryForTesting();
+    }
+    CpuOnlyGrind(const CpuOnlyGrind&) = delete;
+    CpuOnlyGrind& operator=(const CpuOnlyGrind&) = delete;
 
-BOOST_FIXTURE_TEST_CASE(ExactValueChange, TestChain100Setup)
+private:
+    static void SetEnv(const char* name, const std::optional<std::string>& value)
+    {
+#ifdef WIN32
+        _putenv_s(name, value ? value->c_str() : "");
+#else
+        if (value) {
+            setenv(name, value->c_str(), 1);
+        } else {
+            unsetenv(name);
+        }
+#endif
+    }
+    std::vector<std::pair<const char*, std::optional<std::string>>> m_saved;
+};
+
+//! Every case builds its own chain; the suite has no shared fixture (S0207-C-07).
+struct SpendTestingSetup : public TestChain100Setup {
+    CpuOnlyGrind cpu_only;
+};
+} // namespace
+
+BOOST_AUTO_TEST_SUITE(spend_tests)
+
+BOOST_FIXTURE_TEST_CASE(ExactValueChange, SpendTestingSetup)
 {
     CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
     auto vault = CreateSyncedVault(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
@@ -63,7 +118,7 @@ BOOST_FIXTURE_TEST_CASE(ExactValueChange, TestChain100Setup)
     check_tx(123);
 }
 
-BOOST_FIXTURE_TEST_CASE(vault_duplicated_preset_inputs_test, TestChain100Setup)
+BOOST_FIXTURE_TEST_CASE(vault_duplicated_preset_inputs_test, SpendTestingSetup)
 {
     // Verify that the vault's Coin Selection process does not include pre-selected inputs twice in a transaction.
 
@@ -74,6 +129,7 @@ BOOST_FIXTURE_TEST_CASE(vault_duplicated_preset_inputs_test, TestChain100Setup)
     LOCK(vault->cs_vault);
     auto available_coins = AvailableCoins(*vault);
     std::vector<COutput> coins = available_coins.All();
+    BOOST_REQUIRE_GE(coins.size(), 4U);
     // Preselect the first 3 UTXO (150 Hg total)
     std::set<COutPoint> preset_inputs = {coins[0].outpoint, coins[1].outpoint, coins[2].outpoint};
 
@@ -95,17 +151,54 @@ BOOST_FIXTURE_TEST_CASE(vault_duplicated_preset_inputs_test, TestChain100Setup)
     // prior to coin selection, it may create a transaction that does not fund the full payment
     // amount.
 
-    BOOST_CHECK(!CreateTransaction(*vault, recipients, /*change_pos=*/std::nullopt, coin_control));
+    auto res = CreateTransaction(*vault, recipients, /*change_pos=*/std::nullopt, coin_control);
+    BOOST_REQUIRE(!res);
+    // The named error, not any earlier failure (S0207-C-04).
+    BOOST_CHECK_EQUAL(util::ErrorString(res).original, "Insufficient funds");
 }
 
-// Stage 2: required work depends on serialized bytes, and PowPreimage covers neither
+// F-666: the recipient total was summed without a bound. 93 recipients at MAX_MONEY
+// overflow a signed 64-bit sum; the wrapped total selected no inputs and aborted the
+// node on SetFreshVaultLocktime's `!tx.vin.empty()` assert. The RPCs range-check
+// each amount, but the GUI and agent paths reach CreateTransaction with none.
+BOOST_FIXTURE_TEST_CASE(recipient_total_out_of_money_range_is_refused, SpendTestingSetup)
+{
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    auto vault = CreateSyncedVault(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
+    const CTxDestination dest{*Assert(vault->GetNewDestination(OutputType::BECH32, ""))};
+    CCoinControl coin_control;
+
+    // A total that overflows int64.
+    const std::vector<CRecipient> overflowing(100, CRecipient{dest, MAX_MONEY});
+    auto res = CreateTransaction(*vault, overflowing, /*change_pos=*/std::nullopt, coin_control);
+    BOOST_REQUIRE(!res);
+    BOOST_CHECK_EQUAL(util::ErrorString(res).original, "Amount out of range");
+
+    // A total one cinnabar past MAX_MONEY, with every amount in range.
+    auto res_sum = CreateTransaction(*vault, {{dest, MAX_MONEY}, {dest, 1}}, /*change_pos=*/std::nullopt, coin_control);
+    BOOST_REQUIRE(!res_sum);
+    BOOST_CHECK_EQUAL(util::ErrorString(res_sum).original, "Amount out of range");
+
+    // One amount past MAX_MONEY on its own.
+    auto res_one = CreateTransaction(*vault, {{dest, MAX_MONEY + 1}}, /*change_pos=*/std::nullopt, coin_control);
+    BOOST_REQUIRE(!res_one);
+    BOOST_CHECK_EQUAL(util::ErrorString(res_one).original, "Amount out of range");
+
+    // A total of exactly MAX_MONEY is a valid amount: it gets past the range check and
+    // fails only for want of funds.
+    auto res_max = CreateTransaction(*vault, {{dest, MAX_MONEY / 2}, {dest, MAX_MONEY - MAX_MONEY / 2}}, /*change_pos=*/std::nullopt, coin_control);
+    BOOST_REQUIRE(!res_max);
+    BOOST_CHECK_EQUAL(util::ErrorString(res_max).original, "Insufficient funds");
+}
+
+// Per-transaction work pricing: required work depends on serialized bytes, and PowPreimage covers neither
 // scriptSig nor the witness -- so the grind happens before the bytes it is charged
 // for exist. The vault must therefore grind against an UPPER BOUND on the final size,
 // and the size estimate must actually be one. It was not: CalculateMaximumSignedTxSize
 // never accounted for the per-tx PoW tail -- nAnchorHeight (4) + nPowNonce (4) +
 // 42 * nCycle (168) = 176 bytes, or 704 weight -- so every estimate ran 704 short.
 // Harmless while size did not affect validity; an under-grind afterwards.
-BOOST_FIXTURE_TEST_CASE(MaximumSignedTxSizeIncludesThePowTail, TestChain100Setup)
+BOOST_FIXTURE_TEST_CASE(MaximumSignedTxSizeIncludesThePowTail, SpendTestingSetup)
 {
     CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
     auto vault = CreateSyncedVault(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
@@ -127,7 +220,7 @@ BOOST_FIXTURE_TEST_CASE(MaximumSignedTxSizeIncludesThePowTail, TestChain100Setup
     // And the tail is 176 bytes of it, non-witness, so 704 weight.
     BOOST_CHECK_GE(est.weight, 176 * WITNESS_SCALE_FACTOR);
 
-    // The byte bound is what the Stage 2 size term is actually charged against, and
+    // The byte bound is what the byte-pricing term is actually charged against, and
     // it must be an upper bound on the finished serialization for the same reason.
     const int64_t actual_bytes{static_cast<int64_t>(::GetSerializeSize(TX_WITH_WITNESS(*tx)))};
     BOOST_CHECK_GE(est.bytes, actual_bytes);
@@ -145,15 +238,19 @@ BOOST_FIXTURE_TEST_CASE(MaximumSignedTxSizeIncludesThePowTail, TestChain100Setup
 // of magnitude. Where the vault signs locally it knows the true size, so it should
 // check rather than trust: an estimate that ever slips low must cost a regrind, not
 // produce a transaction the network rejects.
-BOOST_FIXTURE_TEST_CASE(SignedTransactionCarriesEnoughWork, TestChain100Setup)
+BOOST_FIXTURE_TEST_CASE(SignedTransactionCarriesEnoughWork, SpendTestingSetup)
 {
     CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
     auto vault = CreateSyncedVault(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
 
-    CRecipient recipient{PubKeyDestination({}), 1 * COIN};
+    // The sandbox's coupling makes the base work 1, so a small transfer needs
+    // work 1 and every cycle meets its target: the check below could not fail
+    // (F-668, S0207-C-01). The byte and new-output terms still scale, so 150
+    // outputs need several cycles' worth of work at the shipped parameters.
+    const std::vector<CRecipient> recipients(150, CRecipient{PubKeyDestination({}), COIN / 100});
     CCoinControl coin_control;
     coin_control.m_change_type = OutputType::BASE58;
-    auto res = CreateTransaction(*vault, {recipient}, /*change_pos=*/std::nullopt, coin_control);
+    auto res = CreateTransaction(*vault, recipients, /*change_pos=*/std::nullopt, coin_control);
     BOOST_REQUIRE_MESSAGE(res, util::ErrorString(res).original);
     const CTransactionRef tx = res->tx;
 
@@ -163,10 +260,29 @@ BOOST_FIXTURE_TEST_CASE(SignedTransactionCarriesEnoughWork, TestChain100Setup)
     LOCK(cs_main);
     const CBlockIndex* anchor{m_node.chainman->ActiveChain()[int(tx->nAnchorHeight)]};
     BOOST_REQUIRE(anchor != nullptr);
+    const arith_uint256 required{RequiredTxWork(*tx, anchor, cp)};
+    BOOST_REQUIRE_MESSAGE(required >= 4, "required work " + required.GetHex() + " is too small for this check to bite");
     const uint256 target{GetTxPowTarget(cp, anchor, *tx)};
-    BOOST_CHECK_MESSAGE(
-        UintToArith256(cuckatoo::CuckatooProofHash(tx->nCycle)) <= UintToArith256(target),
-        "signed transaction carries less work than its own bytes require");
+    BOOST_CHECK_MESSAGE(CheckTxProofOfWork(*tx, target, anchor->GetBlockHash(), cp),
+                        "signed transaction carries less work than its own bytes require");
+
+    // A real cycle that meets a requirement of 1 but not this one is refused, so
+    // the check above measures work and not only that a cycle exists.
+    CMutableTransaction weak{*tx};
+    const auto pre = CTransaction{weak}.PowPreimage(anchor->GetBlockHash());
+    cuckatoo::Cycle cycle;
+    uint32_t nonce{0};
+    const auto misses_target = [&](const cuckatoo::Cycle& candidate, uint32_t) {
+        return UintToArith256(cuckatoo::CuckatooProofHash(candidate)) > UintToArith256(target);
+    };
+    BOOST_REQUIRE(cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), cp.nTxEdgeBits, /*start_nonce=*/0, /*max_attempts=*/1u << 24,
+                                               cycle, nonce, /*cpu_fallback=*/true, /*progress=*/{}, /*cancel=*/{},
+                                               /*gpu_status=*/nullptr, /*discarded_cycles=*/nullptr, misses_target));
+    weak.nCycle = cycle;
+    weak.nPowNonce = nonce;
+    const CTransaction weak_tx{weak};
+    BOOST_CHECK(CheckTxProofOfWork(weak_tx, ArithToUint256(~arith_uint256(0)), anchor->GetBlockHash(), cp));
+    BOOST_CHECK(!CheckTxProofOfWork(weak_tx, target, anchor->GetBlockHash(), cp));
 }
 
 //! The per-transaction proof-of-work must not be ground while cs_vault is held.
@@ -177,7 +293,7 @@ BOOST_FIXTURE_TEST_CASE(SignedTransactionCarriesEnoughWork, TestChain100Setup)
 //! observed on a GUI test node as a frozen desktop and a `getbalances` that took 235 s against
 //! 0.00 s idle. Nothing about the grind needs the lock: it reads the chain, not the
 //! vault, and writes only nAnchorHeight, nCycle and nPowNonce on a local transaction.
-BOOST_FIXTURE_TEST_CASE(create_transaction_does_not_hold_vault_lock_while_grinding, TestChain100Setup)
+BOOST_FIXTURE_TEST_CASE(create_transaction_does_not_hold_vault_lock_while_grinding, SpendTestingSetup)
 {
     CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
     auto vault = CreateSyncedVault(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
@@ -230,8 +346,13 @@ BOOST_FIXTURE_TEST_CASE(no_cycle_mode_skips_solver_but_meets_target, NoCycleTest
 
     bool solver_reported_progress{false};
     constexpr uint64_t charged_bytes{300'000};
-    constexpr size_t charged_outputs{1'501};
-    const uint256 target = vault->chain().txPowTarget(*anchor_height, charged_bytes, charged_outputs, tx.vin.size());
+    // The same inputs GrindTransactionPow derives its target from: the
+    // transaction's own output count. A different count would assert a target
+    // the grind never promised (F-668, S0207-C-02).
+    const uint256 target = vault->chain().txPowTarget(*anchor_height, charged_bytes, tx.vout.size(), tx.vin.size());
+    // At 300'000 bytes even the sandbox base of 1 needs work above 1, so the
+    // target is a real bound.
+    BOOST_REQUIRE(UintToArith256(target) < ~arith_uint256(0) / 32);
     const auto error = GrindTransactionPow(*vault, tx, charged_bytes, *anchor_height,
                                            [&](uint32_t) { solver_reported_progress = true; });
 
@@ -244,7 +365,7 @@ BOOST_FIXTURE_TEST_CASE(no_cycle_mode_skips_solver_but_meets_target, NoCycleTest
 // "Signing transaction failed" must say why (F-520). A locked vault has no keys, and
 // the per-input script error it produces ("invalid stack size") points nowhere near
 // the cause, so the lock is named instead -- in the message and in the log.
-BOOST_FIXTURE_TEST_CASE(signing_failure_names_a_locked_vault, TestChain100Setup)
+BOOST_FIXTURE_TEST_CASE(signing_failure_names_a_locked_vault, SpendTestingSetup)
 {
     CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
     auto vault = CreateSyncedVault(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
@@ -264,7 +385,7 @@ BOOST_FIXTURE_TEST_CASE(signing_failure_names_a_locked_vault, TestChain100Setup)
 }
 
 // Unlocked but without the key: the message carries the input and its reason.
-BOOST_FIXTURE_TEST_CASE(signing_failure_names_the_input_and_reason, TestChain100Setup)
+BOOST_FIXTURE_TEST_CASE(signing_failure_names_the_input_and_reason, SpendTestingSetup)
 {
     CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
     auto vault = std::make_unique<CVault>(m_node.chain.get(), "", CreateMockableVaultDatabase());
@@ -308,7 +429,7 @@ BOOST_FIXTURE_TEST_CASE(signing_failure_names_the_input_and_reason, TestChain100
 }
 
 // An input the vault holds no transaction for is reported, not dropped.
-BOOST_FIXTURE_TEST_CASE(signing_reports_an_input_not_in_the_vault, TestChain100Setup)
+BOOST_FIXTURE_TEST_CASE(signing_reports_an_input_not_in_the_vault, SpendTestingSetup)
 {
     auto vault = CreateSyncedVault(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
     CMutableTransaction tx;
@@ -319,6 +440,8 @@ BOOST_FIXTURE_TEST_CASE(signing_reports_an_input_not_in_the_vault, TestChain100S
     BOOST_REQUIRE_EQUAL(input_errors.size(), 1U);
     BOOST_CHECK_EQUAL(input_errors.at(0).original, "Input not found in this vault");
 }
+
+
 
 BOOST_AUTO_TEST_SUITE_END()
 } // namespace vault

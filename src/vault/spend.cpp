@@ -192,13 +192,13 @@ TxSize CalculateMaximumSignedTxSize(const CTransaction &tx, const CVault *vault,
     // version + nLockTime + input count + output count, plus Quicksilver's per-tx PoW
     // tail: nAnchorHeight (4) + nPowNonce (4) + 42 * nCycle (168) = 176 bytes, all
     // non-witness. Omitting it understated every estimate by 704 weight, which was
-    // harmless only while size did not affect validity. After the Stage 2 flag day an
+    // harmless only while size did not affect validity. After the byte-pricing flag day an
     // understated estimate is an under-grind, and an under-ground transaction is
     // invalid.
     const int64_t header_bytes = 4 + 4 + 176 + GetSizeOfCompactSize(tx.vin.size()) + GetSizeOfCompactSize(tx.vout.size());
     int64_t weight = header_bytes * WITNESS_SCALE_FACTOR;
     // Tracked alongside weight, not derived from it: weight is 3*base + total and
-    // cannot be divided back into bytes. The Stage 2 size term prices bytes.
+    // cannot be divided back into bytes. The byte-pricing term prices bytes.
     int64_t bytes = header_bytes;
     // Whether any input spends a witness program. Necessary to run before the next loop over the
     // inputs in order to accurately compute the compactSize length for the witness data per input.
@@ -997,7 +997,7 @@ std::optional<bilingual_str> GrindTransactionPow(CVault& vault, CMutableTransact
     txNew.nAnchorHeight = static_cast<uint32_t>(anchor_height);
     if (tx_proof_cancel && tx_proof_cancel()) return _("Transfer proof-of-work canceled");
 
-    // Stage 2: required work depends on the transaction's serialized bytes, and
+    // Per-transaction work pricing: required work depends on the transaction's serialized bytes, and
     // the pre-image covers neither scriptSig nor the witness -- so we are grinding
     // before the bytes we are charged for exist. tx_sizes.bytes is an upper bound
     // on the finished serialization, computed with maximum-size dummy signatures.
@@ -1366,7 +1366,7 @@ static util::Result<BuiltTransaction> BuildTransactionForProof(
     // cs_vault released — see CreateTransaction. Resolving the anchor here keeps it
     // under the same lock as coin selection, and keeps the size check ahead of the
     // grind so that a transaction the vault is about to refuse never costs one.
-    // #5c-1: anchor the proof to the current chain tip and commit that block's hash,
+    // per-transaction PoW anchor: anchor the proof to the current chain tip and commit that block's hash,
     // so the proof cannot have been precomputed and is recent (within nMaxAnchorAge).
     const auto anchor_height_result = TxPowAnchorHeight(vault);
     if (!anchor_height_result) return util::Error{util::ErrorString(anchor_height_result)};
@@ -1408,6 +1408,21 @@ util::Result<CreatedTransactionResult> CreateTransaction(
 
     if (std::any_of(vecSend.cbegin(), vecSend.cend(), [](const auto& recipient){ return recipient.nAmount < 0; })) {
         return util::Error{_("Transaction amounts must not be negative")};
+    }
+
+    // Every amount, and every running total of them, must be a valid money amount
+    // (F-666). The RPCs range-check each amount but nothing bounded the sum, and the
+    // GUI and agent paths check nothing: 93 recipients at MAX_MONEY overflow the signed
+    // 64-bit total summed below (undefined behaviour), and a wrapped total selected no
+    // inputs and reached the `!tx.vin.empty()` assert in SetFreshVaultLocktime. Both
+    // operands are within [0, MAX_MONEY] when added, so the addition itself cannot
+    // overflow.
+    CAmount recipients_total{0};
+    for (const auto& recipient : vecSend) {
+        if (!MoneyRange(recipient.nAmount) || !MoneyRange(recipients_total + recipient.nAmount)) {
+            return util::Error{Untranslated("Amount out of range")};
+        }
+        recipients_total += recipient.nAmount;
     }
 
     // Three phases, and the middle one deliberately holds no vault lock.

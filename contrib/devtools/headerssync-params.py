@@ -7,6 +7,7 @@
 
 from math import log, exp, sqrt
 from datetime import datetime, timedelta
+import argparse
 import random
 
 # Parameters:
@@ -18,11 +19,13 @@ TIME = datetime(2036, 9, 5)
 # src/kernel/chainparams.cpp: mainnet nPowTargetSpacing is 5 minutes.
 BLOCK_INTERVAL = timedelta(seconds=300)
 
-# All current chains set nMinimumChainWork to zero, so there is no measured
-# Quicksilver value for this upstream model input. Model assumed minimum-work
-# horizons at the intended 288 headers/day. The one-year horizon is the ruled
-# requirement (owner, 2026-09-25); three and six months are record-only, while
-# five and ten years are sensitivity checks.
+# Main's nMinimumChainWork comes from its newest trust anchor (F-565 (a),
+# 2026-11-16), so the shipped constants are computed with
+# --minchainwork-headers <anchor height> and re-run at every re-pin. Without
+# that option the script runs the table below: assumed minimum-work horizons at
+# the intended 288 headers/day, from the 2026-09-25 analysis (one year was the
+# ruled requirement then; three and six months record-only, five and ten years
+# sensitivity checks). It is kept for the record and superseded.
 MINCHAINWORK_HORIZONS = {
     "3-month assumed minchainwork horizon (record only)": 26298,
     "6-month assumed minchainwork horizon (record only)": 52596,
@@ -151,8 +154,8 @@ LIMIT_FRACTION = LIMIT_HEADERRATE / NET_HEADERRATE
 ATTACK_HEADERS = 0.0  # Recomputed for each assumed minchainwork horizon.
 
 # Shipped src/headerssync.cpp values, re-evaluated for every scenario below.
-CURRENT_PERIOD = 219
-CURRENT_BUFFER = 4889
+CURRENT_PERIOD = 208
+CURRENT_BUFFER = 5174
 
 
 def find_max_headers(when):
@@ -383,6 +386,20 @@ def analyze(when):
 
 def main():
     global MINCHAINWORK_HEADERS, ATTACK_HEADERS
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--minchainwork-headers", type=int, metavar="N",
+        help="run one analysis with the minimum-chain-work point at N headers (the "
+             "newest trust anchor's height); without it, run the horizon table above")
+    args = parser.parse_args()
+    if args.minchainwork_headers is not None:
+        if args.minchainwork_headers <= 0:
+            parser.error("--minchainwork-headers must be positive")
+        MINCHAINWORK_HEADERS = args.minchainwork_headers
+        ATTACK_HEADERS = LIMIT_FRACTION * MINCHAINWORK_HEADERS
+        print(f"\n=== trust anchor at {MINCHAINWORK_HEADERS} headers ===")
+        analyze(TIME)
+        return
     for label, headers in MINCHAINWORK_HORIZONS.items():
         MINCHAINWORK_HEADERS = headers
         ATTACK_HEADERS = LIMIT_FRACTION * MINCHAINWORK_HEADERS

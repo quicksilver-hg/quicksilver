@@ -2,8 +2,6 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <quicksilver-build-config.h> // IWYU pragma: keep
-
 #include <addresstype.h>
 #include <agent/agentclient.h>
 #include <agent/messageio.h>
@@ -69,7 +67,6 @@ static constexpr int CONTINUE_EXECUTION{-1};
 static constexpr size_t MAX_AGENT_PEER_STORE_FILE_SIZE{100'000};
 static constexpr size_t MAX_AGENT_DISCOVERED_PEERS{1000};
 static constexpr int64_t DEFAULT_AGENT_PEER_TIMEOUT_MS{10'000};
-static constexpr int MAX_AGENT_PEER_HANDSHAKE_MESSAGES{64};
 static constexpr int MAX_AGENT_PEER_DISCOVERY_MESSAGES{64};
 static constexpr int MAX_AGENT_PEER_HEADER_SYNC_MESSAGES{256};
 static constexpr bool DEFAULT_AGENT_PROXY_RANDOMIZE{true};
@@ -578,6 +575,15 @@ static util::Result<agent::AllotmentReceiptStoreData> LoadStoredPaymentReceiptSt
     return agent::LoadAllotmentReceiptStore(ReceiptStorePath(args), Params().GetChainTypeString(), Params().GenesisBlock().GetHash());
 }
 
+static bool LockReceiptStore(const ArgsManager& args)
+{
+    const fs::path directory{ReceiptStorePath(args).parent_path()};
+    fs::create_directories(directory);
+    if (agent::LockReceiptStoreDirectory(directory) == util::LockResult::Success) return true;
+    tfm::format(std::cerr, "Error: another quicksilver-agent is using the receipt store in %s; try again when it finishes.\n", fs::PathToString(directory));
+    return false;
+}
+
 static util::Result<std::vector<agent::AllotmentPaymentReceiptArtifact>> LoadStoredPaymentReceipts(const ArgsManager& args)
 {
     auto data{LoadStoredPaymentReceiptStore(args)};
@@ -658,11 +664,17 @@ static util::Result<std::vector<agent::AllotmentPaymentReceiptArtifact>> DecodeS
     if (success.isBool() && !success.get_bool()) {
         return util::Error{Untranslated("scantxoutset result did not complete successfully.")};
     }
+    if (!success.isBool() || !success.get_bool()) {
+        return util::Error{Untranslated("scantxoutset result must report success.")};
+    }
 
     const UniValue& unspents{result.find_value("unspents")};
     if (!unspents.isArray()) {
         return util::Error{Untranslated("scantxoutset result must contain an unspents array.")};
     }
+
+    const CScript funding_script{GetScriptForDestination(DecodeDestination(funding_address))};
+    const std::string funding_script_hex{HexStr(funding_script)};
 
     const int64_t import_time{GetTime()};
     std::vector<agent::AllotmentPaymentReceiptArtifact> receipts;
@@ -679,6 +691,13 @@ static util::Result<std::vector<agent::AllotmentPaymentReceiptArtifact>> DecodeS
         }
         auto vout{ReadRecoveryVoutField(unspent)};
         if (!vout) return util::Error{util::ErrorString(vout)};
+        const UniValue& script_pub_key{unspent.find_value("output_script")};
+        if (!script_pub_key.isStr() || script_pub_key.get_str().empty() || !IsHex(script_pub_key.get_str())) {
+            return util::Error{Untranslated("scantxoutset unspent field 'output_script' must be a hex script.")};
+        }
+        if (HexStr(ParseHex(script_pub_key.get_str())) != funding_script_hex) {
+            return util::Error{Untranslated(strprintf("scantxoutset unspent %s:%u does not pay the funding address.", *txid, *vout))};
+        }
         auto amount{ReadRecoveryAmountField(unspent)};
         if (!amount) return util::Error{util::ErrorString(amount)};
 
@@ -1745,139 +1764,7 @@ static util::Result<CSerializedNetMsg> ReceiveWireMessage(const Sock& sock, std:
     return message;
 }
 
-static CSerializedNetMsg MakeAgentVersionMessage(const CService& peer)
-{
-    const int64_t now{count_seconds(GetTime<std::chrono::seconds>())};
-    const uint64_t nonce{static_cast<uint64_t>(count_microseconds(GetTime<std::chrono::microseconds>()))};
-    return NetMsg::Make(NetMsgType::VERSION,
-                        PROTOCOL_VERSION,
-                        uint64_t{NODE_NONE},
-                        now,
-                        uint64_t{NODE_NONE},
-                        CNetAddr::V1(peer),
-                        uint64_t{NODE_NONE},
-                        CNetAddr::V1(CService{}),
-                        nonce,
-                        FormatSubVersion(CLIENT_NAME, CLIENT_VERSION, {"agent"}),
-                        int32_t{0},
-                        true);
-}
-
-static util::Result<void> SendHandshakeFeatureMessages(const Sock& sock, std::chrono::milliseconds timeout)
-{
-    auto sent_wtxidrelay{SendWireMessage(sock, NetMsg::Make(NetMsgType::WTXIDRELAY), timeout)};
-    if (!sent_wtxidrelay) return util::Error{util::ErrorString(sent_wtxidrelay)};
-    auto sent_sendaddrv2{SendWireMessage(sock, NetMsg::Make(NetMsgType::SENDADDRV2), timeout)};
-    if (!sent_sendaddrv2) return util::Error{util::ErrorString(sent_sendaddrv2)};
-    auto sent_verack{SendWireMessage(sock, NetMsg::Make(NetMsgType::VERACK), timeout)};
-    if (!sent_verack) return util::Error{util::ErrorString(sent_verack)};
-    return {};
-}
-
-struct PeerTransactionRelayResult {
-    CService peer;
-    bool connected{false};
-    bool peer_version_received{false};
-    bool peer_verack_received{false};
-    bool local_verack_sent{false};
-    bool sent_tx{false};
-    size_t wire_tx_bytes{0};
-    std::string error;
-};
-
-struct PeerHandshakeResult {
-    bool peer_version_received{false};
-    bool peer_verack_received{false};
-    bool local_verack_sent{false};
-    std::string error;
-};
-
-static PeerHandshakeResult CompletePeerHandshake(const Sock& sock, const CService& peer, std::chrono::milliseconds timeout)
-{
-    PeerHandshakeResult result;
-
-    auto sent_version{SendWireMessage(sock, MakeAgentVersionMessage(peer), timeout)};
-    if (!sent_version) {
-        result.error = util::ErrorString(sent_version).original;
-        return result;
-    }
-
-    for (int message_count{0}; message_count < MAX_AGENT_PEER_HANDSHAKE_MESSAGES && !(result.peer_version_received && result.peer_verack_received); ++message_count) {
-        auto peer_message{ReceiveWireMessage(sock, timeout)};
-        if (!peer_message) {
-            result.error = util::ErrorString(peer_message).original;
-            return result;
-        }
-        if (peer_message->m_type == NetMsgType::VERSION) {
-            if (result.peer_version_received) {
-                result.error = "peer sent duplicate version message";
-                return result;
-            }
-            result.peer_version_received = true;
-            auto sent_features{SendHandshakeFeatureMessages(sock, timeout)};
-            if (!sent_features) {
-                result.error = util::ErrorString(sent_features).original;
-                return result;
-            }
-            result.local_verack_sent = true;
-            continue;
-        }
-        if (peer_message->m_type == NetMsgType::VERACK) {
-            result.peer_verack_received = true;
-            continue;
-        }
-        if (peer_message->m_type == NetMsgType::PING && peer_message->data.size() == sizeof(uint64_t)) {
-            CSerializedNetMsg pong;
-            pong.m_type = NetMsgType::PONG;
-            pong.data = peer_message->data;
-            auto sent_pong{SendWireMessage(sock, pong, timeout)};
-            if (!sent_pong) {
-                result.error = util::ErrorString(sent_pong).original;
-                return result;
-            }
-        }
-    }
-    if (!result.peer_version_received || !result.peer_verack_received || !result.local_verack_sent) {
-        result.error = "peer handshake did not complete";
-    }
-    return result;
-}
-
-static PeerTransactionRelayResult SendTransactionToOnePeer(const CService& peer,
-                                                           const CSerializedNetMsg& tx_payload,
-                                                           std::chrono::milliseconds timeout)
-{
-    PeerTransactionRelayResult result;
-    result.peer = peer;
-
-    nConnectTimeout = static_cast<int>(std::min<int64_t>(timeout.count(), std::numeric_limits<int>::max()));
-    std::unique_ptr<Sock> sock{agent::ConnectToPeer(peer)};
-    if (!sock) {
-        result.error = strprintf("could not connect to peer %s", peer.ToStringAddrPort());
-        return result;
-    }
-    result.connected = true;
-
-    const PeerHandshakeResult handshake{CompletePeerHandshake(*sock, peer, timeout)};
-    result.peer_version_received = handshake.peer_version_received;
-    result.peer_verack_received = handshake.peer_verack_received;
-    result.local_verack_sent = handshake.local_verack_sent;
-    if (!handshake.error.empty()) {
-        result.error = handshake.error;
-        return result;
-    }
-
-    auto sent_tx{SendWireMessage(*sock, tx_payload, timeout)};
-    if (!sent_tx) {
-        result.error = util::ErrorString(sent_tx).original;
-        return result;
-    }
-    result.sent_tx = true;
-    result.wire_tx_bytes = *sent_tx;
-    return result;
-}
-
-static void PrintPeerTransactionRelayResult(const PeerTransactionRelayResult& result, std::optional<size_t> index = std::nullopt)
+static void PrintPeerTransactionRelayResult(const agent::PeerTransactionRelayResult& result, std::optional<size_t> index = std::nullopt)
 {
     const std::string prefix{index.has_value() ? strprintf("peer_%s_", util::ToString(*index)) : ""};
     tfm::format(std::cout, "%speer=%s\n", prefix, result.peer.ToStringAddrPort());
@@ -1885,12 +1772,12 @@ static void PrintPeerTransactionRelayResult(const PeerTransactionRelayResult& re
     tfm::format(std::cout, "%speer_version_received=%s\n", prefix, result.peer_version_received ? "true" : "false");
     tfm::format(std::cout, "%speer_verack_received=%s\n", prefix, result.peer_verack_received ? "true" : "false");
     tfm::format(std::cout, "%slocal_verack_sent=%s\n", prefix, result.local_verack_sent ? "true" : "false");
-    if (index.has_value()) {
-        tfm::format(std::cout, "%ssent_tx=%s\n", prefix, result.sent_tx ? "true" : "false");
-    }
+    tfm::format(std::cout, "%ssent_tx=%s\n", prefix, result.sent_tx ? "true" : "false");
+    tfm::format(std::cout, "%speer_acknowledged=%s\n", prefix, result.peer_acknowledged ? "true" : "false");
     if (result.sent_tx) {
         tfm::format(std::cout, "%swire_tx_bytes=%s\n", prefix, util::ToString(result.wire_tx_bytes));
-    } else if (!result.error.empty()) {
+    }
+    if (!result.error.empty()) {
         tfm::format(std::cout, "%serror=%s\n", prefix, result.error);
     }
 }
@@ -1953,7 +1840,7 @@ static PeerDiscoveryResult DiscoverPeersFromOnePeer(const CService& peer, std::c
     }
     result.connected = true;
 
-    const PeerHandshakeResult handshake{CompletePeerHandshake(*sock, peer, timeout)};
+    const agent::PeerHandshakeResult handshake{agent::CompletePeerHandshake(*sock, peer, timeout)};
     result.peer_version_received = handshake.peer_version_received;
     result.peer_verack_received = handshake.peer_verack_received;
     result.local_verack_sent = handshake.local_verack_sent;
@@ -2136,7 +2023,7 @@ static PeerHeaderSyncResult SyncHeadersFromOnePeer(const ArgsManager& args,
     }
     result.connected = true;
 
-    const PeerHandshakeResult handshake{CompletePeerHandshake(*sock, peer, timeout)};
+    const agent::PeerHandshakeResult handshake{agent::CompletePeerHandshake(*sock, peer, timeout)};
     result.peer_version_received = handshake.peer_version_received;
     result.peer_verack_received = handshake.peer_verack_received;
     result.local_verack_sent = handshake.local_verack_sent;
@@ -2289,9 +2176,9 @@ static int SendTransactionToPeer(const ArgsManager& args)
     tfm::format(std::cout, "configured_peer_count=%s\n", util::ToString(peers->size()));
     size_t sent_peer_count{0};
     for (size_t i{0}; i < peers->size(); ++i) {
-        const PeerTransactionRelayResult relay_result{SendTransactionToOnePeer((*peers)[i], decoded->message, *timeout)};
+        const agent::PeerTransactionRelayResult relay_result{agent::SendTransactionToOnePeer((*peers)[i], decoded->message, *timeout)};
         PrintPeerTransactionRelayResult(relay_result, peers->size() == 1 ? std::optional<size_t>{} : std::optional<size_t>{i});
-        if (relay_result.sent_tx) {
+        if (relay_result.peer_acknowledged) {
             ++sent_peer_count;
         }
     }
@@ -2525,10 +2412,10 @@ MAIN_FUNCTION
         if (command->command == "sendtxpeer") return SendTransactionToPeer(args);
         if (command->command == "checkpolicy") return CheckPolicy(args);
         if (command->command == "checkbundle") return CheckBundle(args);
-        if (command->command == "signbundle") return SignBundle(args);
-        if (command->command == "importreceipt") return ImportPaymentReceipts(args);
-        if (command->command == "importrecovery") return ImportRecoveredPaymentReceipts(args);
-        if (command->command == "scanreceipts") return ScanPaymentReceiptDirectory(args);
+        if (command->command == "signbundle") return LockReceiptStore(args) ? SignBundle(args) : EXIT_FAILURE;
+        if (command->command == "importreceipt") return LockReceiptStore(args) ? ImportPaymentReceipts(args) : EXIT_FAILURE;
+        if (command->command == "importrecovery") return LockReceiptStore(args) ? ImportRecoveredPaymentReceipts(args) : EXIT_FAILURE;
+        if (command->command == "scanreceipts") return LockReceiptStore(args) ? ScanPaymentReceiptDirectory(args) : EXIT_FAILURE;
         if (command->command == "listreceipts") return ListPaymentReceipts(args);
         if (command->command == "listreceiptactivity") return ListPaymentReceiptActivity(args);
         assert(false);

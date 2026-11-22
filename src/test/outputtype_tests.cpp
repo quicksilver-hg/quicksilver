@@ -14,11 +14,9 @@ BOOST_AUTO_TEST_SUITE(outputtype_tests)
  * These numbers live in every vault file on disk.
  *
  * `VaultBatch::WriteActiveScriptPubKeyMan` stores the address type as a raw
- * `uint8_t` in the record key, and the loader casts it straight back. So an edit
- * to this enum is an edit to the vault database format, and the compiler has
- * nothing to say about it: a renumbered member re-files existing descriptors
- * under a different type, the vault still opens, and the damage only shows up
- * when somebody asks for an address.
+ * `uint8_t` in the record key. The loader validates the stored value with
+ * `OutputTypeFromStored`; renumbering a recognized type could still associate
+ * an existing descriptor with a different address type.
  *
  * This test establishes the compact pre-launch mapping so future edits fail
  * here, loudly, instead of silently changing a vault database format.

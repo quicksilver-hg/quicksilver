@@ -182,7 +182,7 @@ GpuCsvVerdict VerifyGpuCsv(std::istream& in, const std::vector<unsigned char>& p
 
         // Where consensus can speak, let it. This is the tie between the whole
         // calibration harness and the code the network actually runs.
-        if (edgebits == 19 || edgebits == 29) {
+        if (ConsensusVerifiesEdgeBits(static_cast<uint8_t>(edgebits))) {
             const Keys keys = CuckatooSetHeader(keyed.data(), (uint32_t)keyed.size());
             const bool consensus_ok = CuckatooVerify(cyc, keys, (uint8_t)edgebits);
             ++v.consensus_checked;
@@ -201,6 +201,7 @@ GpuCsvVerdict VerifyGpuCsv(std::istream& in, const std::vector<unsigned char>& p
         }
     }
 
+    if (v.rows == 0) v.error = "header-only file: no measured rows";
     return v;
 }
 

@@ -601,9 +601,9 @@ public:
         return spk_man != nullptr;
     }
     OutputType getDefaultAddressType() override { return m_vault->m_default_address_type; }
-    void remove(std::optional<bool> load_on_start = false) override
+    bool remove(std::optional<bool> load_on_start = false) override
     {
-        RemoveVault(m_context, m_vault, load_on_start);
+        return RemoveVault(m_context, m_vault, load_on_start);
     }
 
     std::unique_ptr<Handler> handleUnload(UnloadFn fn) override
@@ -637,6 +637,10 @@ public:
     std::unique_ptr<Handler> handleCanGetAddressesChanged(CanGetAddressesChangedFn fn) override
     {
         return MakeSignalHandler(m_vault->NotifyCanGetAddressesChanged.connect(fn));
+    }
+    std::unique_ptr<Handler> handleBackupStateChanged(BackupStateChangedFn fn) override
+    {
+        return MakeSignalHandler(m_vault->NotifyBackupStateChanged.connect(fn));
     }
     CVault* vault() override { return m_vault.get(); }
 

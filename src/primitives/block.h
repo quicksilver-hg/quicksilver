@@ -31,7 +31,7 @@ public:
     uint256 hashMerkleRoot;
     uint32_t nTime;
     uint32_t nBits;
-    //! Quicksilver (#5c-1 Phase 2): the EIP-1559 congestion multiplier m for THIS block,
+    //! Quicksilver header-field congestion pricing: the EIP-1559 congestion multiplier m for THIS block,
     //! fixed point with CONGESTION_ONE (65536) == 1.0. Consensus-checked at ConnectBlock
     //! against NextCongestionMultiplier(pprev->m_congestion, GetBlockWeight(block)).
     //! It lives in the header so a header-only client can derive a per-transaction PoW

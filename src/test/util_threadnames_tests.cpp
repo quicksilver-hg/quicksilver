@@ -48,8 +48,7 @@ std::set<std::string> RenameEnMasse(int num_threads)
 }
 
 /**
- * Rename a bunch of threads with the same basename (expect_multiple=true), ensuring suffixes are
- * applied properly.
+ * Assign distinct internal names to a group of threads and verify each name survives.
  */
 BOOST_AUTO_TEST_CASE(util_threadnames_test_rename_threaded)
 {

@@ -144,9 +144,9 @@ UniValue blockheaderToJSON(const CBlockIndex& tip, const CBlockIndex& blockindex
     for (uint32_t edge : blockindex.nCycle) cuckatoo_cycle.push_back(static_cast<uint64_t>(edge));
     result.pushKV("cuckatoo_cycle", cuckatoo_cycle);
     result.pushKV("bits", strprintf("%08x", blockindex.nBits));
-    result.pushKV("target", GetTarget(tip, pow_limit).GetHex());
+    result.pushKV("target", GetTarget(blockindex, pow_limit).GetHex());
     result.pushKV("difficulty", GetDifficulty(blockindex, pow_limit));
-    // Quicksilver (#5c-1 Phase 2): the EIP-1559 congestion multiplier. Two forms, because
+    // Quicksilver header-field congestion pricing: the EIP-1559 congestion multiplier. Two forms, because
     // they serve different callers: "congestion" is the exact header field, which anyone
     // building or verifying a block on top of this one needs (the recurrence is integer
     // math and the double below is lossy); "congestion_multiplier" is the human-readable

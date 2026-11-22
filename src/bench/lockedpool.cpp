@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #define ASIZE 2048
@@ -15,9 +16,11 @@
 
 static void BenchLockedPool(benchmark::Bench& bench)
 {
-    void *synth_base = reinterpret_cast<void*>(0x08000000);
+    // A real 1 MiB buffer as the arena's base: the arena does pointer arithmetic on it,
+    // which on an integer cast to a pointer is arithmetic on no object.
     const size_t synth_size = 1024*1024;
-    Arena b(synth_base, synth_size, 16);
+    const auto synth_buffer{std::make_unique<std::byte[]>(synth_size)};
+    Arena b(synth_buffer.get(), synth_size, 16);
 
     std::vector<void*> addr{ASIZE, nullptr};
     uint32_t s = 0x12345678;

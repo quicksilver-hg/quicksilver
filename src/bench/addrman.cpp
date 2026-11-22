@@ -112,7 +112,9 @@ static void AddrManSelectFromAlmostEmpty(benchmark::Bench& bench)
 
     // Add one address to the new table
     CService addr = Lookup("250.3.1.1", 9555, false).value();
-    addrman.Add({CAddress(addr, NODE_NONE)}, addr);
+    Assert(addrman.Add({CAddress(addr, NODE_NONE)}, addr));
+    // Select must find that one address, or the benchmark times the empty-table return.
+    Assert(static_cast<const CService&>(addrman.Select().first) == addr);
 
     bench.run([&] {
         (void)addrman.Select();
@@ -125,13 +127,16 @@ static void AddrManSelectByNetwork(benchmark::Bench& bench)
 
     // add single I2P address to new table
     CService i2p_service;
-    i2p_service.SetSpecial("udhdrtrcetjm5sxzskjyr5ztpeszydbh4dpl3pl4utgqqw2v4jna.b32.i2p");
+    Assert(i2p_service.SetSpecial("udhdrtrcetjm5sxzskjyr5ztpeszydbh4dpl3pl4utgqqw2v4jna.b32.i2p"));
     CAddress i2p_address(i2p_service, NODE_NONE);
     i2p_address.nTime = Now<NodeSeconds>();
     const CNetAddr source{LookupHost("252.2.2.2", false).value()};
-    addrman.Add({i2p_address}, source);
+    Assert(addrman.Add({i2p_address}, source));
 
     FillAddrMan(addrman);
+
+    // The network-filtered Select must return the I2P address, not the empty-network result.
+    Assert(addrman.Select(/*new_only=*/false, {NET_I2P}).first.IsI2P());
 
     bench.run([&] {
         (void)addrman.Select(/*new_only=*/false, {NET_I2P});

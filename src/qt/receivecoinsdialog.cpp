@@ -168,6 +168,9 @@ void ReceiveCoinsDialog::on_receiveButton_clicked()
     if(!model || !model->getOptionsModel() || !model->getAddressTableModel() || !model->getRecentRequestsTableModel())
         return;
 
+    const QLineEdit* amount_edit = ui->reqAmount->findChild<QLineEdit*>();
+    if (amount_edit && !amount_edit->text().trimmed().isEmpty() && !ui->reqAmount->validate()) return;
+
     QString label = ui->reqLabel->text();
     /* Generate new receiving address */
     const OutputType address_type = static_cast<OutputType>(ui->addressType->currentData().toInt());

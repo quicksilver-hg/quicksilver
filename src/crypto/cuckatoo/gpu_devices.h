@@ -16,7 +16,7 @@ inline constexpr uint8_t kBundledHelperEdgeBits{28};
 inline constexpr std::chrono::milliseconds kListingLimit{15000};
 enum class DeviceStatus { kOk, kNoDriver, kCompileFailed, kProbeFailed, kOther };
 struct GpuDevice {
-    std::string backend, id, type;
+    std::string backend, id, alias, type;
     bool integrated{false};
     uint64_t mem{0};
     DeviceStatus status{DeviceStatus::kOther};
@@ -58,6 +58,8 @@ struct GpuDiscovery {
     GpuSituation situation{GpuSituation::kHelperMissing};
 };
 GpuDiscovery DiscoverGpus(uint8_t edgebits);
+//! Last observed listing, without launching a helper. For status display only.
+std::optional<GpuDiscovery> LastGpuDiscovery(uint8_t edgebits);
 void ResetGpuDiscoveryForTesting();
 //! Shorten the listing limit DiscoverGpus passes to ListDevices, so a test can
 //! reach kTimedOut without sleeping out kListingLimit. ResetGpuDiscoveryForTesting

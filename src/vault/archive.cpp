@@ -11,6 +11,7 @@
 #include <script/descriptor.h>
 #include <script/signingprovider.h>
 #include <streams.h>
+#include <support/cleanse.h>
 #include <util/check.h>
 #include <util/fs_helpers.h>
 #include <util/translation.h>
@@ -23,6 +24,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <exception>
+#include <limits>
+#include <tuple>
 
 namespace vault {
 namespace {
@@ -42,6 +45,11 @@ constexpr uint64_t MAX_ARCHIVE_ADDRESSES{5'000'000};
 //! The body is authenticated by prefixing its own hash before encryption; a wrong
 //! passphrase then fails this check instead of producing garbage that happens to parse.
 constexpr size_t ARCHIVE_CHECKSUM_SIZE{32};
+
+struct CleansePlaintext {
+    std::vector<unsigned char>& bytes;
+    ~CleansePlaintext() { memory_cleanse(bytes.data(), bytes.size()); }
+};
 
 void SerializeArchiveTx(DataStream& s, const VaultArchiveTx& tx)
 {
@@ -252,7 +260,8 @@ util::Result<void> WriteVaultArchive(const VaultArchive& archive,
     // Prefix the body with its own hash before encrypting, so decryption with the wrong
     // passphrase is detected here rather than surfacing as a deserialization error.
     const uint256 body_hash{Hash(body)};
-    CKeyingMaterial plaintext;
+    std::vector<unsigned char> plaintext;
+    const CleansePlaintext cleanse{plaintext};
     plaintext.reserve(ARCHIVE_CHECKSUM_SIZE + body.size());
     plaintext.insert(plaintext.end(), body_hash.begin(), body_hash.end());
     for (const std::byte b : body) {
@@ -267,7 +276,7 @@ util::Result<void> WriteVaultArchive(const VaultArchive& archive,
         return util::Error{_("Vault archive encryption key could not be derived.")};
     }
     std::vector<unsigned char> ciphertext;
-    if (!crypter.Encrypt(plaintext, ciphertext)) {
+    if (!crypter.Encrypt(std::span{plaintext}, ciphertext)) {
         return util::Error{_("Vault archive could not be encrypted.")};
     }
 
@@ -339,7 +348,8 @@ util::Result<VaultArchive> ReadVaultArchive(const fs::path& path, const SecureSt
     if (!crypter.SetKeyFromPassphrase(passphrase, salt, rounds)) {
         return util::Error{_("Vault archive decryption key could not be derived.")};
     }
-    CKeyingMaterial plaintext;
+    std::vector<unsigned char> plaintext;
+    const CleansePlaintext cleanse{plaintext};
     if (!crypter.Decrypt(ciphertext, plaintext) || plaintext.size() < ARCHIVE_CHECKSUM_SIZE) {
         return util::Error{_("Vault archive passphrase is incorrect.")};
     }
@@ -370,7 +380,35 @@ util::Result<VaultArchiveImportResult> ImportVaultArchive(CVault& vault, const V
 
     VaultArchiveImportResult result;
 
-    LOCK(vault.cs_vault);
+    LOCK2(vault.m_relock_mutex, vault.cs_vault);
+
+    const auto fits_int32 = [](int64_t value) {
+        return value >= std::numeric_limits<int32_t>::min() && value <= std::numeric_limits<int32_t>::max();
+    };
+    for (const VaultArchiveDescriptor& archived : archive.descriptors) {
+        FlatSigningProvider keys;
+        std::string error;
+        if (Parse(archived.descriptor, keys, error, /*require_checksum=*/false).empty()) {
+            return util::Error{strprintf(_("Vault archive descriptor could not be parsed: %s"), error)};
+        }
+        if (!keys.keys.empty()) {
+            return util::Error{_("Vault archive descriptor carries private keys; an archive holds public descriptors only.")};
+        }
+        if (!fits_int32(archived.range_start) || !fits_int32(archived.range_end) ||
+            !fits_int32(archived.next_index) || archived.range_start > archived.range_end) {
+            return util::Error{_("Vault archive descriptor range is out of bounds.")};
+        }
+    }
+    for (const VaultArchiveAddress& archived : archive.addresses) {
+        if (!IsValidDestination(DecodeDestination(archived.destination))) {
+            return util::Error{strprintf(_("Vault archive contains an address that is not valid on this network: %s"), archived.destination)};
+        }
+    }
+    for (const VaultArchiveTx& archived : archive.transactions) {
+        if (archived.tx == nullptr) {
+            return util::Error{_("Vault archive transaction could not be restored into this vault.")};
+        }
+    }
 
     for (const VaultArchiveDescriptor& archived : archive.descriptors) {
         FlatSigningProvider keys;
@@ -426,8 +464,15 @@ util::Result<VaultArchiveImportResult> ImportVaultArchive(CVault& vault, const V
         ++result.addresses_imported;
     }
 
-    for (const VaultArchiveTx& archived : archive.transactions) {
-        if (archived.tx == nullptr) continue;
+    std::vector<const VaultArchiveTx*> ordered_transactions;
+    ordered_transactions.reserve(archive.transactions.size());
+    for (const VaultArchiveTx& archived : archive.transactions) ordered_transactions.push_back(&archived);
+    std::sort(ordered_transactions.begin(), ordered_transactions.end(), [](const auto* a, const auto* b) {
+        return std::tuple{a->order_pos == -1, a->order_pos, a->time_received, a->tx->GetHash()} <
+               std::tuple{b->order_pos == -1, b->order_pos, b->time_received, b->tx->GetHash()};
+    });
+    for (const VaultArchiveTx* archived_ptr : ordered_transactions) {
+        const VaultArchiveTx& archived{*archived_ptr};
         if (vault.mapVault.count(archived.tx->GetHash()) != 0) {
             ++result.transactions_skipped;
             continue;
@@ -436,17 +481,27 @@ util::Result<VaultArchiveImportResult> ImportVaultArchive(CVault& vault, const V
             ? TxState{TxStateConfirmed{archived.block_hash, archived.block_height, archived.block_index}}
             : TxState{TxStateInactive{}};
         CVaultTx* wtx = vault.AddToVault(archived.tx, state, [&](CVaultTx& new_tx, bool /*new_entry*/) {
-            new_tx.nTimeReceived = archived.time_received;
-            new_tx.nTimeSmart = archived.time_smart;
             new_tx.fFromMe = archived.from_me;
-            new_tx.nOrderPos = archived.order_pos;
             for (const auto& [key, value] : archived.value_map) {
                 new_tx.mapValue[key] = value;
             }
             return true;
-        });
+        }, /*fFlushOnClose=*/true, /*rescanning_old_block=*/false,
+        std::make_pair(archived.time_received, archived.time_smart));
         if (wtx == nullptr) {
             return util::Error{_("Vault archive transaction could not be restored into this vault.")};
+        }
+        if (vault.HaveChain() && vault.chain().hasChainstate()) {
+            const auto before_index{wtx->m_state.index()};
+            const uint256 before_hash{TxStateSerializedBlockHash(wtx->m_state)};
+            const int before_height{wtx->state<TxStateConfirmed>() ? wtx->state<TxStateConfirmed>()->confirmed_block_height : -1};
+            wtx->updateState(vault.chain());
+            const int after_height{wtx->state<TxStateConfirmed>() ? wtx->state<TxStateConfirmed>()->confirmed_block_height : -1};
+            if (wtx->m_state.index() != before_index || TxStateSerializedBlockHash(wtx->m_state) != before_hash || after_height != before_height) {
+                if (!VaultBatch{vault.GetDatabase()}.WriteTx(*wtx)) {
+                    return util::Error{_("Vault archive transaction could not be restored into this vault.")};
+                }
+            }
         }
         ++result.transactions_imported;
     }

@@ -1232,8 +1232,15 @@ void TestFirstPeerBeforeHeadersIsNotSynchronized(QuicksilverGUI* window)
     QCOMPARE(progress->value(), 0);
 }
 
+//! Puts the saved opt-in back. A failed slot must not leave it true for a later
+//! test or the consensus-off window's slots (S0291-A-02).
+struct SavedConsensusGuard {
+    ~SavedConsensusGuard() { QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false); }
+};
+
 void TestLazyConsensusActivation(interfaces::Node& node, const NetworkStyle* network_style)
 {
+    SavedConsensusGuard keep_off;
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate(QuicksilverGUI::DEFAULT_UIPLATFORM.c_str()));
     QuicksilverGUI window(node, platform_style.data(), network_style);
@@ -1373,6 +1380,7 @@ void TestConsensusOptInMovesTheRail(interfaces::Node& node, const NetworkStyle* 
 //! desktop stays usable, says why, and lets the user retry without a restart.
 void TestConsensusRefusedWithoutTor(interfaces::Node& node, const NetworkStyle* network_style)
 {
+    SavedConsensusGuard keep_off;
     QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
     QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate(QuicksilverGUI::DEFAULT_UIPLATFORM.c_str()));
     {
@@ -1707,7 +1715,7 @@ void AppTests::guiTests(QuicksilverGUI* window)
     action->activate(QAction::Trigger);
 }
 
-//! Phase 6 S1-13: a granted shutdown request must survive an open dialog.
+//! First-run walk: a granted shutdown request must survive an open dialog.
 //!
 //! Found by walking, not by testing: a GUI test node sat for twelve minutes through repeated
 //! SIGTERMs and a `stop` RPC that answered "Quicksilver stopping", with a leftover
@@ -1858,12 +1866,6 @@ QString ConsensusBoxProblem(QWidget* dialog, bool ticked)
     return {};
 }
 
-//! Puts the saved opt-in back. A failed slot must not leave it true for the
-//! consensus-off window's later siblings.
-struct SavedConsensusGuard {
-    ~SavedConsensusGuard() { QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false); }
-};
-
 struct CloseModalGuard {
     ~CloseModalGuard()
     {
@@ -1875,9 +1877,13 @@ struct CloseModalGuard {
 
 QuicksilverGUI* AppTests::consensusOffWindow()
 {
-    for (QWidget* widget : QApplication::topLevelWidgets()) {
-        if (auto* gui = qobject_cast<QuicksilverGUI*>(widget)) return gui;
+    if (!m_consensus_off_window_released) {
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (auto* gui = qobject_cast<QuicksilverGUI*>(widget)) return gui;
+        }
     }
+    // createWindow below deletes a released window before anything can use it.
+    m_consensus_off_window_released = false;
 
     // Reset first: it clears QSettings, including the consensus opt-in the frame
     // is about to read. Put the opt-in back to off before the window exists.
@@ -1903,9 +1909,16 @@ void AppTests::setupPlatformStyleOnce()
 
 void AppTests::releaseConsensusOffWindow()
 {
+    // The hidden window would otherwise keep a pointer to the model deleted
+    // below. Detach it, and make consensusOffWindow() build a new window rather
+    // than hand that one out again (S0291-A-07).
     for (QWidget* widget : QApplication::topLevelWidgets()) {
-        if (auto* gui = qobject_cast<QuicksilverGUI*>(widget)) gui->hide();
+        if (auto* gui = qobject_cast<QuicksilverGUI*>(widget)) {
+            gui->hide();
+            gui->setOptionsModel(nullptr);
+        }
     }
+    m_consensus_off_window_released = true;
     // The member in QuicksilverApplication is assigned over on the next
     // createOptionsModel; that assignment does not dereference the old pointer.
     qDeleteAll(m_app.findChildren<OptionsModel*>(QString{}, Qt::FindDirectChildrenOnly));
@@ -1915,6 +1928,7 @@ void AppTests::releaseConsensusOffWindow()
 
 void AppTests::optionsOpensWithConsensusOff()
 {
+    SavedConsensusGuard keep_off;
     QuicksilverGUI* window = consensusOffWindow();
     QVERIFY(window);
     QVERIFY(!window->findChild<ClientModel*>());

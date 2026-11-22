@@ -637,6 +637,7 @@ void SetupServerArgs(ArgsManager& argsman)
     argsman.AddArg("-mineaddress=<addr>", "Payout address for the background mining role; also the default for startmining", ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
     argsman.AddArg("-minescript=<hex>", "Raw payout script (hex) for the background mining role, instead of -mineaddress. For example 6a pays a provably unspendable OP_RETURN output. Mutually exclusive with -mineaddress.", ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
     // F-578: DEBUG_ONLY keeps it out of plain -help, so a release does not advertise it.
+    argsman.AddArg("-minewithoutpeers", "Let the background miner start before any peer has sent block headers, so a lone node can mine a test chain. Not available on main, where mining waits until a peer's headers show the node has caught up with the network (default: 1 on sandbox and publictest)", ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
     argsman.AddArg("-minezeroclaim", "Mine blocks that claim no reward: the coinbase pays 0, so neither the block subsidy nor the per-transaction mint allowance is created. Blocks still include and confirm transactions. Requires -minescript with a provably unspendable script, such as 6a. Not for anyone mining for income (default: 0)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::BLOCK_CREATION);
 
     argsman.AddArg("-rest", strprintf("Accept public REST requests (default: %u)", DEFAULT_REST_ENABLE), ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
@@ -996,7 +997,15 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     if (!g_vault_init_interface.ParameterInteraction()) return false;
 
     // Option to startup with mocktime set (used for regression testing):
-    SetMockTime(args.GetIntArg("-mocktime", 0)); // SetMockTime(0) is a no-op
+    const int64_t mock_time{args.GetIntArg("-mocktime", 0)};
+    constexpr int64_t max_mock_time{Ticks<std::chrono::seconds>(std::chrono::nanoseconds::max())};
+    if (mock_time < 0 || mock_time > max_mock_time) {
+        return InitError(Untranslated(strprintf("-mocktime must be in the range [0, %s], not %s.", max_mock_time, mock_time)));
+    }
+    if (mock_time != 0 && !chainparams.IsMockableChain()) {
+        return InitError(Untranslated("-mocktime is for regression testing on sandbox only."));
+    }
+    SetMockTime(mock_time); // SetMockTime(0) is a no-op
 
     const std::vector<std::string> test_options = args.GetArgs("-test");
     if (!test_options.empty()) {
@@ -2029,6 +2038,13 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     // Before RPC becomes callable, so no startmining can arm a claiming worker
     // first. The payout it requires is validated with -minescript below.
     node.mining_service->SetZeroClaim(args.GetBoolArg("-minezeroclaim", false));
+    // F-610: likewise before RPC, so no startmining arms a worker that mines
+    // on its own tip before a peer has been heard from.
+    {
+        auto mine_without_peers{node::ReadMineWithoutPeers(args, chainparams.GetChainType())};
+        if (!mine_without_peers) return InitError(util::ErrorString(mine_without_peers));
+        node.mining_service->SetMineWithoutPeers(*mine_without_peers);
+    }
     // F-571: sandbox block proof-of-work stops at the target without a cycle
     // (fBlockPowNoCycle, block_solve.cpp), so mining there never reaches a
     // solver. The options still parse, and transfer proofs still use a helper
@@ -2037,25 +2053,6 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     if (chainparams.GetConsensus().fBlockPowNoCycle && (args.IsArgSet("-cuckatoodevice") || args.IsArgSet("-cuckatoosolver"))) {
         LogInfo(HgLog::FORGE, "Sandbox blocks need no solver, so -cuckatoodevice and -cuckatoosolver are not used for mining.\n");
     }
-    SetRPCWarmupFinished();
-
-    uiInterface.InitMessage(_("Node online"));
-
-    for (const auto& client : node.chain_clients) {
-        client->start(scheduler);
-    }
-
-    BanMan* banman = node.banman.get();
-    scheduler.scheduleEvery([banman]{
-        banman->DumpBanlist();
-    }, DUMP_BANS_INTERVAL);
-
-    if (node.peerman) node.peerman->StartScheduledTasks(scheduler);
-
-#if HAVE_SYSTEM
-    StartupNotify(args);
-#endif
-
     // Validate both payout front doors even when the role is not armed, so a bad
     // configuration fails at startup rather than at the first startmining call.
     const std::string mine_addr = args.GetArg("-mineaddress", "");
@@ -2082,22 +2079,46 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         LogInfo(HgLog::FORGE, "zero-claim on: blocks this node mines pay 0 to script=%s\n", HexStr(*mine_script));
     }
 
-    // Quicksilver: opt-in background block-mining role (off by default).
-    if (args.GetBoolArg("-mine", false)) {
-        if (mine_addr.empty() && !mine_script) {
-            return InitError(_("-mine requires -mineaddress or -minescript to be set."));
+    const bool mine_enabled = args.GetBoolArg("-mine", false);
+    if (mine_enabled && mine_addr.empty() && !mine_script) {
+        return InitError(_("-mine requires -mineaddress or -minescript to be set."));
+    }
+    std::optional<CTxDestination> mine_dest;
+    if (mine_enabled && !mine_script) {
+        mine_dest = DecodeDestination(mine_addr);
+        if (!IsValidDestination(*mine_dest)) {
+            return InitError(strprintf(_("Invalid -mineaddress: %s"), mine_addr));
         }
+    }
+
+    SetRPCWarmupFinished();
+
+    uiInterface.InitMessage(_("Node online"));
+
+    for (const auto& client : node.chain_clients) {
+        client->start(scheduler);
+    }
+
+    BanMan* banman = node.banman.get();
+    scheduler.scheduleEvery([banman]{
+        banman->DumpBanlist();
+    }, DUMP_BANS_INTERVAL);
+
+    if (node.peerman) node.peerman->StartScheduledTasks(scheduler);
+
+#if HAVE_SYSTEM
+    StartupNotify(args);
+#endif
+
+    // Quicksilver: opt-in background block-mining role (off by default).
+    if (mine_enabled) {
         if (mine_script) {
             node.mining_service->Start(*mine_script, /*payout_address=*/"");
             LogInfo(HgLog::INIT, "up miner=background payout=script:%s\n", HexStr(*mine_script));
-            return true;
+        } else {
+            node.mining_service->Start(GetScriptForDestination(*mine_dest), mine_addr);
+            LogInfo(HgLog::INIT, "up miner=background payout=%s\n", mine_addr);
         }
-        const CTxDestination dest = DecodeDestination(mine_addr);
-        if (!IsValidDestination(dest)) {
-            return InitError(strprintf(_("Invalid -mineaddress: %s"), mine_addr));
-        }
-        node.mining_service->Start(GetScriptForDestination(dest), mine_addr);
-        LogInfo(HgLog::INIT, "up miner=background payout=%s\n", mine_addr);
     }
 
     return true;

@@ -81,36 +81,38 @@ BOOST_AUTO_TEST_CASE(fastrandom_tests_deterministic)
 
 BOOST_AUTO_TEST_CASE(fastrandom_tests_nondeterministic)
 {
-    // Check that a nondeterministic ones are not
+    // A default context must not reproduce the fixed test-seed stream.
+    BOOST_CHECK(FastRandomContext().rand<uint64_t>() != uint64_t{9330418229102544152u});
+    BOOST_CHECK(FastRandomContext().rand<uint64_t>() != uint64_t{10170981140880778086u});
+    BOOST_CHECK(FastRandomContext().rand<uint64_t>() != uint64_t{5689404004456455543u});
     {
-        BOOST_CHECK(FastRandomContext().rand<uint64_t>() != uint64_t{9330418229102544152u});
-        BOOST_CHECK(FastRandomContext().rand<int>() != int{618925161});
-        BOOST_CHECK(FastRandomContext().randrange<std::chrono::microseconds>(1h).count() != 1271170921);
-        BOOST_CHECK(FastRandomContext().randrange<std::chrono::milliseconds>(1h).count() != 2803534);
-
-        BOOST_CHECK(FastRandomContext().rand<uint64_t>() != uint64_t{10170981140880778086u});
-        BOOST_CHECK(FastRandomContext().rand<int>() != int{1689082725});
-        BOOST_CHECK(FastRandomContext().randrange<std::chrono::microseconds>(1h).count() != 2464643716);
-        BOOST_CHECK(FastRandomContext().randrange<std::chrono::milliseconds>(1h).count() != 2312205);
-
-        BOOST_CHECK(FastRandomContext().rand<uint64_t>() != uint64_t{5689404004456455543u});
-        BOOST_CHECK(FastRandomContext().rand<int>() != int{785839937});
-        BOOST_CHECK(FastRandomContext().randrange<std::chrono::microseconds>(1h).count() != 93558804);
-        BOOST_CHECK(FastRandomContext().randrange<std::chrono::milliseconds>(1h).count() != 507022);
+        FastRandomContext a, b;
+        BOOST_CHECK(a.rand64() != b.rand64());
+    }
+    {
+        FastRandomContext a, b;
+        BOOST_CHECK(a.rand256() != b.rand256());
+    }
+    {
+        FastRandomContext a, b;
+        BOOST_CHECK(a.randbytes(7) != b.randbytes(7));
     }
 
-    {
-        FastRandomContext ctx3, ctx4;
-        BOOST_CHECK(ctx3.rand64() != ctx4.rand64()); // extremely unlikely to be equal
-    }
-    {
-        FastRandomContext ctx3, ctx4;
-        BOOST_CHECK(ctx3.rand256() != ctx4.rand256());
-    }
-    {
-        FastRandomContext ctx3, ctx4;
-        BOOST_CHECK(ctx3.randbytes(7) != ctx4.randbytes(7));
-    }
+    FastRandomContext seeded_zero{uint256::ZERO};
+    FastRandomContext seeded_one{uint256::ONE};
+    FastRandomContext seeded_zero_again{uint256::ZERO};
+    const auto zero_value = seeded_zero.rand256();
+    BOOST_CHECK(zero_value != seeded_one.rand256());
+    BOOST_CHECK(zero_value == seeded_zero_again.rand256());
+
+    FastRandomContext ctx;
+    const auto micros = ctx.randrange<std::chrono::microseconds>(1h);
+    const auto millis = ctx.randrange<std::chrono::milliseconds>(1h);
+    BOOST_CHECK_GE(micros.count(), 0);
+    BOOST_CHECK_LT(micros, 1h);
+    BOOST_CHECK_GE(millis.count(), 0);
+    BOOST_CHECK_LT(millis, 1h);
+    BOOST_CHECK_EQUAL(ctx.randbytes(7).size(), 7U);
 }
 
 BOOST_AUTO_TEST_CASE(fastrandom_randbits)

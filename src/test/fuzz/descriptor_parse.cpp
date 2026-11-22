@@ -56,7 +56,7 @@ static void TestDescriptor(const Descriptor& desc, FlatSigningProvider& sig_prov
     }
 
     const auto max_sat_maxsig{desc.MaxSatisfactionWeight(true)};
-    const auto max_sat_nonmaxsig{desc.MaxSatisfactionWeight(true)};
+    const auto max_sat_nonmaxsig{desc.MaxSatisfactionWeight(false)};
     const auto max_elems{desc.MaxSatisfactionElems()};
     // We must be able to estimate the max satisfaction size for any solvable descriptor (but combo).
     const bool is_nontop_or_nonsolvable{!*is_solvable || !desc.GetOutputType()};

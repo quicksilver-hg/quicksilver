@@ -187,12 +187,19 @@ BOOST_FIXTURE_TEST_CASE(txpow_connectblock_rejects_unproven_tx, TestChain100Setu
     // missing per-tx PoW — isolating the rule under test.
     CMutableTransaction spend = CreateValidRelayPoolTransaction(
         m_coinbase_txns[0], /*input_vout=*/0, /*input_height=*/0, coinbaseKey,
-        m_coinbase_txns[0]->vout[0].scriptPubKey, /*output_amount=*/49 * COIN,
+        m_coinbase_txns[0]->vout[0].scriptPubKey,
+        /*output_amount=*/m_coinbase_txns[0]->vout[0].nValue,
         /*submit=*/false);
+    spend.nAnchorHeight = WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Height());
 
-    const CBlock block = CreateAndProcessBlock({spend}, m_coinbase_txns[0]->vout[0].scriptPubKey);
-    LOCK(cs_main);
-    BOOST_CHECK(m_node.chainman->ActiveChain().Tip()->GetBlockHash() != block.GetHash());
+    const CBlock block = CreateBlock({spend}, m_coinbase_txns[0]->vout[0].scriptPubKey,
+                                     m_node.chainman->ActiveChainstate());
+    BlockValidationState state;
+    const bool valid = WITH_LOCK(cs_main, return TestBlockValidity(
+        state, m_node.chainman->GetParams(), m_node.chainman->ActiveChainstate(),
+        block, m_node.chainman->ActiveChain().Tip()));
+    BOOST_CHECK(!valid);
+    BOOST_CHECK_EQUAL(state.GetRejectReason(), "tx-pow-invalid");
 }
 
 BOOST_AUTO_TEST_CASE(check_tx_anchor_window)
@@ -308,7 +315,7 @@ BOOST_AUTO_TEST_CASE(base_tx_work_and_target)
     cp.nBaseWorkMAWindow = 4;
     cp.nTxWorkCouplingK  = 1;                        // K=1 so base_coupled bites in this unit test
 
-    // Stage 2 makes required work per-transaction, so a probe is needed -- and it must
+    // per-transaction work pricing makes required work per-transaction, so a probe is needed -- and it must
     // be big enough for the size factor to clear the one-cycle floor, or congestion
     // has nothing to move. base is 2 here, and the factor is bytes/R_b, so exactly
     // R_b bytes gives 2 cycles at m = 1 and 4 at m = 2.
@@ -351,7 +358,7 @@ BOOST_AUTO_TEST_CASE(base_tx_work_and_target)
     perm.nTxWorkCouplingK = 0xFFFFFFFFu;             // huge K => tiny base_coupled => permissive
     BOOST_CHECK_EQUAL(GetTxPowTarget(perm, anchor, probe), perm.txPowLimit);
 
-    // Stage 2 consequence, asserted rather than left implicit: congestion moves the
+    // Per-transaction work pricing consequence, asserted rather than left implicit: congestion moves the
     // CHAIN scalar, but a transaction only feels it once its size factor lifts the
     // product past the one-cycle floor. A 237-byte payment at base 2 owes 237/4739 of
     // a cycle either way, so doubling m leaves its target alone. This is finding 3.1
@@ -365,7 +372,7 @@ BOOST_AUTO_TEST_CASE(base_tx_work_and_target)
     anchor->m_congestion = CONGESTION_ONE;
 }
 
-// #5c-1 Phase 3 — m-dynamics validation gate for the calibrated congestion params
+// calibrated per-transaction PoW — m-dynamics validation gate for the calibrated congestion params
 // (s = 0.25 => nCongestionStepDenom 4, m_cap = 64). Confirms the floor ratchets UP
 // under sustained over-target load at the intended rate (~double in 4 blocks), clamps
 // at the cap, and DECAYS back to the floor under empty blocks without sticking.
@@ -454,7 +461,7 @@ BOOST_AUTO_TEST_CASE(txpow_committed_xplat_vector)
     BOOST_CHECK(!CheckTxProofOfWork(tx, ArithToUint256(tighter), anchor, cp));
 }
 
-// Stage 2 flag day: the size term, the UTXO term, and the mint cap are consensus
+// byte-pricing flag day: the size term, the UTXO term, and the mint cap are consensus
 // parameters, and their values are the ones the calibration model was run against
 // (tools/calibration/stage2-byte-pricing.md). A change here is a change to the
 // chain, not a tuning knob. Uniform across networks so the sandbox exercises the
@@ -465,7 +472,7 @@ BOOST_AUTO_TEST_CASE(stage2_reference_parameters_are_the_calibrated_values)
         SelectParams(chain);
         const Consensus::Params& cp = Params().GetConsensus();
         // R_b: serialized bytes that cost one unit of base work. R/4, where
-        // R = 18,957 is the Stage 1 weight reference.
+        // R = 18,957 is the calibration weight reference.
         BOOST_CHECK_EQUAL(cp.nTxWorkRefBytes, 4739u);
         // U: net new UTXOs that cost one unit of base work. Inside the 28-109
         // window the model reports.
@@ -476,7 +483,7 @@ BOOST_AUTO_TEST_CASE(stage2_reference_parameters_are_the_calibrated_values)
     SelectParams(ChainType::SANDBOX);
 }
 
-// --- Stage 2: the size and UTXO terms --------------------------------------
+// --- Per-transaction work pricing: the size and UTXO terms --------------------------------------
 
 BOOST_AUTO_TEST_CASE(required_tx_work_prices_serialized_bytes)
 {

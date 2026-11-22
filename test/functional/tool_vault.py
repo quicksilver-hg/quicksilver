@@ -158,6 +158,17 @@ class ToolVaultTest(QuicksilverTestFramework):
         self.assert_raises_tool_error('Error parsing command line arguments: Invalid parameter -foo', '-foo')
         self.assert_raises_tool_error('No method provided. Run `quicksilver-vault -help` for valid methods.')
         self.assert_raises_tool_error('Vault name must be provided when creating a new vault.', 'create')
+        # F-640: a create that fails at the database (here the target is a regular file,
+        # so no vault directory can be made there) prints its error and exits 1, never 0.
+        not_a_dir = self.nodes[0].datadir_path / 'create_target_is_a_file'
+        not_a_dir.write_text('not a vault directory')
+        p = self.quicksilver_vault_process(f'-vault={not_a_dir}', 'create')
+        stdout, stderr = p.communicate()
+        assert_equal(p.poll(), 1)
+        assert_equal(stdout, '')
+        assert stderr.strip(), 'a failed create must say why on stderr'
+        assert_equal(not_a_dir.read_text(), 'not a vault directory')
+        not_a_dir.unlink()
         # Read-only info does not acquire an exclusive lock of its own. An active node still
         # holds the vault exclusively, so SQLite rejects the first metadata read instead.
         error = "SQLiteDatabase: Failed to fetch the application id: database is locked"

@@ -92,7 +92,7 @@ def main():
              ' the passed corpus_dir.'
     )
 
-    args = parser.parse_args()
+    args = parser.parse_intermixed_args()
     args.corpus_dir = Path(args.corpus_dir)
 
     # Set up logging
@@ -351,6 +351,7 @@ def run_once(*, fuzz_pool, corpus, test_list, src_dir, fuzz_bin, using_libfuzzer
         jobs.append(fuzz_pool.submit(job, t, args))
 
     stats = []
+    failures = []
     for future in as_completed(jobs):
         output, result, target = future.result()
         logging.debug(output)
@@ -361,19 +362,23 @@ def run_once(*, fuzz_pool, corpus, test_list, src_dir, fuzz_bin, using_libfuzzer
                 logging.info(e.stdout)
             if e.stderr:
                 logging.info(e.stderr)
-            logging.info(f"⚠️ Failure generated from target with exit code {e.returncode}: {result.args}")
-            sys.exit(1)
+            logging.info(f"⚠️ Failure generated from target {target} with exit code {e.returncode}: {result.args}")
+            failures.append(target)
+            continue
         if using_libfuzzer:
             done_stat = [l for l in output.splitlines() if "DONE" in l]
             assert len(done_stat) == 1
             stats.append((target, done_stat[0]))
 
-    if using_libfuzzer:
+    if using_libfuzzer and stats:
         print("Summary:")
         max_len = max(len(t[0]) for t in stats)
         for t, s in sorted(stats):
             t = t.ljust(max_len + 1)
             print(f"{t}{s}")
+    if failures:
+        logging.error("Failed fuzz targets: %s", ", ".join(sorted(failures)))
+        raise SystemExit(1)
 
 
 def parse_test_list(*, fuzz_bin, source_dir):

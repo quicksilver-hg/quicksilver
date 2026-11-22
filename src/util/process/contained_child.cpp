@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#ifdef WIN32
+#include <util/utf16.h>
+#endif
 
 namespace util {
 
@@ -94,6 +97,7 @@ struct ContainedChild::Impl {
     pid_t pid{-1};
     int stdout_fd{-1};
     bool reaped{false};
+    bool group_gone{false};
     int exit_code{-1};
 };
 
@@ -230,27 +234,30 @@ bool ContainedChild::Exited()
 
 void ContainedChild::KillGroup()
 {
-    if (m_impl->reaped) return;
-    killpg(m_impl->pid, SIGKILL);
+    if (!m_impl->group_gone && killpg(m_impl->pid, SIGKILL) < 0 && errno == ESRCH) {
+        m_impl->group_gone = true;
+    }
 }
 
 int ContainedChild::Wait()
 {
     if (m_impl->reaped) return m_impl->exit_code;
     int wstatus = 0;
-    waitpid(m_impl->pid, &wstatus, 0);
+    pid_t result;
+    do {
+        result = waitpid(m_impl->pid, &wstatus, 0);
+    } while (result < 0 && errno == EINTR);
     m_impl->reaped = true;
-    m_impl->exit_code = WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1;
+    // ECHILD or another wait error means the leader is gone, but no exit code is known.
+    m_impl->exit_code = result == m_impl->pid && WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1;
     return m_impl->exit_code;
 }
 
 ContainedChild::~ContainedChild()
 {
     if (m_impl->stdout_fd >= 0) close(m_impl->stdout_fd);
-    if (!m_impl->reaped) {
-        KillGroup();
-        Wait();
-    }
+    KillGroup();
+    if (!m_impl->reaped) Wait();
 }
 
 } // namespace util
@@ -320,7 +327,7 @@ std::unique_ptr<ContainedChild> ContainedChild::Spawn(const std::vector<std::str
         job_ok = SetInformationJobObject(job, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli)) != 0;
     }
 
-    STARTUPINFOEXA si{};
+    STARTUPINFOEXW si{};
     si.StartupInfo.cb = sizeof(si);
     si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     si.StartupInfo.hStdOutput = want_pipe ? wr : nul;
@@ -350,8 +357,9 @@ std::unique_ptr<ContainedChild> ContainedChild::Spawn(const std::vector<std::str
     }
 
     // CreateProcess writes to this buffer, so it cannot be the string's storage.
-    std::vector<char> cmdbuf(cmdline.begin(), cmdline.end());
-    cmdbuf.push_back('\0');
+    std::wstring wide_cmdline = Utf8ToUtf16(cmdline);
+    std::vector<wchar_t> cmdbuf(wide_cmdline.begin(), wide_cmdline.end());
+    cmdbuf.push_back(L'\0');
 
     PROCESS_INFORMATION pi{};
     // lpApplicationName stays null so that CreateProcess resolves the name
@@ -363,7 +371,7 @@ std::unique_ptr<ContainedChild> ContainedChild::Spawn(const std::vector<std::str
     // anything of its own; otherwise a fast child escapes the job and survives
     // the kill. CREATE_NO_WINDOW keeps a console from flashing over the GUI.
     const BOOL spawned = (inject == SpawnFault::kSpawn || !attribute_ok) ? FALSE
-                       : CreateProcessA(nullptr, cmdbuf.data(), nullptr, nullptr, TRUE,
+                       : CreateProcessW(nullptr, cmdbuf.data(), nullptr, nullptr, TRUE,
                                         CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
                                         nullptr, nullptr, &si.StartupInfo, &pi);
     if (si.lpAttributeList) DeleteProcThreadAttributeList(si.lpAttributeList);
@@ -393,7 +401,16 @@ std::unique_ptr<ContainedChild> ContainedChild::Spawn(const std::vector<std::str
         if (rd) CloseHandle(rd);
         return nullptr;
     }
-    ResumeThread(pi.hThread);
+    if (ResumeThread(pi.hThread) == static_cast<DWORD>(-1)) {
+        TerminateJobObject(job, 1);
+        WaitForSingleObject(pi.hProcess, 5000);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        if (nul != INVALID_HANDLE_VALUE) CloseHandle(nul);
+        CloseHandle(job);
+        if (rd) CloseHandle(rd);
+        return nullptr;
+    }
 
     auto impl = std::make_unique<Impl>();
     impl->job = job;
@@ -424,7 +441,12 @@ ContainedChild::ReadStatus ContainedChild::ReadStdout(char* buf, size_t buflen, 
         }
         // Nothing buffered. If the process is also gone, that is a true EOF;
         // anything it wrote is already in the pipe and would show as avail > 0.
-        if (WaitForSingleObject(m_impl->process, 0) == WAIT_OBJECT_0) return ReadStatus::kClosed;
+        if (WaitForSingleObject(m_impl->process, 0) == WAIT_OBJECT_0) {
+            if (!PeekNamedPipe(m_impl->stdout_rd, nullptr, 0, nullptr, &avail, nullptr) || avail == 0) {
+                return ReadStatus::kClosed;
+            }
+            continue; // Drain bytes written between the first peek and the exit check.
+        }
         if (waited >= timeout_ms) return ReadStatus::kTimeout;
         const int slice = std::min(kPollSliceMs, timeout_ms - waited);
         Sleep(static_cast<DWORD>(slice));

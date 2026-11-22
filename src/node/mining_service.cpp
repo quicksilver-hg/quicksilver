@@ -14,6 +14,7 @@
 #include <crypto/cuckatoo/multi_device.h>
 #include <interfaces/mining.h>
 #include <interfaces/types.h>
+#include <kernel/chainparams.h>
 #include <key_io.h>
 #include <logging.h>
 #include <node/block_solve.h>
@@ -22,6 +23,7 @@
 #include <pow.h>
 #include <primitives/block.h>
 #include <uint256.h>
+#include <util/chaintype.h>
 #include <util/check.h>
 #include <util/signalinterrupt.h>
 #include <util/strencodings.h>
@@ -96,7 +98,8 @@ bool BlockSolvingPossible(uint8_t edgebits)
 }
 
 MiningService::MiningService(ChainstateManager& chainman, interfaces::Mining& mining)
-    : m_chainman(chainman), m_mining(mining) {}
+    : m_chainman(chainman), m_mining(mining),
+      m_mine_without_peers(MineWithoutPeersDefault(chainman.GetParams().GetChainType())) {}
 
 MiningService::~MiningService() { Stop(); }
 
@@ -112,6 +115,8 @@ bool MiningService::Start(const CScript& payout_script, const std::string& payou
     // calls std::terminate.
     if (m_thread.joinable()) m_thread.join();
     m_interrupt.store(false);
+    // The previous worker may have exited while waiting (F-610).
+    m_waiting_for_sync.store(false);
     // Initialize the session snapshot before the worker is observable, so a
     // startmining RPC that reads GetStatus() right after Start() sees the payout
     // address and start time (not an empty pre-thread status).
@@ -247,8 +252,14 @@ void MiningService::Run(CScript payout_script)
         }
     }
 
+    bool logged_sync_wait{false};
     while (m_active.load() && !m_interrupt.load() && !m_chainman.m_interrupt) {
-        if (node::MiningShouldWaitForSync(m_chainman)) {
+        if (node::MiningShouldWaitForSync(m_chainman, m_mine_without_peers.load())) {
+            m_waiting_for_sync.store(true);
+            if (!logged_sync_wait) {
+                LogInfo(HgLog::FORGE, "waiting reason=not-synced peer_headers=%d\n", m_chainman.m_peer_headers_received.load());
+                logged_sync_wait = true;
+            }
             if (auto tip = m_mining.getTip()) {
                 m_mining.waitTipChanged(tip->hash, std::chrono::seconds(1));
             } else {
@@ -256,6 +267,7 @@ void MiningService::Run(CScript payout_script)
             }
             continue;
         }
+        m_waiting_for_sync.store(false);
 
         // Take a counter on both sides of assembly. If the pool changes while
         // CreateNewBlock is selecting transactions, conservatively rebuild: the
@@ -287,7 +299,7 @@ void MiningService::Run(CScript payout_script)
             m_status.template_transactions = static_cast<int64_t>(block.vtx.size()) - 1;
         }
 
-        bool no_gpu_device{false};
+        bool wait_for_tip{false};
         while (m_active.load() && !m_interrupt.load() && !m_chainman.m_interrupt) {
             {
                 LOCK(::cs_main);
@@ -323,8 +335,8 @@ void MiningService::Run(CScript payout_script)
             // card that comes back must clear the error it left behind.
             RecordSolverOutcome(solver_status, cpu_fallback, gpu_faults);
 
-            if (solver_status == cuckatoo::GpuSolveStatus::kNoGpuDevice && !cpu_fallback) {
-                no_gpu_device = true;
+            if (WaitForTipAfterWindow(solved, solver_status, cpu_fallback, gpu_faults)) {
+                wait_for_tip = true;
                 break;
             }
 
@@ -339,6 +351,7 @@ void MiningService::Run(CScript payout_script)
                     m_status.last_block_time = GetTime();
                 } else {
                     LogInfo(HgLog::FORGE, "rejected reason=processnewblock-refused\n");
+                    wait_for_tip = true;
                 }
                 break;  // rebuild a fresh template
             }
@@ -353,7 +366,7 @@ void MiningService::Run(CScript payout_script)
         // A missing card ends this template's work. Wait on the connected tip
         // so a new block wakes the miner immediately; otherwise retry after a
         // bounded pause, including a fresh device listing on the next window.
-        if (no_gpu_device && m_active.load() && !m_interrupt.load() && !m_chainman.m_interrupt) {
+        if (wait_for_tip && m_active.load() && !m_interrupt.load() && !m_chainman.m_interrupt) {
             for (int second = 0; second < 5 && m_active.load() && !m_interrupt.load() && !m_chainman.m_interrupt; ++second) {
                 if (m_mining.waitTipChanged(parent, std::chrono::seconds(1)).hash != parent) break;
             }
@@ -365,6 +378,18 @@ void MiningService::Run(CScript payout_script)
     // Nothing is being ground once the worker leaves, so stop describing a block.
     m_status.template_height = 0;
     m_status.template_transactions = 0;
+    m_active.store(false);
+}
+
+bool WaitForTipAfterWindow(bool solved, cuckatoo::GpuSolveStatus status, bool cpu_fallback,
+                           const std::vector<cuckatoo::GpuDeviceFault>& faults)
+{
+    // A solved window holds a block even when another card faulted in it.
+    if (solved) return false;
+    return !cpu_fallback && (status == cuckatoo::GpuSolveStatus::kNoGpuDevice ||
+                             status == cuckatoo::GpuSolveStatus::kNoSolver ||
+                             (!faults.empty() && status != cuckatoo::GpuSolveStatus::kNoCycle &&
+                              status != cuckatoo::GpuSolveStatus::kCancelled));
 }
 
 interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateManager& chainman)
@@ -375,22 +400,25 @@ interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateM
 
     interfaces::MiningStatus out;
     out.active = s.active;
+    out.mines_without_peers = svc.MineWithoutPeers();
+    out.waiting_for_sync = s.active && svc.WaitingForSync();
     out.address = s.address;
     out.payout_script = s.payout_script;
     out.blocks_found = s.blocks_found;
     out.coins_minted_session = s.coins_minted_session;
     out.attempts_per_second = svc.RecentAttemptRate();
     const auto stats = cuckatoo::GetGpuDeviceStats();
+    const auto discovery = cuckatoo::LastGpuDiscovery(chainman.GetConsensus().nEdgeBits);
     if (!stats.empty()) {
-        const auto discovery = cuckatoo::DiscoverGpus(chainman.GetConsensus().nEdgeBits);
         double total_rate{0.0};
         bool have_rate{false};
         for (const auto& stat : stats) {
             interfaces::MiningStatus::Device device;
             device.id = stat.device;
-            const auto card = std::find_if(discovery.listing.devices.begin(), discovery.listing.devices.end(),
+            const auto& listed = discovery ? discovery->listing.devices : std::vector<cuckatoo::GpuDevice>{};
+            const auto card = std::find_if(listed.begin(), listed.end(),
                                            [&stat](const auto& found) { return found.id == stat.device; });
-            if (card != discovery.listing.devices.end()) device.name = card->name;
+            if (card != listed.end()) device.name = card->name;
             switch (stat.state) {
             case cuckatoo::GpuDeviceState::kIdle: device.state = "idle"; break;
             case cuckatoo::GpuDeviceState::kSolving: device.state = "solving"; break;
@@ -429,7 +457,7 @@ interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateM
     });
     if (faulted_card != stats.end()) {
         out.solver_ok = false;
-        out.last_solver_error = CardFaultText(cuckatoo::DiscoverGpus(chainman.GetConsensus().nEdgeBits),
+        out.last_solver_error = CardFaultText(discovery.value_or(cuckatoo::GpuDiscovery{}),
                                               faulted_card->device, faulted_card->last_status);
     } else if (s.solver_fault_from_card && !stats.empty()) {
         out.solver_ok = true;
@@ -496,15 +524,41 @@ util::Result<void> StartMining(MiningService& svc, const CScript& payout_script)
     return {};
 }
 
-bool MiningShouldWaitForSync(const ChainstateManager& chainman)
+bool MiningShouldWaitForSync(const ChainstateManager& chainman, bool mine_without_peers)
 {
     if (chainman.m_blockman.LoadingBlocks()) return true;
+    // Before any peer has answered, best header == tip is all this node knows
+    // and says nothing about the network (F-610). Read before cs_main: the net
+    // thread stores it only after the headers are in the block index, so a true
+    // here means m_best_header below already includes them.
+    if (!mine_without_peers && !chainman.m_peer_headers_received.load()) return true;
     LOCK(cs_main);
     const CBlockIndex* tip = chainman.ActiveChain().Tip();
     if (tip == nullptr) return true;  // no tip yet — nothing to build on
     const CBlockIndex* best = chainman.m_best_header;
     // A more-work header chain is known but not connected → sync first.
     return best != nullptr && best->nChainWork > tip->nChainWork;
+}
+
+bool MiningShouldWaitForSync(const ChainstateManager& chainman)
+{
+    return MiningShouldWaitForSync(chainman, MineWithoutPeersDefault(chainman.GetParams().GetChainType()));
+}
+
+bool MineWithoutPeersDefault(ChainType chain)
+{
+    return chain != ChainType::MAIN;
+}
+
+util::Result<bool> ReadMineWithoutPeers(const ArgsManager& args, ChainType chain)
+{
+    if (chain == ChainType::MAIN) {
+        if (args.IsArgSet("-minewithoutpeers")) {
+            return util::Error{_("-minewithoutpeers is not available on main. A main node mines only after a peer's block headers show it has caught up with the network.")};
+        }
+        return false;
+    }
+    return args.GetBoolArg("-minewithoutpeers", MineWithoutPeersDefault(chain));
 }
 
 } // namespace node

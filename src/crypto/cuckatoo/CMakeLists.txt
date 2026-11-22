@@ -51,7 +51,7 @@ if(SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 target_compile_options(quicksilver_cuckatoo PRIVATE ${QS_CUCKATOO_SANITIZER_IGNORELIST})
 
-# Calibration-only single-graph harness (Stage 1 of the tx-cost flag day).
+# Calibration-only single-graph harness (the tx-cost calibration).
 add_subdirectory(bench)
 
 add_subdirectory(gpu)

@@ -6,6 +6,7 @@
 #include <bench/bench.h>
 #include <blockfilter.h>
 #include <uint256.h>
+#include <util/check.h>
 
 #include <cstdint>
 #include <utility>
@@ -23,8 +24,11 @@ static GCSFilter::ElementSet GenerateGCSTestElements()
         GCSFilter::Element element(32);
         element[0] = static_cast<unsigned char>(i);
         element[1] = static_cast<unsigned char>(i >> 8);
+        element[2] = static_cast<unsigned char>(i >> 16);
         elements.insert(std::move(element));
     }
+    // Two bytes of i would hold only 65,536 distinct elements; the set must hold all of them.
+    Assert(elements.size() == 100000);
 
     return elements;
 }
@@ -37,7 +41,7 @@ static void GCSBlockFilterGetHash(benchmark::Bench& bench)
     BlockFilter block_filter(BlockFilterType::BASIC, {}, filter.GetEncoded(), /*skip_decode_check=*/false);
 
     bench.run([&] {
-        block_filter.GetHash();
+        ankerl::nanobench::doNotOptimizeAway(block_filter.GetHash());
     });
 }
 
@@ -48,6 +52,7 @@ static void GCSFilterConstruct(benchmark::Bench& bench)
     uint64_t siphash_k0 = 0;
     bench.run([&]{
         GCSFilter filter({siphash_k0, 0, BASIC_FILTER_P, BASIC_FILTER_M}, elements);
+        ankerl::nanobench::doNotOptimizeAway(filter);
 
         siphash_k0++;
     });
@@ -62,6 +67,7 @@ static void GCSFilterDecode(benchmark::Bench& bench)
 
     bench.run([&] {
         GCSFilter filter({0, 0, BASIC_FILTER_P, BASIC_FILTER_M}, encoded, /*skip_decode_check=*/false);
+        ankerl::nanobench::doNotOptimizeAway(filter);
     });
 }
 
@@ -74,6 +80,7 @@ static void GCSFilterDecodeSkipCheck(benchmark::Bench& bench)
 
     bench.run([&] {
         GCSFilter filter({0, 0, BASIC_FILTER_P, BASIC_FILTER_M}, encoded, /*skip_decode_check=*/true);
+        ankerl::nanobench::doNotOptimizeAway(filter);
     });
 }
 
@@ -84,7 +91,7 @@ static void GCSFilterMatch(benchmark::Bench& bench)
     GCSFilter filter({0, 0, BASIC_FILTER_P, BASIC_FILTER_M}, elements);
 
     bench.run([&] {
-        filter.Match(GCSFilter::Element());
+        ankerl::nanobench::doNotOptimizeAway(filter.Match(GCSFilter::Element()));
     });
 }
 BENCHMARK(GCSBlockFilterGetHash, benchmark::PriorityLevel::HIGH);

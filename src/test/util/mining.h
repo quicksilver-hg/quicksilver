@@ -39,7 +39,7 @@ COutPoint MineBlock(const node::NodeContext&,
 COutPoint MineBlock(const node::NodeContext&, std::shared_ptr<CBlock>& block);
 
 /** Prepare a block to be mined */
-std::shared_ptr<CBlock> PrepareBlock(const node::NodeContext&);
+std::shared_ptr<CBlock> PrepareBlock(const node::NodeContext&, const CScript& coinbase_scriptPubKey);
 std::shared_ptr<CBlock> PrepareBlock(const node::NodeContext& node,
                                      const node::BlockAssembler::Options& assembler_options);
 

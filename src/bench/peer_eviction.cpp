@@ -43,6 +43,7 @@ static void EvictionProtection0Networks250Candidates(benchmark::Bench& bench)
         /*num_candidates=*/250,
         [](NodeEvictionCandidate& c) {
             c.m_connected = std::chrono::seconds{c.id};
+            c.m_is_local = false; // randomized by the candidate generator; local peers are a protected category
             c.m_network = NET_IPV4;
         });
 }
@@ -135,6 +136,26 @@ static void EvictionProtection3Networks250Candidates(benchmark::Bench& bench)
         });
 }
 
+static void EvictionProtection4Networks250Candidates(benchmark::Bench& bench)
+{
+    EvictionProtectionCommon(
+        bench,
+        /*num_candidates=*/250,
+        [](NodeEvictionCandidate& c) {
+            c.m_connected = std::chrono::seconds{c.id};
+            c.m_is_local = (c.id >= 140 && c.id < 160); // 20 localhost
+            if (c.id >= 120 && c.id < 140) {            // 20 CJDNS
+                c.m_network = NET_CJDNS;
+            } else if (c.id >= 170 && c.id < 180) {     // 10 I2P
+                c.m_network = NET_I2P;
+            } else if (c.id >= 190 && c.id < 240) { // 50 Tor
+                c.m_network = NET_ONION;
+            } else {
+                c.m_network = NET_IPV4;
+            }
+        });
+}
+
 // Candidate numbers used for the benchmarks:
 // -  50 candidates simulates a possible use of -maxconnections
 // - 100 candidates approximates an average node with default settings
@@ -153,3 +174,6 @@ BENCHMARK(EvictionProtection2Networks250Candidates, benchmark::PriorityLevel::HI
 BENCHMARK(EvictionProtection3Networks050Candidates, benchmark::PriorityLevel::HIGH);
 BENCHMARK(EvictionProtection3Networks100Candidates, benchmark::PriorityLevel::HIGH);
 BENCHMARK(EvictionProtection3Networks250Candidates, benchmark::PriorityLevel::HIGH);
+
+// 4 disadvantaged networks (CJDNS/I2P/localhost/Tor) with 250 eviction candidates.
+BENCHMARK(EvictionProtection4Networks250Candidates, benchmark::PriorityLevel::HIGH);

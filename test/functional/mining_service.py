@@ -31,6 +31,7 @@ class MiningServiceTest(QuicksilverTestFramework):
         for key in ("active", "address", "payout_script", "blocks_found", "coins_minted_session",
                     "graphs_attempted", "devices", "solver_ok",
                     "last_solver_error", "last_block_time", "elapsed_seconds", "claims_reward",
+                    "mines_without_peers", "waiting_for_sync",
                     "congestion_multiplier", "template_height",
                     "template_transactions"):
             assert key in st, f"getminingstatus missing {key}"
@@ -126,6 +127,23 @@ class MiningServiceTest(QuicksilverTestFramework):
 
         self.log.info("-mine requires -mineaddress or -minescript (fail fast)")
         self.stop_node(0)
+        sentinel = node.datadir_path / "invalid-mining-started"
+        invalid_options = (
+            ([f"-mineaddress={addr}", "-minescript=6a"], "-mineaddress and -minescript are mutually exclusive."),
+            (["-minescript=zz"], "Invalid -minescript: not a hex script."),
+            (["-mine"], "-mine requires -mineaddress or -minescript to be set."),
+            (["-minezeroclaim", "-minescript=51"], "-minezeroclaim requires -minescript set to a provably unspendable script"),
+        )
+        for options, error in invalid_options:
+            sentinel.unlink(missing_ok=True)
+            log_offset = node.debug_log_path.stat().st_size
+            node.assert_start_raises_init_error(
+                options + [f"-startupnotify=echo ready > {sentinel}"],
+                error,
+                match=ErrorMatch.PARTIAL_REGEX,
+            )
+            assert not sentinel.exists(), f"startupnotify ran for {options}"
+            assert b"init message: Node online" not in node.debug_log_path.read_bytes()[log_offset:]
         node.assert_start_raises_init_error(
             ["-mine"],
             "requires -mineaddress or -minescript",

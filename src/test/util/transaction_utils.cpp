@@ -8,7 +8,7 @@
 #include <script/signingprovider.h>
 #include <test/util/transaction_utils.h>
 
-CMutableTransaction BuildCreditingTransaction(const CScript& scriptPubKey, int nValue)
+CMutableTransaction BuildCreditingTransaction(const CScript& scriptPubKey, CAmount nValue)
 {
     CMutableTransaction txCredit;
     txCredit.version = 1;
@@ -85,7 +85,7 @@ void BulkTransaction(CMutableTransaction& tx, int32_t target_weight)
     dummy_vbytes -= GetSizeOfCompactSize(dummy_vbytes) - 1;
 
     // pad transaction by repeatedly appending a dummy opcode to the output script
-    tx.vout[0].scriptPubKey.insert(tx.vout[0].scriptPubKey.end(), dummy_vbytes, OP_1);
+    tx.vout.back().scriptPubKey.insert(tx.vout.back().scriptPubKey.end(), dummy_vbytes, OP_1);
 
     // actual weight should be at most 3 higher than target weight
     assert(GetTransactionWeight(CTransaction(tx)) >= target_weight);

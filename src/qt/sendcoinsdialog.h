@@ -72,6 +72,7 @@ public:
     void bumpSolveGeneration();
     bool acceptSolveResult(quint64 gen) const { return gen == m_solve_generation; }
     QString currentTransferNoteForTesting() const;
+    void setCurrentAttemptForTesting(const std::shared_ptr<VaultModel::ProofOfWorkAttempt>& attempt) { m_current_attempt = attempt; }
     //! What the summary says about preparing a transfer: the notes, then how
     //! the proof will be computed. When the processor takes over, that last
     //! line is a warning and the page sets it apart (F-453).
@@ -127,6 +128,7 @@ private:
     QLabel* m_acceleration_warning{nullptr};
     const PlatformStyle *platformStyle;
     quint64 m_solve_generation{0};
+    std::weak_ptr<VaultModel::ProofOfWorkAttempt> m_current_attempt;
     bool m_send_work_graph_attempted{false};
     QElapsedTimer m_send_work_started;
     QTimer m_send_work_update_timer;

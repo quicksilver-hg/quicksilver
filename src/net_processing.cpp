@@ -1771,6 +1771,7 @@ void PeerManagerImpl::MaybePunishNodeForBlock(NodeId nodeid, const BlockValidati
             break;
         }
     case BlockValidationResult::BLOCK_INVALID_HEADER:
+    case BlockValidationResult::BLOCK_CHECKPOINT:
     case BlockValidationResult::BLOCK_INVALID_PREV:
         if (peer) Misbehaving(*peer, message);
         return;
@@ -2792,6 +2793,8 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
         // A headers message with no headers cannot be an announcement, so assume
         // it is a response to our last getheaders request, if there is one.
         peer.m_last_getheaders_timestamp = {};
+        // The peer has nothing newer than our locator (F-610).
+        m_chainman.m_peer_headers_received.store(true);
         return;
     }
 
@@ -2904,6 +2907,10 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
         }
     }
     assert(pindexLast);
+    // Stored only once the headers are in the block index, so m_best_header
+    // already reflects them when the miner reads this flag (F-610). Headers held
+    // for a low-work presync, or rejected, return above without setting it.
+    m_chainman.m_peer_headers_received.store(true);
 
     // Consider fetching more headers if we are not using our headers-sync mechanism.
     if (nCount == m_opts.max_headers_result && !have_headers_sync) {
@@ -3988,10 +3995,12 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
 
         LOCK(cs_main);
 
-        // Requiring that our chainwork exceed the minimum chain work is a
-        // protection against being fed a bogus chain when we started up for
-        // the first time and getting partitioned off the honest network for
-        // serving that chain to others.
+        // Note that if we were to be on a chain that forks below a trust anchor,
+        // then serving those headers to a peer that holds the anchored chain
+        // would cause that peer to disconnect us. Requiring that our chainwork
+        // exceed the minimum chain work is a protection against being fed a
+        // bogus chain when we started up for the first time and getting
+        // partitioned off the honest network for serving that chain to others.
         if (m_chainman.ActiveTip() == nullptr ||
                 (m_chainman.ActiveTip()->nChainWork < m_chainman.MinimumChainWork() && !pfrom.HasPermission(NetPermissionFlags::Download))) {
             LogDebug(HgLog::MESH, "Ignoring getheaders from peer=%d because active chain has too little work; sending empty response\n", pfrom.GetId());

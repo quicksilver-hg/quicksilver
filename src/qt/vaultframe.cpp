@@ -213,6 +213,8 @@ void VaultFrame::setClientModel(ClientModel *_clientModel)
                 [this](int, const QDateTime&, double, SyncType, SynchronizationState) { refreshNetworkPage(); });
         connect(clientModel, &ClientModel::numConnectionsChanged, this,
                 [this](int) { refreshNetworkPage(); });
+        connect(clientModel, &ClientModel::networkActiveChanged, this,
+                [this](bool) { refreshNetworkPage(); });
     }
     refreshNetworkPage();
     refreshTopLevelMiningAddressHelper();
@@ -502,11 +504,12 @@ void VaultFrame::gotoLoadPSQT(bool from_clipboard)
             tr("Partially Signed Transaction (*.psqt)"),
             [self](const QString& filename) {
                 if (!self || filename.isEmpty()) return;
-                if (GetFileSize(filename.toLocal8Bit().data(), MAX_FILE_SIZE_PSQT) == MAX_FILE_SIZE_PSQT) {
+                const fs::path path{GUIUtil::QStringToPath(filename)};
+                if (GetFileSize(path, MAX_FILE_SIZE_PSQT) == MAX_FILE_SIZE_PSQT) {
                     Q_EMIT self->message(self->tr("Error"), self->tr("PSQT file must be smaller than 100 MiB"), CClientUIInterface::MSG_ERROR);
                     return;
                 }
-                std::ifstream in{filename.toLocal8Bit().data(), std::ios::binary};
+                std::ifstream in{path, std::ios::binary};
                 std::vector<unsigned char> file_data{std::istreambuf_iterator<char>{in}, {}};
 
                 // Some psqt files may be base64 strings in the file rather than binary data
@@ -730,6 +733,7 @@ void VaultFrame::refreshNetworkPage()
 
     const int peers = m_sync_peers < 0 ? clientModel->getNumConnections(CONNECTIONS_ALL) : m_sync_peers;
     for (auto* page : findChildren<NetworkPage*>()) {
+        page->setNetworkActive(clientModel->node().getNetworkActive());
         page->updateStatus(peers, m_sync_state, m_sync_progress);
     }
     setPeerCount(peers);

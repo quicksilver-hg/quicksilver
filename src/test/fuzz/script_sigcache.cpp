@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <consensus/amount.h>
+#include <key.h>
 #include <primitives/transaction.h>
 #include <pubkey.h>
 #include <script/interpreter.h>
@@ -52,6 +53,19 @@ FUZZ_TARGET(script_sigcache, .init = initialize_script_sigcache)
             if (!random_bytes.empty()) {
                 (void)caching_transaction_signature_checker.VerifyECDSASignature(random_bytes, *pub_key, ConsumeUInt256(fuzzed_data_provider));
             }
+        }
+    }
+    // A valid signature can enter the cache, be read again, and be erased on read.
+    CKey key{ConsumePrivateKey(fuzzed_data_provider)};
+    if (key.IsValid()) {
+        const uint256 hash{ConsumeUInt256(fuzzed_data_provider)};
+        std::vector<unsigned char> signature;
+        if (key.Sign(hash, signature)) {
+            CachingTransactionSignatureChecker store_checker{&tx, n_in, amount, true, signature_cache, tx_data};
+            assert(store_checker.VerifyECDSASignature(signature, key.GetPubKey(), hash));
+            assert(store_checker.VerifyECDSASignature(signature, key.GetPubKey(), hash));
+            CachingTransactionSignatureChecker erase_checker{&tx, n_in, amount, false, signature_cache, tx_data};
+            assert(erase_checker.VerifyECDSASignature(signature, key.GetPubKey(), hash));
         }
     }
 }

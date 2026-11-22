@@ -29,8 +29,10 @@ BOOST_AUTO_TEST_CASE(register_then_lookup_round_trips)
     BOOST_CHECK(cuckatoo::bench::Register(200, vt));
     const auto* got = cuckatoo::bench::Lookup(200);
     BOOST_REQUIRE(got != nullptr);
-    BOOST_CHECK(got->create != nullptr);
-    BOOST_CHECK(got->verify_one != nullptr);
+    BOOST_CHECK(got->create == vt.create);
+    BOOST_CHECK(got->destroy == vt.destroy);
+    BOOST_CHECK(got->solve_one == vt.solve_one);
+    BOOST_CHECK(got->verify_one == vt.verify_one);
 }
 
 // A second Register for a size already taken must fail rather than silently
@@ -48,7 +50,12 @@ BOOST_AUTO_TEST_CASE(register_rejects_a_duplicate_size)
     };
 
     BOOST_CHECK(cuckatoo::bench::Register(201, vt));
-    BOOST_CHECK(!cuckatoo::bench::Register(201, vt));
+    auto replacement = vt;
+    replacement.create = [](unsigned) -> void* { static int marker; return &marker; };
+    BOOST_CHECK(!cuckatoo::bench::Register(201, replacement));
+    const auto* got = cuckatoo::bench::Lookup(201);
+    BOOST_REQUIRE(got != nullptr);
+    BOOST_CHECK(got->create == vt.create);
 }
 
 BOOST_AUTO_TEST_CASE(sizes_are_sorted_ascending)

@@ -94,7 +94,8 @@ FUZZ_TARGET(system, .init = initialize_system)
             [&] {
                 const std::vector<std::string> random_arguments = ConsumeRandomLengthStringVector(fuzzed_data_provider);
                 std::vector<const char*> argv;
-                argv.reserve(random_arguments.size());
+                argv.reserve(random_arguments.size() + 1);
+                argv.push_back("fuzz");
                 for (const std::string& random_argument : random_arguments) {
                     argv.push_back(random_argument.c_str());
                 }

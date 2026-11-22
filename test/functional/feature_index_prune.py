@@ -86,7 +86,7 @@ class FeatureIndexPruneTest(QuicksilverTestFramework):
                 # -fastprune, so file 0 holds all 200 cached blocks and file 1 covers the next
                 # run. Pruning to 400 drops files 0 and 1 whole, which makes 306 the last pruned
                 # block. These must be recomputed whenever block serialization changes -- most
-                # recently when nCongestion entered the header (#5c-1 Phase 2, +4 bytes/block).
+                # recently when nCongestion entered the header (header-field congestion pricing, +4 bytes/block).
                 assert_equal(pruneheight_new, 306)
 
         self.log.info("check if we can access the tips blockfilter and coinstats when we have pruned some blocks")

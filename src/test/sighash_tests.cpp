@@ -212,4 +212,36 @@ BOOST_AUTO_TEST_CASE(sighash_from_data)
         BOOST_CHECK_MESSAGE(sh.GetHex() == sigHashHex, strTest);
     }
 }
+BOOST_AUTO_TEST_CASE(nonzero_tx_pow_tail_does_not_change_legacy_sighash)
+{
+    CMutableTransaction tx;
+    tx.vin.resize(1);
+    tx.vin[0].prevout = COutPoint{Txid::FromUint256(uint256::ONE), 0};
+    tx.vout.resize(1);
+    tx.vout[0].nValue = 1;
+    tx.vout[0].scriptPubKey << OP_TRUE;
+    const CScript script{CScript() << OP_TRUE};
+    const uint256 before{SignatureHash(script, tx, 0, SIGHASH_ALL, 0, SigVersion::BASE)};
+
+    CMutableTransaction proved{tx};
+    proved.nAnchorHeight = 123;
+    proved.nPowNonce = 456;
+    for (uint32_t i = 0; i < proved.nCycle.size(); ++i) proved.nCycle[i] = i + 1;
+    BOOST_CHECK(tx.GetHash() != proved.GetHash());
+    BOOST_CHECK(SignatureHash(script, proved, 0, SIGHASH_ALL, 0, SigVersion::BASE) == before);
+}
+
+BOOST_AUTO_TEST_CASE(sighash_single_without_matching_output_returns_one)
+{
+    CMutableTransaction tx;
+    tx.vin.resize(2);
+    tx.vin[0].prevout = COutPoint{Txid::FromUint256(uint256::ONE), 0};
+    tx.vin[1].prevout = COutPoint{Txid::FromUint256(uint256::ONE), 1};
+    tx.vout.resize(1);
+    tx.vout[0].nValue = 1;
+    const CScript script{CScript() << OP_TRUE};
+    BOOST_CHECK(SignatureHash(script, tx, 0, SIGHASH_SINGLE, 0, SigVersion::BASE) != uint256::ONE);
+    BOOST_CHECK(SignatureHash(script, tx, 1, SIGHASH_SINGLE, 0, SigVersion::BASE) == uint256::ONE);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

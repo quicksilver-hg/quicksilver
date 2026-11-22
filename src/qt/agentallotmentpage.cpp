@@ -777,38 +777,12 @@ void AgentAllotmentPage::updateRecordedSetups()
             });
             connect(save_receipts_button, &QPushButton::clicked, this, [this, record, funding_available] {
                 if (!m_model) return;
-                const QString policy_request{m_model->agentAllotmentPolicyRequest(record, funding_available)};
-                const auto bundle{m_model->agentAllotmentPolicyBundle(policy_request)};
-                if (!bundle) {
-                    if (m_state_label) {
-                        m_state_label->setText(tr("Agent receipt export failed: %1").arg(QString::fromStdString(util::ErrorString(bundle).original)));
-                    }
-                    return;
-                }
-                if (bundle->funding_outputs.empty()) {
-                    if (m_state_label) {
-                        m_state_label->setText(tr("Agent receipt export found no spendable funding outputs."));
-                    }
-                    return;
-                }
-
-                const int64_t received_time{QDateTime::currentSecsSinceEpoch()};
-                for (const vault::AgentAllotmentFundingOutput& output : bundle->funding_outputs) {
-                    const agent::AllotmentPaymentReceiptArtifact receipt{AgentPaymentReceiptFromFundingOutput(*bundle, output, received_time)};
-                    const auto receipt_path{SaveAgentPaymentReceiptToInbox(receipt, AgentPaymentReceiptJson(receipt))};
-                    if (!receipt_path) {
-                        if (m_state_label) {
-                            m_state_label->setText(tr("Agent receipt export failed: %1").arg(QString::fromStdString(util::ErrorString(receipt_path).original)));
-                        }
-                        return;
-                    }
-                }
-
-                QApplication::clipboard()->setText(AgentPaymentReceiptScanCommand(AgentPaymentReceiptInboxDirectory()));
-                if (m_state_label) {
-                    m_state_label->setText(tr("Agent funding receipts saved: %1. External-agent scan command copied.")
-                        .arg(QString::number(bundle->funding_outputs.size())));
-                }
+                QPointer<AgentAllotmentPage> page(this);
+                QPointer<VaultModel> model(m_model);
+                model->requestUnlock([page, model, record, funding_available](std::shared_ptr<VaultModel::UnlockContext> unlock) {
+                    if (!page || !model || page->m_model != model || !unlock->isValid()) return;
+                    page->saveFundingReceipts(record, funding_available);
+                });
             });
             connect(copy_recovery_button, &QPushButton::clicked, this, [this, address] {
                 QApplication::clipboard()->setText(ScantxoutsetRecoveryCommand(address));
@@ -874,6 +848,42 @@ void AgentAllotmentPage::updatePaymentReceiptReviewState()
     } else {
         SetLabelClass(m_payment_receipt_state, QStringLiteral("muted"));
         m_payment_receipt_state->setText(tr("Paste a payment receipt to review funding output metadata."));
+    }
+}
+
+void AgentAllotmentPage::saveFundingReceipts(const vault::AgentAllotmentRecord& record, CAmount funding_available)
+{
+    const QString policy_request{m_model->agentAllotmentPolicyRequest(record, funding_available)};
+    const auto bundle{m_model->agentAllotmentPolicyBundle(policy_request)};
+    if (!bundle) {
+        if (m_state_label) {
+            m_state_label->setText(tr("Agent receipt export failed: %1").arg(QString::fromStdString(util::ErrorString(bundle).original)));
+        }
+        return;
+    }
+    if (bundle->funding_outputs.empty()) {
+        if (m_state_label) {
+            m_state_label->setText(tr("Agent receipt export found no spendable funding outputs."));
+        }
+        return;
+    }
+
+    const int64_t received_time{QDateTime::currentSecsSinceEpoch()};
+    for (const vault::AgentAllotmentFundingOutput& output : bundle->funding_outputs) {
+        const agent::AllotmentPaymentReceiptArtifact receipt{AgentPaymentReceiptFromFundingOutput(*bundle, output, received_time)};
+        const auto receipt_path{SaveAgentPaymentReceiptToInbox(receipt, AgentPaymentReceiptJson(receipt))};
+        if (!receipt_path) {
+            if (m_state_label) {
+                m_state_label->setText(tr("Agent receipt export failed: %1").arg(QString::fromStdString(util::ErrorString(receipt_path).original)));
+            }
+            return;
+        }
+    }
+
+    QApplication::clipboard()->setText(AgentPaymentReceiptScanCommand(AgentPaymentReceiptInboxDirectory()));
+    if (m_state_label) {
+        m_state_label->setText(tr("Agent funding receipts saved: %1. External-agent scan command copied.")
+            .arg(QString::number(bundle->funding_outputs.size())));
     }
 }
 

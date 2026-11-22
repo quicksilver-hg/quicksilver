@@ -174,7 +174,7 @@ public:
     //! header for PoW re-check when the block index is reloaded from disk).
     std::array<uint32_t, 42> nCycle{};
 
-    //! Quicksilver (#5c-1 Phase 2): the EIP-1559 congestion multiplier (fixed-point,
+    //! Quicksilver header-field congestion pricing: the EIP-1559 congestion multiplier (fixed-point,
     //! CONGESTION_ONE == 1.0), taken from the header field nCongestion. Consensus checks
     //! it at ConnectBlock against NextCongestionMultiplier(pprev->m_congestion, this
     //! block's weight); it is NOT derived here. Held as uint64_t because that is the type
@@ -387,7 +387,7 @@ public:
         // Quicksilver: the Cuckatoo 42-cycle is part of the header (and its hash),
         // so it must persist in the disk index too. Serialize each edge LE.
         for (auto& edge : obj.nCycle) READWRITE(edge);
-        // Quicksilver (#5c-1 Phase 2): the congestion multiplier is part of the header
+        // Quicksilver header-field congestion pricing: the congestion multiplier is part of the header
         // (and therefore of the block hash), exactly like nCycle, so it must persist in
         // the disk index. On-disk encoding is unchanged from when this was derived state.
         READWRITE(VARINT(obj.m_congestion));

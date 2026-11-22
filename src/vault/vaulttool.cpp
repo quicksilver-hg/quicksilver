@@ -64,27 +64,45 @@ static std::shared_ptr<CVault> MakeVault(const std::string& name, const fs::path
 
     if (load_vault_ret != DBErrors::LOAD_OK) {
         if (load_vault_ret == DBErrors::CORRUPT) {
-            tfm::format(std::cerr, "Error loading %s: Vault corrupted", name);
+            tfm::format(std::cerr, "Error loading %s: Vault corrupted\n", name);
             return nullptr;
         } else if (load_vault_ret == DBErrors::NONCRITICAL_ERROR) {
             tfm::format(std::cerr, "Error reading %s! All keys read correctly, but transaction data"
-                            " or address book entries might be missing or incorrect.",
+                            " or address book entries might be missing or incorrect.\n",
                 name);
         } else if (load_vault_ret == DBErrors::TOO_NEW) {
-            tfm::format(std::cerr, "Error loading %s: Vault requires newer version of %s",
+            tfm::format(std::cerr, "Error loading %s: Vault requires newer version of %s\n",
                 name, CLIENT_NAME);
             return nullptr;
         } else if (load_vault_ret == DBErrors::NEED_RESCAN) {
             tfm::format(std::cerr, "Error reading %s! Some transaction data might be missing or"
-                           " incorrect. Vault requires a rescan.",
+                           " incorrect. Vault requires a rescan.\n",
                 name);
         } else {
-            tfm::format(std::cerr, "Error loading %s", name);
+            tfm::format(std::cerr, "Error loading %s\n", name);
             return nullptr;
         }
     }
 
-    if (options.require_create) VaultCreate(vault_instance.get(), options.create_flags);
+    if (options.require_create) {
+        // S0198-B-03: setting up descriptors can throw (a failed db transaction). Report
+        // it and remove the vault this call just created, as CreateFromDump does, so the
+        // next create of the same name is not refused by a half-written directory.
+        try {
+            VaultCreate(vault_instance.get(), options.create_flags);
+        } catch (const std::exception& e) {
+            tfm::format(std::cerr, "Error creating %s: %s\n", name, e.what());
+            vault_instance.reset();
+            // Remove only what this create wrote: the database and its journal, then
+            // the directory if that leaves it empty. Never anything else under path.
+            std::error_code ec;
+            const fs::path data_file{SQLiteDataFile(path)};
+            fs::remove(data_file, ec);
+            fs::remove(fs::PathFromString(fs::PathToString(data_file) + "-journal"), ec);
+            fs::remove(path, ec);
+            return nullptr;
+        }
+    }
 
     return vault_instance;
 }
@@ -129,10 +147,10 @@ bool ExecuteVaultToolFunc(const ArgsManager& args, const std::string& command)
         options.require_format = DatabaseFormat::SQLITE;
 
         const std::shared_ptr<CVault> vault_instance = MakeVault(name, path, options);
-        if (vault_instance) {
-            VaultShowInfo(vault_instance.get());
-            vault_instance->Close();
-        }
+        // S0198-B-01: a vault that was not created is a failed command, as for info.
+        if (!vault_instance) return false;
+        VaultShowInfo(vault_instance.get());
+        vault_instance->Close();
     } else if (command == "info") {
         DatabaseOptions options;
         ReadDatabaseArgs(args, options);

@@ -43,6 +43,7 @@ bool PartiallySignedQuicksilverTransaction::Merge(const PartiallySignedQuicksilv
         }
     }
     unknown.insert(psqt.unknown.begin(), psqt.unknown.end());
+    m_proprietary.insert(psqt.m_proprietary.begin(), psqt.m_proprietary.end());
 
     return true;
 }
@@ -210,6 +211,7 @@ void PSQTInput::Merge(const PSQTInput& input)
     hash256_preimages.insert(input.hash256_preimages.begin(), input.hash256_preimages.end());
     hd_keypaths.insert(input.hd_keypaths.begin(), input.hd_keypaths.end());
     unknown.insert(input.unknown.begin(), input.unknown.end());
+    m_proprietary.insert(input.m_proprietary.begin(), input.m_proprietary.end());
     m_tap_script_sigs.insert(input.m_tap_script_sigs.begin(), input.m_tap_script_sigs.end());
     m_tap_scripts.insert(input.m_tap_scripts.begin(), input.m_tap_scripts.end());
     m_tap_bip32_paths.insert(input.m_tap_bip32_paths.begin(), input.m_tap_bip32_paths.end());
@@ -221,6 +223,8 @@ void PSQTInput::Merge(const PSQTInput& input)
     if (m_tap_key_sig.empty() && !input.m_tap_key_sig.empty()) m_tap_key_sig = input.m_tap_key_sig;
     if (m_tap_internal_key.IsNull() && !input.m_tap_internal_key.IsNull()) m_tap_internal_key = input.m_tap_internal_key;
     if (m_tap_merkle_root.IsNull() && !input.m_tap_merkle_root.IsNull()) m_tap_merkle_root = input.m_tap_merkle_root;
+    // First one set wins, as for every other single-valued field above.
+    if (!sighash_type && input.sighash_type) sighash_type = input.sighash_type;
 }
 
 void PSQTOutput::FillSignatureData(SignatureData& sigdata) const
@@ -283,6 +287,7 @@ void PSQTOutput::Merge(const PSQTOutput& output)
 {
     hd_keypaths.insert(output.hd_keypaths.begin(), output.hd_keypaths.end());
     unknown.insert(output.unknown.begin(), output.unknown.end());
+    m_proprietary.insert(output.m_proprietary.begin(), output.m_proprietary.end());
     m_tap_bip32_paths.insert(output.m_tap_bip32_paths.begin(), output.m_tap_bip32_paths.end());
 
     if (redeem_script.empty() && !output.redeem_script.empty()) redeem_script = output.redeem_script;
@@ -299,7 +304,7 @@ bool PSQTInputSigned(const PSQTInput& input)
 bool PSQTInputSignedAndVerified(const PartiallySignedQuicksilverTransaction psqt, unsigned int input_index, const PrecomputedTransactionData* txdata)
 {
     CTxOut utxo;
-    assert(psqt.inputs.size() >= input_index);
+    assert(input_index < psqt.inputs.size());
     const PSQTInput& input = psqt.inputs[input_index];
 
     if (input.non_witness_utxo) {
@@ -511,6 +516,7 @@ bool FinalizeAndExtractPSQT(PartiallySignedQuicksilverTransaction& psqtx, CMutab
 
 bool CombinePSQTs(PartiallySignedQuicksilverTransaction& out, const std::vector<PartiallySignedQuicksilverTransaction>& psqtxs)
 {
+    if (psqtxs.empty()) return false;
     out = psqtxs[0]; // Copy the first one
 
     // Merge

@@ -145,7 +145,7 @@ static std::unique_ptr<CBlockIndex> CreateBlockIndex(int nHeight, CBlockIndex* a
     return index;
 }
 
-// Test suite for surplus-work (#5c-2) inclusion ranking inside the miner.
+// Test suite for surplus-work inclusion ranking inside the miner.
 // Quicksilver ranks txs by per-tx surplus-work rate (surplus/vsize), individually
 // — there is no package boost (Approach B). Implemented as an additional function,
 // rather than a separate test case, to reuse the real blockchain (real coinbase
@@ -393,7 +393,7 @@ void MinerTestingSetup::TestBasicMining(const CScript& scriptPubKey, const std::
         CTxRelayPool& tx_relaypool{MakeRelayPool()};
         LOCK(tx_relaypool.cs);
 
-        // Quicksilver subsidy ramp (#5a): there is no halving. The per-block subsidy
+        // Quicksilver tail-subsidy ramp: there is no halving. The per-block subsidy
         // follows a linear ramp from nInitialSubsidy down to nTailSubsidy, reaching the
         // flat tail exactly at nBootstrapBlocks (N). We straddle N and assert the
         // assembler pays the exact ramp/tail value.
@@ -567,7 +567,7 @@ void MinerTestingSetup::TestBasicMining(const CScript& scriptPubKey, const std::
     // None of the of the absolute height/time locked tx should have made
     // it into the template because we still check IsFinalTx in CreateNewBlock,
     // but relative locked txs will if inconsistently added to relaypool.
-    // For now these will still generate a valid template until BIP68 soft fork
+    // This fixture delays CSV activation, so the relative locks do not invalidate the template.
     CBlock block{block_template->getBlock()};
     BOOST_CHECK_EQUAL(block.vtx.size(), 3U);
     // However if we advance height by 1 and time by SEQUENCE_LOCK_TIME, all of them should be mined
@@ -614,7 +614,7 @@ void MinerTestingSetup::TestBasicMining(const CScript& scriptPubKey, const std::
 }
 
 // Quicksilver is feeless and ranks relaypool txs for mining by per-tx surplus-work rate
-// (#5c-2), not by fee. The inherited priority/fee-delta path is removed behavior.
+// (surplus-work ranking), not by fee. The inherited priority/fee-delta path is removed behavior.
 // This test asserts the replacement invariant: explicit surplus overrides drive
 // mining order. Real anchored proofs (ProveTxPow) keep the block self-validating.
 void MinerTestingSetup::TestSurplusWorkMining(const CScript& scriptPubKey, const std::vector<CTransactionRef>& txFirst)
@@ -705,7 +705,7 @@ BOOST_AUTO_TEST_CASE(CreateNewBlock_validity)
             if (txFirst.size() < 4)
                 txFirst.push_back(block.vtx[0]);
             block.hashMerkleRoot = BlockMerkleRoot(block);
-            // Quicksilver (#5c-1 Phase 2): the coinbase swap above changed the block
+            // Quicksilver header-field congestion pricing: the coinbase swap above changed the block
             // weight, and nCongestion folds that in — so the template's value is stale
             // and consensus would reject the block as "bad-congestion". Recompute it
             // exactly as ConnectBlock will, before grinding: it sits in the pre-pow.

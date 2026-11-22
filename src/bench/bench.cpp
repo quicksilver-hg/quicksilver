@@ -60,10 +60,13 @@ void GenerateTemplateResults(const std::vector<ankerl::nanobench::Result>& bench
     std::ofstream fout{file};
     if (fout.is_open()) {
         ankerl::nanobench::render(tpl, benchmarkResults, fout);
-        std::cout << "Created " << file << std::endl;
-    } else {
-        std::cout << "Could not write to file " << file << std::endl;
+        fout.close();
     }
+    if (!fout) {
+        // Caught in main(): reported on stderr, and the run exits nonzero.
+        throw std::runtime_error(strprintf("Could not write to file %s", fs::PathToString(file)));
+    }
+    std::cout << "Created " << file << std::endl;
 }
 
 } // namespace
@@ -71,7 +74,7 @@ void GenerateTemplateResults(const std::vector<ankerl::nanobench::Result>& bench
 namespace benchmark {
 
 // map a label to one or multiple priority levels
-std::map<std::string, uint8_t> map_label_priority = {
+static const std::map<std::string, uint8_t> map_label_priority = {
     {"high", PriorityLevel::HIGH},
     {"low", PriorityLevel::LOW},
     {"all", 0xff}

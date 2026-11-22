@@ -18,7 +18,7 @@ enum class RelayPoolRemovalReason {
     BLOCK,       //!< Removed for block
     CONFLICT,    //!< Removed for conflict with in-block transaction
     REPLACED,    //!< Removed for replacement
-    STALE_ANCHOR, //!< Per-tx PoW anchor aged out of the recency window (#7)
+    STALE_ANCHOR, //!< Per-tx PoW anchor aged out of the recency window (anchor recency)
 };
 
 std::string RemovalReasonToString(const RelayPoolRemovalReason& r) noexcept;

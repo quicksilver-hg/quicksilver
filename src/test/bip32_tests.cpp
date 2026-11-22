@@ -182,8 +182,8 @@ BOOST_AUTO_TEST_CASE(bip32_test5) {
     for (const auto& str : TEST5) {
         auto dec_extkey = DecodeExtKey(str);
         auto dec_extpubkey = DecodeExtPubKey(str);
-        BOOST_CHECK_MESSAGE(!dec_extkey.key.IsValid(), "Decoding '" + str + "' as xprv should fail");
-        BOOST_CHECK_MESSAGE(!dec_extpubkey.pubkey.IsValid(), "Decoding '" + str + "' as xpub should fail");
+        BOOST_CHECK_MESSAGE(!dec_extkey.key.IsValid(), "Decoding '" + str + "' as an extended private key should fail");
+        BOOST_CHECK_MESSAGE(!dec_extpubkey.pubkey.IsValid(), "Decoding '" + str + "' as an extended public key should fail");
     }
 }
 

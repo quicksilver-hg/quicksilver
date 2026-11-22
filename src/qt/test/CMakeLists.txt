@@ -42,7 +42,6 @@ if(ENABLE_VAULT)
     PRIVATE
       addressbooktests.cpp
       vaulttests.cpp
-      ../../vault/test/vault_test_fixture.cpp
   )
 endif()
 

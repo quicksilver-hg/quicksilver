@@ -8,10 +8,13 @@
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
+#include <test/util/random.h>
 #include <vault/coinselection.h>
 
+#include <algorithm>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <vector>
 
 namespace vault {
@@ -66,6 +69,7 @@ static SelectionResult ManualSelection(const std::vector<COutput>& utxos, CAmoun
 
 FUZZ_TARGET(coin_grinder)
 {
+    SeedRandomStateForTest(SeedRand::ZEROS);
     FuzzedDataProvider fuzzed_data_provider{buffer.data(), buffer.size()};
     std::vector<COutput> utxo_pool;
     int next_locktime{0};
@@ -75,14 +79,24 @@ FUZZ_TARGET(coin_grinder)
     std::vector<OutputGroup> groups;
     GroupCoins(fuzzed_data_provider, utxo_pool, groups);
     const int max_selection_weight{fuzzed_data_provider.ConsumeIntegralInRange<int>(0, std::numeric_limits<int>::max())};
+    const std::optional<int> fallback_weight = fuzzed_data_provider.ConsumeBool()
+        ? std::optional<int>{fuzzed_data_provider.ConsumeIntegralInRange<int>(0, std::numeric_limits<int>::max())}
+        : std::nullopt;
 
-    auto result{SelectCoinsExactOrLargest(groups, target, max_selection_weight)};
+    auto result{SelectCoinsExactOrLargest(groups, target, max_selection_weight, fallback_weight)};
     if (!result) return;
 
     assert(total_balance >= target);
     assert(result->GetSelectedValue() >= target);
-    assert(result->GetChange() == result->GetSelectedValue() - target);
-    assert(result->GetWeight() <= max_selection_weight);
+    CAmount selected_from_pool{0};
+    for (const auto& selected : result->GetInputSet()) {
+        const auto it = std::find_if(utxo_pool.begin(), utxo_pool.end(), [&](const COutput& coin) { return coin.outpoint == selected->outpoint; });
+        assert(it != utxo_pool.end());
+        selected_from_pool += it->txout.nValue;
+    }
+    assert(selected_from_pool == result->GetSelectedValue());
+    assert(result->GetChange() == selected_from_pool - target);
+    assert(result->GetWeight() <= (result->GetAlgo() == SelectionAlgorithm::EXACT ? max_selection_weight : fallback_weight.value_or(max_selection_weight)));
     (void)result->GetShuffledInputVector();
     (void)result->GetInputSet();
 }
@@ -105,9 +119,6 @@ FUZZ_TARGET(coin_grinder_is_optimal)
 
     const CAmount target{fuzzed_data_provider.ConsumeIntegralInRange<CAmount>(1, COIN)};
     const int max_selection_weight{fuzzed_data_provider.ConsumeIntegralInRange<int>(0, MAX_STANDARD_TX_WEIGHT)};
-    auto result{SelectCoinsExactOrLargest(groups, target, max_selection_weight)};
-    if (!result) return;
-
     bool exact_exists{false};
     for (uint32_t pattern = 1; (pattern >> groups.size()) == 0; ++pattern) {
         CAmount subset_amount{0};
@@ -120,11 +131,14 @@ FUZZ_TARGET(coin_grinder_is_optimal)
         }
         exact_exists |= subset_amount == target && subset_weight <= max_selection_weight;
     }
+    auto result{SelectCoinsExactOrLargest(groups, target, max_selection_weight)};
     if (exact_exists) {
+        assert(result);
         assert(result->GetAlgo() == SelectionAlgorithm::EXACT);
         assert(result->GetSelectedValue() == target);
         assert(result->GetChange() == 0);
     }
+    if (!result) return;
 }
 
 FUZZ_TARGET(coinselection)
@@ -139,7 +153,10 @@ FUZZ_TARGET(coinselection)
 
     const CAmount target{fuzzed_data_provider.ConsumeIntegralInRange<CAmount>(1, MAX_MONEY)};
     const int max_selection_weight{fuzzed_data_provider.ConsumeIntegralInRange<int>(0, std::numeric_limits<int>::max())};
-    auto result{SelectCoinsExactOrLargest(groups, target, max_selection_weight)};
+    const std::optional<int> fallback_weight = fuzzed_data_provider.ConsumeBool()
+        ? std::optional<int>{fuzzed_data_provider.ConsumeIntegralInRange<int>(0, std::numeric_limits<int>::max())}
+        : std::nullopt;
+    auto result{SelectCoinsExactOrLargest(groups, target, max_selection_weight, fallback_weight)};
     if (!result) return;
 
     std::vector<COutput> manual_inputs;
@@ -148,10 +165,16 @@ FUZZ_TARGET(coinselection)
 
     const size_t input_count{result->GetInputSet().size()};
     const int old_weight{result->GetWeight()};
+    const CAmount old_value{result->GetSelectedValue()};
+    const CAmount old_target{result->GetTarget()};
+    const SelectionAlgorithm old_algo{result->GetAlgo()};
     auto manual_selection{ManualSelection(manual_inputs, manual_balance)};
     result->Merge(manual_selection);
     assert(result->GetInputSet().size() == input_count + manual_inputs.size());
     assert(result->GetWeight() == old_weight + manual_selection.GetWeight());
+    assert(result->GetSelectedValue() == old_value + manual_balance);
+    assert(result->GetTarget() == old_target + manual_balance);
+    assert(result->GetAlgo() == old_algo);
 }
 
 } // namespace vault

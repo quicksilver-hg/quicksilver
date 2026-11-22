@@ -5,6 +5,7 @@
 
 #include <bech32.h>
 #include <bench/bench.h>
+#include <util/check.h>
 #include <util/strencodings.h>
 
 #include <vector>
@@ -25,7 +26,9 @@ static void Bech32Encode(benchmark::Bench& bench)
 
 static void Bech32Decode(benchmark::Bench& bench)
 {
-    std::string addr = "hg1qkallence7tjawwvy0dwt4twc62qjgaw8f4vlhyd006d99f09";
+    // A valid hg Bech32 string, so the benchmark times a successful decode, not the checksum reject.
+    std::string addr = "hg1qkallence7tjawwvy0dwt4twc62qjgaw8f4vlhyd006zqp4n8";
+    Assert(bech32::Decode(addr).encoding == bech32::Encoding::BECH32);
     bench.batch(addr.size()).unit("byte").run([&] {
         bech32::Decode(addr);
     });

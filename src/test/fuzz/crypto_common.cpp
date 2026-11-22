@@ -68,6 +68,11 @@ FUZZ_TARGET(crypto_common)
     WriteBE32(readbe32_arr.data(), readbe32_result);
     assert(std::memcmp(random_bytes_4.data(), readbe32_arr.data(), 4) == 0);
 
+    const uint16_t readbe16_result = ReadBE16(random_bytes_4.data());
+    std::array<uint8_t, 2> readbe16_arr;
+    WriteBE16(readbe16_arr.data(), readbe16_result);
+    assert(std::memcmp(random_bytes_4.data(), readbe16_arr.data(), 2) == 0);
+
     const uint64_t readbe64_result = ReadBE64(random_bytes_8.data());
     std::array<uint8_t, 8> readbe64_arr;
     WriteBE64(readbe64_arr.data(), readbe64_result);

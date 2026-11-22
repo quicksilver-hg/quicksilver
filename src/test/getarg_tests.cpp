@@ -185,7 +185,7 @@ BOOST_AUTO_TEST_CASE(boolarg)
     BOOST_CHECK(local_args.GetBoolArg("-foo", false));
     BOOST_CHECK(local_args.GetBoolArg("-foo", true));
 
-    // New 0.6 feature: auto-map -nosomething to !-something:
+    // Negated options override the corresponding positive option:
     ResetArgs(local_args, "-nofoo");
     BOOST_CHECK(!local_args.GetBoolArg("-foo", false));
     BOOST_CHECK(!local_args.GetBoolArg("-foo", true));
@@ -206,7 +206,7 @@ BOOST_AUTO_TEST_CASE(boolarg)
     BOOST_CHECK(local_args.GetBoolArg("-foo", false));
     BOOST_CHECK(local_args.GetBoolArg("-foo", true));
 
-    // New 0.6 feature: treat -- same as -:
+    // Treat -- and - as equivalent option prefixes:
     ResetArgs(local_args, "--foo=1");
     BOOST_CHECK(local_args.GetBoolArg("-foo", false));
     BOOST_CHECK(local_args.GetBoolArg("-foo", true));
@@ -369,10 +369,8 @@ BOOST_AUTO_TEST_CASE(patharg)
     // Check negated and default argument handling. Specifying an empty argument
     // is the same as not specifying the argument. This is convenient for
     // scripting so later command line arguments can override earlier command
-    // line arguments or quicksilver.conf values. Currently the -dir= case cannot be
-    // distinguished from -dir case with no assignment, but #16545 would add the
-    // ability to distinguish these in the future (and treat the no-assign case
-    // like an imperative command or an error).
+    // line arguments or quicksilver.conf values. The -dir= case cannot currently be distinguished from -dir without
+    // an assignment.
     ResetArgs(local_args, "");
     BOOST_CHECK_EQUAL(local_args.GetPathArg("-dir", "default"), fs::path{"default"});
     ResetArgs(local_args, "-dir=override");
@@ -456,6 +454,29 @@ BOOST_AUTO_TEST_CASE(logargs)
     BOOST_CHECK(str.find("arg source=command-line okaylog=\"public\"") != std::string::npos);
     BOOST_CHECK(str.find("dontlog=****") != std::string::npos);
     BOOST_CHECK(str.find("private42") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(logargs_settings_file)
+{
+    ArgsManager local_args;
+    SetupArgs(local_args, {{"-secret", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE},
+                           {"-plain", ArgsManager::ALLOW_ANY}});
+    local_args.LockSettings([](common::Settings& settings) {
+        settings.rw_settings["secret"] = "private-setting-one";
+        settings.rw_settings["test.secret"] = "private-setting-two";
+        settings.rw_settings["test.plain"] = "public-setting";
+    });
+
+    std::string logged;
+    auto callback = LogInstance().PushBackCallback([&](const std::string& line) { logged += line; });
+    local_args.LogArgs();
+    LogInstance().DeleteCallback(callback);
+
+    BOOST_CHECK(logged.find("secret=****") != std::string::npos);
+    BOOST_CHECK(logged.find("test.secret=****") != std::string::npos);
+    BOOST_CHECK(logged.find("test.plain=\"public-setting\"") != std::string::npos);
+    BOOST_CHECK(logged.find("private-setting-one") == std::string::npos);
+    BOOST_CHECK(logged.find("private-setting-two") == std::string::npos);
 }
 
 #ifdef WIN32

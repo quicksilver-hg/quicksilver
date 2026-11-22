@@ -26,7 +26,7 @@ BOOST_AUTO_TEST_CASE(flatfile_filename)
     BOOST_CHECK_EQUAL(seq2.FileName(pos), data_dir / "a" / "b00456.dat");
 
     // Check default constructor IsNull
-    assert(FlatFilePos{}.IsNull());
+    BOOST_CHECK(FlatFilePos{}.IsNull());
 }
 
 BOOST_AUTO_TEST_CASE(flatfile_open)
@@ -34,11 +34,11 @@ BOOST_AUTO_TEST_CASE(flatfile_open)
     const auto data_dir = m_args.GetDataDirBase();
     FlatFileSeq seq(data_dir, "a", 16 * 1024);
 
-    std::string line1("A purely peer-to-peer version of electronic cash would allow online "
-                      "payments to be sent directly from one party to another without going "
-                      "through a financial institution.");
-    std::string line2("Digital signatures provide part of the solution, but the main benefits are "
-                      "lost if a trusted third party is still required to prevent double-spending.");
+    std::string line1("Quicksilver stores serialized records so a reader can recover their "
+                      "contents after reopening a file, even when two records have different "
+                      "lengths.");
+    std::string line2("The second record follows the first at its serialized offset and can "
+                      "be read independently of the first record.");
 
     size_t pos1 = 0;
     size_t pos2 = pos1 + GetSerializeSize(line1);
@@ -119,11 +119,11 @@ BOOST_AUTO_TEST_CASE(flatfile_flush)
     seq.Allocate(FlatFilePos(0, 0), 1, out_of_space);
 
     // Flush without finalize should not truncate file.
-    seq.Flush(FlatFilePos(0, 1));
+    BOOST_REQUIRE(seq.Flush(FlatFilePos(0, 1)));
     BOOST_CHECK_EQUAL(fs::file_size(seq.FileName(FlatFilePos(0, 1))), 100U);
 
     // Flush with finalize should truncate file.
-    seq.Flush(FlatFilePos(0, 1), true);
+    BOOST_REQUIRE(seq.Flush(FlatFilePos(0, 1), true));
     BOOST_CHECK_EQUAL(fs::file_size(seq.FileName(FlatFilePos(0, 1))), 1U);
 }
 

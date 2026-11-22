@@ -656,6 +656,17 @@ void QuicksilverApplication::requestShutdown()
     if (pollShutdownTimer) pollShutdownTimer->stop();
 
 #ifdef ENABLE_VAULT
+    if (m_vault_controller) {
+        m_vault_controller->prepareForShutdown([this] { finishShutdown(); });
+        return;
+    }
+#endif
+    finishShutdown();
+}
+
+void QuicksilverApplication::finishShutdown()
+{
+#ifdef ENABLE_VAULT
     // Delete vault controller here manually, instead of relying on Qt object
     // tracking (https://doc.qt.io/qt-5/objecttrees.html). This makes sure
     // vaultmodel m_handle_* notification handlers are deleted before vaults
@@ -690,18 +701,27 @@ void QuicksilverApplication::cleanupFailedConsensusInitialization()
     delete m_splash;
     m_splash = nullptr;
 
+    auto finish = [this] {
 #ifdef ENABLE_VAULT
-    delete m_vault_controller;
-    m_vault_controller = nullptr;
+        delete m_vault_controller;
+        m_vault_controller = nullptr;
 #endif // ENABLE_VAULT
 
-    m_consensus_failure_cleanup = true;
-    if (!m_executor) {
-        node().appShutdown();
-        m_consensus_failure_cleanup = false;
+        m_consensus_failure_cleanup = true;
+        if (!m_executor) {
+            node().appShutdown();
+            m_consensus_failure_cleanup = false;
+            return;
+        }
+        Q_EMIT requestedShutdown();
+    };
+#ifdef ENABLE_VAULT
+    if (m_vault_controller) {
+        m_vault_controller->prepareForShutdown(std::move(finish));
         return;
     }
-    Q_EMIT requestedShutdown();
+#endif
+    finish();
 }
 
 void QuicksilverApplication::shutdownResult()

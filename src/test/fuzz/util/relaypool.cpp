@@ -22,5 +22,6 @@ CTxRelayPoolEntry ConsumeTxRelayPoolEntry(FuzzedDataProvider& fuzzed_data_provid
     const unsigned int entry_height = fuzzed_data_provider.ConsumeIntegral<unsigned int>();
     const bool spends_coinbase = fuzzed_data_provider.ConsumeBool();
     const unsigned int sig_op_cost = fuzzed_data_provider.ConsumeIntegralInRange<unsigned int>(0, MAX_BLOCK_SIGOPS_COST);
-    return CTxRelayPoolEntry{MakeTransactionRef(tx), time, entry_height, entry_sequence, spends_coinbase, sig_op_cost, {}};
+    const arith_uint256 txwork_surplus{ConsumeArithUInt256(fuzzed_data_provider)};
+    return CTxRelayPoolEntry{MakeTransactionRef(tx), time, entry_height, entry_sequence, spends_coinbase, sig_op_cost, {}, txwork_surplus};
 }

@@ -105,7 +105,7 @@ BOOST_AUTO_TEST_CASE(mint_claim_matches_anchor_valid_set)
 
     auto tmpl = BlockAssembler{m_node.chainman->ActiveChainstate(), m_node.relaypool.get(), {}}.CreateNewBlock();
     BOOST_REQUIRE(tmpl);
-    // Exactly one relaypool tx (fresh) is included ⇒ mint = subsidy + 1*nTxPowMint (feeless ⇒ nFees=0).
+    // Exactly one relaypool transaction (fresh) adds one transaction-work mint to the subsidy.
     const CAmount expected{GetBlockSubsidy(tip_height + 1, params) + params.nTxPowMint};
     BOOST_CHECK_EQUAL(tmpl->block.vtx[0]->vout[0].nValue, expected);
 }
@@ -151,7 +151,7 @@ BOOST_AUTO_TEST_CASE(block_pow_descriptor_fields)
     BOOST_CHECK_EQUAL(d["proofhash"].get_str(), "blake2b");
     // 84 = the pre-pow through nNonce: 4 + 32 + 32 + 4 (nTime) + 4 (nBits)
     //      + 4 (nCongestion) + 4 (nNonce). Grew from 80 when nCongestion entered the
-    //      header (#5c-1 Phase 2); it is a fact about the format, not a tolerance.
+    //      header (header-field congestion pricing); it is a fact about the format, not a tolerance.
     BOOST_CHECK_EQUAL(d["prepowsize"].getInt<int>(), 84);
     BOOST_CHECK_EQUAL(d["prepowsize"].getInt<int>(), (int)CBlockHeader::PREPOW_SIZE);
     BOOST_CHECK_EQUAL(d["proofhashtarget"].get_str(), target.GetHex());

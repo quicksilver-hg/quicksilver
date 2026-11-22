@@ -23,7 +23,7 @@ static void RollingBloom(benchmark::Bench& bench)
         filter.insert(data);
 
         WriteBE32(data.data(), count);
-        filter.contains(data);
+        ankerl::nanobench::doNotOptimizeAway(filter.contains(data));
     });
 }
 

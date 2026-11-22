@@ -9,13 +9,16 @@
 #include <common/system.h>
 #include <interfaces/node.h>
 #include <qt/rpcconsole.h>
+#include <qt/platformstyle.h>
 #include <rpc/server.h>
 #include <test/util/setup_common.h>
 #include <univalue.h>
 
 #include <QTest>
+#include <QKeyEvent>
 
 #include <string>
+#include <memory>
 #include <stdexcept>
 
 static RPCHelpMan rpcNestedTest_rpc()
@@ -39,6 +42,49 @@ static RPCHelpMan rpcNestedTest_rpc()
 static const CRPCCommand vRPCCommands[] = {
     {"rpcNestedTest", &rpcNestedTest_rpc},
 };
+
+void RPCNestedTests::consoleFiltersSecretBearingCommands()
+{
+    const QStringList names{
+        "signmessagewithprivkey", "signrawtransactionwithkey", "vaultpassphrase",
+        "vaultpassphrasechange", "encryptvault", "createvault", "exportvaultarchive",
+        "importvaultarchive", "importdescriptors", "descriptorprocesspsqt",
+        "getdescriptorinfo", "deriveaddresses", "utxoupdatepsqt",
+        "generatetodescriptor", "scantxoutset", "scanblocks",
+        "getdescriptoractivity", "fundrawtransaction", "send", "sendall",
+        "vaultcreatefundedpsqt"};
+    for (const QString& name : names) {
+        std::string result, filtered;
+        const std::string command = name.toStdString();
+        RPCConsole::RPCParseCommandLine(nullptr, result, command + " secret", false, &filtered);
+        QCOMPARE(QString::fromStdString(filtered), name + "(…)");
+        RPCConsole::RPCParseCommandLine(nullptr, result, "help(" + command + "(secret))", false, &filtered);
+        QCOMPARE(QString::fromStdString(filtered), "help(" + name + "(…))");
+    }
+    std::string result, filtered;
+    RPCConsole::RPCParseCommandLine(nullptr, result, "sethdseed abc", false, &filtered);
+    QCOMPARE(filtered, std::string{"sethdseed abc"});
+}
+
+void RPCNestedTests::consoleReturnWithoutClientModel()
+{
+    std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate("other")};
+    RPCConsole console(m_node, style.get(), nullptr);
+    for (const char* name : {"messagesWidget", "lineEdit"}) {
+        QWidget* widget = console.findChild<QWidget*>(name);
+        QVERIFY(widget);
+        QKeyEvent key(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(widget, &key);
+    }
+}
+
+void RPCNestedTests::consoleRejectsEmptyBracketGroups()
+{
+    for (const char* command : {")", "()", "( )"}) {
+        std::string result;
+        QVERIFY_EXCEPTION_THROWN(RPCConsole::RPCExecuteCommandLine(m_node, result, command), std::runtime_error);
+    }
+}
 
 void RPCNestedTests::rpcNestedTests()
 {

@@ -33,6 +33,7 @@ class QWidget;
 QT_END_NAMESPACE
 
 class LedgerRows;
+class TransactionDescDialog;
 
 //! Home: the newest entries of the vault's ledger beside the node, mining and
 //! vault instruments.
@@ -45,6 +46,7 @@ public:
     //! tested at the figures a mainnet user actually sees; the Qt suite runs on sandbox,
     //! where both are zero. Same reason Intro takes them. See doc/design/chain-storage.md.
     explicit DesktopLaunchPage(const PlatformStyle* platform_style, uint64_t blockchain_size_gb, uint64_t chain_state_size_gb, QWidget* parent);
+    ~DesktopLaunchPage() override;
 
     //! The vault the instruments describe. agent_summary is empty when the vault has
     //! no agent setups.
@@ -129,6 +131,8 @@ private:
     QSortFilterProxyModel* m_first_rows{nullptr};
     LedgerRows* m_ledger_rows{nullptr};
     QPointer<VaultModel> m_ledger_model;
+    QList<QPointer<TransactionDescDialog>> m_opened_dialogs;
+    void closeOpenedDialogs();
 
     QWidget* m_instruments{nullptr};
 
@@ -187,6 +191,8 @@ private:
     bool m_mining_active{false};
     QString m_mining_word;
     int m_peers{-1};
+    //! F-610: from the last mining status; true until one arrives.
+    bool m_mining_without_peers{true};
     //! Set while fitLedgerColumns is writing widths, so the resize it causes
     //! does not re-enter.
     bool m_fitting_ledger{false};

@@ -150,6 +150,7 @@ timeoffsets_tests  tests  never  -
 torcontrol_tests  tests  never  -
 transaction_tests  tests  never  -
 translation_tests  tests  never  -
+trust_anchor_tests  tests  never  -
 txdownload_tests  tests  never  -
 txindex_tests  tests  never  -
 txpackage_tests  tests  never  -

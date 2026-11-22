@@ -135,8 +135,10 @@ public:
         lineEdit()->setPlaceholderText(QuicksilverUnits::format(currentUnit, m_min_amount, false, QuicksilverUnits::SeparatorStyle::ALWAYS));
         if(valid)
             setValue(val);
-        else
+        else {
             clear();
+            Q_EMIT valueChanged();
+        }
     }
 
     void setSingleStep(const CAmount& step)

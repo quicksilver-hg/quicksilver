@@ -117,8 +117,9 @@ static void initialize()
     // - Randomness obtained before this call in g_rng_temp_path_init
     SeedRandomStateForTest(SeedRand::ZEROS);
 
-    // Set time to the genesis block timestamp for deterministic initialization.
-    SetMockTime(1231006505);
+    // Set time to the sandbox genesis timestamp for deterministic initialization.
+    // Chain parameters are not selected yet at this point.
+    SetMockTime(1750000000);
 
     // Terminate immediately if a fuzzing harness ever tries to create a socket.
     // Individual tests can override this by pointing CreateSock to a mocked alternative.

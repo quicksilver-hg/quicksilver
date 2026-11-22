@@ -261,6 +261,7 @@ test/lint/lint-quicksilver-dead-surface-residue.py
 test/lint/lint-quicksilver-fee-residue.py
 test/lint/lint-quicksilver-log-register.py
 test/lint/lint-quicksilver-onion-port-help.py
+test/lint/lint-quicksilver-planning-tags.py
 test/lint/lint-quicksilver-public-address-residue.py
 test/lint/lint-quicksilver-public-port-residue.py
 test/lint/lint-quicksilver-public-version-residue.py
@@ -278,3 +279,5 @@ tools/calibration/model.py
 tools/calibration/run-m1.sh
 tools/calibration/run-m2.sh
 tools/calibration/test_model.py
+test/functional/mining_waits_for_peer_headers.py
+src/test/fuzz/util/txpow.h

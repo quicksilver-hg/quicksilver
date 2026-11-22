@@ -66,6 +66,7 @@ BOOST_FIXTURE_TEST_CASE(tx_relaypool_block_doublespend, Dersig100Setup)
         spends[i].vout.resize(1);
         spends[i].vout[0].nValue = m_coinbase_txns[0]->vout[0].nValue;
         spends[i].vout[0].scriptPubKey = scriptPubKey;
+        if (i == 1) spends[i].vout[0].scriptPubKey = GetScriptForDestination(PKHash(coinbaseKey.GetPubKey()));
 
         // Sign:
         std::vector<unsigned char> vchSig;
@@ -75,11 +76,12 @@ BOOST_FIXTURE_TEST_CASE(tx_relaypool_block_doublespend, Dersig100Setup)
         spends[i].vin[0].scriptSig << vchSig;
         ProveTxPowAtTip(spends[i]);
     }
+    BOOST_REQUIRE(spends[0].GetHash() != spends[1].GetHash());
 
     CBlock block;
 
     // Test 1: block with both of those transactions should be rejected.
-    block = CreateAndProcessBlock(spends, scriptPubKey);
+    block = CreateAndProcessBlock(spends, scriptPubKey, nullptr, /*require_processed=*/false);
     {
         LOCK(cs_main);
         BOOST_CHECK(m_node.chainman->ActiveChain().Tip()->GetBlockHash() != block.GetHash());
@@ -87,7 +89,7 @@ BOOST_FIXTURE_TEST_CASE(tx_relaypool_block_doublespend, Dersig100Setup)
 
     // Test 2: ... and should be rejected if spend1 is in the memory pool
     BOOST_CHECK(ToRelayPool(spends[0]));
-    block = CreateAndProcessBlock(spends, scriptPubKey);
+    block = CreateAndProcessBlock(spends, scriptPubKey, nullptr, /*require_processed=*/false);
     {
         LOCK(cs_main);
         BOOST_CHECK(m_node.chainman->ActiveChain().Tip()->GetBlockHash() != block.GetHash());
@@ -98,7 +100,7 @@ BOOST_FIXTURE_TEST_CASE(tx_relaypool_block_doublespend, Dersig100Setup)
 
     // Test 3: ... and should be rejected if spend2 is in the memory pool
     BOOST_CHECK(ToRelayPool(spends[1]));
-    block = CreateAndProcessBlock(spends, scriptPubKey);
+    block = CreateAndProcessBlock(spends, scriptPubKey, nullptr, /*require_processed=*/false);
     {
         LOCK(cs_main);
         BOOST_CHECK(m_node.chainman->ActiveChain().Tip()->GetBlockHash() != block.GetHash());
@@ -130,8 +132,7 @@ BOOST_FIXTURE_TEST_CASE(tx_relaypool_block_doublespend, Dersig100Setup)
 // CHECKLOCKTIMEVERIFY (or CHECKSEQUENCEVERIFY), but the script does contain
 // OP_CHECKLOCKTIMEVERIFY (or OP_CHECKSEQUENCEVERIFY), then script execution
 // should fail.
-// Capture this interaction with the upgraded_nop argument: set it when evaluating
-// any script flag that is implemented as an upgraded NOP code.
+// The flag combinations below capture this interaction for NOP upgrades.
 static void ValidateCheckInputsForAllFlags(const CTransaction &tx, uint32_t failing_flags, bool add_to_cache, CCoinsViewCache& active_coins_tip, ValidationCache& validation_cache) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     PrecomputedTransactionData txdata;

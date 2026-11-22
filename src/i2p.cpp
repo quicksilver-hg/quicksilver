@@ -76,9 +76,27 @@ static Binary DecodeI2PBase64(const std::string& i2p_b64)
     const std::string& std_b64 = SwapBase64(i2p_b64);
     auto decoded = DecodeBase64(std_b64);
     if (!decoded) {
-        throw std::runtime_error(strprintf("Cannot decode Base64: \"%s\"", i2p_b64));
+        throw std::runtime_error("Cannot decode Base64");
     }
     return std::move(*decoded);
+}
+
+static std::string RedactSamSecrets(std::string text)
+{
+    for (const std::string key : {"PRIV=", "DESTINATION="}) {
+        size_t pos{0};
+        while ((pos = text.find(key, pos)) != std::string::npos) {
+            if (pos != 0 && text[pos - 1] != ' ' && text[pos - 1] != '\t' && text[pos - 1] != '\n') {
+                pos += key.size();
+                continue;
+            }
+            const size_t start = pos + key.size();
+            const size_t end = text.find_first_of(" \t\r\n", start);
+            text.replace(start, end == std::string::npos ? std::string::npos : end - start, "****");
+            pos = start + 4;
+        }
+    }
+    return text;
 }
 
 /**
@@ -192,7 +210,7 @@ bool Session::Accept(Connection& conn)
             // In that case consider the session damaged and close it right away,
             // even if the control socket is alive.
             if (peer_dest.find("RESULT=I2P_ERROR") != std::string::npos) {
-                errmsg = strprintf("unexpected reply that hints the session is unusable: %s", peer_dest);
+                errmsg = strprintf("unexpected reply that hints the session is unusable: %s", RedactSamSecrets(peer_dest));
                 disconnect = true;
             } else {
                 errmsg = e.what();
@@ -232,6 +250,7 @@ bool Session::Connect(const CService& to, Connection& conn, bool& proxy_error)
     proxy_error = true;
 
     std::string session_id;
+    uint64_t session_generation;
     std::unique_ptr<Sock> sock;
     conn.peer = to;
 
@@ -240,6 +259,7 @@ bool Session::Connect(const CService& to, Connection& conn, bool& proxy_error)
             LOCK(m_mutex);
             CreateIfNotCreatedAlready();
             session_id = m_session_id;
+            session_generation = m_session_generation;
             conn.me = m_my_addr;
             sock = Hello();
         }
@@ -262,7 +282,7 @@ bool Session::Connect(const CService& to, Connection& conn, bool& proxy_error)
 
         if (result == "INVALID_ID") {
             LOCK(m_mutex);
-            Disconnect();
+            if (m_session_generation == session_generation && m_session_id == session_id) Disconnect();
             throw std::runtime_error("Invalid session id");
         }
 
@@ -270,7 +290,7 @@ bool Session::Connect(const CService& to, Connection& conn, bool& proxy_error)
             proxy_error = false;
         }
 
-        throw std::runtime_error(strprintf("\"%s\"", connect_reply.full));
+        throw std::runtime_error(strprintf("\"%s\"", RedactSamSecrets(connect_reply.full)));
     } catch (const std::runtime_error& e) {
         LogPrintLevel(HgLog::I2P, HgLog::Level::Debug, "Error connecting to %s: %s\n", to.ToStringAddrPort(), e.what());
         CheckControlSock();
@@ -285,7 +305,7 @@ std::string Session::Reply::Get(const std::string& key) const
     const auto& pos = keys.find(key);
     if (pos == keys.end() || !pos->second.has_value()) {
         throw std::runtime_error(
-            strprintf("Missing %s= in the reply to \"%s\": \"%s\"", key, request, full));
+            strprintf("Missing %s= in the reply to \"%s\": \"%s\"", key, RedactSamSecrets(request), RedactSamSecrets(full)));
     }
     return pos->second.value();
 }
@@ -299,7 +319,7 @@ Session::Reply Session::SendRequestAndGetReply(const Sock& sock,
     Reply reply;
 
     // Don't log the full "SESSION CREATE ..." because it contains our private key.
-    reply.request = request.substr(0, 14) == "SESSION CREATE" ? "SESSION CREATE ..." : request;
+    reply.request = request.substr(0, 14) == "SESSION CREATE" ? "SESSION CREATE ..." : RedactSamSecrets(request);
 
     // It could take a few minutes for the I2P router to reply as it is querying the I2P network
     // (when doing name lookup, for example). Notice: `RecvUntilTerminator()` is checking
@@ -320,7 +340,7 @@ Session::Reply Session::SendRequestAndGetReply(const Sock& sock,
 
     if (check_result_ok && reply.Get("RESULT") != "OK") {
         throw std::runtime_error(
-            strprintf("Unexpected reply to \"%s\": \"%s\"", request, reply.full));
+            strprintf("Unexpected reply to \"%s\": \"%s\"", reply.request, RedactSamSecrets(reply.full)));
     }
 
     return reply;
@@ -450,6 +470,7 @@ void Session::CreateIfNotCreatedAlready()
 
     m_my_addr = CService(DestBinToAddr(MyDestination()), I2P_SAM31_PORT);
     m_session_id = session_id;
+    ++m_session_generation;
     m_control_sock = std::move(sock);
 
     LogPrintLevel(HgLog::I2P, HgLog::Level::Info, "%s SAM session %s created, my address=%s\n",
@@ -476,7 +497,7 @@ std::unique_ptr<Sock> Session::StreamAccept()
         Disconnect();
     }
 
-    throw std::runtime_error(strprintf("\"%s\"", reply.full));
+    throw std::runtime_error(strprintf("\"%s\"", RedactSamSecrets(reply.full)));
 }
 
 void Session::Disconnect()

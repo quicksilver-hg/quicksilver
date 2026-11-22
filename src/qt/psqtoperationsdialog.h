@@ -7,11 +7,18 @@
 #define QUICKSILVER_QT_PSQTOPERATIONSDIALOG_H
 
 #include <QDialog>
+#include <QPointer>
 #include <QString>
 
 #include <psqt.h>
 #include <qt/clientmodel.h>
+#include <qt/quicksilverunits.h>
 #include <qt/vaultmodel.h>
+
+#include <util/fs.h>
+
+bool WritePSQTFile(const fs::path& path, const std::string& bytes);
+QString PSQTBroadcastFailureMessage(const QString& error, const QString& reason);
 
 namespace Ui {
 class PSQTOperationsDialog;
@@ -37,8 +44,8 @@ public Q_SLOTS:
 private:
     Ui::PSQTOperationsDialog* m_ui;
     PartiallySignedQuicksilverTransaction m_transaction_data;
-    VaultModel* m_vault_model;
-    ClientModel* m_client_model;
+    QPointer<VaultModel> m_vault_model;
+    QPointer<ClientModel> m_client_model;
 
     enum class StatusLevel {
         INFO,
@@ -51,6 +58,7 @@ private:
     QString renderTransaction(const PartiallySignedQuicksilverTransaction &psqtx);
     void showStatus(const QString &msg, StatusLevel level);
     void showTransactionStatus(const PartiallySignedQuicksilverTransaction &psqtx);
+    QuicksilverUnit displayUnit() const;
 };
 
 #endif // QUICKSILVER_QT_PSQTOPERATIONSDIALOG_H

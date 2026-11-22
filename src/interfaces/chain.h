@@ -129,7 +129,7 @@ public:
     //! Get block hash. Height must be valid or this function will abort.
     virtual uint256 getBlockHash(int height) = 0;
 
-    //! Quicksilver Stage 2: the per-tx PoW target a transaction of this shape must
+    //! Quicksilver per-transaction work pricing: the per-tx PoW target a transaction of this shape must
     //! meet when anchored at `anchor_height`. Required work is per-transaction after
     //! the flag day, and a sender grinds before its signature bytes exist, so it
     //! passes an UPPER BOUND on its final serialized size here. Returns nullopt if

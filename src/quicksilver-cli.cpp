@@ -751,6 +751,8 @@ public:
 
     UniValue ProcessReply(const UniValue &reply) override
     {
+        // F-641: a node error is the reply, not a result with blocks: null.
+        if (!reply.find_value("error").isNull()) return reply.get_obj();
         UniValue result(UniValue::VOBJ);
         result.pushKV("address", address_str);
         result.pushKV("blocks", reply.get_obj()["result"]);

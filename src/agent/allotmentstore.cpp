@@ -93,6 +93,8 @@ const char* AllotmentStoreResultString(AllotmentStoreResult status)
         return "bad-magic";
     case AllotmentStoreResult::BAD_VERSION:
         return "bad-version";
+    case AllotmentStoreResult::BAD_ACTIVITY:
+        return "bad-activity";
     case AllotmentStoreResult::BAD_GENESIS:
         return "bad-genesis";
     case AllotmentStoreResult::TOO_MANY_RECEIPTS:
@@ -116,6 +118,11 @@ const char* AllotmentReceiptActivityTypeString(AllotmentReceiptActivityType type
     } // no default case, so the compiler can warn on missing enum values
     assert(false);
     return "unknown";
+}
+
+util::LockResult LockReceiptStoreDirectory(const fs::path& directory)
+{
+    return util::LockDirectory(directory, ".lock");
 }
 
 AllotmentStoreResult SaveAllotmentReceiptStore(const AllotmentReceiptStoreData& data,
@@ -247,8 +254,10 @@ AllotmentReceiptStoreLoadResult LoadAllotmentPaymentReceipts(const fs::path& pat
                     activity.type = AllotmentReceiptActivityType::SPENT;
                 } else if (type == static_cast<uint8_t>(AllotmentReceiptActivityType::CHANGE)) {
                     activity.type = AllotmentReceiptActivityType::CHANGE;
-                } else {
+                } else if (type == static_cast<uint8_t>(AllotmentReceiptActivityType::IMPORTED)) {
                     activity.type = AllotmentReceiptActivityType::IMPORTED;
+                } else {
+                    return LoadResult(AllotmentStoreResult::BAD_ACTIVITY);
                 }
                 activities.push_back(std::move(activity));
             }
@@ -440,7 +449,7 @@ util::Result<void> ApplyPaymentReceiptsToBundle(AllotmentPolicyBundleArtifact& b
 
     CAmount funding_output_total{0};
     for (const AllotmentFundingOutputArtifact& output : bundle.funding_outputs) {
-        if (!MoneyRange(funding_output_total + output.amount)) {
+        if (output.amount <= 0 || !MoneyRange(output.amount) || output.amount > MAX_MONEY - funding_output_total) {
             return util::Error{Untranslated("Agent allotment payment receipt funding output total is out of range.")};
         }
         funding_output_total += output.amount;

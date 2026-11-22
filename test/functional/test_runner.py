@@ -268,6 +268,7 @@ BASE_SCRIPTS = [
     'mining_unspendable_coinbase.py',
     'mining_zero_claim.py',
     'mining_service.py',
+    'mining_waits_for_peer_headers.py',
     'p2p_mutated_blocks.py',
     'rpc_named_arguments.py',
     'feature_startupnotify.py',

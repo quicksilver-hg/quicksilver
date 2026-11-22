@@ -144,6 +144,14 @@ BOOST_FIXTURE_TEST_CASE(test_addnode_getaddednodeinfo_and_connection_detection, 
 
     BOOST_TEST_MESSAGE("\nPrint GetAddedNodeInfo contents:");
     for (const auto& info : connman->GetAddedNodeInfo(/*include_connected=*/true)) {
+        BOOST_CHECK(!info.m_params.m_added_node.empty());
+        BOOST_CHECK(info.fConnected);
+        const auto matching = std::find_if(nodes.begin(), nodes.end(), [&](const CNode* node) {
+            return node->addr == info.resolvedAddress;
+        });
+        BOOST_REQUIRE(matching != nodes.end());
+        BOOST_CHECK_EQUAL(info.fInbound, (*matching)->IsInboundConn());
+        BOOST_CHECK(!info.resolvedAddress.ToStringAddrPort().empty());
         BOOST_TEST_MESSAGE(strprintf("\nadded node: %s", info.m_params.m_added_node));
         BOOST_TEST_MESSAGE(strprintf("connected: %s", info.fConnected));
         if (info.fConnected) {

@@ -52,6 +52,13 @@ static void HandleError(const leveldb::Status& status)
     throw dbwrapper_error(errmsg);
 }
 
+[[noreturn]] void ThrowCorruptDBRecord()
+{
+    const std::string errmsg = "Fatal LevelDB error: a stored record does not decode";
+    LogInfo(HgLog::LEVELDB, "%s\n", errmsg);
+    throw dbwrapper_error(errmsg);
+}
+
 class CQuicksilverLevelDBLogger : public leveldb::Logger {
 public:
     // This code is adapted from posix_logger.h, which is why it is using vsprintf.
@@ -380,7 +387,9 @@ bool CDBWrapper::IsEmpty()
 {
     std::unique_ptr<CDBIterator> it(NewIterator());
     it->SeekToFirst();
-    return !(it->Valid());
+    if (it->Valid()) return false;
+    it->CheckStatus();
+    return true;
 }
 
 struct CDBIterator::IteratorImpl {
@@ -415,6 +424,7 @@ Span<const std::byte> CDBIterator::GetValueImpl() const
 
 CDBIterator::~CDBIterator() = default;
 bool CDBIterator::Valid() const { return m_impl_iter->iter->Valid(); }
+void CDBIterator::CheckStatus() const { HandleError(m_impl_iter->iter->status()); }
 void CDBIterator::SeekToFirst() { m_impl_iter->iter->SeekToFirst(); }
 void CDBIterator::Next() { m_impl_iter->iter->Next(); }
 

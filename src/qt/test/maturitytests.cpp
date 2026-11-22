@@ -26,7 +26,7 @@ void MaturityTests::roundsToMinutesUnderAnHour()
 {
     // 6 blocks x 300 s = 1800 s = 30 minutes.
     QCOMPARE(FormatMaturityCountdown(6, 300), QString("spendable in about 30 minutes"));
-    // 1 block: singular.
+    // 1 block x 300 s = 5 minutes, plural (one minute is singularAtBothEnds).
     QCOMPARE(FormatMaturityCountdown(1, 300), QString("spendable in about 5 minutes"));
 }
 
@@ -60,9 +60,11 @@ void MaturityTests::summaryOfNothingMaturing()
 void MaturityTests::summarySumsEveryRowAtTheSoonestHeight()
 {
     // Two rows free up at the soonest block: the amount is their sum, not either one.
-    const MaturingSummary s{SummarizeMaturing({{40, 50 * COIN}, {3, 30 * COIN}, {3, 20 * COIN}, {7, 50 * COIN}})};
+    // Every amount and the sum differ, so taking any single row, the largest,
+    // or a row at another height cannot pass (S0293-A-04).
+    const MaturingSummary s{SummarizeMaturing({{40, 41 * COIN}, {3, 30 * COIN}, {3, 22 * COIN}, {7, 45 * COIN}})};
     QCOMPARE(s.soonest, 3);
-    QCOMPARE(s.soonest_amount, 50 * COIN);
+    QCOMPARE(s.soonest_amount, 52 * COIN);
     QCOMPARE(s.latest, 40);
 }
 

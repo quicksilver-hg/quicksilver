@@ -289,11 +289,11 @@ BOOST_FIXTURE_TEST_CASE(logging_Conf, LogSetup)
         BOOST_CHECK_EQUAL(category_levels.size(), 2);
 
         const auto mesh_it{category_levels.find(HgLog::LogFlags::MESH)};
-        BOOST_CHECK(mesh_it != category_levels.end());
+        BOOST_REQUIRE(mesh_it != category_levels.end());
         BOOST_CHECK_EQUAL(mesh_it->second, HgLog::Level::Trace);
 
         const auto http_it{category_levels.find(HgLog::LogFlags::HTTP)};
-        BOOST_CHECK(http_it != category_levels.end());
+        BOOST_REQUIRE(http_it != category_levels.end());
         BOOST_CHECK_EQUAL(http_it->second, HgLog::Level::Info);
     }
 }

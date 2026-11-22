@@ -13,6 +13,7 @@
 #include <common/args.h>
 #include <interfaces/node.h>
 #include <key_io.h>
+#include <logging.h>
 #include <node/interface_ui.h>
 #include <policy/policy.h>
 #include <vault/vault.h>
@@ -30,6 +31,7 @@
 #include <QList>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QTimer>
 #include <QStringList>
 #include <QUrlQuery>
 
@@ -60,6 +62,29 @@ static QString ipcServerName()
 // to send payment.
 
 static QSet<QString> savedPaymentRequests;
+
+PaymentServerFrame::Status PaymentServerFrame::decode(const QByteArray& bytes, QString* uri, const char** reason)
+{
+    if (bytes.size() < 4) return Status::Incomplete;
+    const auto* data = reinterpret_cast<const unsigned char*>(bytes.constData());
+    const quint32 length = (quint32(data[0]) << 24) | (quint32(data[1]) << 16) | (quint32(data[2]) << 8) | quint32(data[3]);
+    auto invalid = [reason](const char* why) {
+        if (reason) *reason = why;
+        return Status::Invalid;
+    };
+    if (length == 0xffffffffU || (length & 1U)) return invalid("malformed");
+    if (length > 64U * 1024U) return invalid("too large");
+    const qsizetype expected = 4 + length;
+    if (bytes.size() > expected) return invalid("malformed");
+    if (bytes.size() < expected) return Status::Incomplete;
+    QDataStream stream(bytes);
+    stream.setVersion(QDataStream::Qt_4_0);
+    QString decoded;
+    stream >> decoded;
+    if (stream.status() != QDataStream::Ok || decoded.isNull()) return invalid("malformed");
+    if (uri) *uri = decoded;
+    return Status::Complete;
+}
 
 //
 // Sending to the server is done synchronously, at startup.
@@ -110,13 +135,13 @@ bool PaymentServer::ipcSendCommandLine()
         out << r;
         out.device()->seek(0);
 
-        socket->write(block);
-        socket->flush();
-        socket->waitForBytesWritten(QUICKSILVER_IPC_CONNECT_TIMEOUT);
+        const bool written = socket->write(block) == block.size() &&
+            (socket->bytesToWrite() == 0 || socket->waitForBytesWritten(QUICKSILVER_IPC_CONNECT_TIMEOUT));
         socket->disconnectFromServer();
 
         delete socket;
         socket = nullptr;
+        if (!written) return false;
         fResult = true;
     }
 
@@ -134,11 +159,17 @@ PaymentServer::PaymentServer(QObject* parent, bool startLocalServer)
 
     QString name = ipcServerName();
 
-    // Clean up old socket leftover from a crash:
-    QLocalServer::removeServer(name);
-
     if (startLocalServer)
     {
+        QLocalSocket probe;
+        probe.connectToServer(name, QIODevice::WriteOnly);
+        if (probe.waitForConnected(QUICKSILVER_IPC_CONNECT_TIMEOUT)) {
+            probe.disconnectFromServer();
+            LogInfo(HgLog::QT, "Payment server: another instance is answering on the URI endpoint; not taking it over\n");
+            return;
+        }
+        // Clean up a socket left by a crashed process, then claim the endpoint.
+        QLocalServer::removeServer(name);
         uriServer = new QLocalServer(this);
 
         if (!uriServer->listen(name)) {
@@ -241,22 +272,49 @@ void PaymentServer::handleURIOrFile(const QString& s)
 
 void PaymentServer::handleURIConnection()
 {
-    QLocalSocket *clientConnection = uriServer->nextPendingConnection();
-
-    while (clientConnection->bytesAvailable() < (int)sizeof(quint32))
-        clientConnection->waitForReadyRead();
-
-    connect(clientConnection, &QLocalSocket::disconnected, clientConnection, &QLocalSocket::deleteLater);
-
-    QDataStream in(clientConnection);
-    in.setVersion(QDataStream::Qt_4_0);
-    if (clientConnection->bytesAvailable() < (int)sizeof(quint16)) {
-        return;
+    while (uriServer->hasPendingConnections()) {
+        auto* client = uriServer->nextPendingConnection();
+        auto bytes = std::make_shared<QByteArray>();
+        auto done = std::make_shared<bool>(false);
+        auto* timer = new QTimer(client);
+        timer->setSingleShot(true);
+        connect(timer, &QTimer::timeout, client, [client, done] {
+            if (*done) return;
+            *done = true;
+            LogInfo(HgLog::QT, "Payment server: dropped a URI connection (%s)\n", "timed out");
+            client->abort();
+            client->deleteLater();
+        });
+        const auto read_frame = [this, client, bytes, done, timer] {
+            if (*done) return;
+            bytes->append(client->readAll());
+            QString uri;
+            const char* reason = nullptr;
+            const auto status = PaymentServerFrame::decode(*bytes, &uri, &reason);
+            if (status == PaymentServerFrame::Status::Incomplete) return;
+            *done = true;
+            timer->stop();
+            if (status == PaymentServerFrame::Status::Complete) {
+                handleURIOrFile(uri);
+            } else {
+                LogInfo(HgLog::QT, "Payment server: dropped a URI connection (%s)\n", reason);
+            }
+            client->disconnectFromServer();
+            client->deleteLater();
+        };
+        connect(client, &QLocalSocket::readyRead, client, read_frame);
+        // Qt does not promise readyRead before disconnected: read what is buffered first.
+        connect(client, &QLocalSocket::disconnected, client, [client, done, read_frame] {
+            read_frame();
+            if (!*done) {
+                *done = true;
+                LogInfo(HgLog::QT, "Payment server: dropped a URI connection (%s)\n", "closed early");
+            }
+            client->deleteLater();
+        });
+        timer->start(QUICKSILVER_IPC_CONNECT_TIMEOUT);
+        read_frame();
     }
-    QString msg;
-    in >> msg;
-
-    handleURIOrFile(msg);
 }
 
 void PaymentServer::setOptionsModel(OptionsModel *_optionsModel)

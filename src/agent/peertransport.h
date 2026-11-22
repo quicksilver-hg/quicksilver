@@ -26,9 +26,25 @@ struct PeerTransactionRelayResult {
     bool peer_verack_received{false};
     bool local_verack_sent{false};
     bool sent_tx{false};
+    bool peer_acknowledged{false};
     size_t wire_tx_bytes{0};
     std::string error;
 };
+
+struct PeerHandshakeResult {
+    bool peer_version_received{false};
+    bool peer_verack_received{false};
+    bool local_verack_sent{false};
+    std::string error;
+};
+
+PeerHandshakeResult CompletePeerHandshake(const Sock& sock, const CService& peer, std::chrono::milliseconds timeout);
+
+/** Send a transaction and wait for a pong proving ordered peer processing. */
+PeerTransactionRelayResult RelayTransactionOnSocket(const Sock& sock,
+                                                    const CSerializedNetMsg& tx_payload,
+                                                    std::chrono::milliseconds timeout,
+                                                    uint64_t nonce);
 
 /** Decode the active network's BIP155 fixed-seed blob into usable endpoints. */
 std::vector<CService> FixedSeedPeers();

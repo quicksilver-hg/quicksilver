@@ -533,7 +533,7 @@ BOOST_AUTO_TEST_CASE(peer_discouragement)
     connman->ClearTestNodes();
 }
 
-BOOST_AUTO_TEST_CASE(DoS_bantime)
+BOOST_AUTO_TEST_CASE(DoS_discouragement)
 {
     LOCK(NetEventsInterface::g_msgproc_mutex);
 

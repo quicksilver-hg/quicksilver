@@ -16,7 +16,7 @@
 //
 // Behaviour comes from a directive file named by QS_SOLVER_STUB_SCRIPT rather
 // than from the command line, because the bridge owns the command line: it
-// always invokes the solver as `<path> <edgebits> <hex> <nonce> <attempts>`.
+// always invokes the solver as `<path> --device ID <edgebits> <hex> <nonce> <attempts>`.
 // One directive per line:
 //
 //   echo <text>     write <text> and a newline to stdout, flushed immediately
@@ -154,7 +154,6 @@ std::vector<std::string> ReadLines(const std::string& path)
     return lines;
 }
 
-//! True and sets `rest` when `line` is `<verb> <rest>`.
 // Locale-independent, like ParseInt: the stub only ever sees decimal nonces.
 unsigned long long ParseU64(const char* text)
 {

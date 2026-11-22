@@ -51,8 +51,11 @@ public:
 /** RAII class that provides access to a VaultDatabase */
 class DatabaseBatch
 {
+public:
+    enum class ReadStatus { kFound, kMissing, kFailed }; // not ERROR: a macro in <wingdi.h>
 private:
     virtual bool ReadKey(DataStream&& key, DataStream& value) = 0;
+    virtual ReadStatus ReadKeyStatus(DataStream&& key, DataStream& value) = 0;
     virtual bool WriteKey(DataStream&& key, DataStream&& value, bool overwrite = true) = 0;
     virtual bool EraseKey(DataStream&& key) = 0;
     virtual bool HasKey(DataStream&& key) = 0;
@@ -66,6 +69,14 @@ public:
 
     virtual void Flush() = 0;
     virtual void Close() = 0;
+
+    template <typename K>
+    ReadStatus ReadRaw(const K& key, DataStream& value)
+    {
+        DataStream ssKey{};
+        ssKey << key;
+        return ReadKeyStatus(std::move(ssKey), value);
+    }
 
     template <typename K, typename T>
     bool Read(const K& key, T& value)

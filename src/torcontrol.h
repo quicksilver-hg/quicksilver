@@ -15,9 +15,11 @@
 #include <event2/util.h>
 
 #include <cstdint>
+#include <cstddef>
 #include <deque>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 constexpr int DEFAULT_TOR_CONTROL_PORT = 9051;
@@ -51,6 +53,7 @@ public:
  */
 class TorControlConnection
 {
+    friend struct TorControlConnectionTest;
 public:
     typedef std::function<void(TorControlConnection&)> ConnectionCB;
     typedef std::function<void(TorControlConnection &,const TorControlReply &)> ReplyHandlerCB;
@@ -81,6 +84,8 @@ public:
     bool Command(const std::string &cmd, const ReplyHandlerCB& reply_handler);
 
 private:
+    void DisconnectWithoutNotification();
+    bool AddReplyLine(const std::string& line);
     /** Callback when ready for use */
     std::function<void(TorControlConnection&)> connected;
     /** Callback when connection lost */
@@ -91,8 +96,10 @@ private:
     struct bufferevent* b_conn{nullptr};
     /** Message being received */
     TorControlReply message;
+    size_t message_bytes{0};
     /** Response handlers */
     std::deque<ReplyHandlerCB> reply_handlers;
+    bool connection_active{false};
 
     /** Libevent handlers: internal */
     static void readcb(struct bufferevent *bev, void *ctx);
@@ -108,7 +115,8 @@ class TorController
 {
 public:
     TorController(struct event_base* base, const std::string& tor_control_center, const CService& target);
-    TorController() : conn{nullptr} {
+    TorController() : base{nullptr}, m_tor_control_center{}, conn{nullptr}, reconnect{false},
+                      reconnect_timeout{1.0F}, m_target{} {
         // Used for testing only.
     }
     ~TorController();
@@ -118,6 +126,8 @@ public:
 
     /** Reconnect, after getting disconnected */
     void Reconnect();
+    static int64_t NextReconnectDelayMillis(float& timeout);
+    static std::string PasswordAuthCommand(std::string_view password);
 private:
     struct event_base* base;
     const std::string m_tor_control_center;

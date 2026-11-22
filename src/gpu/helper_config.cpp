@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #include <common/args.h>
+#include <charconv>
 #include <common/executable.h>
 #include <crypto/cuckatoo/gpu_devices.h>
 #include <cstdlib>
@@ -62,6 +63,20 @@ util::Result<void> ApplyGpuHelperArgs(const ArgsManager& args, const std::option
     std::string error;
     const auto choice = cuckatoo::ParseDeviceChoice(args.GetArgs("-cuckatoodevice"), error);
     if (!choice) return util::Error{Untranslated(error)};
+    std::string timeout;
+    if (args.IsArgSet("-cuckatoosolvertimeout")) {
+        timeout = args.GetArg("-cuckatoosolvertimeout", "");
+        const auto first = timeout.find_first_not_of(' ');
+        const auto last = timeout.find_last_not_of(' ');
+        const std::string trimmed = first == std::string::npos ? std::string{} : timeout.substr(first, last - first + 1);
+        unsigned int seconds{0};
+        const auto [end, ec] = std::from_chars(trimmed.data(), trimmed.data() + trimmed.size(), seconds);
+        if (trimmed.empty() || ec != std::errc{} || end != trimmed.data() + trimmed.size() ||
+            seconds < 1 || seconds > 86400) {
+            return util::Error{Untranslated(strprintf("-cuckatoosolvertimeout must be a whole number of seconds from 1 to 86400, not '%s'.", timeout))};
+        }
+        timeout = trimmed;
+    }
     const std::string custom = Trim(args.GetArg("-cuckatoosolver", ""));
     if (custom.empty())
         Unset("CUCKATOO_GPU_SOLVER");
@@ -79,7 +94,7 @@ util::Result<void> ApplyGpuHelperArgs(const ArgsManager& args, const std::option
         Unset("CUCKATOO_GPU_DEVICES");
     }
     if (args.IsArgSet("-cuckatoosolvertimeout"))
-        Set("CUCKATOO_GPU_TIMEOUT", args.GetArg("-cuckatoosolvertimeout", ""));
+        Set("CUCKATOO_GPU_TIMEOUT", timeout);
     else
         Unset("CUCKATOO_GPU_TIMEOUT");
     return {};

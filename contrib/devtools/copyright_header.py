@@ -115,7 +115,7 @@ ANY_COPYRIGHT_COMPILED = re.compile(ANY_COPYRIGHT_STYLE_OR_YEAR_STYLE)
 
 ################################################################################
 # Quicksilver copyright: anchor-based insertion alongside the retained
-# "The Bitcoin Core developers" attribution (Phase 7 of the de-Bitcoinify audit)
+# "The Bitcoin Core developers" attribution (the Bitcoin-residue audit)
 ################################################################################
 
 # Match a "Copyright [(c)] [<year|range|-present|list>] The Bitcoin Core

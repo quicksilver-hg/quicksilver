@@ -115,6 +115,22 @@ BOOST_AUTO_TEST_CASE(found_cycle_verifies_against_consensus_at_e19)
                         "rejects at E19 — no timing from this harness is usable");
 }
 
+BOOST_AUTO_TEST_CASE(tool_width_calibration_cycle_verifies_at_e19)
+{
+    const auto* vt = cuckatoo::bench::Lookup(19);
+    BOOST_REQUIRE(vt != nullptr);
+    std::vector<unsigned char> prepow(84, 0); // qscalibrate and qsgpucalibrate width.
+    BOOST_REQUIRE_EQUAL(prepow.size(), 84U);
+    std::memcpy(prepow.data(), "quicksilver-calibration-vector", 30);
+
+    cuckatoo::Cycle cycle{};
+    const int64_t winning = FindOneCycle(*vt, 2, prepow, 800, cycle);
+    BOOST_REQUIRE_MESSAGE(winning >= 0, "no 42-cycle in 800 tool-width E19 graphs");
+    const auto keyed = KeyedPrepow(prepow, static_cast<uint32_t>(winning));
+    const auto keys = cuckatoo::CuckatooSetHeader(keyed.data(), static_cast<uint32_t>(keyed.size()));
+    BOOST_CHECK(cuckatoo::CuckatooVerify(cycle, keys, 19));
+}
+
 // Pinned E19 graph recovered from the original probe: 38-byte pre-pow
 // 85 1b b7 + c5 * 35, nonce 9. Before the fix, 12 threads return a cycle
 // whose last edges are 524201 and 524209 (both >= tail_start 523776) and

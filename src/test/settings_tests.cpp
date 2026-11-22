@@ -77,6 +77,13 @@ BOOST_AUTO_TEST_CASE(ReadWrite)
     BOOST_CHECK_EQUAL_COLLECTIONS(values.begin(), values.end(), expected.begin(), expected.end());
     BOOST_CHECK(errors.empty());
 
+    // Exercise the writer as well as the reader with the same value types.
+    BOOST_REQUIRE(common::WriteSettings(path, expected, errors));
+    values.clear();
+    BOOST_REQUIRE(common::ReadSettings(path, values, errors));
+    BOOST_CHECK_EQUAL_COLLECTIONS(values.begin(), values.end(), expected.begin(), expected.end());
+    BOOST_CHECK(errors.empty());
+
     // Check no errors if file doesn't exist.
     fs::remove(path);
     BOOST_CHECK(common::ReadSettings(path, values, errors));
@@ -106,6 +113,64 @@ BOOST_AUTO_TEST_CASE(ReadWrite)
                                                      "and can be fixed by removing the file, which will reset settings to default values.",
                                                      fs::PathToString(path))};
     BOOST_CHECK_EQUAL_COLLECTIONS(errors.begin(), errors.end(), fail_parse.begin(), fail_parse.end());
+}
+
+#ifdef __linux__
+// /dev/full accepts an open but fails when buffered output is flushed.
+BOOST_AUTO_TEST_CASE(WriteFailureReported)
+{
+    std::vector<std::string> errors;
+    BOOST_CHECK(!common::WriteSettings("/dev/full", {{"known", "value"}}, errors));
+    BOOST_REQUIRE_EQUAL(errors.size(), 1U);
+    BOOST_CHECK(errors[0].find("/dev/full") != std::string::npos);
+    BOOST_CHECK(errors[0].find("Unable to open") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(WriteFailureKeepsOldFile)
+{
+    fs::path path;
+    fs::path temp;
+    BOOST_REQUIRE(m_args.GetSettingsPath(&path));
+    BOOST_REQUIRE(m_args.GetSettingsPath(&temp, /*temp=*/true));
+    const std::string original = R"({"known":"original"})";
+    WriteText(path, original);
+    fs::remove(temp);
+    fs::create_symlink("/dev/full", temp);
+    m_args.LockSettings([](common::Settings& settings) { settings.rw_settings["known"] = "replacement"; });
+
+    std::vector<std::string> errors;
+    BOOST_CHECK(!m_args.WriteSettingsFile(&errors));
+    BOOST_REQUIRE_EQUAL(errors.size(), 1U);
+    BOOST_CHECK(errors[0].find(fs::PathToString(temp)) != std::string::npos);
+    BOOST_CHECK(errors[0].find("Unable to open") == std::string::npos);
+    std::ifstream in(path);
+    BOOST_CHECK_EQUAL(std::string(std::istreambuf_iterator<char>(in), {}), original);
+    fs::remove(temp);
+}
+#endif
+
+BOOST_AUTO_TEST_CASE(NegationOverridesDefaultSection)
+{
+    ArgsManager args;
+    args.AddArg("-foo", "", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::OPTIONS);
+    args.SelectConfigNetwork("test");
+    args.LockSettings([](common::Settings& settings) {
+        settings.ro_config[""]["foo"].emplace_back("1");
+        settings.command_line_options["foo"].emplace_back(false);
+    });
+    BOOST_CHECK(args.GetUnsuitableSectionOnlyArgs().empty());
+    args.SelectConfigNetwork("main");
+    BOOST_CHECK(args.GetUnsuitableSectionOnlyArgs().empty());
+
+    // A negation alone in the default section is not a default-section setting:
+    // it must not turn a previously accepted config into a startup error.
+    ArgsManager negated_default;
+    negated_default.AddArg("-foo", "", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::OPTIONS);
+    negated_default.SelectConfigNetwork("test");
+    negated_default.LockSettings([](common::Settings& settings) {
+        settings.ro_config[""]["foo"].emplace_back(false);
+    });
+    BOOST_CHECK(negated_default.GetUnsuitableSectionOnlyArgs().empty());
 }
 
 //! Check settings struct contents against expected json strings.
@@ -264,7 +329,7 @@ BOOST_FIXTURE_TEST_CASE(Merge, MergeTestingSetup)
     // Results file is formatted like:
     //
     //   <input> || GetSetting() | GetSettingsList() | OnlyHasDefaultSectionSetting()
-    BOOST_CHECK_EQUAL(out_sha_hex, "8dbeca4e407134c959e219467abef66a22f4283f88f845b31bbd527ee958b96d");
+    BOOST_CHECK_EQUAL(out_sha_hex, "6d6d2f7fb46d0944ddb3f0eb3b52c36ff1dd5fe45d905c70956a92b8fc8bfdf8");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

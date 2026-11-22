@@ -47,7 +47,7 @@ public:
      * 42-cycle (`cycle`) alongside the grind nonce — `nonce` alone cannot satisfy
      * `CheckProofOfWork`. An external miner submits both.
      *
-     * Quicksilver (#5c-1 Phase 2): `congestion` is likewise submitted rather than
+     * Quicksilver header-field congestion pricing: `congestion` is likewise submitted rather than
      * carried over from the template. It is a header field inside the pre-pow, and
      * consensus recomputes it from the FINAL block weight — which the miner changes
      * here by supplying its own `coinbase`. Reusing the template's value would be

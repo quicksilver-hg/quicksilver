@@ -3750,7 +3750,11 @@ bool CConnman::OutboundTargetReached(bool historicalBlockServingLimit) const
     {
         // keep a large enough buffer to at least relay each block once
         const std::chrono::seconds timeLeftInCycle = GetMaxOutboundTimeLeftInCycle_();
-        const uint64_t buffer = timeLeftInCycle / std::chrono::minutes{10} * MAX_BLOCK_SERIALIZED_SIZE;
+        const int64_t configured_spacing = m_params.GetConsensus().nPowTargetSpacing;
+        const std::chrono::seconds spacing{Assume(configured_spacing > 0) ? configured_spacing : 1};
+        // The cycle is at most one day; even at one block per second this product fits uint64_t.
+        const uint64_t blocks_to_reserve = timeLeftInCycle / spacing;
+        const uint64_t buffer = blocks_to_reserve * MAX_BLOCK_SERIALIZED_SIZE;
         if (buffer >= nMaxOutboundLimit || nMaxOutboundTotalBytesSentInCycle >= nMaxOutboundLimit - buffer)
             return true;
     }

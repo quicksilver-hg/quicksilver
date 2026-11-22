@@ -131,7 +131,7 @@
   "BADTX"
  ],
  [
-  "MAX_MONEY + 1 output"
+  "Output above the Quicksilver maximum (historical signed vector)"
  ],
  [
   [
@@ -145,7 +145,7 @@
   "BADTX"
  ],
  [
-  "MAX_MONEY output + 1 output"
+  "First output above the Quicksilver maximum (historical signed vector)"
  ],
  [
   [

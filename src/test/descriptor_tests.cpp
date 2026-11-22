@@ -159,12 +159,12 @@ void DoCheck(std::string prv, std::string pub, const std::string& norm_pub, int 
         prv = UseHInsteadOfApostrophe(prv);
     }
     parse_privs = Parse(prv, keys_priv, error);
-    BOOST_CHECK_MESSAGE(!parse_privs.empty(), error);
+    BOOST_REQUIRE_MESSAGE(desc_index >= 0 && static_cast<size_t>(desc_index) < parse_privs.size(), error);
     if (replace_apostrophe_with_h_in_pub) {
         pub = UseHInsteadOfApostrophe(pub);
     }
     parse_pubs = Parse(pub, keys_pub, error);
-    BOOST_CHECK_MESSAGE(!parse_pubs.empty(), error);
+    BOOST_REQUIRE_MESSAGE(desc_index >= 0 && static_cast<size_t>(desc_index) < parse_pubs.size(), error);
 
     auto& parse_priv = parse_privs.at(desc_index);
     auto& parse_pub = parse_pubs.at(desc_index);
@@ -273,7 +273,7 @@ void DoCheck(std::string prv, std::string pub, const std::string& norm_pub, int 
             BOOST_CHECK((t ? parse_priv : parse_pub)->Expand(i, key_provider, spks, script_provider, &desc_cache));
 
             // Compare the output with the expected result.
-            BOOST_CHECK_EQUAL(spks.size(), ref.size());
+            BOOST_REQUIRE_EQUAL(spks.size(), ref.size());
 
             // Try to expand again using cached data, and compare.
             BOOST_CHECK(parse_pub->ExpandFromCache(i, desc_cache, spks_cached, script_provider_cached));
@@ -457,13 +457,18 @@ void CheckMultipath(const std::string& prv,
     FlatSigningProvider prov, out;
     std::string error;
     const auto desc{[&](){
-        auto parsed{Parse(pub, prov, error)};
-        assert(parsed.size() > 1);
+        auto parsed{Parse(prv, prov, error)};
+        BOOST_REQUIRE(parsed.size() > 1);
         return std::move(parsed.at(0));
     }()};
     desc->ToString();
     std::vector<CScript> out_scripts;
-    desc->Expand(0, prov, out_scripts, out);
+    BOOST_REQUIRE(desc->Expand(0, prov, out_scripts, out));
+    const auto& expected_scripts{scripts.at(0).at(0)};
+    BOOST_REQUIRE_EQUAL(out_scripts.size(), expected_scripts.size());
+    for (size_t i{0}; i < out_scripts.size(); ++i) {
+        BOOST_CHECK_EQUAL(HexStr(out_scripts[i]), expected_scripts[i]);
+    }
 }
 
 void CheckInferDescriptor(const std::string& script_hex, const std::string& expected_desc, const std::vector<std::string>& hex_scripts, const std::vector<std::pair<std::string, std::string>>& origin_pubkeys)

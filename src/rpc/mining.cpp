@@ -597,6 +597,8 @@ static RPCHelpMan getminingstatus()
             {RPCResult::Type::STR_HEX, "payout_script", "Payout script in use, hex (empty if never started)"},
             {RPCResult::Type::NUM, "blocks_found", "Blocks mined this session"},
             {RPCResult::Type::STR_AMOUNT, "coins_minted_session", "Coins minted this session (" + CURRENCY_UNIT + ")"},
+            {RPCResult::Type::BOOL, "mines_without_peers", "Whether the miner may start before any peer has sent this node block headers (-minewithoutpeers). Always false on main"},
+            {RPCResult::Type::BOOL, "waiting_for_sync", "True while the mining role is active but waiting until this node has caught up with the network; no block is built until it has"},
             {RPCResult::Type::BOOL, "claims_reward", "False when -minezeroclaim is set: blocks this node mines claim nothing, so no coins are created for them"},
             {RPCResult::Type::NUM, "attempts_per_second", /*optional=*/true, "Sum of measured rates for solving cards when available; otherwise Cuckatoo graphs attempted per second over the trailing " + util::ToString(node::AttemptRateWindow::WINDOW_SECONDS) + " seconds, including processor mining. This is the rate now, not a session average. Omitted while no rate or attempt has been measured -- unknown, not zero"},
             {RPCResult::Type::ARR, "devices", "Cards with recorded solver activity", {{RPCResult::Type::OBJ, "", "", {
@@ -630,6 +632,8 @@ static RPCHelpMan getminingstatus()
     obj.pushKV("payout_script", st.payout_script);
     obj.pushKV("blocks_found", st.blocks_found);
     obj.pushKV("coins_minted_session", ValueFromAmount(st.coins_minted_session));
+    obj.pushKV("mines_without_peers", st.mines_without_peers);
+    obj.pushKV("waiting_for_sync", st.waiting_for_sync);
     obj.pushKV("claims_reward", !svc.ZeroClaim());
     // Deliberately absent rather than 0 when unknown: a zero rate is a real
     // reading (an armed miner whose solver has stopped) and must not be produced
@@ -701,7 +705,7 @@ UniValue BlockPowDescriptor(const Consensus::Params& params, const arith_uint256
     pow.pushKV("cycleencoding",
                strprintf("uint32le x42 ascending, appended to the %u-byte header",
                          (unsigned)CBlockHeader::PREPOW_SIZE));
-    // Quicksilver (#5c-1 Phase 2): the recurrence a miner needs to recompute nCongestion
+    // Quicksilver header-field congestion pricing: the recurrence a miner needs to recompute nCongestion
     // for itself. The template's "congestion" field is only correct for the template's own
     // transaction set; "transactions" is in the mutable list, so a miner that changes the
     // body MUST recompute from these and the parent multiplier.
@@ -1162,7 +1166,7 @@ static RPCHelpMan submitblock()
 
     ChainstateManager& chainman = EnsureAnyChainman(request.context);
 
-    // Quicksilver (#5c-1 Phase 2): the submitted block is validated exactly as it
+    // Quicksilver header-field congestion pricing: the submitted block is validated exactly as it
     // arrived. A node that filled in a missing coinbase witness nonce here would
     // change the block's weight, and weight feeds nCongestion -- so a miner who
     // ground a correct multiplier over their own bytes would be rejected as

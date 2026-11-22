@@ -53,6 +53,11 @@ QT_END_NAMESPACE
 
 extern const QString QUICKSILVER_IPC_PREFIX;
 
+namespace PaymentServerFrame {
+enum class Status { Incomplete, Complete, Invalid };
+Status decode(const QByteArray& bytes, QString* uri, const char** reason = nullptr);
+}
+
 class PaymentServer : public QObject
 {
     Q_OBJECT

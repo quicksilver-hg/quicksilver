@@ -10,6 +10,7 @@
 #include <interfaces/node.h>
 #include <script/script.h>
 #include <sync.h>
+#include <util/chaintype.h>
 #include <util/result.h>
 #include <util/time.h>
 
@@ -19,7 +20,9 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
+class ArgsManager;
 class ChainstateManager;
 namespace interfaces { class Mining; }
 
@@ -144,6 +147,13 @@ public:
     //! While set, Start() refuses any payout script ZeroClaimPayoutAllowed rejects.
     void SetZeroClaim(bool zero_claim) { m_zero_claim.store(zero_claim); }
     bool ZeroClaim() const { return m_zero_claim.load(); }
+    //! F-610: whether the worker may mine before any peer has sent headers.
+    //! Starts at the chain's default (MineWithoutPeersDefault); init sets it
+    //! from -minewithoutpeers before RPC becomes callable.
+    void SetMineWithoutPeers(bool mine_without_peers) { m_mine_without_peers.store(mine_without_peers); }
+    bool MineWithoutPeers() const { return m_mine_without_peers.load(); }
+    //! True while the worker is armed and deferring in MiningShouldWaitForSync.
+    bool WaitingForSync() const { return m_waiting_for_sync.load(); }
     MiningStatus GetStatus() const EXCLUSIVE_LOCKS_REQUIRED(!m_stats_mutex);
     //! Solver attempts per second over the trailing window, or nullopt when no
     //! attempt has been observed this session. See AttemptRateWindow.
@@ -162,6 +172,8 @@ private:
     std::atomic<bool> m_active{false};
     std::atomic<bool> m_interrupt{false};
     std::atomic<bool> m_zero_claim{false};
+    std::atomic<bool> m_mine_without_peers;
+    std::atomic<bool> m_waiting_for_sync{false};
     //! Graphs attempted this session. Counted off the solver's per-attempt progress
     //! callback rather than the nonce budget: the budget bills 4096 for a window
     //! that finds nothing and zero for one that finds a cycle, which made a dead
@@ -182,6 +194,12 @@ private:
     mutable Mutex m_stats_mutex;
     MiningStatus m_status GUARDED_BY(m_stats_mutex);
 };
+
+//! Whether a solve window sends the worker to the bounded tip wait instead of
+//! straight into the next window: no card, no solver, or every card benched,
+//! with the CPU fallback off (F-651).
+bool WaitForTipAfterWindow(bool solved, cuckatoo::GpuSolveStatus status, bool cpu_fallback,
+                           const std::vector<cuckatoo::GpuDeviceFault>& faults);
 
 //! Compute a GUI/RPC-facing status snapshot from the live service + chain tip.
 interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateManager& chainman);
@@ -209,12 +227,24 @@ util::Result<void> StartMining(MiningService& svc, const std::string& payout_add
 util::Result<void> StartMining(MiningService& svc, const CScript& payout_script);
 
 // Returns true if the background miner should defer instead of building on the
-// current tip: the node is either still importing blocks from disk, or it knows
-// of a more-work header chain it has not yet connected. Deliberately does NOT
-// consult the wall-clock tip-age (max_tip_age): a correctly bootstrapping chain
-// whose genesis is timestamped in the past is at the frontier and must mine.
+// current tip: the node is still importing blocks from disk, it knows of a
+// more-work header chain it has not yet connected, or (unless
+// mine_without_peers) no peer has sent it headers since startup (F-610).
+// Deliberately does NOT consult the wall-clock tip-age (max_tip_age): a node
+// whose peers' headers show it at the frontier mines however old its tip is.
 // Takes cs_main internally; the caller must not already hold it.
+bool MiningShouldWaitForSync(const ChainstateManager& chainman, bool mine_without_peers);
+//! As above, with the chain's default for -minewithoutpeers.
 bool MiningShouldWaitForSync(const ChainstateManager& chainman);
+
+//! F-610 (owner, 2026-11-13): main never mines before a peer's headers arrive.
+//! The test chains let a lone node mine by default: sandbox, and publictest,
+//! where isolated nodes run the real-card checks.
+bool MineWithoutPeersDefault(ChainType chain);
+
+//! Reads -minewithoutpeers for this chain. The option does not exist on main,
+//! so setting it there is an error rather than silently ignored.
+util::Result<bool> ReadMineWithoutPeers(const ArgsManager& args, ChainType chain);
 
 } // namespace node
 

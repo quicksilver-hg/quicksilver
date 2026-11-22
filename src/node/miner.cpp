@@ -67,7 +67,7 @@ void RegenerateCommitments(CBlock& block, ChainstateManager& chainman)
 
     block.hashMerkleRoot = BlockMerkleRoot(block);
 
-    // Quicksilver (#5c-1 Phase 2): nCongestion folds in this block's own weight, so a
+    // Quicksilver header-field congestion pricing: nCongestion folds in this block's own weight, so a
     // body change invalidates it exactly as it invalidates the merkle root above. This
     // is why it is recomputed here and not left to the assembler: every caller of this
     // function has just changed vtx, and a stale value is rejected as "bad-congestion".
@@ -162,9 +162,9 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     coinbaseTx.vin[0].prevout.SetNull();
     coinbaseTx.vout.resize(1);
     coinbaseTx.vout[0].scriptPubKey = m_options.coinbase_output_script;
-    // Quicksilver Frame-B mint (#4): claim nTxPowMint for each included tx carrying a valid
+    // Quicksilver Frame-B mint: claim nTxPowMint for each included tx carrying a valid
     // per-tx PoW. Consensus only caps the claim; the assembler must actually take it. Stale-
-    // anchor txs are already excluded from pblock->vtx by TestPackageAnchors (#7), so this
+    // anchor txs are already excluded from pblock->vtx by TestPackageAnchors (anchor recency), so this
     // sum is exactly the mint over the anchor-valid included set. vtx[0] is still the dummy
     // coinbase (mints nothing).
     // F-578: zero-claim pays 0 instead. Consensus caps the claim on one side only,
@@ -183,7 +183,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     pblock->hashPrevBlock  = pindexPrev->GetBlockHash();
     UpdateTime(pblock, chainparams.GetConsensus(), pindexPrev);
     pblock->nBits          = GetNextWorkRequired(pindexPrev, pblock, chainparams.GetConsensus());
-    // Quicksilver (#5c-1 Phase 2): the congestion multiplier is a header field that
+    // Quicksilver header-field congestion pricing: the congestion multiplier is a header field that
     // consensus recomputes at ConnectBlock from the parent's m and THIS block's weight.
     // It must therefore be set after the body is final — the coinbase above is the last
     // thing to move it, since GenerateCoinbaseCommitment appends the witness-commitment
@@ -277,7 +277,7 @@ void BlockAssembler::SortForBlock(const CTxRelayPool::setEntries& package, std::
     std::sort(sortedEntries.begin(), sortedEntries.end(), CompareTxIterByAncestorCount());
 }
 
-// #5c-2 transaction selection: order the relaypool by per-tx surplus-work rate
+// Surplus-work transaction selection: order the relaypool by per-tx surplus-work rate
 // (surplus/vsize) — the policy inclusion ranking. This is PER-TX individual
 // scoring (no package re-ranking by a child's surplus): we rank each tx by its own rate, but a
 // selected tx still pulls in its not-yet-included in-relaypool ancestors so the

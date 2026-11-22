@@ -174,7 +174,8 @@ BOOST_AUTO_TEST_CASE(key_signature_tests)
 
     for (int i = 1; i <=20; ++i) {
         sig.clear();
-        BOOST_CHECK(key.Sign(msg_hash, sig, false, i));
+        BOOST_REQUIRE(key.Sign(msg_hash, sig, false, i));
+        BOOST_REQUIRE_GE(sig.size(), 5U);
         found = sig[3] == 0x21 && sig[4] == 0x00;
         if (found) {
             break;

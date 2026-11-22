@@ -709,7 +709,7 @@ bool RelayPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return state.Invalid(TxValidationResult::TX_CONSENSUS, "coinbase");
 
     // Quicksilver: reject txs without a valid, recently-anchored per-tx Cuckatoo PoW
-    // (sovereignty floor + #5c-1 precompute/recency anchor).
+    // (sovereignty floor + per-transaction PoW precompute and recency anchor).
     const Consensus::Params& tx_cp = m_active_chainstate.m_chainman.GetConsensus();
     const CBlockIndex* tx_tip = m_active_chainstate.m_chain.Tip();
     const CBlockIndex* tx_anchor = CheckTxAnchor(tx, tx_tip, tx_cp);
@@ -2242,7 +2242,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         return false;
     }
 
-    // Quicksilver (#5c-1 Phase 2): the congestion multiplier is a HEADER field, so this is
+    // Quicksilver header-field congestion pricing: the congestion multiplier is a HEADER field, so this is
     // a consensus check, not a computation -- the block carries m and we verify it equals the
     // EIP-1559 recurrence over the parent's m and this block's fullness. It lives in the
     // header so header-only clients can derive a per-tx PoW target; the price is that a full
@@ -2369,7 +2369,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         const CTransaction &tx = *(block.vtx[i]);
 
         // Quicksilver: every non-coinbase tx must carry a valid per-tx Cuckatoo PoW
-        // whose anchor (#5c-1) resolves on this branch and is within the recency
+        // whose anchor (per-transaction PoW anchor) resolves on this branch and is within the recency
         // window. The coinbase is exempt (it carries no per-tx proof or anchor).
         if (!tx.IsCoinBase()) {
             const CBlockIndex* tx_anchor = CheckTxAnchor(tx, pindex->pprev, params.GetConsensus());
@@ -2451,11 +2451,11 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
              Ticks<SecondsDouble>(m_chainman.time_connect),
              Ticks<MillisecondsDouble>(m_chainman.time_connect) / m_chainman.num_blocks_total);
 
-    // Quicksilver Frame-B mint (#4): each non-coinbase tx with a valid per-tx PoW
+    // Quicksilver Frame-B mint: each non-coinbase tx with a valid per-tx PoW
     // authorizes a mint of C to the miner, raising the coinbase ceiling. The
     // allowance re-verifies each proof via the same predicate used at the top of
     // this loop, so it cannot pay for an unproven tx. Replay is impossible: a proof
-    // binds to one txid (#3), and a txid is includable once (UTXO uniqueness).
+    // binds to one txid, and a txid is includable once (UTXO uniqueness).
     const CAmount mint_allowance = GetBlockMintAllowance(block, params.GetConsensus(), pindex->pprev);
     if (mint_allowance == MINT_ALLOWANCE_INVALID && state.IsValid()) {
         state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-mint-range",
@@ -3869,6 +3869,26 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
     const Consensus::Params& consensusParams = chainman.GetConsensus();
     if (block.nBits != GetNextWorkRequired(pindexPrev, &block, consensusParams))
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "bad-diffbits", "incorrect proof of work");
+
+    // Check against the trust anchors. Both checks always run; there is no switch.
+    const int nHeight{pindexPrev->nHeight + 1};
+    const std::vector<TrustAnchor>& anchors{chainman.GetParams().TrustAnchors()};
+    // (a) A header at an anchor's height must be that anchor. This protects a
+    // fresh node that holds none of the anchored chain yet.
+    for (const TrustAnchor& anchor : anchors) {
+        if (anchor.height == nHeight && block.GetHash() != anchor.hash) {
+            LogWarning(HgLog::LEDGER, "rejected reason=checkpoint-mismatch height=%d\n", nHeight);
+            return state.Invalid(BlockValidationResult::BLOCK_CHECKPOINT, "checkpoint-mismatch", "header contradicts a trust anchor");
+        }
+    }
+    // (b) Don't accept any fork below the newest anchor already in our block
+    // index. GetLastTrustAnchor goes by the anchor's block-index entry, so on a
+    // node that holds no anchor yet this never fires.
+    const CBlockIndex* panchor{blockman.GetLastTrustAnchor(anchors)};
+    if (panchor && nHeight < panchor->nHeight) {
+        LogWarning(HgLog::LEDGER, "rejected reason=bad-fork-prior-to-checkpoint height=%d\n", nHeight);
+        return state.Invalid(BlockValidationResult::BLOCK_CHECKPOINT, "bad-fork-prior-to-checkpoint");
+    }
 
     // Check timestamp against prev
     if (block.GetBlockTime() <= pindexPrev->GetMedianTimePast())

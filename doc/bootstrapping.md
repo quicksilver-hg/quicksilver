@@ -118,17 +118,24 @@ The bootstrap mining path in v1 is **`startmining`**:
     quicksilver-cli getminingstatus
     quicksilver-cli stopmining
 
-`startmining` builds templates in-process and is not gated on peer count. That is
-deliberate, and it is also a trap for anyone who did not mean to use it that way:
-a node with zero peers cannot see the network's chain, so it mines onto a chain
-of its own, and the coins it pays are discarded the moment it connects to a chain
-with more work. The desktop asks before arming a miner with no peers, and says so
-on the page for as long as the count stays at zero; `startmining` itself does not
-ask, because bootstrapping a new network is exactly what it is for.
+`startmining` builds templates in-process. On **main** it mines only after a peer
+has sent this node block headers and the node has caught up with them. A node
+with no peers, or one still catching up, waits: it never builds on a tip the
+network has already passed. `getminingstatus` reports `waiting_for_sync` while it
+does.
 
-It still defers while the node knows of a more-work header chain it has not
-connected — that check is on chain frontier, not on wall-clock tip age, so a
-genesis timestamped in the past does not park it.
+Starting a new chain from one node is a test-chain activity. On sandbox and
+publictest the node may mine alone: `-minewithoutpeers` is on by default there,
+and it does not exist on main. That is also a trap for anyone who did not mean to
+use it that way: a node with zero peers cannot see the network's chain, so it
+mines onto a chain of its own, and the coins it pays are discarded the moment it
+connects to a chain with more work. On those chains the desktop asks before
+arming a miner with no peers, and says so on the page for as long as the count
+stays at zero; `startmining` itself does not ask.
+
+On every chain it also defers while the node knows of a more-work header chain it
+has not connected — that check is on chain frontier, not on wall-clock tip age,
+so a genesis timestamped in the past does not park it.
 
 `getblocktemplate` is for external mining software on an already-populated
 network. If you are running one node on a chain that has just started, you want

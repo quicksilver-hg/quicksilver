@@ -56,10 +56,12 @@ BOOST_AUTO_TEST_CASE(verifies, *boost::unit_test::precondition(gpu_solver_config
     auto pre = make_preimage();
 
     // Drive the real bridge (watchdog + parse) exactly as the vault/miner do.
+    const auto device = cuckatoo::SolveDevice(cuckatoo::DiscoverGpus(28).selection);
+    BOOST_REQUIRE_MESSAGE(device, "No usable E28 GPU solver device selected");
     cuckatoo::Cycle cyc{}; uint32_t nonce = 0;
     BOOST_REQUIRE_MESSAGE(
         cuckatoo::GpuSolveBytes(pre.data(), pre.size(), 28,
-                                *cuckatoo::SolveDevice(cuckatoo::DiscoverGpus(28).selection),
+                                *device,
                                 1, 100000, cyc, nonce),
         "qsgpusolve-cuda produced no cycle in window — raise max_attempts");
 
@@ -84,10 +86,12 @@ BOOST_AUTO_TEST_CASE(verifies_e28_block, *boost::unit_test::precondition(gpu_sol
     auto pre = make_block_preimage();
 
     // Drive the real bridge exactly as the block miner does (84-byte header, E28).
+    const auto device = cuckatoo::SolveDevice(cuckatoo::DiscoverGpus(28).selection);
+    BOOST_REQUIRE_MESSAGE(device, "No usable E28 GPU solver device selected");
     cuckatoo::Cycle cyc{}; uint32_t nonce = 0;
     BOOST_REQUIRE_MESSAGE(
         cuckatoo::GpuSolveBytes(pre.data(), pre.size(), 28,
-                                *cuckatoo::SolveDevice(cuckatoo::DiscoverGpus(28).selection),
+                                *device,
                                 1, 100000, cyc, nonce),
         "qsgpusolve-cuda (E28) produced no cycle for the 84-byte block header — raise max_attempts");
 

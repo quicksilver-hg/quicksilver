@@ -60,12 +60,12 @@ bool CheckProofOfWorkImpl(const CBlockHeader& header, const Consensus::Params&);
 /**
  * Quicksilver per-tx PoW target: floor((2^256 - 1) / RequiredTxWork(tx, anchor)),
  * never easier than params.txPowLimit. Takes the transaction because required work
- * is per-transaction after the Stage 2 flag day — see RequiredTxWork.
+ * is per-transaction after the byte-pricing flag day — see RequiredTxWork.
  */
 uint256 GetTxPowTarget(const Consensus::Params& params, const CBlockIndex* anchor,
                        const CTransaction& tx);
 
-/** Quicksilver (#5c-1 Phase 2): the CHAIN-dependent half of the per-tx work floor:
+/** Quicksilver header-field congestion pricing: the CHAIN-dependent half of the per-tx work floor:
  *  base_coupled(anchor) * m(anchor) / CONGESTION_ONE, clamped >= 1.
  *  base_coupled = average GetBlockProof over nBaseWorkMAWindow blocks back from the
  *  anchor, divided by nTxWorkCouplingK. Pure function of chain state at the anchor —
@@ -75,18 +75,18 @@ uint256 GetTxPowTarget(const Consensus::Params& params, const CBlockIndex* ancho
  *  The clamp to 1 belongs HERE, not in RequiredTxWork. tools/calibration/model.py
  *  floors max(1, W//K) BEFORE applying the size factor, so decision criteria 1 and 2
  *  were verified against a design where the size term is live from block 1. Moving
- *  the clamp outward would make both Stage 2 terms inert until mean block work
+ *  the clamp outward would make both byte-pricing terms inert until mean block work
  *  reaches K = 106 cycles (~57 GPUs) — spec finding 3.2 reappearing inside its own
  *  fix. */
 arith_uint256 BaseTxWork(const CBlockIndex* anchor, const Consensus::Params& params);
 
-/** Quicksilver Stage 2 flag day: the per-tx work a transaction must carry —
+/** Quicksilver byte-pricing flag day: the per-tx work a transaction must carry —
  *  BaseTxWork(anchor) scaled by the transaction-local size and UTXO terms. This is
  *  what consensus checks and what a sender must grind against. */
 arith_uint256 RequiredTxWork(const CTransaction& tx, const CBlockIndex* anchor,
                              const Consensus::Params& params);
 
-/** Quicksilver Stage 2 flag day: RequiredTxWork evaluated against a byte count and an
+/** Quicksilver byte-pricing flag day: RequiredTxWork evaluated against a byte count and an
  *  output/input count rather than a finished transaction. A sender grinds BEFORE the
  *  signature bytes exist (PowPreimage covers neither scriptSig nor the witness), so it
  *  must price an upper bound on its final size — and a second copy of the formula in
@@ -96,11 +96,11 @@ arith_uint256 RequiredTxWorkForBytes(uint64_t bytes, size_t nout, size_t nin,
                                      const CBlockIndex* anchor,
                                      const Consensus::Params& params);
 
-//! Quicksilver (#5c-1 Phase 2): fixed-point scale for the congestion multiplier m.
+//! Quicksilver header-field congestion pricing: fixed-point scale for the congestion multiplier m.
 //! m == CONGESTION_ONE means multiplier 1.0 (the hardware floor). Integer math only.
 static constexpr uint64_t CONGESTION_ONE = 65536; // 2^16
 
-/** Quicksilver (#5c-1 Phase 2): one step of the EIP-1559 congestion recurrence.
+/** Quicksilver header-field congestion pricing: one step of the EIP-1559 congestion recurrence.
  *  Given the parent multiplier prev_m (fixed-point, CONGESTION_ONE == 1.0) and the
  *  connecting block's weight, returns the next multiplier, clamped to
  *  [CONGESTION_ONE, params.nCongestionMaxMultiplier * CONGESTION_ONE].
@@ -110,18 +110,18 @@ static constexpr uint64_t CONGESTION_ONE = 65536; // 2^16
 uint64_t NextCongestionMultiplier(uint64_t prev_m, int64_t block_weight,
                                   const Consensus::Params& params);
 
-/** Quicksilver (#5c-2): actual per-tx work represented by a tx's Cuckatoo proof,
+/** Quicksilver surplus-work ranking: actual per-tx work represented by a tx's Cuckatoo proof,
  *  2^256/(proofhash+1) — the GetBlockProof idiom applied to CuckatooProofHash(nCycle).
  *  Pure function of tx.nCycle; does not require the proof to be valid. */
 arith_uint256 GetTxActualWork(const CTransaction& tx);
 
-/** Quicksilver (#5c-2): surplus per-tx work above the #5c-1 floor at the tx's anchor,
+/** Quicksilver surplus-work ranking: surplus per-tx work above the per-transaction work floor at the tx's anchor,
  *  max(0, GetTxActualWork(tx) - RequiredTxWork(tx, anchor)). The inclusion-ranking key
  *  (the EIP-1559 "tip" analog). Pure function of tx.nCycle + chain state at the anchor. */
 arith_uint256 GetTxWorkSurplus(const CTransaction& tx, const CBlockIndex* anchor,
                                const Consensus::Params& params);
 
-/** Quicksilver (#5c-1): resolve and validate a tx's PoW anchor against a branch.
+/** Quicksilver per-transaction PoW anchor: resolve and validate a tx's PoW anchor against a branch.
  *  Returns the anchor CBlockIndex (an ancestor of branch_tip at tx.nAnchorHeight)
  *  iff it is on-branch and within [height(branch_tip) - nMaxAnchorAge, height(branch_tip)].
  *  Returns nullptr otherwise. Coinbase txs are not anchored and must not be passed here. */
@@ -144,14 +144,14 @@ bool CheckTxProofOfWork(const CTransaction& tx, const uint256& target,
 static constexpr CAmount MINT_ALLOWANCE_INVALID{-1};
 
 /**
- * Frame-B mint accounting (#4 / #5c-1). Returns the total per-tx mint a block
+ * Frame-B mint accounting with per-transaction PoW anchors. Returns the total per-tx mint a block
  * authorizes: params.nTxPowMint for every NON-coinbase transaction whose anchor
  * resolves against `pprev` (CheckTxAnchor) AND whose per-tx PoW is valid against
  * its anchor-derived target (re-verified via CheckTxProofOfWork — the SAME predicate
  * that gates inclusion, so the mint cannot pay for an unproven or stale-anchored tx
  * regardless of caller ordering). A bad/stale anchor mints nothing. Coinbase is
  * exempt. The running total is MoneyRange-guarded; an out-of-range sum returns
- * MINT_ALLOWANCE_INVALID. Stage 2: the total is then clamped to params.nMaxBlockMint.
+ * MINT_ALLOWANCE_INVALID. Per-transaction work pricing: the total is then clamped to params.nMaxBlockMint.
  * Both the assembler (node/miner.cpp) and the validator (validation.cpp) reach the cap
  * through THIS function, so there is no second implementation to keep in sync and they
  * cannot disagree about it. This is the sole inflation arithmetic of the coin — keep

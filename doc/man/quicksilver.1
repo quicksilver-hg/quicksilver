@@ -682,6 +682,13 @@ startmining
 Raw payout script (hex) for the background mining role, instead of
 \fB\-mineaddress\fR. For example 6a pays a provably unspendable
 OP_RETURN output. Mutually exclusive with \fB\-mineaddress\fR.
+.HP
+\fB\-minewithoutpeers\fR
+.IP
+Let the background miner start before any peer has sent block headers,
+so a lone node can mine a test chain. Not available on main,
+where mining waits until a peer's headers show the node has
+caught up with the network (default: 1 on sandbox and publictest)
 .PP
 RPC server options:
 .HP

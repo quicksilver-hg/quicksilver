@@ -88,7 +88,9 @@ void TestAddAddressesToSendBook(interfaces::Node& node)
     TestChain100Setup test;
     auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
     test.m_node.vault_loader = vault_loader.get();
-    node.setContext(&test.m_node);
+    // The setup lives on this stack; put the application node's context back
+    // before it is destroyed, on every exit (S0290-B-01).
+    const ScopedNodeContext scoped_context(node, test.m_node);
     const std::shared_ptr<CVault> vault = std::make_shared<CVault>(node.context()->chain.get(), "", CreateMockableVaultDatabase());
     vault->LoadVault();
     vault->SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
@@ -258,7 +260,7 @@ void AddressBookTests::newSendingAddressDoesNotNestEventLoop()
     TestChain100Setup test;
     auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
     test.m_node.vault_loader = vault_loader.get();
-    m_node.setContext(&test.m_node);
+    const ScopedNodeContext scoped_context(m_node, test.m_node);
     const std::shared_ptr<CVault> vault = std::make_shared<CVault>(m_node.context()->chain.get(), "", CreateMockableVaultDatabase());
     vault->LoadVault();
     vault->SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
@@ -297,7 +299,7 @@ void AddressBookTests::exportDoesNotNestEventLoop()
     TestChain100Setup test;
     auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
     test.m_node.vault_loader = vault_loader.get();
-    m_node.setContext(&test.m_node);
+    const ScopedNodeContext scoped_context(m_node, test.m_node);
     const std::shared_ptr<CVault> vault = std::make_shared<CVault>(m_node.context()->chain.get(), "", CreateMockableVaultDatabase());
     vault->LoadVault();
     vault->SetVaultFlag(VAULT_FLAG_DESCRIPTORS);

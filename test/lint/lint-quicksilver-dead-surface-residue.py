@@ -184,7 +184,12 @@ RULES = [
     Rule("unused key-origin vault flag", re.compile(r"\bVAULT_FLAG_KEY_ORIGIN_METADATA\b|\bkey_origin_metadata\b")),
     Rule("hdseedid RPC field", re.compile(r'"hdseedid"'), re.compile(r"^src/vault/rpc/")),
     Rule("empty-table -checkpoints flag", re.compile(r"-checkpoints\b")),
-    Rule("checkpoint walker and empty maps", re.compile(r"\bDEFAULT_CHECKPOINTS_ENABLED\b|\bcheckpoints_enabled\b|\bGetLastCheckpoint\b|\bBLOCK_CHECKPOINT\b|\bCCheckpointData\b|\bMapCheckpoints\b|\bcheckpointData\b|\bmapCheckpoints\b|\.Checkpoints\(\)|bad-fork-prior-to-checkpoint")),
+    # The "checkpoint walker and empty maps" rule (2026-08-20) is gone: the owner
+    # re-added an anchor list on 2026-11-16 (F-565 (a)), so BLOCK_CHECKPOINT and the
+    # checkpoint-mismatch / bad-fork-prior-to-checkpoint reasons are live again. The
+    # mechanism uses new names (TrustAnchor, GetLastTrustAnchor), so the old
+    # walker, switch and map names stay banned.
+    Rule("retired checkpoint walker names", re.compile(r"\bDEFAULT_CHECKPOINTS_ENABLED\b|\bcheckpoints_enabled\b|\bGetLastCheckpoint\b|\bCCheckpointData\b|\bMapCheckpoints\b|\bcheckpointData\b|\bmapCheckpoints\b|\.Checkpoints\(\)")),
     Rule("empty-table -forcednsseed flag", re.compile(r"-forcednsseed\b")),
     Rule("unsupported-types reject set", re.compile(r"\bUNSUPPORTED_TYPES\b|\bLoadUnsupportedVaultRecords\b|\bUNSUPPORTED_RECORD\b")),
     Rule("CMasterKey dummy derivation slots", re.compile(r"\bnDerivationMethod\b|\bvchOtherDerivationParameters\b")),
@@ -817,12 +822,10 @@ def self_test() -> int:
         ("src/node/chainstatemanager_args.cpp", "    if (auto value{args.GetBoolArg(\"-checkpoints\")}) opts.checkpoints_enabled = *value;", "empty-table -checkpoints flag"),
         ("src/test/fuzz/p2p_headers_presync.cpp", '    static auto setup = MakeNoLogFileContext<HeadersSyncSetup>(ChainType::MAIN, {.extra_args = {"-checkpoints=0"}});', "empty-table -checkpoints flag"),
         ("src/kernel/chainparams.cpp", "                // Quicksilver: fresh chain, no checkpoints.", None),
-        ("src/kernel/chainstatemanager_opts.h", "static constexpr bool DEFAULT_CHECKPOINTS_ENABLED{true};", "checkpoint walker and empty maps"),
-        ("src/node/blockstorage.h", "    const CBlockIndex* GetLastCheckpoint(const CCheckpointData& data) EXCLUSIVE_LOCKS_REQUIRED(cs_main);", "checkpoint walker and empty maps"),
-        ("src/consensus/validation.h", "    BLOCK_CHECKPOINT,        //!< the block failed to meet one of our checkpoints", "checkpoint walker and empty maps"),
-        ("src/kernel/chainparams.cpp", "        checkpointData = {", "checkpoint walker and empty maps"),
-        ("src/test/pow_tests.cpp", "    BOOST_CHECK(params.Checkpoints().mapCheckpoints.empty());", "checkpoint walker and empty maps"),
-        ("src/validation.cpp", '            return state.Invalid(BlockValidationResult::BLOCK_CHECKPOINT, "bad-fork-prior-to-checkpoint");', "checkpoint walker and empty maps"),
+        # Trust anchors re-added 2026-11-16 (F-565 (a)): the old names stay banned,
+        # BLOCK_CHECKPOINT and its reason strings are live.
+        ("src/node/blockstorage.h", "    const CBlockIndex* GetLastCheckpoint(const CCheckpointData& data) EXCLUSIVE_LOCKS_REQUIRED(cs_main);", "retired checkpoint walker names"),
+        ("src/consensus/validation.h", "    BLOCK_CHECKPOINT,        //!< the block failed to meet one of our checkpoints", None),
         ("src/net_processing.cpp", "    case BlockValidationResult::BLOCK_INVALID_HEADER:", None),
         ("src/init.cpp", '    argsman.AddArg("-forcednsseed", strprintf("Always query for peer addresses via DNS lookup', "empty-table -forcednsseed flag"),
         ("src/init.cpp", '    argsman.AddArg("-dnsseed", strprintf("Query for peer addresses via DNS lookup', None),

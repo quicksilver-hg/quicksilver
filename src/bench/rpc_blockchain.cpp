@@ -25,7 +25,9 @@
 namespace {
 
 struct TestBlockAndIndex {
-    const std::unique_ptr<const TestingSetup> testing_setup{MakeNoLogFileContext<const TestingSetup>(ChainType::MAIN)};
+    // The fixture is a real sandbox block (see readwriteblock.cpp), so its index carries the
+    // header's own nBits under sandbox params, whose pow limit admits it.
+    const std::unique_ptr<const TestingSetup> testing_setup{MakeNoLogFileContext<const TestingSetup>(ChainType::SANDBOX)};
     CBlock block{};
     uint256 blockHash{};
     CBlockIndex blockindex{};
@@ -40,7 +42,7 @@ struct TestBlockAndIndex {
 
         blockHash = block.GetHash();
         blockindex.phashBlock = &blockHash;
-        blockindex.nBits = 403014710;
+        blockindex.nBits = block.nBits;
     }
 };
 

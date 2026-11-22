@@ -149,7 +149,8 @@ class QuicksilverAgentTest(QuicksilverTestFramework):
         self._test_agent_alone_cannot_spend(funding_address, destination, wif, genesis)
         self._test_vault_cosigns_and_broadcasts(funding_address, destination, wif, genesis)
         self._test_vault_reclaims_by_key_path(funding_address, destination)
-        self._test_importrecovery_finds_taproot_allotment(funding_address)
+        recovery_scan = self._test_importrecovery_finds_taproot_allotment(funding_address)
+        self._test_importrecovery_refuses_foreign_outputs(funding_address, recovery_scan)
 
     def _test_sequential_spend_uses_change(self, funding_address: str, destination: str, wif: str, genesis: str) -> None:
         bundle = self.make_bundle(
@@ -271,10 +272,22 @@ class QuicksilverAgentTest(QuicksilverTestFramework):
         assert_equal(len(witness), 4)
         assert_equal(witness[0], signatures[self.cosigner_pubkey[1:].hex()].hex())
         assert_equal(witness[1], agent_sig.hex())
-        txid = node.sendrawtransaction(final["hex"])
+        txid = self._test_sendtxpeer_waits_for_the_peer(final["hex"])
         self.generate(node, 1)
         assert_equal(node.getrawtransaction(txid, 1)["confirmations"], 1)
         self.reclaim_descriptor = descsum_create(f"tr({self.vault_wif},multi_a(2,{self.agent_pubkey},{self.cosigner_wif}))")
+
+    def _test_sendtxpeer_waits_for_the_peer(self, raw_tx: str) -> str:
+        node = self.nodes[0]
+        datadir = os.path.join(self.options.tmpdir, "agent_relay")
+        os.makedirs(datadir)
+        result = self.agent_process(datadir, [f"-peer=127.0.0.1:{p2p_port(0)}", f"-message={raw_tx}", "sendtxpeer"])
+        output = parse_agent_kv(result.stdout)
+        assert_equal(output["peer_acknowledged"], "true")
+        assert_equal(output["sent_tx"], "true")
+        txid = output["txid"]
+        self.wait_until(lambda: txid in node.getrawrelaypool())
+        return txid
 
     def _test_vault_reclaims_by_key_path(self, funding_address, destination):
         node = self.nodes[0]
@@ -304,6 +317,34 @@ class QuicksilverAgentTest(QuicksilverTestFramework):
         assert_equal(parse_agent_kv(result.stdout)["imported_receipts"], "1")
         listed = self.agent_output(datadir, ["listreceipts"])
         assert_equal(listed["receipt_0_output"], f"{txid}:{scan['unspents'][0]['vout']}")
+        return scan
+
+    def _test_importrecovery_refuses_foreign_outputs(self, funding_address, scan):
+        datadir = os.path.join(self.options.tmpdir, "agent_recovery_rejected")
+        os.makedirs(datadir)
+        args = [f"-fundingaddress={funding_address}", "-scantxoutset=-", "importrecovery"]
+        foreign_script = self.funder.getaddressinfo(self.funder.getnewaddress())["output_script"]
+        foreign_scan = json.loads(json.dumps(scan, default=str))
+        foreign_scan["unspents"][0]["output_script"] = foreign_script
+        rejected = self.agent_process(datadir, args, check=False, input_text=json.dumps(foreign_scan))
+        assert rejected.returncode != 0
+        assert "does not pay the funding address" in rejected.stderr
+        assert_equal(self.agent_output(datadir, ["listreceipts"])["stored_receipt_count"], "0")
+
+        for bad_script in (None, "zz"):
+            malformed_scan = json.loads(json.dumps(scan, default=str))
+            malformed_scan["unspents"][0]["output_script"] = bad_script
+            rejected = self.agent_process(datadir, args, check=False, input_text=json.dumps(malformed_scan))
+            assert rejected.returncode != 0
+            assert "field 'output_script' must be a hex script" in rejected.stderr
+            assert_equal(self.agent_output(datadir, ["listreceipts"])["stored_receipt_count"], "0")
+
+        missing_success = json.loads(json.dumps(scan, default=str))
+        del missing_success["success"]
+        rejected = self.agent_process(datadir, args, check=False, input_text=json.dumps(missing_success))
+        assert rejected.returncode != 0
+        assert "scantxoutset result must report success." in rejected.stderr
+        assert_equal(self.agent_output(datadir, ["listreceipts"])["stored_receipt_count"], "0")
 
 
 if __name__ == '__main__':

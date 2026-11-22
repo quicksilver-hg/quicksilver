@@ -42,6 +42,9 @@ BOOST_AUTO_TEST_CASE(netbase_networks)
     BOOST_CHECK(ResolveIP("8.8.8.8").GetNetwork() == NET_IPV4);
     BOOST_CHECK(ResolveIP("2001::8888").GetNetwork() == NET_IPV6);
     BOOST_CHECK(ResolveIP("pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion").GetNetwork() == NET_ONION);
+    CNetAddr i2p;
+    BOOST_REQUIRE(i2p.SetSpecial("udhdrtrcetjm5sxzskjyr5ztpeszydbh4dpl3pl4utgqqw2v4jna.b32.i2p"));
+    BOOST_CHECK(i2p.GetNetwork() == NET_I2P);
     BOOST_CHECK(CreateInternal("foo.com").GetNetwork() == NET_INTERNAL);
 }
 
@@ -341,6 +344,7 @@ BOOST_AUTO_TEST_CASE(netbase_parsenetwork)
     BOOST_CHECK_EQUAL(ParseNetwork("ipv4"), NET_IPV4);
     BOOST_CHECK_EQUAL(ParseNetwork("ipv6"), NET_IPV6);
     BOOST_CHECK_EQUAL(ParseNetwork("onion"), NET_ONION);
+    BOOST_CHECK_EQUAL(ParseNetwork("i2p"), NET_I2P);
     BOOST_CHECK_EQUAL(ParseNetwork("tor"), NET_UNROUTABLE);
     BOOST_CHECK_EQUAL(ParseNetwork("cjdns"), NET_CJDNS);
 
@@ -527,7 +531,7 @@ static constexpr const char* stream_addrv1_hex =
 
     "61bc6649"                         // time, Fri Jan  9 02:54:25 UTC 2009
     "0000000000000000"                 // service flags, NODE_NONE
-    "00000000000000000000000000000001" // address, fixed 16 bytes (IPv4 embedded in IPv6)
+    "00000000000000000000000000000001" // address, IPv6 loopback in 16 bytes
     "0000"                             // port
 
     "79627683"                         // time, Tue Nov 22 11:22:33 UTC 2039

@@ -104,16 +104,15 @@ BOOST_AUTO_TEST_CASE(passphrase) {
     std::string hash(GetRandHash().ToString());
     std::vector<unsigned char> vchSalt(8);
     GetRandBytes(vchSalt);
-    uint32_t rounds = m_rng.rand32();
-    if (rounds > 30000)
-        rounds = 30000;
+    // SetKeyFromPassphrase refuses 0 rounds, so draw from [1, 30000] (S0208-B-05).
+    const uint32_t rounds{1 + m_rng.randrange(30000U)};
     TestCrypter::TestPassphrase(vchSalt, SecureString(hash.begin(), hash.end()), rounds);
 }
 
 BOOST_AUTO_TEST_CASE(encrypt) {
     constexpr std::array<uint8_t, VAULT_CRYPTO_SALT_SIZE> salt{"0000deadbeef0000"_hex_u8};
     CCrypter crypt;
-    crypt.SetKeyFromPassphrase("passphrase", salt, 25000);
+    BOOST_REQUIRE(crypt.SetKeyFromPassphrase("passphrase", salt, 25000));
     TestCrypter::TestEncrypt(crypt, "22bcade09ac03ff6386914359cfe885cfeb5f77ff0d670f102f619687453b29d"_hex_u8);
 
     for (int i = 0; i != 100; i++)
@@ -127,7 +126,17 @@ BOOST_AUTO_TEST_CASE(encrypt) {
 BOOST_AUTO_TEST_CASE(decrypt) {
     constexpr std::array<uint8_t, VAULT_CRYPTO_SALT_SIZE> salt{"0000deadbeef0000"_hex_u8};
     CCrypter crypt;
-    crypt.SetKeyFromPassphrase("passphrase", salt, 25000);
+    // Without a key every vector below is refused before padding is read, so
+    // the key must be set and shown to work (S0208-B-01).
+    BOOST_REQUIRE(crypt.SetKeyFromPassphrase("passphrase", salt, 25000));
+    {
+        const CKeyingMaterial plaintext{0x22, 0xbc, 0xad, 0xe0, 0x9a, 0xc0, 0x3f, 0xf6};
+        std::vector<unsigned char> ciphertext;
+        BOOST_REQUIRE(crypt.Encrypt(plaintext, ciphertext));
+        CKeyingMaterial decrypted;
+        BOOST_REQUIRE(crypt.Decrypt(ciphertext, decrypted));
+        BOOST_CHECK(decrypted == plaintext);
+    }
 
     // Corner cases from testing. Independent oracle (python hashlib SHA-512
     // EVP_BytesToKey equivalent, which reproduces the committed passphrase

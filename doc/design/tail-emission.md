@@ -32,6 +32,17 @@ perpetual tail subsidy of 1 COIN, and a bootstrap window of 1,051,920 blocks
 (ten years at the five-minute target spacing). Sandbox uses a 150-block window
 so tests cross the tail boundary quickly while exercising the same curve.
 
+## A ceiling, not a schedule
+
+The curve gives the most a block may claim, not what it must claim. Consensus
+rejects a coinbase that pays more than the block's subsidy plus its
+per-transaction mint allowance, and accepts one that pays less. The difference
+is never created. A node started with `-minezeroclaim` mines blocks that claim
+nothing.
+
+So the curve, summed over heights, is an upper bound on supply. The coins that
+exist are the ones the chain's blocks actually claimed.
+
 ## Properties
 
 - height 0 pays the initial subsidy;
@@ -41,5 +52,5 @@ so tests cross the tail boundary quickly while exercising the same curve.
 - each per-block subsidy must stay within `MoneyRange`.
 
 The tail means Quicksilver keeps issuing indefinitely. Over time, issuance remains
-bounded per block while the total supply grows, so the percentage issuance rate
-trends downward.
+bounded per block while the total supply can keep growing, so the most the
+percentage issuance rate can be trends downward.

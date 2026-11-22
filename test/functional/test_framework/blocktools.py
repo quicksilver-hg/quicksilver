@@ -45,7 +45,7 @@ from .util import assert_equal
 
 MAX_BLOCK_SIGOPS = 20000
 
-# Quicksilver (#5c-1 Phase 2): the EIP-1559 congestion multiplier, mirrored from
+# Quicksilver header-field congestion pricing: the EIP-1559 congestion multiplier, mirrored from
 # src/pow.h and NextCongestionMultiplier() in src/pow.cpp. It is a header field
 # (CBlockHeader.nCongestion), so a block built here must carry the exact value
 # consensus recomputes at ConnectBlock or it is rejected as "bad-congestion".

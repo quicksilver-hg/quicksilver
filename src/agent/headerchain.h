@@ -25,6 +25,7 @@ enum class HeaderAcceptCode {
     BAD_DIFFICULTY,
     TIME_TOO_OLD,
     TIME_TOO_NEW,
+    BAD_VERSION,
 };
 
 struct HeaderAcceptResult {

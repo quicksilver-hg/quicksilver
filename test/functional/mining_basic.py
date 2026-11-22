@@ -164,7 +164,7 @@ class MiningTest(QuicksilverTestFramework):
         block.hashPrevBlock = int(tmpl["previousblockhash"], 16)
         block.nTime = tmpl["curtime"]
         block.nBits = int(tmpl["bits"], 16)
-        # Quicksilver (#5c-1 Phase 2): the template publishes the congestion multiplier
+        # Quicksilver header-field congestion pricing: the template publishes the congestion multiplier
         # for its own transaction set; this block uses that set unchanged, so it is the
         # value consensus will demand. It sits inside the pre-pow, so set it before solve().
         block.nCongestion = tmpl["congestion"]

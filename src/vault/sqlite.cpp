@@ -294,6 +294,7 @@ void SQLiteDatabase::Open()
 
     // Enable fullfsync for the platforms that use it
     SetPragma(m_db, "fullfsync", "true", "Failed to enable fullfsync");
+    SetPragma(m_db, "secure_delete", "ON", "Failed to enable secure delete");
 
     if (m_use_unsafe_sync) {
         // Use normal synchronous mode for the journal
@@ -459,11 +460,16 @@ void SQLiteBatch::Close()
 
 bool SQLiteBatch::ReadKey(DataStream&& key, DataStream& value)
 {
-    if (!m_database.m_db) return false;
+    return ReadKeyStatus(std::move(key), value) == ReadStatus::kFound;
+}
+
+DatabaseBatch::ReadStatus SQLiteBatch::ReadKeyStatus(DataStream&& key, DataStream& value)
+{
+    if (!m_database.m_db) return ReadStatus::kFailed;
     assert(m_read_stmt);
 
     // Bind: leftmost parameter in statement is index 1
-    if (!BindBlobToStatement(m_read_stmt, 1, key, "key")) return false;
+    if (!BindBlobToStatement(m_read_stmt, 1, key, "key")) return ReadStatus::kFailed;
     int res = sqlite3_step(m_read_stmt);
     if (res != SQLITE_ROW) {
         if (res != SQLITE_DONE) {
@@ -472,7 +478,7 @@ bool SQLiteBatch::ReadKey(DataStream&& key, DataStream& value)
         }
         sqlite3_clear_bindings(m_read_stmt);
         sqlite3_reset(m_read_stmt);
-        return false;
+        return res == SQLITE_DONE ? ReadStatus::kMissing : ReadStatus::kFailed;
     }
     // Leftmost column in result is index 0
     value.clear();
@@ -480,7 +486,7 @@ bool SQLiteBatch::ReadKey(DataStream&& key, DataStream& value)
 
     sqlite3_clear_bindings(m_read_stmt);
     sqlite3_reset(m_read_stmt);
-    return true;
+    return ReadStatus::kFound;
 }
 
 bool SQLiteBatch::WriteKey(DataStream&& key, DataStream&& value, bool overwrite)

@@ -12,6 +12,7 @@
 #include <primitives/transaction.h>
 #include <random.h>
 #include <sync.h>
+#include <util/check.h>
 #include <util/result.h>
 #include <vault/coinselection.h>
 #include <vault/spend.h>
@@ -38,6 +39,10 @@ using vault::OutputGroup;
 using vault::SelectCoinsExactOrLargest;
 using vault::TxStateInactive;
 
+// A P2WPKH input's signed size. The benchmark coins carry no script, so their size
+// is set explicitly; without it every group weighs 0 and no weight limit is exercised.
+static constexpr int BENCH_INPUT_BYTES{68};
+
 static void addCoin(const CAmount& nValue, const CVault& vault, std::vector<std::unique_ptr<CVaultTx>>& wtxs)
 {
     static int nextLockTime = 0;
@@ -50,10 +55,10 @@ static void addCoin(const CAmount& nValue, const CVault& vault, std::vector<std:
 
 // Simple benchmark for vault coin selection. Note that it maybe be necessary
 // to build up more complicated scenarios in order to get meaningful
-// measurements of performance. From laanwj, "Vault coin selection is probably
-// the hardest, as you need a wider selection of scenarios, just testing the
-// same one over and over isn't too useful. Generating random isn't useful
-// either for measurements."
+// measurements of performance. As laanwj noted for the upstream wallet, coin
+// selection is probably the hardest to benchmark: it needs a wider range of
+// scenarios, since repeating one is not very useful, and random generation
+// is not useful for measurements either.
 static void CoinSelection(benchmark::Bench& bench)
 {
     NodeContext node;
@@ -72,13 +77,15 @@ static void CoinSelection(benchmark::Bench& bench)
     vault::CoinsResult available_coins;
     for (const auto& wtx : wtxs) {
         const auto txout = wtx->tx->vout.at(0);
-        available_coins.Add(OutputType::BECH32, COutput{COutPoint(wtx->GetHash(), 0), txout, /*depth=*/6 * 24, CalculateMaximumSignedInputSize(txout, &vault, /*coin_control=*/nullptr), /*solvable=*/true, /*safe=*/true, wtx->GetTxTime(), /*from_me=*/true});
+        available_coins.Add(OutputType::BECH32, COutput{COutPoint(wtx->GetHash(), 0), txout, /*depth=*/6 * 24, BENCH_INPUT_BYTES, /*solvable=*/true, /*safe=*/true, wtx->GetTxTime(), /*from_me=*/true});
     }
 
     const CoinEligibilityFilter filter_standard(1, 6, 0);
     FastRandomContext rand{};
     const CoinSelectionParams coin_selection_params{rand};
     auto group = vault::GroupOutputs(vault, available_coins, coin_selection_params, {{filter_standard}})[filter_standard];
+    Assert(!group.all_groups.positive_group.empty());
+    for (const OutputGroup& g : group.all_groups.positive_group) Assert(g.m_weight > 0);
     bench.run([&] {
         auto result = AttemptSelection(1002.99 * COIN, group, coin_selection_params, /*allow_mixed_output_types=*/true);
         assert(result);
@@ -94,17 +101,15 @@ static void CoinSelection(benchmark::Bench& bench)
     });
 }
 
-// Copied from src/vault/test/coinselector_tests.cpp
 static void add_coin(const CAmount& nValue, int nInput, std::vector<OutputGroup>& set)
 {
     CMutableTransaction tx;
     tx.vout.resize(nInput + 1);
     tx.vout[nInput].nValue = nValue;
-    COutput output(COutPoint(tx.GetHash(), nInput), tx.vout.at(nInput), /*depth=*/ 0, /*input_bytes=*/ -1, /*solvable=*/ true, /*safe=*/ true, /*time=*/ 0, /*from_me=*/ true);
+    COutput output(COutPoint(tx.GetHash(), nInput), tx.vout.at(nInput), /*depth=*/ 0, /*input_bytes=*/ BENCH_INPUT_BYTES, /*solvable=*/ true, /*safe=*/ true, /*time=*/ 0, /*from_me=*/ true);
     set.emplace_back();
     set.back().Insert(std::make_shared<COutput>(output), /*ancestors=*/ 0, /*descendants=*/ 0);
 }
-// Copied from src/vault/test/coinselector_tests.cpp
 static CAmount make_hard_case(int utxos, std::vector<OutputGroup>& utxo_pool)
 {
     utxo_pool.clear();
@@ -122,10 +127,23 @@ static void ExactSearchExhaustion(benchmark::Bench& bench)
     // Setup
     std::vector<OutputGroup> utxo_pool;
 
+    // The hard case must exhaust the exact search: it stops at the try cap without
+    // completing, and still returns a selection (the largest-first fallback).
+    {
+        const CAmount target = make_hard_case(17, utxo_pool);
+        const auto result = SelectCoinsExactOrLargest(utxo_pool, target, MAX_STANDARD_TX_WEIGHT);
+        Assert(result);
+        Assert(!result->GetAlgoCompleted());
+        Assert(result->GetSelectionsEvaluated() == 100'000); // MAX_EXACT_SELECTION_TRIES in vault/coinselection.cpp
+        Assert(result->GetWeight() > 0);
+        utxo_pool.clear();
+    }
+
     bench.run([&] {
         // Benchmark
         CAmount target = make_hard_case(17, utxo_pool);
-        SelectCoinsExactOrLargest(utxo_pool, target, MAX_STANDARD_TX_WEIGHT);
+        auto result = SelectCoinsExactOrLargest(utxo_pool, target, MAX_STANDARD_TX_WEIGHT);
+        ankerl::nanobench::doNotOptimizeAway(result);
 
         // Cleanup
         utxo_pool.clear();

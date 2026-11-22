@@ -58,10 +58,11 @@ int PeerTableModel::columnCount(const QModelIndex& parent) const
 
 QVariant PeerTableModel::data(const QModelIndex& index, int role) const
 {
-    if(!index.isValid())
+    if (!index.isValid() || index.model() != this || index.row() < 0 || index.row() >= m_peers_data.size() ||
+        index.column() < 0 || index.column() >= columnCount())
         return QVariant();
 
-    CNodeCombinedStats *rec = static_cast<CNodeCombinedStats*>(index.internalPointer());
+    CNodeCombinedStats* rec = const_cast<CNodeCombinedStats*>(&m_peers_data[index.row()]);
 
     const auto column = static_cast<ColumnIndex>(index.column());
     if (role == Qt::DisplayRole) {
@@ -107,6 +108,7 @@ QVariant PeerTableModel::data(const QModelIndex& index, int role) const
         } // no default case, so the compiler can warn about missing cases
         assert(false);
     } else if (role == StatsRole) {
+        // Consumers use this pointer immediately; it is valid only until the next refresh.
         return QVariant::fromValue(rec);
     }
 
@@ -135,10 +137,8 @@ Qt::ItemFlags PeerTableModel::flags(const QModelIndex &index) const
 
 QModelIndex PeerTableModel::index(int row, int column, const QModelIndex& parent) const
 {
-    Q_UNUSED(parent);
-
-    if (0 <= row && row < rowCount() && 0 <= column && column < columnCount()) {
-        return createIndex(row, column, const_cast<CNodeCombinedStats*>(&m_peers_data[row]));
+    if (!parent.isValid() && 0 <= row && row < rowCount() && 0 <= column && column < columnCount()) {
+        return createIndex(row, column);
     }
 
     return QModelIndex();
@@ -180,7 +180,9 @@ void PeerTableModel::refresh()
         m_peers_data.swap(new_peers_data);
     }
 
-    const auto top_left = index(0, 0);
-    const auto bottom_right = index(rowCount() - 1, columnCount() - 1);
-    Q_EMIT dataChanged(top_left, bottom_right);
+    if (rowCount() > 0) {
+        const auto top_left = index(0, 0);
+        const auto bottom_right = index(rowCount() - 1, columnCount() - 1);
+        Q_EMIT dataChanged(top_left, bottom_right);
+    }
 }

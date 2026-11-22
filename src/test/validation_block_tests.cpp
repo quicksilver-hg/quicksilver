@@ -20,6 +20,7 @@
 #include <validation.h>
 #include <validationinterface.h>
 
+#include <atomic>
 #include <thread>
 
 using node::BlockAssembler;
@@ -36,7 +37,7 @@ struct MinerTestingSetup : public SandboxingSetup {
 
 // Grind a valid per-tx Cuckatoo proof into `mtx`, bound to `anchor_hash`. Callers
 // must set mtx.nAnchorHeight to the height of `anchor_hash` so that relaypool/block
-// validation resolves the same anchor (#5c-1).
+// validation resolves the same anchor (per-transaction PoW anchor).
 static void GrindProof(CMutableTransaction& mtx, uint8_t edgebits, const uint256& anchor_hash)
 {
     const auto pre = CTransaction(mtx).PowPreimage(anchor_hash);
@@ -97,7 +98,7 @@ std::shared_ptr<CBlock> MinerTestingSetup::Block(const uint256& prev_hash)
     txCoinbase.vout[1].scriptPubKey = P2WSH_OP_TRUE;
     // BlockAssembler valued the coinbase for the active tip+1 (genesis+1 here, since
     // BuildChain only submits headers and never connects), but this block is
-    // repositioned onto prev_hash at `height`. Under the #5a tail-emission ramp the
+    // repositioned onto prev_hash at `height`. Under the tail-subsidy ramp the
     // subsidy shrinks every block, so reusing the tip+1 value at any greater height
     // over-pays and ConnectBlock rejects it (bad-cb-amount). Re-value the reward
     // output for the block's actual height.
@@ -265,9 +266,9 @@ BOOST_AUTO_TEST_CASE(relaypool_locks_reorg)
         const uint256 split_hash{last_mined->hashPrevBlock};
 
         // Create a bunch of transactions to spend the miner rewards of the
-        // most recent blocks. #5b-1: these are feeless (out == in), so the spend
+        // most recent blocks. Feeless: these are (out == in), so the spend
         // copies the coinbase reward output verbatim with nothing skimmed off as
-        // a fee. #5c-1: their per-tx PoW is ground later (below), once the anchor
+        // a fee. per-transaction PoW anchor: their per-tx PoW is ground later (below), once the anchor
         // block they will point at exists.
         std::vector<CMutableTransaction> mtxs;
         for (int num_txs = 22; num_txs > 0; --num_txs) {
@@ -287,7 +288,7 @@ BOOST_AUTO_TEST_CASE(relaypool_locks_reorg)
             BOOST_REQUIRE(ProcessBlock(last_mined));
         }
 
-        // #5c-1: every non-coinbase tx needs a recent, on-branch anchor and a
+        // per-transaction PoW anchor: every non-coinbase tx needs a recent, on-branch anchor and a
         // valid per-tx Cuckatoo proof to enter the relaypool. Anchor all spends to
         // the current tip (the newest in-window block, height H) and grind each
         // proof against that tip's block hash now that the chain exists.
@@ -331,14 +332,14 @@ BOOST_AUTO_TEST_CASE(relaypool_locks_reorg)
 
         // Run a thread that simulates an RPC caller that is polling while
         // validation is doing a reorg
-        std::thread rpc_thread{[&]() {
+        std::atomic<bool> saw_intermediate_size{false};
+        std::jthread rpc_thread{[&](std::stop_token stop) {
             // This thread is checking that the relaypool either contains all of
             // the transactions invalidated by the reorg, or none of them, and
             // not some intermediate amount.
-            while (true) {
+            while (!stop.stop_requested()) {
                 LOCK(m_node.relaypool->cs);
                 if (m_node.relaypool->size() == 0) {
-                    // We are done with the reorg
                     break;
                 }
                 // Internally, we might be in the middle of the reorg, but
@@ -346,23 +347,21 @@ BOOST_AUTO_TEST_CASE(relaypool_locks_reorg)
                 // be atomic. So the caller assumes that the returned relaypool
                 // is consistent. That is, it has all txs that were there
                 // before the reorg.
-                assert(m_node.relaypool->size() == txs.size());
-                continue;
+                if (m_node.relaypool->size() != txs.size()) saw_intermediate_size = true;
             }
-            LOCK(cs_main);
-            // We are done with the reorg, so the tip must have changed
-            assert(tip_init != m_node.chainman->ActiveChain().Tip()->GetBlockHash());
         }};
 
         // Submit the reorg in this thread to invalidate and remove the txs from the tx pool
         for (const auto& b : reorg) {
-            ProcessBlock(b);
+            BOOST_REQUIRE(ProcessBlock(b));
         }
         // Check that the reorg was eventually successful
-        BOOST_CHECK_EQUAL(last_mined->GetHash(), WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Tip()->GetBlockHash()));
-
-        // We can join the other thread, which returns when the reorg was successful
+        BOOST_REQUIRE_EQUAL(last_mined->GetHash(), WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Tip()->GetBlockHash()));
+        BOOST_CHECK(tip_init != last_mined->GetHash());
+        rpc_thread.request_stop();
         rpc_thread.join();
+        BOOST_CHECK(!saw_intermediate_size);
+        BOOST_CHECK_EQUAL(m_node.relaypool->size(), 0U);
     }
 }
 

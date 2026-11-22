@@ -36,9 +36,14 @@ static void tag_free(void* mem) {
     free(mem);
 }
 
+struct ScopedTaggedAllocators {
+    ScopedTaggedAllocators() { event_set_mem_functions(tag_malloc, realloc, tag_free); }
+    ~ScopedTaggedAllocators() { event_set_mem_functions(malloc, realloc, free); }
+};
+
 BOOST_AUTO_TEST_CASE(raii_event_creation)
 {
-    event_set_mem_functions(tag_malloc, realloc, tag_free);
+    ScopedTaggedAllocators allocators;
 
     void* base_ptr = nullptr;
     {
@@ -62,12 +67,11 @@ BOOST_AUTO_TEST_CASE(raii_event_creation)
     BOOST_CHECK(tags[base_ptr] == 0);
     BOOST_CHECK(tags[event_ptr] == 0);
 
-    event_set_mem_functions(malloc, realloc, free);
 }
 
 BOOST_AUTO_TEST_CASE(raii_event_order)
 {
-    event_set_mem_functions(tag_malloc, realloc, tag_free);
+    ScopedTaggedAllocators allocators;
 
     void* base_ptr = nullptr;
     void* event_ptr = nullptr;
@@ -84,7 +88,6 @@ BOOST_AUTO_TEST_CASE(raii_event_order)
     // base should be freed after event
     BOOST_CHECK(orders[base_ptr] > orders[event_ptr]);
 
-    event_set_mem_functions(malloc, realloc, free);
 }
 
 #endif  // EVENT_SET_MEM_FUNCTIONS_IMPLEMENTED

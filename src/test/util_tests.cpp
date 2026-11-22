@@ -27,6 +27,7 @@
 #include <util/time.h>
 #include <util/vector.h>
 #include <util/utf16.h>
+#include <util/tokenpipe.h>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -54,6 +55,7 @@
 #include <windows.h>
 #endif
 
+
 using namespace std::literals;
 using namespace util::hex_literals;
 using util::ConstevalHexDigit;
@@ -74,6 +76,14 @@ namespace HgLog {
 }
 
 BOOST_FIXTURE_TEST_SUITE(util_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(daemonwait_token_decision)
+{
+    BOOST_CHECK(DaemonWaitSucceeded(1));
+    BOOST_CHECK(!DaemonWaitSucceeded(0));
+    BOOST_CHECK(!DaemonWaitSucceeded(-1));
+    BOOST_CHECK(!DaemonWaitSucceeded(-2));
+}
 
 namespace {
 class NoCopyOrMove
@@ -1416,7 +1426,7 @@ BOOST_AUTO_TEST_CASE(test_ToLower)
     BOOST_CHECK_EQUAL(ToLower('\xff'), '\xff');
 
     BOOST_CHECK_EQUAL(ToLower(""), "");
-    BOOST_CHECK_EQUAL(ToLower("#HODL"), "#hodl");
+    BOOST_CHECK_EQUAL(ToLower("#SAVE"), "#save");
     BOOST_CHECK_EQUAL(ToLower("\x00\xfe\xff"), "\x00\xfe\xff");
 }
 
@@ -1430,7 +1440,7 @@ BOOST_AUTO_TEST_CASE(test_ToUpper)
     BOOST_CHECK_EQUAL(ToUpper('\xff'), '\xff');
 
     BOOST_CHECK_EQUAL(ToUpper(""), "");
-    BOOST_CHECK_EQUAL(ToUpper("#hodl"), "#HODL");
+    BOOST_CHECK_EQUAL(ToUpper("#save"), "#SAVE");
     BOOST_CHECK_EQUAL(ToUpper("\x00\xfe\xff"), "\x00\xfe\xff");
 }
 
@@ -1943,12 +1953,11 @@ BOOST_AUTO_TEST_CASE(util_WriteBinaryFile)
 {
     fs::path tmpfolder = m_args.GetDataDirBase();
     fs::path tmpfile = tmpfolder / "write_binary.dat";
-    std::string expected_text = "quicksilver";
+    std::string expected_text{"quick silver\0\n", 14};
     auto valid = WriteBinaryFile(tmpfile, expected_text);
-    std::string actual_text;
-    std::ifstream file{tmpfile};
-    file >> actual_text;
-    BOOST_CHECK(valid);
+    std::ifstream file{tmpfile, std::ios::binary};
+    const std::string actual_text{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
+    BOOST_REQUIRE(valid);
     BOOST_CHECK_EQUAL(actual_text, expected_text);
 }
 

@@ -18,6 +18,7 @@
 #include <sync.h>
 
 #include <chrono>
+#include <stdexcept>
 #include <optional>
 #include <vector>
 
@@ -219,8 +220,7 @@ bool ZeroSock::WaitMany(std::chrono::milliseconds timeout, EventsPerSock& events
 
 ZeroSock& ZeroSock::operator=(Sock&& other)
 {
-    assert(false && "Move of Sock into ZeroSock not allowed.");
-    return *this;
+    throw std::logic_error{"Move of Sock into ZeroSock not allowed."};
 }
 
 StaticContentsSock::StaticContentsSock(const std::string& contents)
@@ -240,6 +240,5 @@ ssize_t StaticContentsSock::Recv(void* buf, size_t len, int flags) const
 
 StaticContentsSock& StaticContentsSock::operator=(Sock&& other)
 {
-    assert(false && "Move of Sock into StaticContentsSock not allowed.");
-    return *this;
+    throw std::logic_error{"Move of Sock into StaticContentsSock not allowed."};
 }

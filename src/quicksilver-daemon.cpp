@@ -69,6 +69,7 @@ int fork_daemon(bool nochdir, bool noclose, TokenPipeEnd& endpoint)
         int status = endpoint.TokenRead();
         if (status != 0) { // Something went wrong while setting up child process.
             endpoint.Close();
+            errno = 0; // The child did not provide its errno to the parent.
             return -1;
         }
 
@@ -210,10 +211,10 @@ static bool AppInit(NodeContext& node)
                 }
                 break;
             case -1: // Error happened.
-                return InitError(Untranslated(strprintf("fork_daemon() failed: %s", SysErrorString(errno))));
+                return InitError(Untranslated(errno ? strprintf("fork_daemon() failed: %s", SysErrorString(errno)) : "fork_daemon() failed"));
             default: { // Parent: wait and exit.
                 int token = daemon_ep.TokenRead();
-                if (token) { // Success
+                if (DaemonWaitSucceeded(token)) { // Success
                     exit(EXIT_SUCCESS);
                 } else { // fRet = false or token read error (premature exit).
                     tfm::format(std::cerr, "Error during initialization - check debug.log for details\n");

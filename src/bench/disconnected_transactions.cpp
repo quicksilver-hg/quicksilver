@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <bench/bench.h>
+#include <consensus/amount.h>
 #include <kernel/disconnected_transactions.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
@@ -47,7 +48,7 @@ static BlockTxns CreateRandomTransactions(size_t num_txns)
     for (uint32_t i = 0; i < num_txns; ++i) {
         CMutableTransaction tx;
         tx.vin.emplace_back(COutPoint{prevout_hash, 0});
-        tx.vout.emplace_back(CENT, spk);
+        tx.vout.emplace_back(COIN, spk); // any value: the txids differ through the prevout chain
         auto ptx{MakeTransactionRef(tx)};
         txns.emplace_back(ptx);
         prevout_hash = ptx->GetHash();
@@ -99,10 +100,9 @@ static void Reorg(const ReorgTxns& reorg)
     disconnectpool.clear();
 }
 
-/** Add transactions from DisconnectedBlockTransactions, remove all but one (the disconnected
- * block's coinbase transaction) of them, and then pop from the front until empty. This is a reorg
- * in which all of the non-coinbase transactions in the disconnected chain also exist in the new
- * chain. */
+/** Add transactions from DisconnectedBlockTransactions, remove all but one of them (the one
+ * transaction only the disconnected block has), and then clear the rest. This is a reorg in which
+ * all but one of the transactions in the disconnected chain also exist in the new chain. */
 static void AddAndRemoveDisconnectedBlockTransactionsAll(benchmark::Bench& bench)
 {
     const auto chains{CreateBlocks(/*num_not_shared=*/1)};
@@ -113,7 +113,7 @@ static void AddAndRemoveDisconnectedBlockTransactionsAll(benchmark::Bench& bench
     });
 }
 
-/** Add transactions from DisconnectedBlockTransactions, remove 90% of them, and then pop from the front until empty. */
+/** Add transactions from DisconnectedBlockTransactions, remove 90% of them, and then clear the rest. */
 static void AddAndRemoveDisconnectedBlockTransactions90(benchmark::Bench& bench)
 {
     const auto chains{CreateBlocks(/*num_not_shared=*/BLOCK_VTX_COUNT_10PERCENT)};
@@ -124,7 +124,7 @@ static void AddAndRemoveDisconnectedBlockTransactions90(benchmark::Bench& bench)
     });
 }
 
-/** Add transactions from DisconnectedBlockTransactions, remove 10% of them, and then pop from the front until empty. */
+/** Add transactions from DisconnectedBlockTransactions, remove 10% of them, and then clear the rest. */
 static void AddAndRemoveDisconnectedBlockTransactions10(benchmark::Bench& bench)
 {
     const auto chains{CreateBlocks(/*num_not_shared=*/BLOCK_VTX_COUNT - BLOCK_VTX_COUNT_10PERCENT)};

@@ -13,9 +13,11 @@
 #include <boost/test/unit_test.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
-#include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -53,37 +55,43 @@ std::vector<std::string> SplitComma(const std::string& text)
 #ifndef WIN32
 // SelectDevices keeps only type=gpu. PoCL's stand-ins are type=cpu, so the
 // listing the coordinator reads says gpu; every solve execs the real helper.
-bool WriteShim(const std::string& path, const std::string& real)
+bool WriteShim(int fd, const std::string& path, const std::string& real)
 {
-    std::ofstream out{path};
-    out << "#!/bin/sh\n"
-        << "real='" << real << "'\n"
-        << "if [ \"$1\" = --list-devices ]; then\n"
-        << "  tmp=$(mktemp)\n"
-        << "  \"$real\" --list-devices > \"$tmp\"\n"
-        << "  rc=$?\n"
-        << "  sed 's/ type=cpu / type=gpu /' \"$tmp\"\n"
-        << "  rm -f \"$tmp\"\n"
-        << "  exit \"$rc\"\n"
-        << "fi\n"
-        << "exec \"$real\" \"$@\"\n";
-    out.close();
-    return static_cast<bool>(out) && chmod(path.c_str(), 0755) == 0;
+    FILE* file = fdopen(fd, "w");
+    if (!file) { close(fd); return false; }
+    const std::string body = "#!/bin/sh\nreal='" + real + "'\n"
+        "if [ \"$1\" = --list-devices ]; then\n"
+        "  tmp=$(mktemp)\n"
+        "  \"$real\" --list-devices > \"$tmp\"\n"
+        "  rc=$?\n"
+        "  sed 's/ type=cpu / type=gpu /' \"$tmp\"\n"
+        "  rm -f \"$tmp\"\n"
+        "  exit \"$rc\"\n"
+        "fi\n"
+        "exec \"$real\" \"$@\"\n";
+    const bool written = std::fwrite(body.data(), 1, body.size(), file) == body.size();
+    const bool closed = std::fclose(file) == 0;
+    return written && closed && chmod(path.c_str(), 0755) == 0;
 }
 
 struct Env {
+    static constexpr std::array<const char*, 4> names{"CUCKATOO_GPU_SOLVER", "CUCKATOO_GPU_DEVICES", "CUCKATOO_GPU_TIMEOUT", "CUCKATOO_GPU_BUNDLED"};
     std::string script;
+    std::array<std::optional<std::string>, 4> previous;
     Env()
     {
+        for (size_t i = 0; i < names.size(); ++i) {
+            if (const char* value = std::getenv(names[i])) previous[i] = value;
+        }
         cuckatoo::ResetGpuDiscoveryForTesting();
         cuckatoo::ResetGpuDeviceStatsForTesting();
     }
     ~Env()
     {
-        unsetenv("CUCKATOO_GPU_SOLVER");
-        unsetenv("CUCKATOO_GPU_DEVICES");
-        unsetenv("CUCKATOO_GPU_TIMEOUT");
-        unsetenv("CUCKATOO_GPU_BUNDLED");
+        for (size_t i = 0; i < names.size(); ++i) {
+            if (previous[i]) setenv(names[i], previous[i]->c_str(), 1);
+            else unsetenv(names[i]);
+        }
         cuckatoo::ResetGpuDiscoveryForTesting();
         cuckatoo::ResetGpuDeviceStatsForTesting();
         if (!script.empty()) std::remove(script.c_str());
@@ -100,24 +108,14 @@ bool BothWorking(const std::vector<std::string>& ids)
     return true;
 }
 
-// Digits only. std::to_string is locale-dependent and the lint rejects it.
-std::string Decimal(unsigned long long value)
-{
-    if (value == 0) return "0";
-    std::string digits;
-    while (value > 0) {
-        digits.push_back(static_cast<char>('0' + static_cast<int>(value % 10)));
-        value /= 10;
-    }
-    std::reverse(digits.begin(), digits.end());
-    return digits;
-}
-
 void RunBothDevices(const std::vector<std::string>& ids)
 {
     Env env;
-    env.script = "/tmp/qs-opencl-two-shim-" + Decimal(static_cast<unsigned long long>(getpid()));
-    BOOST_REQUIRE(WriteShim(env.script, QSGPUSOLVE_OPENCL_PATH));
+    char path[] = "/tmp/qs-opencl-two-shim-XXXXXX";
+    const int fd = mkstemp(path);
+    BOOST_REQUIRE(fd >= 0);
+    env.script = path;
+    BOOST_REQUIRE(WriteShim(fd, env.script, QSGPUSOLVE_OPENCL_PATH));
     setenv("CUCKATOO_GPU_SOLVER", env.script.c_str(), 1);
     setenv("CUCKATOO_GPU_DEVICES", (ids[0] + "," + ids[1]).c_str(), 1);
     // One graph on two PoCL CPUs was 39 s here, past the 30 s watchdog.
@@ -130,13 +128,16 @@ void RunBothDevices(const std::vector<std::string>& ids)
     cuckatoo::Cycle cycle{};
     uint32_t nonce{0};
     const auto started = std::chrono::steady_clock::now();
-    cuckatoo::MultiDeviceSolveBytes(
+    const auto result = cuckatoo::MultiDeviceSolveBytes(
         pre.data(), pre.size(), 28, 0, /*two blocks*/ 128, cycle, nonce,
         [](const cuckatoo::Cycle&, uint32_t) { return false; }, {},
         [&] {
             if (BothWorking(ids)) return true;
             return std::chrono::steady_clock::now() - started > std::chrono::seconds{240};
         });
+    BOOST_CHECK(result.had_devices);
+    BOOST_CHECK(result.all_benched);
+    BOOST_CHECK(result.faults.empty());
 
     const auto stats = cuckatoo::GetGpuDeviceStats();
     for (const auto& id : ids) {

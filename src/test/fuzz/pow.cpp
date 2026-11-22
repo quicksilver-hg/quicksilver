@@ -36,10 +36,10 @@ FUZZ_TARGET(pow, .init = initialize_pow)
         if (!block_header) {
             continue;
         }
+        CBlockIndex* previous_block = blocks.empty() ? nullptr : PickValue(fuzzed_data_provider, blocks).get();
         CBlockIndex& current_block{
             *blocks.emplace_back(std::make_unique<CBlockIndex>(*block_header))};
         {
-            CBlockIndex* previous_block = blocks.empty() ? nullptr : PickValue(fuzzed_data_provider, blocks).get();
             const int current_height = (previous_block != nullptr && previous_block->nHeight != std::numeric_limits<int>::max()) ? previous_block->nHeight + 1 : 0;
             if (fuzzed_data_provider.ConsumeBool()) {
                 current_block.pprev = previous_block;

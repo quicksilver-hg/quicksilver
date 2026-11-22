@@ -78,12 +78,27 @@ namespace {
 
 // don't add private key handling cmd's to the history
 const QStringList historyFilter = QStringList()
-    << "sethdseed"
     << "signmessagewithprivkey"
     << "signrawtransactionwithkey"
     << "vaultpassphrase"
     << "vaultpassphrasechange"
-    << "encryptvault";
+    << "encryptvault"
+    << "createvault"
+    << "exportvaultarchive"
+    << "importvaultarchive"
+    << "importdescriptors"
+    << "descriptorprocesspsqt"
+    << "getdescriptorinfo"
+    << "deriveaddresses"
+    << "utxoupdatepsqt"
+    << "generatetodescriptor"
+    << "scantxoutset"
+    << "scanblocks"
+    << "getdescriptoractivity"
+    << "fundrawtransaction"
+    << "send"
+    << "sendall"
+    << "vaultcreatefundedpsqt";
 
 }
 
@@ -327,6 +342,7 @@ bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strRes
                     if ((ch == ')' || ch == '\n') && stack.size() > 0)
                     {
                         if (fExecute) {
+                            if (stack.back().empty()) throw std::runtime_error("Invalid Syntax");
                             // Convert argument list to JSON objects in method-dependent way,
                             // and pass it along with the method name to the dispatcher.
                             UniValue params = RPCConvertValues(stack.back()[0], std::vector<std::string>(stack.back().begin() + 1, stack.back().end()));
@@ -669,7 +685,7 @@ bool RPCConsole::eventFilter(QObject* obj, QEvent *event)
         case Qt::Key_Return:
         case Qt::Key_Enter:
             // forward these events to lineEdit
-            if (obj == autoCompleter->popup()) {
+            if (autoCompleter && obj == autoCompleter->popup()) {
                 QApplication::sendEvent(ui->lineEdit, keyevt);
                 autoCompleter->popup()->hide();
                 return true;

@@ -278,9 +278,12 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     header->setMinimumSectionSize(40);
     connect(m_ledger_rows, &QAbstractItemModel::modelReset, this, &DesktopLaunchPage::arrangeLedgerColumns);
     connect(m_ledger_rows, &QAbstractItemModel::columnsInserted, this, &DesktopLaunchPage::arrangeLedgerColumns);
-    connect(m_ledger_table, &QTableView::doubleClicked, this, [](const QModelIndex& index) {
+    connect(m_ledger_table, &QTableView::doubleClicked, this, [this](const QModelIndex& index) {
+        if (m_privacy) return;
         auto* dialog = new TransactionDescDialog(index);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
+        m_opened_dialogs.append(dialog);
+        connect(dialog, &QObject::destroyed, this, [this, dialog] { m_opened_dialogs.removeOne(dialog); });
         dialog->show();
     });
     ledger.body->addWidget(m_ledger_table, 1);
@@ -425,6 +428,19 @@ DesktopLaunchPage::DesktopLaunchPage(const PlatformStyle* platform_style, uint64
     setPeerCount(-1);
     setChainTip(-1, QDateTime());
     setVaultModel(nullptr);
+}
+
+DesktopLaunchPage::~DesktopLaunchPage()
+{
+    closeOpenedDialogs();
+}
+
+void DesktopLaunchPage::closeOpenedDialogs()
+{
+    for (const QPointer<TransactionDescDialog>& dialog : m_opened_dialogs) {
+        if (dialog) dialog->close();
+    }
+    m_opened_dialogs.clear();
 }
 
 void DesktopLaunchPage::setVaultSummary(bool has_vault, const QString& vault_name, const QString& agent_summary)
@@ -794,6 +810,7 @@ void DesktopLaunchPage::setMiningStatus(const interfaces::MiningStatus& status)
     const MineMintPage::StatusText rows = MineMintPage::statusText(status);
     m_have_mining_status = true;
     m_mining_active = status.active;
+    m_mining_without_peers = status.mines_without_peers;
     m_mining_word = rows.block_mining;
     m_mining_solver->setText(rows.solver);
     m_mining_rate->setText(rows.attempts);
@@ -876,7 +893,10 @@ void DesktopLaunchPage::renderConsensusCards()
     } else if (isolated) {
         // Not locked: the first node on a new chain has no peers either, and
         // doc/bootstrapping.md makes that a supported way to start.
-        m_mining_summary->setText(tr("Mining is available, but with no peers anything mined would be on a chain of this computer's own."));
+        // F-610: a node that never mines alone just waits.
+        m_mining_summary->setText(m_mining_without_peers
+            ? tr("Mining is available, but with no peers anything mined would be on a chain of this computer's own.")
+            : tr("Mining is on. It will begin once this node has synchronized with the network."));
     } else {
         m_mining_summary->setText(tr("Mining can now be configured because consensus has been accepted."));
     }
@@ -892,6 +912,7 @@ void DesktopLaunchPage::renderConsensusCards()
 void DesktopLaunchPage::setPrivacy(bool privacy)
 {
     m_privacy = privacy;
+    if (privacy) closeOpenedDialogs();
     const QuicksilverUnit unit = m_ledger_model && m_ledger_model->getOptionsModel() ? m_ledger_model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HGS;
     m_ledger_rows->setDisplay(unit, m_privacy);
     if (m_has_vault) renderVaultRows();

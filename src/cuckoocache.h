@@ -46,6 +46,11 @@ class bit_packed_atomic_flags
     std::unique_ptr<std::atomic<uint8_t>[]> mem;
 
 public:
+    static constexpr uint32_t ByteCount(uint32_t entries)
+    {
+        return static_cast<uint32_t>((uint64_t{entries} + 7) / 8);
+    }
+
     /** No default constructor, as there must be some size. */
     bit_packed_atomic_flags() = delete;
 
@@ -63,7 +68,7 @@ public:
     explicit bit_packed_atomic_flags(uint32_t size)
     {
         // pad out the size if needed
-        size = (size + 7) / 8;
+        size = ByteCount(size);
         mem.reset(new std::atomic<uint8_t>[size]);
         for (uint32_t i = 0; i < size; ++i)
             mem[i].store(0xFF);
@@ -119,7 +124,7 @@ public:
 
 /** @ref cache implements a cache with properties similar to a cuckoo-set.
  *
- *  The cache is able to hold up to `(~(uint32_t)0) - 1` elements.
+ *  The cache supports up to `UINT32_MAX - 1` slots, subject to available memory.
  *
  *  Read Operations:
  *      - contains() for `erase=false`
@@ -318,6 +323,16 @@ private:
     }
 
 public:
+    static constexpr uint32_t ClampSize(uint32_t requested)
+    {
+        return std::clamp(requested, uint32_t{2}, std::numeric_limits<uint32_t>::max() - 1);
+    }
+
+    static constexpr uint32_t EpochSize(uint32_t slots)
+    {
+        return std::max(uint32_t{1}, static_cast<uint32_t>((uint64_t{45} * slots) / 100));
+    }
+
     /** You must always construct a cache with some elements via a subsequent
      * call to setup or setup_bytes, otherwise operations may segfault.
      */
@@ -336,13 +351,13 @@ public:
     uint32_t setup(uint32_t new_size)
     {
         // depth_limit must be at least one otherwise errors can occur.
-        size = std::max<uint32_t>(2, new_size);
+        size = ClampSize(new_size);
         depth_limit = static_cast<uint8_t>(std::log2(static_cast<float>(size)));
         table.resize(size);
         collection_flags.setup(size);
         epoch_flags.resize(size);
         // Set to 45% as described above
-        epoch_size = std::max(uint32_t{1}, (45 * size) / 100);
+        epoch_size = EpochSize(size);
         // Initially set to wait for a whole epoch
         epoch_heuristic_counter = epoch_size;
         return size;
@@ -473,6 +488,7 @@ public:
      */
     inline bool contains(const Element& e, const bool erase) const
     {
+        // Sigcache keys are hashes; matching a default slot requires an all-zero preimage.
         std::array<uint32_t, 8> locs = compute_hashes(e);
         for (const uint32_t loc : locs)
             if (table[loc] == e) {

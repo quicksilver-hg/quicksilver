@@ -57,7 +57,7 @@ void CCoinsViewDB::ResizeCache(size_t new_cache_size)
 
 std::optional<Coin> CCoinsViewDB::GetCoin(const COutPoint& outpoint) const
 {
-    if (Coin coin; m_db->Read(CoinEntry(&outpoint), coin)) return coin;
+    if (Coin coin; m_db->ReadChecked(CoinEntry(&outpoint), coin)) return coin;
     return std::nullopt;
 }
 
@@ -67,14 +67,14 @@ bool CCoinsViewDB::HaveCoin(const COutPoint &outpoint) const {
 
 uint256 CCoinsViewDB::GetBestBlock() const {
     uint256 hashBestChain;
-    if (!m_db->Read(DB_BEST_BLOCK, hashBestChain))
+    if (!m_db->ReadChecked(DB_BEST_BLOCK, hashBestChain))
         return uint256();
     return hashBestChain;
 }
 
 std::vector<uint256> CCoinsViewDB::GetHeadBlocks() const {
     std::vector<uint256> vhashHeadBlocks;
-    if (!m_db->Read(DB_HEAD_BLOCKS, vhashHeadBlocks)) {
+    if (!m_db->ReadChecked(DB_HEAD_BLOCKS, vhashHeadBlocks)) {
         return std::vector<uint256>();
     }
     return vhashHeadBlocks;
@@ -179,10 +179,15 @@ std::unique_ptr<CCoinsViewCursor> CCoinsViewDB::Cursor() const
     i->pcursor->Seek(DB_COIN);
     // Cache key of first record
     if (i->pcursor->Valid()) {
-        CoinEntry entry(&i->keyTmp.second);
-        i->pcursor->GetKey(entry);
-        i->keyTmp.first = entry.key;
+        uint8_t prefix{};
+        if (!i->pcursor->GetKey(prefix)) ThrowCorruptDBRecord();
+        i->keyTmp.first = prefix;
+        if (prefix == DB_COIN) {
+            CoinEntry entry(&i->keyTmp.second);
+            if (!i->pcursor->GetKey(entry)) ThrowCorruptDBRecord();
+        }
     } else {
+        i->pcursor->CheckStatus();
         i->keyTmp.first = 0; // Make sure Valid() and GetKey() return false
     }
     return i;
@@ -200,7 +205,8 @@ bool CCoinsViewDBCursor::GetKey(COutPoint &key) const
 
 bool CCoinsViewDBCursor::GetValue(Coin &coin) const
 {
-    return pcursor->GetValue(coin);
+    if (!pcursor->GetValue(coin)) ThrowCorruptDBRecord();
+    return true;
 }
 
 bool CCoinsViewDBCursor::Valid() const
@@ -211,10 +217,16 @@ bool CCoinsViewDBCursor::Valid() const
 void CCoinsViewDBCursor::Next()
 {
     pcursor->Next();
-    CoinEntry entry(&keyTmp.second);
-    if (!pcursor->Valid() || !pcursor->GetKey(entry)) {
+    if (!pcursor->Valid()) {
+        pcursor->CheckStatus();
         keyTmp.first = 0; // Invalidate cached key after last record so that Valid() and GetKey() return false
     } else {
-        keyTmp.first = entry.key;
+        uint8_t prefix{};
+        if (!pcursor->GetKey(prefix)) ThrowCorruptDBRecord();
+        keyTmp.first = prefix;
+        if (prefix == DB_COIN) {
+            CoinEntry entry(&keyTmp.second);
+            if (!pcursor->GetKey(entry)) ThrowCorruptDBRecord();
+        }
     }
 }

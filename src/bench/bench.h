@@ -33,7 +33,7 @@ static void NameOfYourBenchmarkFunction(benchmark::Bench& bench)
     ...do any cleanup needed...
 }
 
-BENCHMARK(NameOfYourBenchmarkFunction);
+BENCHMARK(NameOfYourBenchmarkFunction, benchmark::PriorityLevel::HIGH);
 
  */
 
@@ -78,7 +78,7 @@ public:
 };
 } // namespace benchmark
 
-// BENCHMARK(foo) expands to:  benchmark::BenchRunner bench_11foo("foo", foo, priority_level);
+// BENCHMARK(foo, priority_level) expands to:  benchmark::BenchRunner bench_11foo("foo", foo, priority_level);
 #define BENCHMARK(n, priority_level) \
     benchmark::BenchRunner PASTE2(bench_, PASTE2(__LINE__, n))(STRINGIZE(n), n, priority_level);
 

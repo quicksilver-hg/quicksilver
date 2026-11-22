@@ -5,6 +5,7 @@
 #include <qt/minemintpage.h>
 
 #include <addresstype.h>
+#include <chainparams.h>
 #include <interfaces/node.h>
 #include <key_io.h>
 #include <policy/policy.h>
@@ -15,6 +16,7 @@
 #include <qt/qvalidatedlineedit.h>
 #include <script/interpreter.h>
 #include <script/script.h>
+#include <util/chaintype.h>
 #include <util/strencodings.h>
 
 #include <QFontDatabase>
@@ -76,7 +78,8 @@ public:
 } // namespace
 
 MineMintPage::MineMintPage(QWidget* parent)
-    : QWidget(parent)
+    : QWidget(parent),
+      m_mines_without_peers(Params().GetChainType() != ChainType::MAIN)
 {
     setObjectName(QStringLiteral("mineMintPage"));
     setProperty("class", QStringLiteral("quicksilverPage"));
@@ -313,7 +316,9 @@ void MineMintPage::handleStartClicked()
     // the first node on a new chain starts, and startmining is deliberately not gated
     // on peer count -- so the only defensible behaviour is to make the user assert it
     // rather than to block it or, as before, to do it silently.
-    if (m_peers != 0) {
+    // F-610: where the node never mines alone (main) it waits for a peer's
+    // headers, so there is no private chain to confirm.
+    if (m_peers != 0 || !m_mines_without_peers) {
         emitStart();
         return;
     }
@@ -346,10 +351,15 @@ void MineMintPage::setPeerCount(int peers)
 void MineMintPage::refreshIsolationState()
 {
     m_isolation_panel->setVisible(m_peers == 0);
+    // F-610: a node that never mines alone mines nothing while isolated, so the
+    // warning about a private chain would be false there.
+    m_isolation_banner->setText(m_mines_without_peers
+        ? tr("Not connected to any peer. Anything mined now extends a separate chain belonging to this computer alone; when this node reaches the network, the network's chain replaces it and those coins are gone.")
+        : tr("Network connection has not been made, awaiting peers. Mining is paused until this node has synchronized with the network."));
     // Isolation is the whole meaning of the count while it is zero: a bare "1" here
     // is the sentence the walk read as success, and it is the one number on this page
     // that a private fork makes false.
-    m_blocks_value->setText(m_peers == 0 && m_blocks_found > 0
+    m_blocks_value->setText(m_peers == 0 && m_blocks_found > 0 && m_mines_without_peers
         ? tr("%1 — on this computer's own chain, not the network's").arg(m_blocks_found)
         : QString::number(m_blocks_found));
 }
@@ -362,8 +372,11 @@ MineMintPage::StatusText MineMintPage::statusText(const interfaces::MiningStatus
     // That row stays Idle. Nothing was refused, because nothing was armed.
     const bool halted{s.active && !s.block_solving_possible};
     const bool idle_unconfigured{!s.active && !s.gpu_solver && !s.block_solving_possible};
+    // F-610: armed, but holding until the node has caught up. Halted outranks
+    // it: nothing could solve even once the node is current.
+    const bool waiting{s.active && !halted && s.waiting_for_sync};
     StatusText rows;
-    rows.block_mining = !s.active ? tr("Idle") : (halted ? tr("Halted") : tr("Active"));
+    rows.block_mining = !s.active ? tr("Idle") : (halted ? tr("Halted") : (waiting ? tr("Waiting") : tr("Active")));
     if (!s.address.empty()) {
         rows.payout = QString::fromStdString(s.address);
     } else if (s.payout_script.empty()) {
@@ -387,6 +400,7 @@ MineMintPage::StatusText MineMintPage::statusText(const interfaces::MiningStatus
     // idle miner, an armed one with no rate yet and a halted one are three
     // different words, and none of them is a number.
     const QString rate{!s.active ? tr("Idle")
+        : waiting ? tr("Waiting")
         : s.attempts_per_second ? QString::number(*s.attempts_per_second, 'f', 3)
         : (halted ? tr("Not solving") : tr("Warming up"))};
     // Singular and plural as separate strings rather than the "%n graph(s)" idiom, for
@@ -407,6 +421,8 @@ MineMintPage::StatusText MineMintPage::statusText(const interfaces::MiningStatus
         // configuration, so it is true before arming as well as after a refusal.
         rows.health = tr("No graphics card is in use, and processor block mining is off. Choose a card, or allow processor block mining, in Settings > Options > Hardware.");
         rows.show_configure_solver = true;
+    } else if (waiting) {
+        rows.health = tr("Waiting. Mining will begin once this node has synchronized with the network.");
     } else if (s.solver_ok) {
         // "armed but nothing finished yet" must not read the same as "armed
         // with a dead card". Halted was split out above; it is not this branch.
@@ -448,6 +464,7 @@ void MineMintPage::setStatus(const interfaces::MiningStatus& s)
     m_coins_minted_session = s.coins_minted_session;
     renderMinted();
     m_blocks_found = s.blocks_found;
+    m_mines_without_peers = s.mines_without_peers;
     refreshIsolationState();
     m_rate_value->setText(rows.attempts);
     m_solver_health_value->setText(rows.health);

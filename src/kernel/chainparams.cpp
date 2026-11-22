@@ -54,7 +54,7 @@ static CBlock CreateGenesisBlock(const char* pszTimestamp, const CScript& genesi
     CBlock genesis;
     genesis.nTime    = nTime;
     genesis.nBits    = nBits;
-    // Quicksilver (#5c-1 Phase 2): genesis sits at the congestion floor. It never passes
+    // Quicksilver header-field congestion pricing: genesis sits at the congestion floor. It never passes
     // through ConnectBlock, so this header field IS the seed for the whole recurrence —
     // every descendant's multiplier is derived from it.
     genesis.nCongestion = static_cast<uint32_t>(CONGESTION_ONE);
@@ -101,15 +101,15 @@ public:
         consensus.powLimit = uint256{"3fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nEdgeBits = 28; // Quicksilver block PoW (Cuckatoo); unified with the per-tx PoW graph size so one E28 solver serves both. Block difficulty comes from the target (cycles-per-block), not a larger graph.
         consensus.nTxEdgeBits = 28; // Quicksilver per-tx PoW (Cuckatoo); MUST equal nEdgeBits — r = 1 depends on it
-        consensus.txPowLimit = uint256{"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}; // permissive; tightened in #5/calibration
-        consensus.nMaxAnchorAge = 100; // #5c-1 W: ~8h @ 5-min blocks
-        consensus.nCongestionTargetPermille = 500;   // #5c-1 Phase 3: T=0.5
-        consensus.nCongestionStepDenom      = 4;      // #5c-1 Phase 3: s=0.25 (faster response @ 5-min blocks)
-        consensus.nCongestionMaxMultiplier  = 64;     // #5c-1 Phase 3: m_cap
-        consensus.nBaseWorkMAWindow         = 144;    // #5c-1 Phase 3: aligned to the difficulty-retarget interval, and follows it down to 144 (12h)
+        consensus.txPowLimit = uint256{"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}; // permissive until calibration tightens it
+        consensus.nMaxAnchorAge = 100; // anchor-recency window W: ~8h @ 5-min blocks
+        consensus.nCongestionTargetPermille = 500;   // calibrated per-transaction PoW: T=0.5
+        consensus.nCongestionStepDenom      = 4;      // calibrated per-transaction PoW: s=0.25 (faster response @ 5-min blocks)
+        consensus.nCongestionMaxMultiplier  = 64;     // calibrated per-transaction PoW: m_cap
+        consensus.nBaseWorkMAWindow         = 144;    // calibrated per-transaction PoW: aligned to the difficulty-retarget interval, and follows it down to 144 (12h)
         consensus.nTxWorkCouplingK          = 106;    // run2 (2026-06-28): K=round(alpha*r*S_tail/C), measured lean r=0.243 restores 4x mint-safety margin. E29 unification (r=1) raised the derived ceiling to 437; 106 held, now 4.1x inside it — see doc/audit/mainnet-difficulty-floor-model.md
-        consensus.nTxPowMint = 57143;    // #5c-1 Phase 3: C=2*COIN/N_tx,max (mints = 2x tail subsidy at full block)
-        // Quicksilver Stage 2 flag day (2026-08-01). See
+        consensus.nTxPowMint = 57143;    // calibrated per-transaction PoW: C=2*COIN/N_tx,max (mints = 2x tail subsidy at full block)
+        // Quicksilver byte-pricing flag day (2026-08-01). See
         // doc/design/chain-growth.md and tools/calibration/stage2-byte-pricing.md.
         consensus.nTxWorkRefBytes = 4739;     // R_b: R/4, serialized bytes not weight
         consensus.nTxUtxoRefCount = 50;       // U: inside the measured 28-109 window
@@ -142,8 +142,20 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].min_activation_height = 0; // No activation delay
 
-        consensus.nMinimumChainWork = uint256{}; // Quicksilver: fresh chain
+        // Trust anchors: append one per release, a few days below the tip, and
+        // never remove one. The newest supplies nMinimumChainWork and
+        // defaultAssumeValid (SetTrustAnchors). Values are read from a node:
+        // getblockhash <height>, then getblockheader <hash> for chainwork.
+        consensus.nMinimumChainWork = uint256{};
         consensus.defaultAssumeValid = uint256{};
+        // Name each value before the list: MSVC 14.39 rejects a consteval
+        // uint256{"..."} inside the braced TrustAnchor list (C7595).
+        // Provisional, read 2026-11-16 (tip 18220); the v0.1.10 freeze appends the release anchor.
+        const uint256 anchor_17000_hash{"ff79c0ed2df2c3156141aeb0fe507a0d616218fe5eef55d694fd172ac38c439e"};
+        const uint256 anchor_17000_work{"0000000000000000000000000000000000000000000000000000000000020553"};
+        SetTrustAnchors({
+            {17000, anchor_17000_hash, anchor_17000_work},
+        });
 
         /**
          * The message start string is designed to be unlikely to occur in normal data.
@@ -156,7 +168,7 @@ public:
         pchMessageStart[3] = 0x53; // Quicksilver mainnet
         nDefaultPort = 9555;
         m_onion_service_port = 9556;  // RPC is 9554, so P2P+1 is free here
-        nPruneAfterHeight = 100000;
+        nPruneAfterHeight = 1000;
         // Quicksilver: these are FIRST-YEAR growth figures, not a snapshot of a chain
         // that already exists — this chain starts at height 0, so a snapshot would be
         // zero and would tell a prospective operator nothing about the commitment they
@@ -244,15 +256,15 @@ public:
         consensus.powLimit = uint256{"3fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nEdgeBits = 28; // Quicksilver block PoW (Cuckatoo); unified with the per-tx PoW graph size so one E28 solver serves both. Block difficulty comes from the target (cycles-per-block), not a larger graph.
         consensus.nTxEdgeBits = 28; // Quicksilver per-tx PoW (Cuckatoo); MUST equal nEdgeBits — r = 1 depends on it
-        consensus.txPowLimit = uint256{"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}; // permissive; tightened in #5/calibration
-        consensus.nMaxAnchorAge = 100; // #5c-1 W: ~8h @ 5-min blocks
-        consensus.nCongestionTargetPermille = 500;   // #5c-1 Phase 3: T=0.5
-        consensus.nCongestionStepDenom      = 4;      // #5c-1 Phase 3: s=0.25 (faster response @ 5-min blocks)
-        consensus.nCongestionMaxMultiplier  = 64;     // #5c-1 Phase 3: m_cap
+        consensus.txPowLimit = uint256{"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}; // permissive until calibration tightens it
+        consensus.nMaxAnchorAge = 100; // anchor-recency window W: ~8h @ 5-min blocks
+        consensus.nCongestionTargetPermille = 500;   // calibrated per-transaction PoW: T=0.5
+        consensus.nCongestionStepDenom      = 4;      // calibrated per-transaction PoW: s=0.25 (faster response @ 5-min blocks)
+        consensus.nCongestionMaxMultiplier  = 64;     // calibrated per-transaction PoW: m_cap
         consensus.nBaseWorkMAWindow         = 144;    // = mainnet; follows the retarget interval
         consensus.nTxWorkCouplingK          = 106;    // run2 (2026-06-28): K=round(alpha*r*S_tail/C), measured lean r=0.243 restores 4x mint-safety margin
-        consensus.nTxPowMint = 57143;    // #5c-1 Phase 3: C=2*COIN/N_tx,max (mints = 2x tail subsidy at full block)
-        // Quicksilver Stage 2 flag day (2026-08-01). See
+        consensus.nTxPowMint = 57143;    // calibrated per-transaction PoW: C=2*COIN/N_tx,max (mints = 2x tail subsidy at full block)
+        // Quicksilver byte-pricing flag day (2026-08-01). See
         // doc/design/chain-growth.md and tools/calibration/stage2-byte-pricing.md.
         consensus.nTxWorkRefBytes = 4739;     // R_b: R/4, serialized bytes not weight
         consensus.nTxUtxoRefCount = 50;       // U: inside the measured 28-109 window
@@ -278,8 +290,10 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].min_activation_height = 0; // No activation delay
 
-        consensus.nMinimumChainWork = uint256{}; // Quicksilver: fresh chain
-        consensus.defaultAssumeValid = uint256{}; // Quicksilver: fresh chain
+        // publictest carries no trust anchors, so both stay null.
+        consensus.nMinimumChainWork = uint256{};
+        consensus.defaultAssumeValid = uint256{};
+        SetTrustAnchors({});
 
         pchMessageStart[0] = 0x48; // 'H'
         pchMessageStart[1] = 0x47; // 'G'
@@ -373,7 +387,7 @@ public:
         consensus.nBaseWorkMAWindow         = 10;     // small window for fast tests
         consensus.nTxWorkCouplingK          = 0xFFFFFFFFu; // huge K => base_coupled ~ 0 => permissive
         consensus.nTxPowMint = 1 * COIN; // sandbox fixture: permissive whole-coin mint used by fast tests
-        // Quicksilver Stage 2 flag day (2026-08-01). See
+        // Quicksilver byte-pricing flag day (2026-08-01). See
         // doc/design/chain-growth.md and tools/calibration/stage2-byte-pricing.md.
         consensus.nTxWorkRefBytes = 4739;     // R_b: R/4, serialized bytes not weight
         consensus.nTxUtxoRefCount = 50;       // U: inside the measured 28-109 window
@@ -399,8 +413,10 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
         consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT].min_activation_height = 0; // No activation delay
 
+        // sandbox carries no trust anchors; only unit tests pass some in.
         consensus.nMinimumChainWork = uint256{};
         consensus.defaultAssumeValid = uint256{};
+        SetTrustAnchors(opts.trust_anchors);
 
         pchMessageStart[0] = 0x48; // 'H'
         pchMessageStart[1] = 0x47; // 'G'

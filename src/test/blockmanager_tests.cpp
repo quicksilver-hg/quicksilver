@@ -50,9 +50,8 @@ BOOST_AUTO_TEST_CASE(blockmanager_find_block_pos)
     blockman.UpdateBlockInfo(params->GenesisBlock(), 0, pos);
     // now simulate what happens after reindex for the first new block processed
     // the actual block contents don't matter, just that it's a block.
-    // verify that the write position is at offset 0x12d.
-    // 8 bytes (for serialization header) + 285 (for serialized genesis block) = 293
-    // add another 8 bytes for the second block's serialization header and we get 293 + 8 = 301
+    // The next block starts after the serialization header, the serialized genesis
+    // block, and the following serialization header.
     FlatFilePos actual{blockman.WriteBlock(params->GenesisBlock(), 1)};
     BOOST_CHECK_EQUAL(actual.nPos, BLOCK_SERIALIZATION_HEADER_SIZE + ::GetSerializeSize(TX_WITH_WITNESS(params->GenesisBlock())) + BLOCK_SERIALIZATION_HEADER_SIZE);
 }

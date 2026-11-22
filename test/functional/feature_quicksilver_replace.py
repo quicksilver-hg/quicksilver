@@ -2,9 +2,9 @@
 # Copyright (c) 2026 The Quicksilver developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Replace-by-surplus-work (#6): replacement observed end-to-end.
+"""Replace-by-surplus-work: replacement observed end-to-end.
 
-Quicksilver is feeless (#5b), so a conflicting tx replaces an incumbent iff it
+Quicksilver is feeless, so a conflicting tx replaces an incumbent iff it
 carries strictly more surplus per-tx PoW work (the 5c-2 ranking key). There is
 no vault "rarer cycle" knob yet (that
 is #7) and no Python Cuckatoo solver, so we cannot REQUEST a target surplus.

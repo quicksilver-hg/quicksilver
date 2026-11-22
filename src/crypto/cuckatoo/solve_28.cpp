@@ -7,7 +7,7 @@
 // PoW graph size for publictest/main. EDGEBITS-28 lean solving is memory-heavy and
 // slow on CPU (~hundreds of MB working set); it is a reference / low-volume
 // FALLBACK. Production per-tx grinding is GPU-class (the actual users are
-// GPU-running agents) — see the per-tx-pow-algorithm-decision note.
+// GPU-running agents) — see the doc/design/transaction-pow.md.
 //
 // Exposes both entry points at this graph size: Solve28 (fixed PREPOW_BYTES block
 // pre-pow) and Solve28Bytes (variable-length per-tx pre-image). Block PoW and

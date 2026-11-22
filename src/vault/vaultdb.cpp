@@ -216,12 +216,34 @@ bool VaultBatch::WriteAgentAllotmentRecords(const std::vector<AgentAllotmentReco
 
 bool VaultBatch::ReadAgentAllotmentRecords(std::vector<AgentAllotmentRecord>& records)
 {
+    return ReadAgentAllotmentRecordsClassified(records) == AllotmentRecordsRead::OK;
+}
+
+VaultBatch::AllotmentRecordsRead VaultBatch::ReadAgentAllotmentRecordsClassified(std::vector<AgentAllotmentRecord>& records)
+{
     records.clear();
-    if (!m_batch->Read(std::make_pair(DBKeys::SETTINGS, std::string{"agent_allotment_records"}), records)) {
+    DataStream raw{};
+    const auto status{m_batch->ReadRaw(std::make_pair(DBKeys::SETTINGS, std::string{"agent_allotment_records"}), raw)};
+    if (status == DatabaseBatch::ReadStatus::kMissing) return AllotmentRecordsRead::MISSING;
+    if (status == DatabaseBatch::ReadStatus::kFailed) return AllotmentRecordsRead::READ_ERROR;
+    try {
+        DataStream probe{raw};
+        if (ReadCompactSize(probe) != 0) {
+            int32_t version;
+            probe >> version;
+            if (version == 1) return AllotmentRecordsRead::LEGACY;
+            if (version > AgentAllotmentRecord::CURRENT_VERSION) return AllotmentRecordsRead::NEWER;
+        }
+        raw >> records;
+        if (!raw.empty()) {
+            records.clear();
+            return AllotmentRecordsRead::CORRUPT;
+        }
+    } catch (const std::exception&) {
         records.clear();
-        return false;
+        return AllotmentRecordsRead::CORRUPT;
     }
-    return true;
+    return AllotmentRecordsRead::OK;
 }
 
 bool VaultBatch::HasAgentAllotmentRecords()
@@ -267,8 +289,7 @@ bool VaultBatch::WriteCryptedDescriptorKey(const uint256& desc_id, const CPubKey
     if (!WriteIC(std::make_pair(DBKeys::VAULTDESCRIPTORCKEY, std::make_pair(desc_id, pubkey)), secret, false)) {
         return false;
     }
-    EraseIC(std::make_pair(DBKeys::VAULTDESCRIPTORKEY, std::make_pair(desc_id, pubkey)));
-    return true;
+    return EraseIC(std::make_pair(DBKeys::VAULTDESCRIPTORKEY, std::make_pair(desc_id, pubkey)));
 }
 
 bool VaultBatch::WriteDescriptor(const uint256& desc_id, const VaultDescriptor& descriptor)

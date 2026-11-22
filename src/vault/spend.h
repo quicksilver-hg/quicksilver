@@ -95,7 +95,7 @@ struct TxSize {
     int64_t weight{-1};
     //! Upper bound on the WITH-witness serialized size once signed. Distinct from
     //! weight, which is 3*base + total and so overstates bytes by up to 4x. The
-    //! Stage 2 size term prices bytes, and a sender grinds before its signature
+    //! byte-pricing term prices bytes, and a sender grinds before its signature
     //! bytes exist, so this is the number it must grind against — using weight
     //! instead over-charges a zero-witness transaction by exactly 4x.
     int64_t bytes{-1};

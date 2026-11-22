@@ -1,4 +1,4 @@
-# Mining-only GPU Cuckatoo solver build (Quicksilver #5c bridge).
+# Mining-only GPU Cuckatoo solver build (Quicksilver per-transaction PoW bridge).
 #
 # Separate from the node's CMake/consensus build: nvcc compiles the wrapper
 # against the TRACKED vendored CUDA solver in ../vendor. CUDA never enters the
@@ -27,7 +27,7 @@ qsgpusolve-cuda: $(DEPS)
 	$(NVCC) -I$(SRC_ROOT) -o $@ -DEDGEBITS=$(EDGEBITS) -arch $(GPU_ARCH) qsgpusolve-cuda.cu $(BLAKE_SRC)
 
 # Calibration-only twin of qsgpusolve-cuda: times every graph instead of stopping at
-# the first cycle. Stage 1 of the tx-cost flag day (M2/M3). Not a mining tool and
+# the first cycle. Used for GPU cycle-rate and graph-time measurements, not mining,
 # not on any validation path; see qsgpucalibrate.cu for why qscalibrate cannot
 # stand in for it.
 qsgpucalibrate: qsgpucalibrate.cu $(COMMON_DEPS)

@@ -214,8 +214,8 @@ static std::vector<RPCResult> RelayPoolEntryDescription()
     return {
         RPCResult{RPCResult::Type::NUM, "vsize", "virtual transaction size as defined in BIP 141. This is different from actual serialized size for witness transactions as witness data is discounted."},
         RPCResult{RPCResult::Type::NUM, "weight", "transaction weight as defined in BIP 141."},
-        RPCResult{RPCResult::Type::STR, "txwork_surplus", "Quicksilver: surplus per-tx PoW work (actual - floor) as hex arith_uint256, the inclusion/replacement ranking key (#6)"},
-        RPCResult{RPCResult::Type::NUM, "txwork_rate", "Quicksilver: surplus per-tx PoW work per vsize byte (surplus/vsize); higher = included/preferred first (#6)"},
+        RPCResult{RPCResult::Type::STR, "txwork_surplus", "Quicksilver: surplus per-tx PoW work (actual - floor) as hex arith_uint256, the inclusion/replacement ranking key"},
+        RPCResult{RPCResult::Type::NUM, "txwork_rate", "Quicksilver: surplus per-tx PoW work per vsize byte (surplus/vsize); higher = included/preferred first"},
         RPCResult{RPCResult::Type::NUM_TIME, "time", "local time transaction entered pool in seconds since 1 Jan 1970 GMT"},
         RPCResult{RPCResult::Type::NUM, "height", "block height when transaction entered pool"},
         RPCResult{RPCResult::Type::NUM, "descendantcount", "number of in-relay-pool descendant transactions (including this one)"},

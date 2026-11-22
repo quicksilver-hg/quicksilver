@@ -12,12 +12,14 @@
 #include <util/fs.h>
 #include <util/translation.h>
 #ifdef USE_SQLITE
+#include <sqlite3.h>
 #include <vault/sqlite.h>
 #endif
 #include <vault/test/util.h>
 #include <vault/vaultutil.h> // for VAULT_FLAG_DESCRIPTORS
 
 #include <fstream>
+#include <algorithm>
 #include <memory>
 #include <string>
 
@@ -67,10 +69,42 @@ static std::vector<std::unique_ptr<VaultDatabase>> TestDatabases(const fs::path&
     bilingual_str error;
 #ifdef USE_SQLITE
     dbs.emplace_back(MakeSQLiteDatabase(path_root / "sqlite", options, status, error));
+    // A null database would be dereferenced by every caller (S0205-C-02).
+    BOOST_REQUIRE_MESSAGE(dbs.back(), error.original);
 #endif
     dbs.emplace_back(CreateMockableVaultDatabase());
     return dbs;
 }
+
+#ifdef USE_SQLITE
+BOOST_AUTO_TEST_CASE(sqlite_erase_zeroes_the_record)
+{
+    DatabaseOptions options;
+    DatabaseStatus status;
+    bilingual_str error;
+    auto database{MakeSQLiteDatabase(m_path_root / "secure-delete", options, status, error)};
+    BOOST_REQUIRE(database);
+    sqlite3_stmt* pragma{nullptr};
+    BOOST_REQUIRE_EQUAL(sqlite3_prepare_v2(database->m_db, "PRAGMA secure_delete", -1, &pragma, nullptr), SQLITE_OK);
+    BOOST_REQUIRE_EQUAL(sqlite3_step(pragma), SQLITE_ROW);
+    BOOST_CHECK_EQUAL(sqlite3_column_int(pragma, 0), 1);
+    sqlite3_finalize(pragma);
+
+    const std::string secret{"distinctive-plaintext-key-012345"};
+    {
+        auto batch{database->MakeBatch()};
+        BOOST_REQUIRE(batch->Write(std::string{"erased-key"}, secret));
+        BOOST_REQUIRE(batch->Erase(std::string{"erased-key"}));
+    }
+    const fs::path file_path{fs::PathFromString(database->Filename())};
+    database->Close();
+    AutoFile file{fsbridge::fopen(file_path, "rb")};
+    BOOST_REQUIRE(!file.IsNull());
+    std::vector<unsigned char> bytes(fs::file_size(file_path));
+    file.read(std::as_writable_bytes(std::span{bytes}));
+    BOOST_CHECK(std::search(bytes.begin(), bytes.end(), secret.begin(), secret.end()) == bytes.end());
+}
+#endif
 
 BOOST_AUTO_TEST_CASE(db_cursor_prefix_range_test)
 {
@@ -226,6 +260,7 @@ BOOST_AUTO_TEST_CASE(txn_close_failure_dangling_txn)
     DatabaseStatus status;
     bilingual_str error;
     std::unique_ptr<SQLiteDatabase> database = MakeSQLiteDatabase(m_path_root / "sqlite", options, status, error);
+    BOOST_REQUIRE_MESSAGE(database, error.original);
 
     std::string key = "key";
     std::string value = "value";
@@ -251,7 +286,10 @@ BOOST_AUTO_TEST_CASE(txn_close_failure_dangling_txn)
     BOOST_CHECK(!batch2->Exists(key));
 }
 
-BOOST_AUTO_TEST_CASE(concurrent_txn_dont_interfere)
+//! Batches on one database share its SQLite connection, so an uncommitted write
+//! is visible to a second batch; what the second batch cannot do is commit or
+//! abort the transaction the first one opened (S0205-C-01).
+BOOST_AUTO_TEST_CASE(second_batch_cannot_end_another_batchs_txn)
 {
     std::string key = "key";
     std::string value = "value";
@@ -261,17 +299,17 @@ BOOST_AUTO_TEST_CASE(concurrent_txn_dont_interfere)
     DatabaseStatus status;
     bilingual_str error;
     const auto& database = MakeSQLiteDatabase(m_path_root / "sqlite", options, status, error);
+    BOOST_REQUIRE_MESSAGE(database, error.original);
 
-    std::unique_ptr<DatabaseBatch> handler = Assert(database)->MakeBatch();
+    std::unique_ptr<DatabaseBatch> handler = database->MakeBatch();
 
-    // Verify concurrent db transactions does not interfere between each other.
     // Start db txn, write key and check the key does exist within the db txn.
     BOOST_CHECK(handler->TxnBegin());
     BOOST_CHECK(handler->Write(key, value));
     BOOST_CHECK(handler->Exists(key));
 
-    // But, the same key, does not exist in another handler
-    std::unique_ptr<DatabaseBatch> handler2 = Assert(database)->MakeBatch();
+    // A second batch on the same connection already sees the uncommitted key.
+    std::unique_ptr<DatabaseBatch> handler2 = database->MakeBatch();
     BOOST_CHECK(handler2->Exists(key));
 
     // Attempt to commit the handler txn calling the handler2 methods.

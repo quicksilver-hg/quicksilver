@@ -74,13 +74,13 @@ class QuicksilverBringupTest(QuicksilverTestFramework):
         assert_equal(len(decoded["cuckatoo_cycle"]), 42)
         assert any(e != 0 for e in decoded["cuckatoo_cycle"]), "spend tx cuckatoo_cycle is all zeros"
 
-        # 6. Frame-B mint (#4): a block containing a user tx mints C to the miner.
+        # 6. Frame-B mint: a block containing a user tx mints C to the miner.
         #    Compare the miner's coinbase payout in an EMPTY block vs a block that
         #    includes one user transaction. The difference is the mint C (= the 1 COIN
         #    sandbox fixture), so it must be exactly 1 whole coin.
         from decimal import Decimal
 
-        # Under the #5a emission ramp the per-block subsidy DECREASES with height, so two
+        # Under the tail-subsidy ramp the per-block subsidy DECREASES with height, so two
         # consecutive blocks have different subsidies and the subsidy term would not cancel.
         # Isolate the mint by comparing an empty block and a one-tx block mined at the SAME
         # height: mine the empty block, record its payout, invalidate it to roll back, then

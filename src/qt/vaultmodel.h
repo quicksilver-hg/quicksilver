@@ -13,10 +13,12 @@
 #include <interfaces/vault.h>
 #include <primitives/transaction.h>
 #include <support/allocators/secure.h>
+#include <sync.h>
 
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <set>
 #include <vector>
 
 #include <QObject>
@@ -108,42 +110,31 @@ public:
     };
 
     // Prepare transaction state before broadcasting a transfer.
-    SendCoinsReturn prepareTransaction(VaultModelTransaction& transaction, const vault::CCoinControl& coinControl, const std::function<void(uint32_t nonce)>& tx_proof_progress = {});
+    class ProofOfWorkAttempt
+    {
+    public:
+        ~ProofOfWorkAttempt();
+        void cancel() { m_cancel_requested = true; }
+        bool cancelRequested() const { return m_cancel_requested.load(); }
+        ProofOfWorkAttempt(const ProofOfWorkAttempt&) = delete;
+        ProofOfWorkAttempt& operator=(const ProofOfWorkAttempt&) = delete;
+    private:
+        friend class VaultModel;
+        explicit ProofOfWorkAttempt(VaultModel& model) : m_model(model) {}
+        VaultModel& m_model;
+        std::atomic<bool> m_cancel_requested{false};
+    };
 
-    /** Proof-of-work grinds running on worker threads.
-     *
-     * A transfer's grind does not run on the GUI thread -- SendCoinsDialog hands it
-     * to a detached worker so the window stays usable -- and nothing joins that
-     * thread. The worker executes inside the CVault this model owns the last
-     * reference to, holding cs_vault for however long the grind takes, which on a
-     * live target is minutes. So every path that would unload the vault, including
-     * `Close vault` and enabling consensus, has to ask first: deleting the model
-     * under a running grind destroys the vault the worker is standing in.
-     *
-     * A cancel request is a request to the grinds running *now*. It is cleared when
-     * the last one ends, so it cannot leak into the next transfer.
-     */
-    bool proofOfWorkInFlight() const { return m_proofs_in_flight.load() > 0; }
-    void requestProofOfWorkCancel() { m_proof_cancel_requested = true; }
-    bool proofOfWorkCancelRequested() const { return m_proof_cancel_requested.load(); }
+    std::shared_ptr<ProofOfWorkAttempt> beginProofOfWorkAttempt() EXCLUSIVE_LOCKS_REQUIRED(!m_proof_mutex);
+    SendCoinsReturn prepareTransaction(VaultModelTransaction& transaction, const vault::CCoinControl& coinControl, const std::function<void(uint32_t nonce)>& tx_proof_progress = {}, std::shared_ptr<ProofOfWorkAttempt> attempt = nullptr) EXCLUSIVE_LOCKS_REQUIRED(!m_proof_mutex);
+
+    // Each transfer owns an attempt from the accepted Send until its worker has
+    // released the unlock context. Cancellation reaches only attempts alive now.
+    bool proofOfWorkInFlight() const EXCLUSIVE_LOCKS_REQUIRED(!m_proof_mutex);
+    void requestProofOfWorkCancel() EXCLUSIVE_LOCKS_REQUIRED(!m_proof_mutex);
 
     static bool IsSolverConfigurationError(const bilingual_str& error);
 
-    //! Marks a grind as running for as long as it exists. Held on the worker thread.
-    class ProofOfWorkScope
-    {
-    public:
-        explicit ProofOfWorkScope(VaultModel& model);
-        ~ProofOfWorkScope();
-
-        ProofOfWorkScope(const ProofOfWorkScope&) = delete;
-        ProofOfWorkScope(ProofOfWorkScope&&) = delete;
-        ProofOfWorkScope& operator=(const ProofOfWorkScope&) = delete;
-        ProofOfWorkScope& operator=(ProofOfWorkScope&&) = delete;
-
-    private:
-        VaultModel& m_model;
-    };
 
     // Broadcast a transfer to a list of recipients.
     SendCoinsReturn sendCoins(VaultModelTransaction& transaction);
@@ -205,7 +196,6 @@ public:
 
     bool isMultivault() const;
 
-    void refresh(bool pk_hash_only = false);
 
     uint256 getLastBlockProcessed() const;
 
@@ -227,12 +217,12 @@ private:
     std::unique_ptr<interfaces::Handler> m_handler_show_progress;
     std::unique_ptr<interfaces::Handler> m_handler_can_get_addrs_changed;
     std::unique_ptr<interfaces::Handler> m_handler_transfer_expired;
+    std::unique_ptr<interfaces::Handler> m_handler_backup_state_changed;
     ClientModel* m_client_model;
     interfaces::Node& m_node;
 
-    // Written on worker threads, read on the GUI thread. See ProofOfWorkScope.
-    std::atomic<int> m_proofs_in_flight{0};
-    std::atomic<bool> m_proof_cancel_requested{false};
+    mutable Mutex m_proof_mutex;
+    std::set<ProofOfWorkAttempt*> m_proof_attempts GUARDED_BY(m_proof_mutex);
 
     bool fForceCheckBalanceChanged{true};
 

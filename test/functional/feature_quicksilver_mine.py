@@ -3,7 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-"""End-to-end node mining under feeless + per-tx-anchor (#7): a vault-built feeless tx
+"""End-to-end node mining under feeless + per-tx-anchor (anchor recency): a vault-built feeless tx
 (in == out, anchored to the tip, carrying a real per-tx Cuckatoo proof) is assembled by
 the node, the block PoW is solved, the block connects, and the tx confirms. Exercises the
 real BlockAssembler (surplus-work selection + stale-anchor skip) -> CuckatooSolve ->

@@ -9,6 +9,7 @@
 #include <key.h>
 #include <key_io.h>
 #include <streams.h>
+#include <tinyformat.h>
 #include <test/util/setup_common.h>
 #include <validationinterface.h>
 #include <vault/context.h>
@@ -16,6 +17,7 @@
 #include <vault/vaultdb.h>
 
 #include <memory>
+#include <stdexcept>
 
 namespace vault {
 std::unique_ptr<CVault> CreateSyncedVault(interfaces::Chain& chain, CChain& cchain, const CKey& key)
@@ -52,7 +54,12 @@ std::shared_ptr<CVault> TestLoadVault(std::unique_ptr<VaultDatabase> database, V
 {
     bilingual_str error;
     std::vector<bilingual_str> warnings;
+    // Shared with the vault fuzz harnesses and benches, so the signature stays;
+    // a failure throws with the reason rather than returning a null that the
+    // next line would dereference (S0208-A-04).
+    if (!database) throw std::runtime_error("TestLoadVault: no database");
     auto vault = CVault::Create(context, "", std::move(database), create_flags, error, warnings);
+    if (!vault) throw std::runtime_error("TestLoadVault: CVault::Create failed: " + error.original);
     NotifyVaultLoaded(context, vault);
     if (context.chain) {
         vault->postInitProcess();
@@ -68,6 +75,9 @@ std::shared_ptr<CVault> TestLoadVault(VaultContext& context)
     bilingual_str error;
     std::vector<bilingual_str> warnings;
     auto database = MakeVaultDatabase("", options, status, error);
+    if (!database) {
+        throw std::runtime_error(strprintf("TestLoadVault: MakeVaultDatabase failed (status %d): %s", static_cast<int>(status), error.original));
+    }
     return TestLoadVault(std::move(database), context, options.create_flags);
 }
 
@@ -120,23 +130,39 @@ DatabaseCursor::Status MockableCursor::Next(DataStream& key, DataStream& value)
 
 bool MockableBatch::ReadKey(DataStream&& key, DataStream& value)
 {
+    return ReadKeyStatus(std::move(key), value) == ReadStatus::kFound;
+}
+
+DatabaseBatch::ReadStatus MockableBatch::ReadKeyStatus(DataStream&& key, DataStream& value)
+{
     if (!m_pass) {
-        return false;
+        return ReadStatus::kFailed;
     }
     SerializeData key_data{key.begin(), key.end()};
+    if (m_allotment_read_error && *m_allotment_read_error) {
+        DataStream allotment_key{};
+        allotment_key << std::make_pair(DBKeys::SETTINGS, std::string{"agent_allotment_records"});
+        if (key_data == SerializeData{allotment_key.begin(), allotment_key.end()}) return ReadStatus::kFailed;
+    }
     const auto& it = m_records.find(key_data);
     if (it == m_records.end()) {
-        return false;
+        return ReadStatus::kMissing;
     }
     value.clear();
     value.write(it->second);
-    return true;
+    return ReadStatus::kFound;
 }
 
 bool MockableBatch::WriteKey(DataStream&& key, DataStream&& value, bool overwrite)
 {
     if (!m_pass) {
         return false;
+    }
+    if (m_fail_master_key_write && *m_fail_master_key_write) {
+        DataStream probe{key};
+        std::string type;
+        probe >> type;
+        if (type == DBKeys::MASTER_KEY) return false;
     }
     if (m_counters && !m_txn_active) ++m_counters->implicit;
     SerializeData key_data{key.begin(), key.end()};
@@ -153,6 +179,12 @@ bool MockableBatch::EraseKey(DataStream&& key)
 {
     if (!m_pass) {
         return false;
+    }
+    if (m_fail_descriptor_key_erase && *m_fail_descriptor_key_erase) {
+        DataStream probe{key};
+        std::string type;
+        probe >> type;
+        if (type == DBKeys::VAULTDESCRIPTORKEY) return false;
     }
     SerializeData key_data{key.begin(), key.end()};
     m_records.erase(key_data);

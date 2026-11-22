@@ -21,7 +21,6 @@ add_library(quicksilver_util STATIC EXCLUDE_FROM_ALL
   strencodings.cpp
   string.cpp
   syserror.cpp
-  utf16.cpp
   thread.cpp
   threadinterrupt.cpp
   threadnames.cpp
@@ -40,8 +39,20 @@ target_link_libraries(quicksilver_util
     core_interface
     quicksilver_clientversion
     quicksilver_crypto
+    quicksilver_utf16
     $<$<PLATFORM_ID:Windows>:ws2_32>
     $<$<PLATFORM_ID:Windows>:iphlpapi>
+)
+
+# UTF-8/UTF-16 conversion (Win32 API only; empty elsewhere). Its own target so that
+# quicksilver_process can use it without taking in the rest of quicksilver_util.
+add_library(quicksilver_utf16 STATIC EXCLUDE_FROM_ALL
+  utf16.cpp
+)
+
+target_link_libraries(quicksilver_utf16
+  PRIVATE
+    core_interface
 )
 
 # Process containment, shared by the Cuckatoo solver bridge and bundled Tor.
@@ -57,4 +68,5 @@ add_library(quicksilver_process STATIC EXCLUDE_FROM_ALL
 target_link_libraries(quicksilver_process
   PRIVATE
     core_interface
+    quicksilver_utf16
 )

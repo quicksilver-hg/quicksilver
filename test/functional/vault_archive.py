@@ -68,6 +68,7 @@ class VaultArchiveTest(QuicksilverTestFramework):
 
         expected_txids = history_txids(source)
         assert_greater_than(len(expected_txids), 2)
+        expected_received = {txid: source.gettransaction(txid)["timereceived"] for txid in expected_txids}
 
         self.log.info("Export the history to an encrypted archive")
         result = source.exportvaultarchive(archive_path, passphrase)
@@ -114,6 +115,8 @@ class VaultArchiveTest(QuicksilverTestFramework):
 
         assert_equal(history_txids(restored), expected_txids)
         assert_equal(len(expected_txids), result["transactions"])
+        for txid, received in expected_received.items():
+            assert_equal(restored.gettransaction(txid)["timereceived"], received)
 
         self.log.info("Importing the same archive again changes nothing")
         again = restored.importvaultarchive(archive_path, passphrase)

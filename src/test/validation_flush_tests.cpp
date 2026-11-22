@@ -15,6 +15,9 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <cstdlib>
+#include <stdexcept>
+
 BOOST_FIXTURE_TEST_SUITE(validation_flush_tests, TestingSetup)
 
 namespace {
@@ -36,7 +39,14 @@ public:
     {
         BOOST_REQUIRE(fs::is_regular_file(m_path));
         fs::rename(m_path, m_saved_path);
-        BOOST_REQUIRE(fs::create_directory(m_path));
+        try {
+            if (!fs::create_directory(m_path)) {
+                throw std::runtime_error{"failed to replace block file with a directory"};
+            }
+        } catch (...) {
+            fs::rename(m_saved_path, m_path);
+            throw;
+        }
     }
 
     ~BlockFilePathRestorer()
@@ -199,6 +209,32 @@ BOOST_FIXTURE_TEST_CASE(older_undo_file_flush_failure_stops_index_write, TestCha
     CBlockFileInfo file_info_after_retry;
     BOOST_REQUIRE(WITH_LOCK(::cs_main, return blockman.m_block_tree_db->ReadBlockFileInfo(0, file_info_after_retry)));
     BOOST_CHECK_GT(file_info_after_retry.nUndoSize, persisted_file_info.nUndoSize);
+}
+
+BOOST_FIXTURE_TEST_CASE(rebalance_block_file_flush_failure_requests_shutdown, TestChain100Setup)
+{
+    auto& chainman{*Assert(m_node.chainman)};
+    Chainstate& chainstate{chainman.ActiveChainstate()};
+    const fs::path block_path{chainman.m_blockman.GetBlockPosFilename(FlatFilePos{0, 0})};
+    int hook_calls{0};
+    ScopedFlushFailureHook flush_failure{[&](const fs::path& path, const FlatFilePos&, bool finalize) {
+        if (path == block_path && !finalize) {
+            ++hook_calls;
+            return true;
+        }
+        return false;
+    }};
+
+    BOOST_REQUIRE_GT(chainstate.m_coinstip_cache_size_bytes, 1U);
+    chainman.m_total_coinstip_cache = chainstate.m_coinstip_cache_size_bytes / 2;
+    chainman.m_total_coinsdb_cache = chainstate.m_coinsdb_cache_size_bytes;
+    BOOST_CHECK_EQUAL(m_node.exit_status.load(), EXIT_SUCCESS);
+    BOOST_CHECK(!static_cast<bool>(m_interrupt));
+    WITH_LOCK(::cs_main, chainman.MaybeRebalanceCaches());
+
+    BOOST_CHECK_GT(hook_calls, 0);
+    BOOST_CHECK_EQUAL(m_node.exit_status.load(), EXIT_FAILURE);
+    BOOST_CHECK(static_cast<bool>(m_interrupt));
 }
 
 //! Test utilities for detecting when we need to flush the coins cache based

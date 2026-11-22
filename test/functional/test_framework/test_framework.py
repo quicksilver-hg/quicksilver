@@ -199,7 +199,7 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
         self.options = parser.parse_args()
         if self.options.timeout_factor == 0:
             self.options.timeout_factor = 99999
-        # Quicksilver: every spend grinds a per-tx proof of work, and since the Stage 2
+        # Quicksilver: every spend grinds a per-tx proof of work, and since the per-transaction work pricing
         # flag day the work required scales with the transaction's serialized bytes. A
         # heavy script building large transactions can hold a core for minutes, so under
         # -j8 whichever script loses the CPU race exceeds the RPC timeout and fails --

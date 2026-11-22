@@ -88,12 +88,21 @@ FUZZ_TARGET(vault_notifications, .init = initialize_setup)
     }
     LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 20)
     {
+        bool disconnected{false};
         CallOneOf(
             fuzzed_data_provider,
             [&] {
                 auto& [coins_orig, block]{chain.back()};
                 // Copy the coins for this block and consume all of them
                 Coins coins = coins_orig;
+                // A real block starts with its coinbase. The vault treats vtx[0] as the coinbase
+                // when a block is disconnected, so the harness must put one there.
+                if (block.vtx.empty()) {
+                    CMutableTransaction coinbase;
+                    coinbase.vin.emplace_back(COutPoint{});
+                    coinbase.vout.emplace_back(0, CScript{} << OP_RETURN);
+                    block.vtx.emplace_back(MakeTransactionRef(coinbase));
+                }
                 while (!coins.empty()) {
                     // Create a new tx
                     CMutableTransaction tx{};
@@ -138,6 +147,7 @@ FUZZ_TARGET(vault_notifications, .init = initialize_setup)
                 // Store the coins for the next block
                 Coins coins_new;
                 for (const auto& tx : block.vtx) {
+                    if (tx->IsCoinBase()) continue; // pays no vault
                     uint32_t i{0};
                     for (const auto& out : tx->vout) {
                         coins_new.emplace(out.nValue, COutPoint{tx->GetHash(), i++});
@@ -147,7 +157,7 @@ FUZZ_TARGET(vault_notifications, .init = initialize_setup)
             },
             [&] {
                 if (chain.size() <= 1) return; // The first entry can't be removed
-                auto& [coins, block]{chain.back()};
+                auto& [coins, block]{chain[chain.size() - 2]};
                 if (block.vtx.empty()) return; // Can only disconnect if the block was submitted first
                 // Disconnect block
                 const uint256& hash = block.GetHash();
@@ -157,14 +167,29 @@ FUZZ_TARGET(vault_notifications, .init = initialize_setup)
                 info.data = &block;
                 a.vault->blockDisconnected(info);
                 b.vault->blockDisconnected(info);
+                for (const auto& tx : block.vtx) {
+                    for (auto* vault : {a.vault.get(), b.vault.get()}) {
+                        LOCK(vault->cs_vault);
+                        const auto it = vault->mapVault.find(tx->GetHash());
+                        if (it != vault->mapVault.end()) assert(it->second.isInactive());
+                    }
+                }
                 chain.pop_back();
+                block.SetNull();
+                disconnected = true;
             });
-        auto& [coins, first_block]{chain.front()};
-        if (!first_block.vtx.empty()) {
+        // Right after a disconnect the balance is not checked: the harness has no relay pool, and the
+        // vault counts a disconnected transaction as pending only when it spends the vault's own coins
+        // (receive.cpp GetBalance, F-579), so value paid by the other vault is not in the balance until
+        // a block confirms it again.
+        if (!disconnected && chain.size() > 1) {
             // Only check balance when at least one block was submitted
-            const auto bal_a{GetBalance(*a.vault).m_mine_trusted};
-            const auto bal_b{GetBalance(*b.vault).m_mine_trusted};
-            assert(total_amount == bal_a + bal_b);
+            const auto balance_a{GetBalance(*a.vault)};
+            const auto balance_b{GetBalance(*b.vault)};
+            assert(total_amount == balance_a.m_mine_trusted + balance_b.m_mine_trusted);
+            // Every coin is confirmed here, so nothing is pending or immature (S0212-B-02).
+            assert(balance_a.m_mine_untrusted_pending == 0 && balance_b.m_mine_untrusted_pending == 0);
+            assert(balance_a.m_mine_immature == 0 && balance_b.m_mine_immature == 0);
         }
     }
 }

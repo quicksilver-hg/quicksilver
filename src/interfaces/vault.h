@@ -103,6 +103,7 @@ public:
     virtual void abortRescan() = 0;
 
     //! Back up vault. The copy alone records nothing (F-567).
+    //! filename is UTF-8 on every platform (F-614).
     virtual bool backupVault(const std::string& filename) = 0;
 
     //! Reopen a saved backup read-only and check it; with a passphrase, also test it against the backup (F-567).
@@ -310,7 +311,7 @@ public:
     //! leaves the list untouched -- for an unload the application intends to reverse
     //! itself, such as handing the vault over to node initialisation when consensus
     //! is enabled mid-session.
-    virtual void remove(std::optional<bool> load_on_start = false) = 0;
+    virtual bool remove(std::optional<bool> load_on_start = false) = 0;
 
     //! Register handler for unload message.
     using UnloadFn = std::function<void()>;
@@ -346,6 +347,10 @@ public:
     //! Register handler for keypool changed messages.
     using CanGetAddressesChangedFn = std::function<void()>;
     virtual std::unique_ptr<Handler> handleCanGetAddressesChanged(CanGetAddressesChangedFn fn) = 0;
+
+    //! Register handler for a change to what a backup covers (F-613).
+    using BackupStateChangedFn = std::function<void()>;
+    virtual std::unique_ptr<Handler> handleBackupStateChanged(BackupStateChangedFn fn) = 0;
 
     //! Return pointer to internal vault class, useful for testing.
     virtual vault::CVault* vault() { return nullptr; }

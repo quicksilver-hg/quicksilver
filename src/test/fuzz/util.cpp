@@ -343,9 +343,12 @@ int FuzzedFileProvider::seek(void* cookie, int64_t* offset, int whence)
     if (new_offset < 0) {
         return -1;
     }
-    fuzzed_file->m_offset = new_offset;
-    *offset = new_offset;
-    return fuzzed_file->m_fuzzed_data_provider.ConsumeIntegralInRange<int>(-1, 0);
+    const int result = fuzzed_file->m_fuzzed_data_provider.ConsumeIntegralInRange<int>(-1, 0);
+    if (result == 0) {
+        fuzzed_file->m_offset = new_offset;
+        *offset = new_offset;
+    }
+    return result;
 }
 
 int FuzzedFileProvider::close(void* cookie)

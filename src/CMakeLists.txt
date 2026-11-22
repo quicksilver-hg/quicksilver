@@ -48,12 +48,19 @@ get_target_interface(SECP256K1_APPEND_LDFLAGS "" sanitize_interface LINK_OPTIONS
 string(STRIP "${SECP256K1_APPEND_LDFLAGS} ${APPEND_LDFLAGS}" SECP256K1_APPEND_LDFLAGS)
 set(SECP256K1_APPEND_LDFLAGS ${SECP256K1_APPEND_LDFLAGS} CACHE STRING "" FORCE)
 # We want to build libsecp256k1 with the most tested RelWithDebInfo configuration.
+# The override is scoped to secp256k1: the saved flags are restored right after
+# add_subdirectory(secp256k1), so later C targets in src/ keep their own configuration.
 enable_language(C)
+set(secp256k1_saved_c_flag_configs "")
 foreach(config IN LISTS CMAKE_BUILD_TYPE CMAKE_CONFIGURATION_TYPES)
   if(config STREQUAL "")
     continue()
   endif()
   string(TOUPPER "${config}" config)
+  if(NOT config IN_LIST secp256k1_saved_c_flag_configs)
+    list(APPEND secp256k1_saved_c_flag_configs ${config})
+    set(secp256k1_saved_C_FLAGS_${config} "${CMAKE_C_FLAGS_${config}}")
+  endif()
   set(CMAKE_C_FLAGS_${config} "${CMAKE_C_FLAGS_RELWITHDEBINFO}")
 endforeach()
 # If the CFLAGS environment variable is defined during building depends
@@ -63,6 +70,11 @@ if(DEFINED ENV{CFLAGS})
 endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS OFF)
 add_subdirectory(secp256k1)
+foreach(config IN LISTS secp256k1_saved_c_flag_configs)
+  set(CMAKE_C_FLAGS_${config} "${secp256k1_saved_C_FLAGS_${config}}")
+  unset(secp256k1_saved_C_FLAGS_${config})
+endforeach()
+unset(secp256k1_saved_c_flag_configs)
 set_target_properties(secp256k1 PROPERTIES
   EXCLUDE_FROM_ALL TRUE
 )

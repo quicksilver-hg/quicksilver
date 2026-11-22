@@ -32,6 +32,8 @@ const char* HeaderAcceptCodeString(HeaderAcceptCode code)
         return "time-too-old";
     case HeaderAcceptCode::TIME_TOO_NEW:
         return "time-too-new";
+    case HeaderAcceptCode::BAD_VERSION:
+        return "bad-version";
     } // no default case, so the compiler can warn on missing enum values
     assert(false);
     return "unknown";
@@ -128,6 +130,13 @@ HeaderAcceptResult HeaderChain::AcceptHeader(const CBlockHeader& header)
 
     if (header.Time() > NodeClock::now() + std::chrono::seconds{MAX_FUTURE_BLOCK_TIME}) {
         return {HeaderAcceptCode::TIME_TOO_NEW, hash, prev->nHeight + 1};
+    }
+
+    const int height{prev->nHeight + 1};
+    if ((header.nVersion < 2 && height >= m_params.DeploymentHeight(Consensus::DEPLOYMENT_HEIGHTINCB)) ||
+        (header.nVersion < 3 && height >= m_params.DeploymentHeight(Consensus::DEPLOYMENT_DERSIG)) ||
+        (header.nVersion < 4 && height >= m_params.DeploymentHeight(Consensus::DEPLOYMENT_CLTV))) {
+        return {HeaderAcceptCode::BAD_VERSION, hash, height};
     }
 
     HeaderEntry& entry{Append(header, prev)};

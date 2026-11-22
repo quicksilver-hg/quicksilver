@@ -10,6 +10,7 @@
 #include <util/fs.h>
 
 #include <fstream>
+#include <stdexcept>
 #include <string>
 
 #include <vault/test/init_test_fixture.h>
@@ -22,7 +23,6 @@ InitVaultDirTestingSetup::InitVaultDirTestingSetup(const ChainType chainType) : 
     const auto sep = fs::path::preferred_separator;
 
     m_datadir = m_args.GetDataDirNet();
-    m_cwd = fs::current_path();
 
     m_vaultdir_path_cases["default"] = m_datadir / "vaults";
     m_vaultdir_path_cases["custom"] = m_datadir / "my_vaults";
@@ -39,12 +39,12 @@ InitVaultDirTestingSetup::InitVaultDirTestingSetup(const ChainType chainType) : 
     fs::create_directories(m_vaultdir_path_cases["relative"]);
     std::ofstream f{m_vaultdir_path_cases["file"]};
     f.close();
+    if (!f || !fs::is_regular_file(m_vaultdir_path_cases["file"])) {
+        throw std::runtime_error("cannot create " + fs::PathToString(m_vaultdir_path_cases["file"]));
+    }
 }
 
-InitVaultDirTestingSetup::~InitVaultDirTestingSetup()
-{
-    fs::current_path(m_cwd);
-}
+InitVaultDirTestingSetup::~InitVaultDirTestingSetup() = default;
 
 void InitVaultDirTestingSetup::SetVaultDir(const fs::path& vaultdir_path)
 {

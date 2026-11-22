@@ -192,7 +192,7 @@ BOOST_AUTO_TEST_CASE(set)
     for (int i = 0; i < 4; i++)
     {
         txFrom.vout[i].scriptPubKey = outer[i];
-        txFrom.vout[i].nValue = CENT;
+        txFrom.vout[i].nValue = COIN / 100;
     }
     BOOST_CHECK(IsStandardTx(CTransaction(txFrom), reason));
 
@@ -203,7 +203,7 @@ BOOST_AUTO_TEST_CASE(set)
         txTo[i].vout.resize(1);
         txTo[i].vin[0].prevout.n = i;
         txTo[i].vin[0].prevout.hash = txFrom.GetHash();
-        txTo[i].vout[0].nValue = 1*CENT;
+        txTo[i].vout[0].nValue = COIN / 100;
         txTo[i].vout[0].scriptPubKey = inner[i];
     }
     for (int i = 0; i < 4; i++)
@@ -256,9 +256,9 @@ BOOST_AUTO_TEST_CASE(is)
     BOOST_CHECK(!not_p2sh.IsPayToScriptHash());
 }
 
-BOOST_AUTO_TEST_CASE(switchover)
+BOOST_AUTO_TEST_CASE(p2sh_flag_verification)
 {
-    // Test switch over code
+    // Compare script verification with and without the P2SH flag.
     CScript notValid;
     ScriptError err;
     notValid << OP_11 << OP_12 << OP_EQUALVERIFY;
@@ -268,10 +268,10 @@ BOOST_AUTO_TEST_CASE(switchover)
     CScript fund = GetScriptForDestination(ScriptHash(notValid));
 
 
-    // Validation should succeed under old rules (hash is correct):
+    // Without P2SH verification, the matching script hash is sufficient:
     BOOST_CHECK(Verify(scriptSig, fund, false, err));
     BOOST_CHECK_MESSAGE(err == SCRIPT_ERR_OK, ScriptErrorString(err));
-    // Fail under new:
+    // P2SH verification executes the redeem script and finds its failed comparison:
     BOOST_CHECK(!Verify(scriptSig, fund, true, err));
     BOOST_CHECK_MESSAGE(err == SCRIPT_ERR_EQUALVERIFY, ScriptErrorString(err));
 }

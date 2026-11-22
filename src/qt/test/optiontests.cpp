@@ -6,6 +6,7 @@
 #include <quicksilver-build-config.h> // IWYU pragma: keep
 
 #include <common/args.h>
+#include <util/fs.h>
 #include <crypto/cuckatoo/gpu_devices.h>
 #include <crypto/cuckatoo/gpu_kernel_limit.h>
 #include <crypto/cuckatoo/gpu_solver.h>
@@ -64,6 +65,7 @@
 #include <univalue.h>
 
 #include <fstream>
+#include <system_error>
 #include <utility>
 
 void ShieldOptionsDialogFromBundledHelper()
@@ -79,9 +81,24 @@ void ShieldOptionsDialogFromBundledHelper()
     });
 }
 
+namespace {
+std::optional<fs::path> SettingsFilePath()
+{
+    fs::path path;
+    if (!gArgs.GetSettingsPath(&path)) return std::nullopt;
+    return path;
+}
+} // namespace
+
 OptionTests::OptionTests(interfaces::Node& node) : m_node(node)
 {
     gArgs.LockSettings([&](common::Settings& s) { m_previous_settings = s; });
+    if (const auto path{SettingsFilePath()}; path && fs::exists(*path)) {
+        std::ifstream file{*path, std::ios::binary};
+        m_previous_settings_file = std::string{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    }
+    const QSettings settings;
+    for (const QString& key : settings.allKeys()) m_previous_qsettings.insert(key, settings.value(key));
 }
 
 void OptionTests::init()
@@ -89,9 +106,36 @@ void OptionTests::init()
     // reset args
     gArgs.LockSettings([&](common::Settings& s) { s = m_previous_settings; });
     gArgs.ClearPathCache();
-    for (const char* name : {"CUCKATOO_GPU_SOLVER", "QS_PROBE_STUB_LISTING", "QS_PROBE_STUB_EXIT", "QS_PROBE_STUB_SLEEP_MS", "CUCKATOO_GPU_DEVICES"}) qunsetenv(name);
+    for (const char* name : ProbeEnvironmentNames()) qunsetenv(name);
     gArgs.LockSettings([](common::Settings& settings) { settings.rw_settings.erase("cuckatoodevice"); });
     QSettings().remove(QStringLiteral("gpu_device_names"));
+    ResetGpuCardTables();
+}
+
+void OptionTests::cleanup()
+{
+    // init() resets only what the next slot of this class reads. A failed check
+    // returns before a slot's own restore, so put back everything a slot can
+    // change, on disk too, before the next slot or the next class (S0294-A-03,
+    // S0294-A-04): the args, settings.json, every QSettings key (the language
+    // among them) and the probe variables.
+    gArgs.LockSettings([&](common::Settings& s) { s = m_previous_settings; });
+    gArgs.ClearPathCache();
+    if (const auto path{SettingsFilePath()}) {
+        if (m_previous_settings_file) {
+            std::ofstream file{*path, std::ios::binary | std::ios::trunc};
+            file << *m_previous_settings_file;
+            QVERIFY2(file.good(), qPrintable(QStringLiteral("cannot restore ") + QString::fromStdString(fs::PathToString(*path))));
+        } else {
+            std::error_code ec;
+            fs::remove(*path, ec);
+        }
+    }
+    QSettings settings;
+    settings.clear();
+    for (auto it = m_previous_qsettings.cbegin(); it != m_previous_qsettings.cend(); ++it) settings.setValue(it.key(), it.value());
+    settings.sync();
+    for (const char* name : ProbeEnvironmentNames()) qunsetenv(name);
     ResetGpuCardTables();
 }
 
@@ -118,11 +162,30 @@ void OptionTests::leftoverQSettingsKeysAreIgnored()
     QVERIFY(settings.contains("fListen"));
     QVERIFY(settings.contains("addrProxy"));
 
-    std::ifstream file(gArgs.GetDataDirNet() / "settings.json");
-    const std::string contents{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
-    QVERIFY(contents.find("\"dbcache\"") == std::string::npos);
-    QVERIFY(contents.find("\"listen\"") == std::string::npos);
-    QVERIFY(contents.find("\"proxy\"") == std::string::npos);
+    // Every settings write goes through updateRwSetting, which changes the
+    // in-memory read-write settings and rewrites settings.json. Check both:
+    // reading only the file passed on an empty read whenever Init() wrote
+    // nothing and the file was absent (S0294-A-01).
+    for (const char* name : {"dbcache", "listen", "proxy", "prune", "par", "onion"}) {
+        bool present{true};
+        gArgs.LockSettings([&](const common::Settings& settings) { present = settings.rw_settings.count(name) > 0; });
+        QVERIFY2(!present, name);
+    }
+    const fs::path settings_path{gArgs.GetDataDirNet() / "settings.json"};
+    const auto read_settings_file = [&settings_path] {
+        std::ifstream file(settings_path);
+        return std::string{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    };
+    if (fs::exists(settings_path)) {
+        const std::string contents{read_settings_file()};
+        QVERIFY(contents.find("\"dbcache\"") == std::string::npos);
+        QVERIFY(contents.find("\"listen\"") == std::string::npos);
+        QVERIFY(contents.find("\"proxy\"") == std::string::npos);
+    }
+    // Positive control: a real write lands in the file read above.
+    m_node.updateRwSetting("settings_path_probe", "1");
+    QVERIFY2(fs::exists(settings_path), qPrintable(QString::fromStdString(fs::PathToString(settings_path))));
+    QVERIFY(read_settings_file().find("\"settings_path_probe\"") != std::string::npos);
 }
 
 void OptionTests::legacyDisplayUnitSettingIsIgnored()
@@ -390,6 +453,7 @@ void OptionTests::gpuDevicesSettingRoundTrips()
 
 void OptionTests::gpuCardsListAndModes()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
     PointDiscoveryAtStub(WriteListing({
         QStringLiteral("device backend=opencl id=pci:0000:00:02.0 type=gpu integrated=1 mem=0 status=ok name=Intel(R) HD Graphics 4600"),
         QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480"),
@@ -441,6 +505,7 @@ void OptionTests::commandLineGraphicsHelperIsShown()
 
 void OptionTests::sameNamedCardsShowTheirIds()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
     PointDiscoveryAtStub(WriteListing({
         QStringLiteral("device backend=opencl id=pci:0000:03:00.0 type=gpu integrated=0 mem=0 status=ok name=Radeon RX 580"),
         QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=Radeon RX 580"),
@@ -469,6 +534,7 @@ void OptionTests::sameNamedCardsShowTheirIds()
 
 void OptionTests::gpuCardStatsRefresh()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
     PointDiscoveryAtStub(WriteListing({
         QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480") }));
     OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
@@ -577,6 +643,7 @@ struct RestoreBundled {
 //! the dialog, a test run started whatever helper the node was configured with.
 void OptionTests::dialogTestsDoNotRunTheBundledHelper()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
     const RestoreBundled restore;
     qputenv("CUCKATOO_GPU_BUNDLED", SolverProbeStubPath().toUtf8());
     qputenv("QS_PROBE_STUB_LISTING", WriteListing({QStringLiteral("device backend=opencl id=pci:0000:0a:00.0 type=gpu integrated=0 mem=0 status=ok name=Ran The Bundled Helper")}).toUtf8());
@@ -634,6 +701,7 @@ void OptionTests::injectedDiscoveryFillsTheDialog()
 //! helper is the stub, so this reaches a real process and no hardware.
 void OptionTests::defaultDiscoveryRunnerListsThroughTheHelper()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
     const RestoreDiscoveryShield restore;
     OptionsDialog::setGpuDiscoveryRunnerForTesting(nullptr);
     PointDiscoveryAtStub(WriteListing({QStringLiteral("device backend=opencl id=pci:0000:0c:00.0 type=gpu integrated=0 mem=0 status=ok name=Default Runner Card")}));
@@ -675,6 +743,7 @@ void OptionTests::missingBundledHelperIsNamed()
 //! are checked where those states are already built.
 void OptionTests::cardsHintNeedsACard()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
     const auto check = [&](const QString& expected_state) {
         OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
         OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
@@ -693,6 +762,7 @@ void OptionTests::cardsHintNeedsACard()
 
 void OptionTests::tickingBuiltInGraphicsAsksFirst()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
     PointDiscoveryAtStub(WriteListing({
         QStringLiteral("device backend=opencl id=pci:0000:00:02.0 type=gpu integrated=1 mem=0 status=ok name=Intel(R) HD Graphics 4600"),
         QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480") }));
@@ -720,6 +790,7 @@ void OptionTests::tickingBuiltInGraphicsAsksFirst()
 
 void OptionTests::missingChosenCardKeepsItsName()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
     PointDiscoveryAtStub(WriteListing({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")}));
     OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
     QVERIFY(options.setOption(OptionsModel::GpuDevices, QStringList{QStringLiteral("pci:0000:09:00.0")}));
@@ -739,6 +810,7 @@ void OptionTests::missingChosenCardKeepsItsName()
 
 void OptionTests::cpuOnlyHidesTheList()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
     PointDiscoveryAtStub(WriteListing({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")}));
     OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
     OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
@@ -751,6 +823,7 @@ void OptionTests::cpuOnlyHidesTheList()
 
 void OptionTests::savedGpuDevicesSelectTheMatchingRadio()
 {
+    QVERIFY_SOLVER_PROBE_STUB();
     PointDiscoveryAtStub(WriteListing({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")}));
     const struct {
         QStringList devices;
@@ -1023,8 +1096,8 @@ void OptionTests::hardwareTabFitsAtTheOpeningSize()
 
     QString problem;
     // horizontal is for a screen wide enough to give the rows their width.
-    // The opening-size check does not ask for it: this platform's screen is
-    // 240x320, so the dialog cannot grow past 700 and a wide font sticks out.
+    // The opening-size check does not ask for it: at the 700x540 opening size
+    // a wide font sticks out.
     auto rows_fit = [&](bool horizontal) {
         QScrollArea* scroll = tab->findChild<QScrollArea*>(QStringLiteral("tabMainScrollArea"));
         const auto widgets = tab->findChildren<QWidget*>();
@@ -1112,10 +1185,9 @@ void OptionTests::hardwareTabFitsAtTheOpeningSize()
     QVERIFY2(main_rows_fit(false), qPrintable(problem));
     QVERIFY(show_page(tab));
 
-    // A 1920x1080 desktop gives the rows their own size. This platform cannot:
-    // its screen is 240x320, and the dialog will not grow past the screen.
-    // Apply the desktop size, then the client area a 1366x768 laptop has left
-    // after a taskbar and a title bar.
+    // A 1920x1080 desktop gives the rows their own size. Size the dialog to
+    // what its contents ask for, then to the client area a 1366x768 laptop
+    // has left after a taskbar and a title bar.
     QScrollArea* scroll = tab->findChild<QScrollArea*>(QStringLiteral("tabMainScrollArea"));
     QVERIFY(scroll);
     QVERIFY(scroll->widget());
@@ -1135,10 +1207,14 @@ void OptionTests::hardwareTabFitsAtTheOpeningSize()
     QVERIFY2(main_rows_fit(true), qPrintable(problem));
     QVERIFY(show_page(tab));
 
-    dialog.resize(qMin(dialog.width(), 1366), qMin(dialog.height(), 700));
+    // The dialog must really take the laptop size: a minimum above it, or a
+    // resize the platform refused, would leave the checks below measuring the
+    // desktop size again (S0294-A-05).
+    const QSize laptop{qMin(dialog.width(), 1366), qMin(dialog.height(), 700)};
+    dialog.resize(laptop);
     QVERIFY(QTest::qWaitForWindowExposed(&dialog));
-    QVERIFY2(dialog.width() <= 1366 && dialog.height() <= 700,
-             qPrintable(QStringLiteral("laptop size %1x%2").arg(dialog.width()).arg(dialog.height())));
+    QVERIFY2(dialog.size() == laptop,
+             qPrintable(QStringLiteral("asked for laptop size %1x%2, got %3x%4").arg(laptop.width()).arg(laptop.height()).arg(dialog.width()).arg(dialog.height())));
     QVERIFY2(rows_fit(true), qPrintable(problem));
     QVERIFY(show_page(main));
     QVERIFY2(main_rows_fit(true), qPrintable(problem));
@@ -1402,8 +1478,8 @@ void OptionTests::coinControlSettingIsNamedCoinControl()
     QCOMPARE(setting->toolTip(), QStringLiteral("Show the Coin control… button on Transfer, so you can choose which coins a transfer spends."));
 
     TestChain100Setup test;
-    node::NodeContext* const previous_context = m_node.context();
-    m_node.setContext(&test.m_node);
+    // Put the context back before `test` is destroyed, on every exit.
+    const ScopedNodeContext scoped_context(m_node, test.m_node);
     QString coin_control_title;
     {
         vault::VaultContext context;
@@ -1422,6 +1498,5 @@ void OptionTests::coinControlSettingIsNamedCoinControl()
         // the database file while the vault still holds it open.
         vault::WaitForDeleteVault(std::move(raw_vault));
     }
-    m_node.setContext(previous_context);
     QCOMPARE(coin_control_title, QStringLiteral("Coin Control"));
 }

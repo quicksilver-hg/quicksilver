@@ -6,6 +6,7 @@
 
 #include <qt/platformstyle.h>
 #include <qt/quicksilverstyle.h>
+#include <qt/test/util.h>
 
 #include <QApplication>
 #include <QColor>
@@ -144,6 +145,29 @@ void QuicksilverStyleTests::dialogButtonsCarryNoStockIcon()
     QVERIFY(installed);
     QCOMPARE(installed->objectName(), QStringLiteral("fusion"));
     QCOMPARE(installed->styleHint(QStyle::SH_DialogButtonBox_ButtonsHaveIcons), 0);
+}
+
+void QuicksilverStyleTests::restoreApplicationStyleKeepsTheProxy()
+{
+    // S0297-C-01: the proxy copies its base's name, so a guard that recreates
+    // the style by name alone puts plain Fusion back and drops the proxy's hints
+    // for every later test.
+    QuicksilverStyle::Apply(*qApp);
+    const QProxyStyle* before = qApp->findChild<QProxyStyle*>();
+    QVERIFY(before);
+    const int hint_before{before->styleHint(QStyle::SH_DialogButtonBox_ButtonsHaveIcons)};
+    QCOMPARE(hint_before, 0);
+    {
+        const RestoreApplicationStyle restore;
+        qApp->setStyleSheet(QString());
+        qApp->setStyle(QStyleFactory::create(QStringLiteral("Windows")));
+        QVERIFY(!qApp->findChild<QProxyStyle*>());
+    }
+    const QProxyStyle* after = qApp->findChild<QProxyStyle*>();
+    QVERIFY2(after, "the guard put back the base style without the Quicksilver proxy");
+    QCOMPARE(after->objectName(), QStringLiteral("fusion"));
+    QCOMPARE(after->styleHint(QStyle::SH_DialogButtonBox_ButtonsHaveIcons), hint_before);
+    QVERIFY(qApp->styleSheet().contains(QStringLiteral("QToolBar#primaryCommandRail")));
 }
 
 namespace {

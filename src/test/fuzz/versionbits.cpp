@@ -73,10 +73,11 @@ private:
     const uint32_t m_interval;
     const int32_t m_signal;
     const int32_t m_no_signal;
+    const uint32_t m_bits;
 
 public:
-    Blocks(uint32_t start_time, uint32_t interval, int32_t signal, int32_t no_signal)
-        : m_start_time{start_time}, m_interval{interval}, m_signal{signal}, m_no_signal{no_signal} {}
+    Blocks(uint32_t start_time, uint32_t interval, int32_t signal, int32_t no_signal, uint32_t bits)
+        : m_start_time{start_time}, m_interval{interval}, m_signal{signal}, m_no_signal{no_signal}, m_bits{bits} {}
 
     size_t size() const { return m_blocks.size(); }
 
@@ -90,7 +91,7 @@ public:
         CBlockHeader header;
         header.nVersion = signal ? m_signal : m_no_signal;
         header.nTime = m_start_time + m_blocks.size() * m_interval;
-        header.nBits = 0x1d00ffff;
+        header.nBits = m_bits;
 
         auto current_block = std::make_unique<CBlockIndex>(header);
         current_block->pprev = tip();
@@ -129,7 +130,7 @@ FUZZ_TARGET(versionbits, .init = initialize)
     const int threshold = fuzzed_data_provider.ConsumeIntegralInRange(1, period);
     assert(0 < threshold && threshold <= period); // must be able to both pass and fail threshold!
 
-    // too many blocks at 10min each might cause uint32_t time to overflow if
+    // Too many blocks at the chain's spacing might cause uint32_t time to overflow if
     // block_start_time is at the end of the range above
     assert(std::numeric_limits<uint32_t>::max() - MAX_START_TIME > interval * max_blocks);
 
@@ -183,7 +184,7 @@ FUZZ_TARGET(versionbits, .init = initialize)
     assert(ver_signal >= VERSIONBITS_LAST_OLD_BLOCK_VERSION);
 
     // Now that we have chosen time and versions, setup to mine blocks
-    Blocks blocks(block_start_time, interval, ver_signal, ver_nosignal);
+    Blocks blocks(block_start_time, interval, ver_signal, ver_nosignal, params.GenesisBlock().nBits);
 
     /* Strategy:
      *  * we will mine a final period worth of blocks, with

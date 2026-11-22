@@ -13,28 +13,6 @@
 #include <string>
 #include <vector>
 
-class DummyTorControlConnection : public TorControlConnection
-{
-public:
-    DummyTorControlConnection() : TorControlConnection{nullptr}
-    {
-    }
-
-    bool Connect(const std::string&, const ConnectionCB&, const ConnectionCB&)
-    {
-        return true;
-    }
-
-    void Disconnect()
-    {
-    }
-
-    bool Command(const std::string&, const ReplyHandlerCB&)
-    {
-        return true;
-    }
-};
-
 void initialize_torcontrol()
 {
     static const auto testing_setup = MakeNoLogFileContext<>();
@@ -62,7 +40,9 @@ FUZZ_TARGET(torcontrol, .init = initialize_torcontrol)
         if (tor_control_reply.lines.empty()) {
             break;
         }
-        DummyTorControlConnection dummy_tor_control_connection;
+        // Command() on this disconnected connection returns false. The methods
+        // are nonvirtual, so a derived no-op connection cannot intercept them.
+        TorControlConnection dummy_tor_control_connection{nullptr};
         CallOneOf(
             fuzzed_data_provider,
             [&] {

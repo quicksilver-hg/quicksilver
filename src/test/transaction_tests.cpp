@@ -381,6 +381,35 @@ BOOST_AUTO_TEST_CASE(tx_no_inputs)
     BOOST_CHECK(state.GetRejectReason() == "bad-txns-vin-empty");
 }
 
+BOOST_AUTO_TEST_CASE(tx_output_amount_boundary)
+{
+    const CAmount limit{CAmount{1'000'000'000} * COIN};
+    CMutableTransaction tx;
+    tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+    tx.vout.emplace_back(limit, CScript{});
+
+    TxValidationState state;
+    BOOST_REQUIRE(CheckTransaction(CTransaction{tx}, state));
+    BOOST_CHECK(state.IsValid());
+
+    tx.vout.emplace_back(0, CScript{});
+    state = {};
+    BOOST_REQUIRE(CheckTransaction(CTransaction{tx}, state));
+    BOOST_CHECK(state.IsValid());
+
+    tx.vout.resize(1);
+    tx.vout[0].nValue = limit + 1;
+    state = {};
+    BOOST_CHECK(!CheckTransaction(CTransaction{tx}, state));
+    BOOST_CHECK_EQUAL(state.GetRejectReason(), "bad-txns-vout-toolarge");
+
+    tx.vout[0].nValue = limit;
+    tx.vout.emplace_back(1, CScript{});
+    state = {};
+    BOOST_CHECK(!CheckTransaction(CTransaction{tx}, state));
+    BOOST_CHECK_EQUAL(state.GetRejectReason(), "bad-txns-txouttotal-toolarge");
+}
+
 BOOST_AUTO_TEST_CASE(tx_oversized)
 {
     auto createTransaction =[](size_t payloadSize) {
@@ -430,7 +459,7 @@ BOOST_AUTO_TEST_CASE(test_Get)
     CCoinsView coinsDummy;
     CCoinsViewCache coins(&coinsDummy);
     std::vector<CMutableTransaction> dummyTransactions =
-        SetupDummyInputs(keystore, coins, {11*CENT, 50*CENT, 21*CENT, 22*CENT});
+        SetupDummyInputs(keystore, coins, {11*(COIN / 100), 50*(COIN / 100), 21*(COIN / 100), 22*(COIN / 100)});
 
     CMutableTransaction t1;
     t1.vin.resize(3);
@@ -444,7 +473,9 @@ BOOST_AUTO_TEST_CASE(test_Get)
     t1.vin[2].prevout.n = 1;
     t1.vin[2].scriptSig << std::vector<unsigned char>(65, 0) << std::vector<unsigned char>(33, 4);
     t1.vout.resize(2);
-    t1.vout[0].nValue = 90*CENT;
+    t1.vout[0].nValue = dummyTransactions[0].vout[1].nValue +
+                       dummyTransactions[1].vout[0].nValue +
+                       dummyTransactions[1].vout[1].nValue;
     t1.vout[0].scriptPubKey << OP_1;
 
     BOOST_CHECK(AreInputsStandard(CTransaction(t1), coins));
@@ -765,7 +796,7 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     CCoinsView coinsDummy;
     CCoinsViewCache coins(&coinsDummy);
     std::vector<CMutableTransaction> dummyTransactions =
-        SetupDummyInputs(keystore, coins, {11*CENT, 50*CENT, 21*CENT, 22*CENT});
+        SetupDummyInputs(keystore, coins, {11*(COIN / 100), 50*(COIN / 100), 21*(COIN / 100), 22*(COIN / 100)});
 
     CMutableTransaction t;
     t.vin.resize(1);
@@ -773,7 +804,7 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     t.vin[0].prevout.n = 1;
     t.vin[0].scriptSig << std::vector<unsigned char>(65, 0);
     t.vout.resize(1);
-    t.vout[0].nValue = 90*CENT;
+    t.vout[0].nValue = 11 * COIN / 100;
     CKey key = GenerateRandomKey();
     t.vout[0].scriptPubKey = GetScriptForDestination(PKHash(key.GetPubKey()));
 
@@ -796,7 +827,7 @@ BOOST_AUTO_TEST_CASE(test_IsStandard)
     t.vout.emplace_back(0, t.vout[0].scriptPubKey); // a zero-value output is no longer "dust"
     CheckIsStandard(t);
     t.vout.resize(1);
-    t.vout[0].nValue = 90*CENT; // restore a normal output for the checks below
+    t.vout[0].nValue = 11 * COIN / 100; // restore a balanced output for the checks below
 
     // Disallowed version
     t.version = std::numeric_limits<uint32_t>::max();

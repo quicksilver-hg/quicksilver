@@ -20,6 +20,7 @@
 #include <cassert>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -29,6 +30,29 @@
 
 namespace {
 const Coin EMPTY_COIN{};
+
+class WritableCoinsView : public CCoinsView {
+    std::map<COutPoint, Coin> m_coins;
+    uint256 m_best_block;
+public:
+    std::optional<Coin> GetCoin(const COutPoint& outpoint) const override
+    {
+        const auto it = m_coins.find(outpoint);
+        if (it == m_coins.end() || it->second.IsSpent()) return std::nullopt;
+        return it->second;
+    }
+    uint256 GetBestBlock() const override { return m_best_block; }
+    bool BatchWrite(CoinsViewCacheCursor& cursor, const uint256& hash_block) override
+    {
+        for (auto it = cursor.Begin(); it != cursor.End(); it = cursor.NextAndMaybeErase(*it)) {
+            if (!it->second.IsDirty()) continue;
+            if (it->second.coin.IsSpent()) m_coins.erase(it->first);
+            else m_coins[it->first] = it->second.coin;
+        }
+        m_best_block = hash_block;
+        return true;
+    }
+};
 
 bool operator==(const Coin& a, const Coin& b)
 {
@@ -47,7 +71,7 @@ FUZZ_TARGET(coins_view, .init = initialize_coins_view)
     FuzzedDataProvider fuzzed_data_provider{buffer.data(), buffer.size()};
     bool good_data{true};
 
-    CCoinsView backend_coins_view;
+    WritableCoinsView backend_coins_view;
     CCoinsViewCache coins_view_cache{&backend_coins_view, /*deterministic=*/true};
     COutPoint random_out_point;
     Coin random_coin;
@@ -75,10 +99,10 @@ FUZZ_TARGET(coins_view, .init = initialize_coins_view)
                 assert(expected_code_path);
             },
             [&] {
-                (void)coins_view_cache.Flush();
+                assert(coins_view_cache.Flush());
             },
             [&] {
-                (void)coins_view_cache.Sync();
+                assert(coins_view_cache.Sync());
             },
             [&] {
                 coins_view_cache.SetBestBlock(ConsumeUInt256(fuzzed_data_provider));
@@ -91,9 +115,6 @@ FUZZ_TARGET(coins_view, .init = initialize_coins_view)
                 coins_view_cache.Uncache(random_out_point);
             },
             [&] {
-                if (fuzzed_data_provider.ConsumeBool()) {
-                    backend_coins_view = CCoinsView{};
-                }
                 coins_view_cache.SetBackend(backend_coins_view);
             },
             [&] {
@@ -141,10 +162,10 @@ FUZZ_TARGET(coins_view, .init = initialize_coins_view)
                         }
                         coins_cache_entry.coin = *opt_coin;
                     }
-                    auto it{coins_map.emplace(random_out_point, std::move(coins_cache_entry)).first};
+                    auto [it, inserted]{coins_map.emplace(random_out_point, std::move(coins_cache_entry))};
                     if (dirty) CCoinsCacheEntry::SetDirty(*it, sentinel);
                     if (fresh) CCoinsCacheEntry::SetFresh(*it, sentinel);
-                    usage += it->second.coin.DynamicMemoryUsage();
+                    if (inserted) usage += it->second.coin.DynamicMemoryUsage();
                 }
                 bool expected_code_path = false;
                 try {

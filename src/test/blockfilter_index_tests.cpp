@@ -51,8 +51,8 @@ static bool CheckFilterLookups(BlockFilterIndex& filter_index, const CBlockIndex
     BOOST_CHECK(filter_index.LookupFilterHashRange(block_index->nHeight, block_index,
                                                    filter_hashes));
 
-    BOOST_CHECK_EQUAL(filters.size(), 1U);
-    BOOST_CHECK_EQUAL(filter_hashes.size(), 1U);
+    BOOST_REQUIRE_EQUAL(filters.size(), 1U);
+    BOOST_REQUIRE_EQUAL(filter_hashes.size(), 1U);
 
     BOOST_CHECK_EQUAL(filter.GetHash(), expected_filter.GetHash());
     BOOST_CHECK_EQUAL(filter_header, expected_filter.ComputeHeader(last_header));
@@ -86,7 +86,7 @@ CBlock BuildChainTestingSetup::CreateBlock(const CBlockIndex* prev,
         CMutableTransaction tx_coinbase{*block.vtx.at(0)};
         tx_coinbase.vin.at(0).scriptSig = CScript{} << prev->nHeight + 1;
         // BlockAssembler valued the coinbase for the active tip+1, but this block is
-        // repositioned onto `prev` (height prev->nHeight+1). Under the #5a tail-emission
+        // repositioned onto `prev` (height prev->nHeight+1). Under the tail-subsidy ramp tail-emission
         // ramp the subsidy decreases every block, so the assembler's value over-pays at
         // any height past tip+1 (bad-cb-amount). Re-value for the block's actual height,
         // mirroring ConnectBlock's blockReward ceiling (subsidy + per-tx mint allowance).
@@ -291,7 +291,7 @@ BOOST_FIXTURE_TEST_CASE(blockfilter_index_init_destroy, BasicTestingSetup)
     BOOST_CHECK(InitBlockFilterIndex([&]{ return interfaces::MakeChain(m_node); }, BlockFilterType::BASIC, 1 << 20, true, false));
 
     filter_index = GetBlockFilterIndex(BlockFilterType::BASIC);
-    BOOST_CHECK(filter_index != nullptr);
+    BOOST_REQUIRE(filter_index != nullptr);
     BOOST_CHECK(filter_index->GetFilterType() == BlockFilterType::BASIC);
 
     // Initialize returns false if index already exists.

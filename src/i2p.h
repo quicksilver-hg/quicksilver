@@ -14,6 +14,7 @@
 #include <util/sock.h>
 #include <util/threadinterrupt.h>
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -270,6 +271,9 @@ private:
      * SAM session id.
      */
     std::string m_session_id GUARDED_BY(m_mutex);
+
+    /** Incremented for each successfully created session so stale replies cannot affect a replacement. */
+    uint64_t m_session_generation GUARDED_BY(m_mutex){0};
 
     /**
      * Whether this is a transient session (the I2P private key will not be

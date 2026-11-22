@@ -326,6 +326,64 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ci/prune-gha-caches.sh "${{ github.repository }}" "${{ github.ref }}" "${{ github.job }}-ccache-" 2 "${{ github.job }}-ccache-${{ github.run_id }}" --apply
 
+  fuzz-libfuzzer-asan-ubsan:
+    name: 'libFuzzer + ASan + UBSan + integer'
+    runs-on: ubuntu-24.04 # has to match container in ci/test/00_setup_env_native_fuzz.sh for tracing tools
+    if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
+    # Cache pruning needs actions: write; keep it on only the jobs that prune.
+    permissions:
+      actions: write
+      contents: read
+    timeout-minutes: 120
+    env:
+      FILE_ENV: "./ci/test/00_setup_env_native_fuzz.sh"
+      DANGER_CI_ON_HOST_FOLDERS: 1
+      # 00_setup_env_native_asan.sh already honours this. Passing it as a job
+      # env (and as a docker --build-arg in 02_run_container.sh) is what lets
+      # the image build install bpfcc without sed-ing a tracked file, which
+      # GenerateBuildInfo.cmake would otherwise stamp as -dirty (F-236).
+      INSTALL_BCC_TRACING_TOOLS: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set CI directories
+        run: |
+          echo "CCACHE_DIR=${{ runner.temp }}/ccache_dir" >> "$GITHUB_ENV"
+          echo "BASE_ROOT_DIR=${{ runner.temp }}" >> "$GITHUB_ENV"
+          echo "BASE_BUILD_DIR=${{ runner.temp }}/build-fuzz" >> "$GITHUB_ENV"
+
+      - name: Restore Ccache cache
+        id: ccache-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ github.job }}-ccache-${{ github.run_id }}
+          restore-keys: ${{ github.job }}-ccache-
+
+      - name: CI script
+        run: ./ci/test_run_all.sh
+
+      - name: Save Ccache cache
+        uses: actions/cache/save@v6
+        id: save-ccache-cache
+        # Without the status check, this step inherits success() and never saves
+        # the cache on a red run, exactly when the cache is needed.
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.ccache-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          # https://github.com/actions/cache/blob/main/tips-and-workarounds.md#update-a-cache
+          key: ${{ github.job }}-ccache-${{ github.run_id }}
+
+      - name: Prune superseded Ccache caches
+        # Keep the just-saved entry plus one fallback. Run after a successful
+        # save even when the test step was red; housekeeping stays non-fatal.
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.save-ccache-cache.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ci/prune-gha-caches.sh "${{ github.repository }}" "${{ github.ref }}" "${{ github.job }}-ccache-" 2 "${{ github.job }}-ccache-${{ github.run_id }}" --apply
+
   # F-387. Distro -flto=auto is the only configuration where
   # quicksilver_no_qt_copy_reloc can fail. No ccache: an LTO link is not what
   # ccache saves, and a cache adds the restore, save and prune steps.

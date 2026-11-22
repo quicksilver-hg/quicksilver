@@ -619,7 +619,7 @@ public:
      * Add the transaction to the vault, wrapping it up inside a CVaultTx
      * @return the recently added wtx pointer or nullptr if there was a db write error.
      */
-    CVaultTx* AddToVault(CTransactionRef tx, const TxState& state, const UpdateVaultTxFn& update_wtx = nullptr, bool fFlushOnClose = true, bool rescanning_old_block = false);
+    CVaultTx* AddToVault(CTransactionRef tx, const TxState& state, const UpdateVaultTxFn& update_wtx = nullptr, bool fFlushOnClose = true, bool rescanning_old_block = false, std::optional<std::pair<int64_t, uint32_t>> archived_times = std::nullopt);
     bool LoadToVault(const uint256& hash, const UpdateVaultTxFn& fill_wtx) EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
     void transactionAddedToRelayPool(const CTransactionRef& tx) override;
     void blockConnected(const interfaces::BlockInfo& block) override;
@@ -857,6 +857,15 @@ public:
      * Note: Called without locks held.
      */
     boost::signals2::signal<void(CVault* vault)> NotifyStatusChanged;
+
+    /**
+     * F-613: a write changed a record the backup fingerprint covers (a descriptor, the active set or a
+     * master key), so an earlier backup may no longer match. Fired by the write itself, so the GUI hears
+     * about RPC changes too (importdescriptors, importvaultarchive, vaultpassphrasechange).
+     * Note: may be called with cs_vault held, inside a database transaction; a listener must not read
+     * the vault synchronously from the calling thread's stack.
+     */
+    boost::signals2::signal<void()> NotifyBackupStateChanged;
 
     /** Inquire whether this vault broadcasts transactions. */
     bool GetBroadcastTransactions() const { return fBroadcastTransactions; }

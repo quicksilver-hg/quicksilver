@@ -34,7 +34,8 @@ void initialize_replacement()
     g_setup = testing_setup.get();
 }
 
-FUZZ_TARGET(replacement, .init = initialize_replacement)
+// This target exercises relaypool entry storage; it does not call replacement policy.
+FUZZ_TARGET(relaypool_entry_storage, .init = initialize_replacement)
 {
     SeedRandomStateForTest(SeedRand::ZEROS);
     FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());

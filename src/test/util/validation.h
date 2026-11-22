@@ -11,6 +11,7 @@
 class CValidationInterface;
 
 struct TestChainstateManager : public ChainstateManager {
+    using ChainstateManager::ChainstateManager;
     /** Reset the ibd cache to its initial state */
     void ResetIbd();
     /** Toggle IsInitialBlockDownload from true to false */

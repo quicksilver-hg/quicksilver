@@ -17,6 +17,7 @@
 #include <external_signer.h>
 #include <interfaces/handler.h>
 #include <interfaces/node.h>
+#include <logging.h>
 #include <util/string.h>
 #include <util/threadnames.h>
 #include <util/translation.h>
@@ -207,7 +208,9 @@ void VaultController::stopProofOfWork(std::function<void()> done)
     // is written as one rather than assumed away.
     QTimer* poll = new QTimer(this);
     poll->setInterval(50);
-    connect(poll, &QTimer::timeout, this, [this, poll, done = std::move(done)]() {
+    auto ticks = std::make_shared<int>(0);
+    connect(poll, &QTimer::timeout, this, [this, poll, done = std::move(done), ticks]() {
+        if (++*ticks % 200 == 0) LogInfo(HgLog::QT, "Waiting for vault proof workers to finish\n");
         if (proofOfWorkInFlight()) return;
         poll->stop();
         poll->deleteLater();
@@ -216,7 +219,57 @@ void VaultController::stopProofOfWork(std::function<void()> done)
     poll->start();
 }
 
-void VaultController::closeAllVaultsForHandover(std::function<void()> done)
+void VaultController::stopProofOfWork(VaultModel* vault_model, std::function<void()> done)
+{
+    QPointer<VaultModel> model(vault_model);
+    if (!model || !model->proofOfWorkInFlight()) {
+        done();
+        return;
+    }
+    model->requestProofOfWorkCancel();
+    QTimer* poll = new QTimer(this);
+    poll->setInterval(50);
+    connect(poll, &QTimer::timeout, this, [model, poll, done = std::move(done)]() {
+        if (model && model->proofOfWorkInFlight()) return;
+        poll->stop();
+        poll->deleteLater();
+        done();
+    });
+    poll->start();
+}
+
+bool VaultController::controllerMutexAvailableForTesting(int timeout_ms)
+{
+    if (!m_mutex.tryLock(timeout_ms)) return false;
+    m_mutex.unlock();
+    return true;
+}
+
+void VaultController::prepareForShutdown(std::function<void()> done)
+{
+    stopProofOfWork([this, done = std::move(done)]() mutable {
+        m_activity_thread->quit();
+        if (m_activity_thread->isFinished()) {
+            done();
+            return;
+        }
+        QTimer* poll = new QTimer(this);
+        poll->setInterval(50);
+        auto ticks = std::make_shared<int>(0);
+        connect(poll, &QTimer::timeout, this, [this, poll, done = std::move(done), ticks]() mutable {
+            if (m_activity_thread->isFinished()) {
+                poll->stop();
+                poll->deleteLater();
+                done();
+                return;
+            }
+            if (++*ticks % 200 == 0) LogInfo(HgLog::QT, "Waiting for vault activity thread to finish during shutdown\n");
+        });
+        poll->start();
+    });
+}
+
+void VaultController::closeAllVaultsForHandover(std::function<void(bool ok)> done)
 {
     std::vector<VaultModel*> vaults;
     {
@@ -226,7 +279,10 @@ void VaultController::closeAllVaultsForHandover(std::function<void()> done)
     for (VaultModel* vault_model : vaults) {
         // std::nullopt: leave the startup list alone. Whoever is taking the vaults
         // over reads that list to find them again.
-        vault_model->vault().remove(/*load_on_start=*/std::nullopt);
+        if (!vault_model->vault().remove(/*load_on_start=*/std::nullopt)) {
+            done(false);
+            return;
+        }
     }
 
     // removeVault only starts the closure. The database handle survives until the
@@ -241,7 +297,7 @@ void VaultController::closeAllVaultsForHandover(std::function<void()> done)
         }
         poll->stop();
         poll->deleteLater();
-        done();
+        done(true);
     });
     poll->start();
 }
@@ -267,7 +323,7 @@ void VaultController::closeVault(VaultModel* vault_model, QWidget* parent)
 void VaultController::closeVaultAfterConfirm(VaultModel* vault_model, QWidget* parent)
 {
     auto proceed = [this, vault_model] {
-        stopProofOfWork([this, vault_model] { removeVault(vault_model); });
+        stopProofOfWork(vault_model, [this, vault_model] { removeVault(vault_model); });
     };
     // A transfer's proof-of-work runs on a worker thread inside this vault. Closing
     // now would delete it underneath that worker, so the transfer has to be given up
@@ -338,11 +394,11 @@ void VaultController::closeAllVaults(QWidget* parent)
 
 VaultModel* VaultController::getOrCreateVault(std::unique_ptr<interfaces::Vault> vault)
 {
+    const std::string name = vault->getVaultName();
     QMutexLocker locker(&m_mutex);
 
     // Return model instance if exists.
     if (!m_vaults.empty()) {
-        std::string name = vault->getVaultName();
         for (VaultModel* vault_model : m_vaults) {
             if (vault_model->vault().getVaultName() == name) {
                 return vault_model;
@@ -362,11 +418,22 @@ VaultModel* VaultController::getOrCreateVault(std::unique_ptr<interfaces::Vault>
     // handled on the GUI event loop.
     vault_model->moveToThread(thread());
     // setParent(parent) must be called in the thread which created the parent object. More details in #18948.
+    locker.unlock();
     QMetaObject::invokeMethod(this, [vault_model, this] {
         vault_model->setParent(this);
     }, GUIUtil::blockingGUIThreadConnection());
+    locker.relock();
+
+    for (VaultModel* existing : m_vaults) {
+        if (existing->vault().getVaultName() == name) {
+            locker.unlock();
+            QMetaObject::invokeMethod(this, [vault_model] { delete vault_model; }, GUIUtil::blockingGUIThreadConnection());
+            return existing;
+        }
+    }
 
     m_vaults.push_back(vault_model);
+    locker.unlock();
 
     // VaultModel::startPollBalance needs to be called in a thread managed by
     // Qt because of startTimer. Considering the current thread can be a RPC
@@ -375,20 +442,26 @@ VaultModel* VaultController::getOrCreateVault(std::unique_ptr<interfaces::Vault>
     assert(called);
 
     connect(vault_model, &VaultModel::unload, this, [this, vault_model] {
-        // Backup/export/save pickers are ApplicationModal and parented under VaultView.
-        // Deleting that view while a picker is up would dismiss it. Other ApplicationModal
-        // widgets (main-window pickers, options, clientMessageBox) are not ancestors of
-        // this view and do not need to block unload.
-        QWidget* active_dialog = QApplication::activeModalWidget();
-        if (ModalIsParentedUnderVault(active_dialog, vault_model)) {
-            connect(qApp, &QApplication::focusWindowChanged, vault_model, [this, vault_model]() {
-                if (!ModalIsParentedUnderVault(QApplication::activeModalWidget(), vault_model)) {
-                    removeAndDeleteVault(vault_model);
-                }
-            }, Qt::QueuedConnection);
-        } else {
-            removeAndDeleteVault(vault_model);
-        }
+        QPointer<VaultModel> model(vault_model);
+        auto finish = [this, model] {
+            if (!model) return;
+            // Backup/export/save pickers are ApplicationModal and parented under VaultView.
+            // Deleting that view while a picker is up would dismiss it. Other ApplicationModal
+            // widgets (main-window pickers, options, clientMessageBox) are not ancestors of
+            // this view and do not need to block unload.
+            QWidget* active_dialog = QApplication::activeModalWidget();
+            if (ModalIsParentedUnderVault(active_dialog, model)) {
+                connect(qApp, &QApplication::focusWindowChanged, model, [this, model]() {
+                    if (model && !ModalIsParentedUnderVault(QApplication::activeModalWidget(), model)) {
+                        removeAndDeleteVault(model);
+                    }
+                }, Qt::QueuedConnection);
+            } else {
+                removeAndDeleteVault(model);
+            }
+        };
+        if (model->proofOfWorkInFlight()) stopProofOfWork(model, finish);
+        else finish();
     }, Qt::QueuedConnection);
 
     // Re-emit coinsSent signal from vault model.

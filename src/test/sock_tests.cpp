@@ -12,6 +12,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <cassert>
+#include <atomic>
 #include <optional>
 #include <string_view>
 #include <thread>
@@ -176,15 +177,21 @@ static bool SendAndRecvMessage(const Sock& sender, const Sock& receiver)
     constexpr ssize_t msg_len = 4;
     char recv_buf[10];
 
-    const ssize_t sent{sender.Send(msg, msg_len, 0)};
-    if (sent == SOCKET_ERROR && WarnIfSocketDenied("send()", WSAGetLastError())) return false;
-    BOOST_CHECK_EQUAL(sent, msg_len);
-    if (sent != msg_len) return false;
+    size_t sent_total{0};
+    while (sent_total < msg_len) {
+        const ssize_t sent{sender.Send(msg + sent_total, msg_len - sent_total, 0)};
+        if (sent == SOCKET_ERROR && WarnIfSocketDenied("send()", WSAGetLastError())) return false;
+        BOOST_REQUIRE(sent > 0);
+        sent_total += sent;
+    }
 
-    const ssize_t received{receiver.Recv(recv_buf, sizeof(recv_buf), 0)};
-    if (received == SOCKET_ERROR && WarnIfSocketDenied("recv()", WSAGetLastError())) return false;
-    BOOST_CHECK_EQUAL(received, msg_len);
-    if (received != msg_len) return false;
+    size_t received_total{0};
+    while (received_total < msg_len) {
+        const ssize_t received{receiver.Recv(recv_buf + received_total, msg_len - received_total, 0)};
+        if (received == SOCKET_ERROR && WarnIfSocketDenied("recv()", WSAGetLastError())) return false;
+        BOOST_REQUIRE(received > 0);
+        received_total += received;
+    }
     BOOST_CHECK_EQUAL(strncmp(msg, recv_buf, msg_len), 0);
     return true;
 }
@@ -238,11 +245,16 @@ BOOST_AUTO_TEST_CASE(wait)
     char discard;
     BOOST_REQUIRE_EQUAL(sock0.Recv(&discard, 1, 0), 1);
 
-    std::thread waiter([&sock0]() { (void)sock0.Wait(1s, Sock::RECV); });
+    std::atomic<bool> wait_ok{false};
+    std::thread waiter([&]() {
+        Sock::Event occurred{};
+        wait_ok = sock0.Wait(1s, Sock::RECV, &occurred) && occurred == Sock::RECV;
+    });
 
     BOOST_CHECK_EQUAL(sock1.Send("a", 1, 0), 1);
 
     waiter.join();
+    BOOST_CHECK(wait_ok);
 }
 
 BOOST_AUTO_TEST_CASE(recv_until_terminator_limit)
@@ -262,9 +274,9 @@ BOOST_AUTO_TEST_CASE(recv_until_terminator_limit)
     char discard;
     BOOST_REQUIRE_EQUAL(sock_recv.Recv(&discard, 1, 0), 1);
 
-    std::thread receiver([&sock_recv, &timeout, &interrupt]() {
+    std::atomic<bool> threw_as_expected{false};
+    std::jthread receiver([&sock_recv, &timeout, &interrupt, &threw_as_expected]() {
         constexpr size_t max_data{10};
-        bool threw_as_expected{false};
         // BOOST_CHECK_EXCEPTION() writes to some variables shared with the main thread which
         // creates a data race. So mimic it manually.
         try {
@@ -272,13 +284,13 @@ BOOST_AUTO_TEST_CASE(recv_until_terminator_limit)
         } catch (const std::runtime_error& e) {
             threw_as_expected = HasReason("too many bytes without a terminator")(e);
         }
-        assert(threw_as_expected);
     });
 
     BOOST_REQUIRE_NO_THROW(sock_send.SendComplete("1234567", timeout, interrupt));
     BOOST_REQUIRE_NO_THROW(sock_send.SendComplete("89a\n", timeout, interrupt));
 
     receiver.join();
+    BOOST_CHECK(threw_as_expected);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

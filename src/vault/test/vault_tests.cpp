@@ -5,14 +5,20 @@
 
 #include <vault/vault.h>
 
+#include <array>
 #include <chrono>
 #include <fstream>
 #include <functional>
 #include <map>
+#include <limits>
 #include <future>
 #include <memory>
+#include <optional>
 #include <stdint.h>
+#include <string>
+#include <string_view>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include <addresstype.h>
@@ -451,11 +457,29 @@ static void AddKey(CVault& vault, const CKey& key)
     if (!vault.AddVaultDescriptor(w_desc, provider, "", false)) assert(false);
 }
 
-struct VaultTxPowTestSetup : TestChain100Setup {
-    VaultTxPowTestSetup()
+//! Sets fTxPowNoCycle on the global consensus params for one fixture and puts
+//! the previous value back, so later suites see the chain as configured
+//! (S0209-A-04).
+class ScopedTxPowNoCycle
+{
+public:
+    ScopedTxPowNoCycle() : m_previous{Params().GetConsensus().fTxPowNoCycle}
     {
         const_cast<Consensus::Params&>(Params().GetConsensus()).fTxPowNoCycle = true;
     }
+    ~ScopedTxPowNoCycle()
+    {
+        const_cast<Consensus::Params&>(Params().GetConsensus()).fTxPowNoCycle = m_previous;
+    }
+    ScopedTxPowNoCycle(const ScopedTxPowNoCycle&) = delete;
+    ScopedTxPowNoCycle& operator=(const ScopedTxPowNoCycle&) = delete;
+
+private:
+    const bool m_previous;
+};
+
+struct VaultTxPowTestSetup : TestChain100Setup {
+    ScopedTxPowNoCycle m_no_cycle;
 
     void ProveTxPowAtTip(CMutableTransaction& tx)
     {
@@ -1033,7 +1057,7 @@ BOOST_FIXTURE_TEST_CASE(scan_for_vault_transactions, TestChain100Setup)
         }
         AddKey(vault, coinbaseKey);
         VaultRescanReserver reserver(vault);
-        reserver.reserve();
+        BOOST_REQUIRE(reserver.reserve());
         CVault::ScanResult result = vault.ScanForVaultTransactions(/*start_block=*/{}, /*start_height=*/0, /*max_height=*/{}, reserver, /*fUpdate=*/false, /*save_progress=*/false);
         BOOST_CHECK_EQUAL(result.status, CVault::ScanResult::FAILURE);
         BOOST_CHECK(result.last_failed_block.IsNull());
@@ -1056,7 +1080,7 @@ BOOST_FIXTURE_TEST_CASE(scan_for_vault_transactions, TestChain100Setup)
         VaultRescanReserver reserver(vault);
         std::chrono::steady_clock::time_point fake_time;
         reserver.setNow([&] { fake_time += 60s; return fake_time; });
-        reserver.reserve();
+        BOOST_REQUIRE(reserver.reserve());
 
         {
             CBlockLocator locator;
@@ -1099,7 +1123,7 @@ BOOST_FIXTURE_TEST_CASE(scan_for_vault_transactions, TestChain100Setup)
         }
         AddKey(vault, coinbaseKey);
         VaultRescanReserver reserver(vault);
-        reserver.reserve();
+        BOOST_REQUIRE(reserver.reserve());
         CVault::ScanResult result = vault.ScanForVaultTransactions(/*start_block=*/oldTip->GetBlockHash(), /*start_height=*/oldTip->nHeight, /*max_height=*/{}, reserver, /*fUpdate=*/false, /*save_progress=*/false);
         BOOST_CHECK_EQUAL(result.status, CVault::ScanResult::FAILURE);
         BOOST_CHECK_EQUAL(result.last_failed_block, oldTip->GetBlockHash());
@@ -1127,7 +1151,7 @@ BOOST_FIXTURE_TEST_CASE(scan_for_vault_transactions, TestChain100Setup)
         }
         AddKey(vault, coinbaseKey);
         VaultRescanReserver reserver(vault);
-        reserver.reserve();
+        BOOST_REQUIRE(reserver.reserve());
         CVault::ScanResult result = vault.ScanForVaultTransactions(/*start_block=*/oldTip->GetBlockHash(), /*start_height=*/oldTip->nHeight, /*max_height=*/{}, reserver, /*fUpdate=*/false, /*save_progress=*/false);
         BOOST_CHECK_EQUAL(result.status, CVault::ScanResult::FAILURE);
         BOOST_CHECK_EQUAL(result.last_failed_block, newTip->GetBlockHash());
@@ -1502,6 +1526,108 @@ static std::optional<XOnlyPubKey> DescriptorAgentKey(const std::string& funding_
     return XOnlyPubKey{bytes};
 }
 
+// Secret-leak checks (F-668, S0209-A-01). These used to search for "xprv", "tprv",
+// "qprv" and "tqrv": upstream and other-chain prefixes, none of which the chain
+// under test emits, so they could never fail, and WIF keys were not checked at all.
+// They now look for what the vault actually holds and for any extended key the
+// active chain can decode, and leak_checks_catch_planted_secrets shows they fire.
+
+//! Every extended key of the active chain inside `text`: private ones when `priv`,
+//! public ones otherwise. The length comes from the chain's own encoding.
+static std::vector<std::string> ExtendedKeysIn(std::string_view text, bool priv)
+{
+    CExtKey sample;
+    const std::array<std::byte, 32> seed{};
+    sample.SetSeed(seed);
+    const size_t len{priv ? EncodeExtKey(sample).size() : EncodeExtPubKey(sample.Neuter()).size()};
+    std::vector<std::string> found;
+    for (size_t i{0}; i + len <= text.size(); ++i) {
+        const std::string candidate{text.substr(i, len)};
+        if (priv ? DecodeExtKey(candidate).key.IsValid() : DecodeExtPubKey(candidate).pubkey.IsValid()) {
+            found.push_back(candidate);
+        }
+    }
+    return found;
+}
+
+//! Every WIF private key of the active chain inside `text`.
+static std::vector<std::string> SecretKeysIn(std::string_view text)
+{
+    const size_t len{EncodeSecret(GenerateRandomKey()).size()};
+    std::vector<std::string> found;
+    for (size_t i{0}; i + len <= text.size(); ++i) {
+        const std::string candidate{text.substr(i, len)};
+        if (DecodeSecret(candidate).IsValid()) found.push_back(candidate);
+    }
+    return found;
+}
+
+//! The vault's spending secrets as text, read from each descriptor's private form:
+//! every extended private key and the WIF of its key, and every WIF key.
+static std::vector<std::string> VaultSecrets(CVault& vault)
+{
+    std::vector<std::string> secrets;
+    LOCK(vault.cs_vault);
+    for (ScriptPubKeyMan* spk_man : vault.GetAllScriptPubKeyMans()) {
+        auto* desc_spk_man{dynamic_cast<DescriptorScriptPubKeyMan*>(spk_man)};
+        BOOST_REQUIRE(desc_spk_man);
+        std::string private_descriptor;
+        BOOST_REQUIRE(desc_spk_man->GetDescriptorString(private_descriptor, /*priv=*/true));
+        for (const std::string& extkey : ExtendedKeysIn(private_descriptor, /*priv=*/true)) {
+            secrets.push_back(extkey);
+            secrets.push_back(EncodeSecret(DecodeExtKey(extkey).key));
+        }
+        for (std::string& wif : SecretKeysIn(private_descriptor)) secrets.push_back(std::move(wif));
+    }
+    return secrets;
+}
+
+//! The first of `secrets`, or the first extended private key of the active chain,
+//! found in `text`.
+static std::optional<std::string> FindSecretIn(std::string_view text, const std::vector<std::string>& secrets)
+{
+    for (const std::string& secret : secrets) {
+        if (text.find(secret) != std::string_view::npos) return secret;
+    }
+    auto extkeys{ExtendedKeysIn(text, /*priv=*/true)};
+    if (!extkeys.empty()) return extkeys.front();
+    return std::nullopt;
+}
+
+BOOST_AUTO_TEST_CASE(leak_checks_catch_planted_secrets)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    EnableDescriptorVault(vault);
+
+    const std::vector<std::string> secrets{VaultSecrets(vault)};
+    size_t extkeys{0};
+    size_t wifs{0};
+    for (const std::string& secret : secrets) {
+        if (DecodeExtKey(secret).key.IsValid()) ++extkeys;
+        if (DecodeSecret(secret).IsValid()) ++wifs;
+    }
+    BOOST_CHECK_GT(extkeys, 0U);
+    BOOST_CHECK_GT(wifs, 0U);
+    BOOST_CHECK_EQUAL(extkeys + wifs, secrets.size());
+
+    BOOST_CHECK(!FindSecretIn("{\"descriptor\":\"tr(00)\"}", secrets));
+    for (const std::string& secret : secrets) {
+        const std::string leaking{"{\"descriptor\":\"tr(" + secret + "/0/*)\"}"};
+        BOOST_CHECK_EQUAL(FindSecretIn(leaking, secrets).value_or(""), secret);
+    }
+    // An extended private key of this chain is caught even when it is not one of the
+    // vault's own, and an extended public key is seen by the public scan only.
+    CExtKey other;
+    const std::array<std::byte, 32> other_seed{std::byte{1}};
+    other.SetSeed(other_seed);
+    const std::string other_priv{EncodeExtKey(other)};
+    const std::string other_pub{EncodeExtPubKey(other.Neuter())};
+    BOOST_CHECK_EQUAL(FindSecretIn("pk(" + other_priv + ")", secrets).value_or(""), other_priv);
+    BOOST_CHECK(!FindSecretIn("pk(" + other_pub + ")", secrets));
+    BOOST_CHECK_EQUAL(ExtendedKeysIn("pk(" + other_pub + ")", /*priv=*/false).size(), 1U);
+    BOOST_CHECK(ExtendedKeysIn("pk(" + other_priv + ")", /*priv=*/false).empty());
+}
+
 BOOST_AUTO_TEST_CASE(agent_allotment_setup_records_vault_metadata)
 {
     CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
@@ -1642,6 +1768,48 @@ struct AgentAllotmentRecordV1 {
     }
 };
 
+static void CheckAllotmentSetupRefusesUnreadableRecord(interfaces::Chain& chain, bool newer, bool read_error)
+{
+    CVault vault(&chain, "", CreateMockableVaultDatabase());
+    EnableDescriptorVault(vault);
+    const auto records_key{std::make_pair(DBKeys::SETTINGS, std::string{"agent_allotment_records"})};
+    AgentAllotmentRecord existing;
+    existing.id = "agent-1";
+    BOOST_REQUIRE(vault.GetDatabase().MakeBatch()->Write(records_key, std::vector<AgentAllotmentRecord>{existing}));
+    auto& db{GetMockableDatabase(vault)};
+    DataStream key_stream{};
+    key_stream << records_key;
+    const SerializeData key{key_stream.begin(), key_stream.end()};
+    auto& stored{db.m_records.at(key)};
+    if (newer) {
+        // CompactSize list length (01), then little-endian int32 record version (03 00 00 00).
+        stored[1] = std::byte{3};
+    } else if (!read_error) {
+        stored = {std::byte{0xff}};
+    }
+    const SerializeData original{stored};
+    const auto managers_before{WITH_LOCK(vault.cs_vault, return vault.GetAllScriptPubKeyMans().size())};
+    db.m_allotment_read_error = read_error;
+    BOOST_CHECK(!vault.RecordAgentAllotmentSetup("new-agent", COIN, 0));
+    BOOST_CHECK(db.m_records.at(key) == original);
+    BOOST_CHECK_EQUAL(WITH_LOCK(vault.cs_vault, return vault.GetAllScriptPubKeyMans().size()), managers_before);
+}
+
+BOOST_AUTO_TEST_CASE(allotment_setup_refuses_newer_record)
+{
+    CheckAllotmentSetupRefusesUnreadableRecord(*m_node.chain, /*newer=*/true, /*read_error=*/false);
+}
+
+BOOST_AUTO_TEST_CASE(allotment_setup_refuses_corrupt_record)
+{
+    CheckAllotmentSetupRefusesUnreadableRecord(*m_node.chain, /*newer=*/false, /*read_error=*/false);
+}
+
+BOOST_AUTO_TEST_CASE(allotment_setup_refuses_on_read_error)
+{
+    CheckAllotmentSetupRefusesUnreadableRecord(*m_node.chain, /*newer=*/false, /*read_error=*/true);
+}
+
 BOOST_AUTO_TEST_CASE(agent_allotment_setup_replaces_pre_012_records)
 {
     CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
@@ -1702,8 +1870,8 @@ BOOST_AUTO_TEST_CASE(agent_allotment_setup_imports_cosigned_taproot_descriptor)
     std::string private_descriptor;
     BOOST_CHECK(!descs[0]->ToPrivateString(parsed, private_descriptor));
     BOOST_CHECK_NE(record->funding_descriptor.find("multi_a(2,"), std::string::npos);
-    BOOST_CHECK_EQUAL(record->funding_descriptor.find("xprv"), std::string::npos);
-    BOOST_CHECK_EQUAL(record->funding_descriptor.find("tprv"), std::string::npos);
+    const auto leak{FindSecretIn(record->funding_descriptor, VaultSecrets(vault))};
+    BOOST_CHECK_MESSAGE(!leak, "funding descriptor carries a vault secret: " << leak.value_or(""));
 
     LOCK(vault.cs_vault);
     BOOST_CHECK(vault.IsMine(dest) & ISMINE_SPENDABLE);
@@ -1750,10 +1918,17 @@ BOOST_AUTO_TEST_CASE(agent_allotment_agent_key_is_not_a_vault_child)
     }
     BOOST_CHECK_GT(seen_in_allotment, 0);
     BOOST_CHECK_EQUAL(seen_elsewhere, 0);
-    BOOST_CHECK_EQUAL(bundle->bundle_json.find("xpub"), std::string::npos);
-    BOOST_CHECK_EQUAL(bundle->bundle_json.find("tpub"), std::string::npos);
-    BOOST_CHECK_EQUAL(bundle->bundle_json.find("xprv"), std::string::npos);
-    BOOST_CHECK_EQUAL(bundle->bundle_json.find("tprv"), std::string::npos);
+    // The bundle exists to hand over the agent's key, so that WIF is expected in it.
+    // No other vault secret is, and no extended key of either kind.
+    BOOST_CHECK_NE(bundle->bundle_json.find(bundle->agent_secret), std::string::npos);
+    std::vector<std::string> secrets{VaultSecrets(vault)};
+    const size_t before{secrets.size()};
+    std::erase(secrets, bundle->agent_secret);
+    BOOST_CHECK_EQUAL(secrets.size(), before - 1);
+    BOOST_CHECK_GT(secrets.size(), 0U);
+    const auto leak{FindSecretIn(bundle->bundle_json, secrets)};
+    BOOST_CHECK_MESSAGE(!leak, "agent bundle carries a vault secret: " << leak.value_or(""));
+    BOOST_CHECK(ExtendedKeysIn(bundle->bundle_json, /*priv=*/false).empty());
 }
 
 BOOST_AUTO_TEST_CASE(agent_allotment_setup_requires_unlocked_vault)
@@ -1893,6 +2068,36 @@ BOOST_AUTO_TEST_CASE(passphrase_change_after_backup_is_protection_differs)
     BOOST_REQUIRE(vault->ChangeVaultPassphrase(SecureString{"old"}, SecureString{"new"}));
     BOOST_CHECK(vault->GetBackupState() == BackupState::NEEDED);
     BOOST_CHECK(vault->VerifyBackup(file, nullptr).result == BackupCheckResult::PROTECTION_DIFFERS);
+}
+
+BOOST_AUTO_TEST_CASE(encrypt_failed_txn_begin_leaves_vault_unencrypted)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    EnableDescriptorVault(vault);
+    GetMockableDatabase(vault).m_fail_txn_begin = true;
+    BOOST_CHECK(!vault.EncryptVault(SecureString{"test"}));
+    BOOST_CHECK(!vault.IsCrypted());
+}
+
+BOOST_AUTO_TEST_CASE(passphrase_change_failed_write_keeps_old_passphrase)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    EnableDescriptorVault(vault);
+    BOOST_REQUIRE(vault.EncryptVault(SecureString{"old"}));
+    GetMockableDatabase(vault).m_fail_master_key_write = true;
+    BOOST_CHECK(!vault.ChangeVaultPassphrase(SecureString{"old"}, SecureString{"new"}));
+    BOOST_CHECK(vault.Unlock(SecureString{"old"}));
+    vault.Lock();
+    BOOST_CHECK(!vault.Unlock(SecureString{"new"}));
+}
+
+BOOST_AUTO_TEST_CASE(crypted_descriptor_key_write_checks_plaintext_erase)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    const CPubKey pubkey{GenerateRandomKey().GetPubKey()};
+    GetMockableDatabase(vault).m_fail_descriptor_key_erase = true;
+    VaultBatch batch{vault.GetDatabase()};
+    BOOST_CHECK(!batch.WriteCryptedDescriptorKey(uint256::ONE, pubkey, std::vector<unsigned char>{1, 2, 3}));
 }
 
 BOOST_AUTO_TEST_CASE(backup_check_passphrase)
@@ -2084,12 +2289,16 @@ BOOST_AUTO_TEST_CASE(agent_allotment_stop_is_persistent)
     auto record{vault.RecordAgentAllotmentSetup("stopping-agent", COIN, 0)};
     BOOST_REQUIRE(record);
     BOOST_CHECK_EQUAL(record->stopped_time, 0);
+    // A second stop at a later time must not re-stamp the record (S0209-A-08).
+    constexpr int64_t first_stop{1'800'000'000};
+    SetMockTime(first_stop);
     BOOST_CHECK(vault.StopAgentAllotment(record->id));
+    SetMockTime(first_stop + 3600);
     BOOST_CHECK(vault.StopAgentAllotment(record->id));
 
     const auto stopped{vault.ListAgentAllotmentRecords()};
     BOOST_REQUIRE_EQUAL(stopped.size(), 1U);
-    BOOST_CHECK_GT(stopped[0].stopped_time, 0);
+    BOOST_CHECK_EQUAL(stopped[0].stopped_time, first_stop);
 
     CVault reloaded(m_node.chain.get(), "", DuplicateMockDatabase(vault.GetDatabase()));
     BOOST_CHECK_EQUAL(reloaded.LoadVault(), DBErrors::LOAD_OK);
@@ -2110,6 +2319,7 @@ void TestLoadVault(const std::string& name, DatabaseFormat format, std::function
     bilingual_str error;
     std::vector<bilingual_str> warnings;
     auto database{MakeVaultDatabase(name, options, status, error)};
+    BOOST_REQUIRE_MESSAGE(database, error.original);
     auto vault{std::make_shared<CVault>(chain.get(), "", std::move(database))};
     BOOST_CHECK_EQUAL(vault->LoadVault(), DBErrors::LOAD_OK);
     WITH_LOCK(vault->cs_vault, f(vault));
@@ -2172,7 +2382,7 @@ public:
         CCoinControl dummy;
         {
             auto res = CreateTransaction(*vault, {recipient}, /*change_pos=*/std::nullopt, dummy);
-            BOOST_CHECK(res);
+            BOOST_REQUIRE_MESSAGE(res, util::ErrorString(res).original);
             tx = res->tx;
         }
         vault->CommitTransaction(tx, {}, {});
@@ -2316,11 +2526,17 @@ BOOST_FIXTURE_TEST_CASE(vault_archive_round_trip, ListCoinsTestingSetup)
     BOOST_CHECK_EQUAL(archive->chain, Params().GetChainTypeString());
     // The archive must never carry spending material: that is the vault-file backup's
     // job, and a history backup that also unlocks the money is a different, worse artifact.
+    const std::vector<std::string> secrets{VaultSecrets(*vault)};
+    BOOST_REQUIRE(!secrets.empty());
+    size_t public_extkeys{0};
     for (const VaultArchiveDescriptor& desc : archive->descriptors) {
-        BOOST_CHECK_EQUAL(desc.descriptor.find("xprv"), std::string::npos);
-        BOOST_CHECK_EQUAL(desc.descriptor.find("qprv"), std::string::npos);
-        BOOST_CHECK_EQUAL(desc.descriptor.find("tqrv"), std::string::npos);
+        const auto leak{FindSecretIn(desc.descriptor, secrets)};
+        BOOST_CHECK_MESSAGE(!leak, "archive descriptor carries a vault secret: " << leak.value_or(""));
+        public_extkeys += ExtendedKeysIn(desc.descriptor, /*priv=*/false).size();
     }
+    // The scan recognises this chain's keys in these very strings: the history needs
+    // the public half, so it is there.
+    BOOST_CHECK_GT(public_extkeys, 0U);
     const size_t exported_transactions{archive->transactions.size()};
 
     BOOST_REQUIRE(WriteVaultArchive(*archive, archive_path, passphrase));
@@ -2358,6 +2574,26 @@ BOOST_FIXTURE_TEST_CASE(vault_archive_round_trip, ListCoinsTestingSetup)
     BOOST_CHECK_EQUAL(imported->descriptors_imported, archive->descriptors.size());
     BOOST_CHECK_EQUAL(imported->addresses_imported, archive->addresses.size());
     BOOST_CHECK_EQUAL(WITH_LOCK(restored.cs_vault, return restored.mapVault.size()), exported_transactions);
+    {
+        LOCK(restored.cs_vault);
+        std::vector<const VaultArchiveTx*> ordered;
+        for (const auto& tx : archive->transactions) {
+            const auto& saved{restored.mapVault.at(tx.tx->GetHash())};
+            BOOST_CHECK_EQUAL(saved.nTimeReceived, tx.time_received);
+            BOOST_CHECK_EQUAL(saved.nTimeSmart, tx.time_smart);
+            ordered.push_back(&tx);
+        }
+        std::sort(ordered.begin(), ordered.end(), [](const auto* a, const auto* b) {
+            return std::tuple{a->order_pos == -1, a->order_pos, a->time_received, a->tx->GetHash()} <
+                   std::tuple{b->order_pos == -1, b->order_pos, b->time_received, b->tx->GetHash()};
+        });
+        auto ordered_it{restored.wtxOrdered.begin()};
+        for (const auto* tx : ordered) {
+            BOOST_REQUIRE(ordered_it != restored.wtxOrdered.end());
+            BOOST_CHECK(ordered_it->second->GetHash() == tx->tx->GetHash());
+            ++ordered_it;
+        }
+    }
 
     // Importing the same archive again must change nothing rather than duplicate history.
     auto reimported{ImportVaultArchive(restored, *reread)};
@@ -2368,6 +2604,68 @@ BOOST_FIXTURE_TEST_CASE(vault_archive_round_trip, ListCoinsTestingSetup)
     BOOST_CHECK_EQUAL(WITH_LOCK(restored.cs_vault, return restored.m_address_book.size()),
                       archive->addresses.size());
     BOOST_CHECK_EQUAL(WITH_LOCK(restored.cs_vault, return restored.mapVault.size()), exported_transactions);
+}
+
+BOOST_AUTO_TEST_CASE(vault_archive_large_body_round_trip)
+{
+    VaultArchive archive;
+    archive.chain = Params().GetChainTypeString();
+    archive.genesis_hash = Params().GenesisBlock().GetHash();
+    for (uint32_t i = 0; i < 5'000; ++i) {
+        CMutableTransaction tx;
+        tx.nLockTime = i;
+        tx.vin.resize(1);
+        tx.vout.emplace_back(0, CScript() << std::vector<unsigned char>(256, static_cast<unsigned char>(i)));
+        VaultArchiveTx archived;
+        archived.tx = MakeTransactionRef(std::move(tx));
+        archive.transactions.push_back(std::move(archived));
+    }
+    const fs::path path{m_path_root / "large.qsva"};
+    const SecureString passphrase{"large archive test"};
+    BOOST_REQUIRE(WriteVaultArchive(archive, path, passphrase));
+    BOOST_CHECK_GT(fs::file_size(path), 1'048'576U);
+    auto reread{ReadVaultArchive(path, passphrase)};
+    BOOST_REQUIRE_MESSAGE(reread, util::ErrorString(reread).original);
+    BOOST_REQUIRE_EQUAL(reread->transactions.size(), archive.transactions.size());
+    for (size_t i = 0; i < archive.transactions.size(); ++i) {
+        BOOST_CHECK(reread->transactions[i].tx->GetHash() == archive.transactions[i].tx->GetHash());
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(vault_archive_import_checks_chain, ListCoinsTestingSetup)
+{
+    auto archive{BuildVaultArchive(*vault)};
+    BOOST_REQUIRE(archive);
+    BOOST_REQUIRE(!archive->transactions.empty());
+    archive->transactions.front().confirmed = true;
+    archive->transactions.front().block_hash = uint256::ONE;
+    archive->transactions.front().block_height = 123;
+    CVault restored(m_node.chain.get(), "restored", CreateMockableVaultDatabase());
+    { LOCK(restored.cs_vault); restored.SetVaultFlag(VAULT_FLAG_DESCRIPTORS); }
+    BOOST_REQUIRE(ImportVaultArchive(restored, *archive));
+    LOCK(restored.cs_vault);
+    BOOST_CHECK(restored.mapVault.at(archive->transactions.front().tx->GetHash()).isInactive());
+}
+
+BOOST_FIXTURE_TEST_CASE(vault_archive_import_validates_before_writing, ListCoinsTestingSetup)
+{
+    auto base{BuildVaultArchive(*vault)};
+    BOOST_REQUIRE(base);
+    BOOST_REQUIRE(!base->descriptors.empty());
+    for (const bool private_key : {true, false}) {
+        VaultArchive archive{*base};
+        auto bad{archive.descriptors.back()};
+        if (private_key) bad.descriptor = "tr(" + EncodeSecret(GenerateRandomKey()) + ")";
+        else bad.range_end = std::numeric_limits<int64_t>::max();
+        archive.descriptors.push_back(std::move(bad));
+        CVault restored(m_node.chain.get(), "restored", CreateMockableVaultDatabase());
+        { LOCK(restored.cs_vault); restored.SetVaultFlag(VAULT_FLAG_DESCRIPTORS); }
+        BOOST_CHECK(!ImportVaultArchive(restored, archive));
+        LOCK(restored.cs_vault);
+        BOOST_CHECK(restored.GetAllScriptPubKeyMans().empty());
+        BOOST_CHECK(restored.m_address_book.empty());
+        BOOST_CHECK(restored.mapVault.empty());
+    }
 }
 
 // An archive names the chain it came from, so history cannot be restored onto the wrong
@@ -2554,9 +2852,10 @@ BOOST_FIXTURE_TEST_CASE(agent_allotment_reclaim_spends_by_key_path, ListCoinsTes
 
 // Agent requests carry public descriptor metadata and only the agent's private key.
 struct AgentCosignTestingSetup : ListCoinsTestingSetup {
+    ScopedTxPowNoCycle m_no_cycle;
+
     AgentCosignTestingSetup()
     {
-        const_cast<Consensus::Params&>(Params().GetConsensus()).fTxPowNoCycle = true;
         vault->SetBroadcastTransactions(true);
     }
 

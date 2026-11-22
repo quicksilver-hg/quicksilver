@@ -11,6 +11,7 @@
 #include <chainparamsbase.h>
 #include <node/blockstorage.h>
 #include <rpc/blockchain.h>
+#include <rpc/util.h>
 #include <sync.h>
 #include <test/util/setup_common.h>
 
@@ -25,6 +26,37 @@ static void TestDifficulty(uint32_t nbits, const uint256& pow_limit, double expe
 }
 
 BOOST_FIXTURE_TEST_SUITE(blockchain_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(header_json_target_is_the_blocks_own)
+{
+    const auto params{CreateChainParams(*m_node.args, ChainType::MAIN)};
+    const uint256& pow_limit{params->GetConsensus().powLimit};
+    const uint256 hash_a{uint256::ONE};
+    const uint256 hash_b{uint256::ZERO};
+    CBlockIndex a;
+    a.phashBlock = &hash_a;
+    a.nBits = UintToArith256(pow_limit).GetCompact();
+    CBlockIndex b;
+    b.phashBlock = &hash_b;
+    arith_uint256 harder_target{UintToArith256(pow_limit)};
+    harder_target >>= 8;
+    b.nBits = harder_target.GetCompact();
+    b.pprev = &a;
+    b.nHeight = 1;
+    b.BuildSkip();
+
+    const std::string target{blockheaderToJSON(b, a, pow_limit)["target"].get_str()};
+    BOOST_CHECK_EQUAL(target, GetTarget(a, pow_limit).GetHex());
+    BOOST_CHECK_NE(target, GetTarget(b, pow_limit).GetHex());
+}
+
+BOOST_AUTO_TEST_CASE(main_prune_after_height_matches_publictest)
+{
+    const auto main{CreateChainParams(*m_node.args, ChainType::MAIN)};
+    const auto publictest{CreateChainParams(*m_node.args, ChainType::PUBLIC_TEST)};
+    BOOST_CHECK_EQUAL(main->PruneAfterHeight(), 1000U);
+    BOOST_CHECK_EQUAL(main->PruneAfterHeight(), publictest->PruneAfterHeight());
+}
 
 BOOST_AUTO_TEST_CASE(get_difficulty_relative_to_each_chain_pow_limit)
 {

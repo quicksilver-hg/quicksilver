@@ -43,7 +43,6 @@
 #include <event2/thread.h>
 #include <event2/util.h>
 
-using util::ReplaceAll;
 using util::SplitString;
 using util::ToString;
 
@@ -66,6 +65,9 @@ static const float RECONNECT_TIMEOUT_EXP = 1.5;
  * this is belt-and-suspenders sanity limit to prevent memory exhaustion.
  */
 static const int MAX_LINE_LENGTH = 100000;
+static constexpr size_t MAX_REPLY_LINES = 1000;
+static constexpr size_t MAX_REPLY_BYTES = 1 << 20;
+static constexpr float MAX_RECONNECT_TIMEOUT = 600.0F;
 static const uint16_t DEFAULT_TOR_SOCKS_PORT = 9050;
 
 /****** Low-level TorControlConnection ********/
@@ -77,8 +79,35 @@ TorControlConnection::TorControlConnection(struct event_base* _base)
 
 TorControlConnection::~TorControlConnection()
 {
-    if (b_conn)
-        bufferevent_free(b_conn);
+    DisconnectWithoutNotification();
+}
+
+bool TorControlConnection::AddReplyLine(const std::string& s)
+{
+    if (s.size() > MAX_LINE_LENGTH || message.lines.size() >= MAX_REPLY_LINES ||
+        s.size() > MAX_REPLY_BYTES - message_bytes) {
+        LogInfo(HgLog::TOR, "tor: Disconnecting because reply bounds exceeded\n");
+        Disconnect();
+        return false;
+    }
+    if (s.size() < 4) return true;
+    message_bytes += s.size();
+    message.code = ToIntegral<int>(s.substr(0, 3)).value_or(0);
+    message.lines.push_back(s.substr(4));
+    if (s[3] == ' ') {
+        if (message.code < 600) {
+            if (!reply_handlers.empty()) {
+                auto handler = std::move(reply_handlers.front());
+                reply_handlers.pop_front();
+                handler(*this, message);
+            } else {
+                LogDebug(HgLog::TOR, "Received unexpected sync reply %i\n", message.code);
+            }
+        }
+        message.Clear();
+        message_bytes = 0;
+    }
+    return true;
 }
 
 void TorControlConnection::readcb(struct bufferevent *bev, void *ctx)
@@ -93,29 +122,7 @@ void TorControlConnection::readcb(struct bufferevent *bev, void *ctx)
     {
         std::string s(line, n_read_out);
         free(line);
-        if (s.size() < 4) // Short line
-            continue;
-        // <status>(-|+| )<data><CRLF>
-        self->message.code = ToIntegral<int>(s.substr(0, 3)).value_or(0);
-        self->message.lines.push_back(s.substr(4));
-        char ch = s[3]; // '-','+' or ' '
-        if (ch == ' ') {
-            // Final line, dispatch reply and clean up
-            if (self->message.code >= 600) {
-                // (currently unused)
-                // Dispatch async notifications to async handler
-                // Synchronous and asynchronous messages are never interleaved
-            } else {
-                if (!self->reply_handlers.empty()) {
-                    // Invoke reply handler with message
-                    self->reply_handlers.front()(*self, self->message);
-                    self->reply_handlers.pop_front();
-                } else {
-                    LogDebug(HgLog::TOR, "Received unexpected sync reply %i\n", self->message.code);
-                }
-            }
-            self->message.Clear();
-        }
+        if (!self->AddReplyLine(s) || self->b_conn != bev) return;
     }
     //  Check for size of buffer - protect against memory exhaustion with very long lines
     //  Do this after evbuffer_readln to make sure all full lines have been
@@ -139,19 +146,20 @@ void TorControlConnection::eventcb(struct bufferevent *bev, short what, void *ct
             LogDebug(HgLog::TOR, "End of stream\n");
         }
         self->Disconnect();
-        self->disconnected(*self);
     }
 }
 
 bool TorControlConnection::Connect(const std::string& tor_control_center, const ConnectionCB& _connected, const ConnectionCB& _disconnected)
 {
-    if (b_conn) {
-        Disconnect();
-    }
+    DisconnectWithoutNotification();
+    connected = _connected;
+    disconnected = _disconnected;
+    connection_active = true;
 
     const std::optional<CService> control_service{Lookup(tor_control_center, DEFAULT_TOR_CONTROL_PORT, fNameLookup)};
     if (!control_service.has_value()) {
         LogInfo(HgLog::TOR, "tor: Failed to look up control center %s\n", tor_control_center);
+        Disconnect();
         return false;
     }
 
@@ -159,22 +167,23 @@ bool TorControlConnection::Connect(const std::string& tor_control_center, const 
     socklen_t control_address_len = sizeof(control_address);
     if (!control_service.value().GetSockAddr(reinterpret_cast<struct sockaddr*>(&control_address), &control_address_len)) {
         LogInfo(HgLog::TOR, "tor: Error parsing socket address %s\n", tor_control_center);
+        Disconnect();
         return false;
     }
 
     // Create a new socket, set up callbacks and enable notification bits
     b_conn = bufferevent_socket_new(base, -1, BEV_OPT_CLOSE_ON_FREE);
     if (!b_conn) {
+        Disconnect();
         return false;
     }
     bufferevent_setcb(b_conn, TorControlConnection::readcb, nullptr, TorControlConnection::eventcb, this);
     bufferevent_enable(b_conn, EV_READ|EV_WRITE);
-    this->connected = _connected;
-    this->disconnected = _disconnected;
 
     // Finally, connect to tor_control_center
     if (bufferevent_socket_connect(b_conn, reinterpret_cast<struct sockaddr*>(&control_address), control_address_len) < 0) {
         LogInfo(HgLog::TOR, "tor: Error connecting to address %s\n", tor_control_center);
+        Disconnect();
         return false;
     }
     return true;
@@ -182,9 +191,21 @@ bool TorControlConnection::Connect(const std::string& tor_control_center, const 
 
 void TorControlConnection::Disconnect()
 {
+    const bool notify = connection_active;
+    const auto callback = disconnected;
+    DisconnectWithoutNotification();
+    if (notify && callback) callback(*this);
+}
+
+void TorControlConnection::DisconnectWithoutNotification()
+{
+    connection_active = false;
     if (b_conn)
         bufferevent_free(b_conn);
     b_conn = nullptr;
+    message.Clear();
+    message_bytes = 0;
+    reply_handlers.clear();
 }
 
 bool TorControlConnection::Command(const std::string &cmd, const ReplyHandlerCB& reply_handler)
@@ -338,6 +359,25 @@ TorController::TorController(struct event_base* _base, const std::string& tor_co
         LogDebug(HgLog::TOR, "Reading cached private key from %s\n", fs::PathToString(GetPrivateKeyFile()));
         private_key = pkf.second;
     }
+}
+
+int64_t TorController::NextReconnectDelayMillis(float& timeout)
+{
+    timeout = std::min(timeout, MAX_RECONNECT_TIMEOUT);
+    const int64_t delay = static_cast<int64_t>(timeout * 1000.0F);
+    timeout = std::min(timeout * RECONNECT_TIMEOUT_EXP, MAX_RECONNECT_TIMEOUT);
+    return delay;
+}
+
+std::string TorController::PasswordAuthCommand(std::string_view password)
+{
+    std::string escaped;
+    escaped.reserve(password.size());
+    for (const char ch : password) {
+        if (ch == '\\' || ch == '"') escaped.push_back('\\');
+        escaped.push_back(ch);
+    }
+    return "AUTHENTICATE \"" + escaped + "\"";
 }
 
 TorController::~TorController()
@@ -580,8 +620,7 @@ void TorController::protocolinfo_cb(TorControlConnection& _conn, const TorContro
         if (!torpassword.empty()) {
             if (methods.count("HASHEDPASSWORD")) {
                 LogDebug(HgLog::TOR, "Using HASHEDPASSWORD authentication\n");
-                ReplaceAll(torpassword, "\"", "\\\"");
-                _conn.Command("AUTHENTICATE \"" + torpassword + "\"", std::bind(&TorController::auth_cb, this, std::placeholders::_1, std::placeholders::_2));
+                _conn.Command(PasswordAuthCommand(torpassword), std::bind(&TorController::auth_cb, this, std::placeholders::_1, std::placeholders::_2));
             } else {
                 LogInfo(HgLog::TOR, "tor: Password provided with -torpassword, but HASHEDPASSWORD authentication is not available\n");
             }
@@ -635,10 +674,9 @@ void TorController::disconnected_cb(TorControlConnection& _conn)
     LogDebug(HgLog::TOR, "Not connected to Tor control port %s, trying to reconnect\n", m_tor_control_center);
 
     // Single-shot timer for reconnect. Use exponential backoff.
-    struct timeval time = MillisToTimeval(int64_t(reconnect_timeout * 1000.0));
+    struct timeval time = MillisToTimeval(NextReconnectDelayMillis(reconnect_timeout));
     if (reconnect_ev)
         event_add(reconnect_ev, &time);
-    reconnect_timeout *= RECONNECT_TIMEOUT_EXP;
 }
 
 void TorController::Reconnect()

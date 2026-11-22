@@ -33,14 +33,23 @@ spendable key.
 
 ## Trust Anchors
 
-Fresh-chain parameters intentionally reset inherited trust anchors:
-
-- no checkpoints;
 - no DNS seeds, and an onion fixed seed on `main` and `publictest` only;
-- zero minimum chain work;
-- zero default assumed-valid block;
 - no UTXO-snapshot bootstrap;
-- chain transaction metadata reset for the fresh ledger.
+- chain transaction metadata that each release fills in from main's own ledger.
+
+`main` carries its own list of trust anchors, each a block height, the hash of
+the block at that height, and the total chain work up to it. Each release adds
+one anchor a few days below the chain tip, and no anchor is ever removed.
+
+A node refuses a header at an anchor's height that does not carry the anchor's
+hash. It also refuses a header that forks from the chain below the newest anchor
+it already holds. There is no option to turn either check off.
+
+The newest anchor also sets the node's default minimum chain work and its default
+assumed-valid block.
+
+`publictest` and `sandbox` carry no anchors. Their minimum chain work is zero and
+they have no default assumed-valid block.
 
 ## Why BIP numbers appear in this source tree
 

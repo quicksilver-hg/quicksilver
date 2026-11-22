@@ -31,6 +31,7 @@
 #include <QtGlobal>
 
 #include <cassert>
+#include <algorithm>
 #include <exception>
 
 #include <QCoreApplication>
@@ -343,7 +344,7 @@ void NetworkPage::buildAddPeerSection(QVBoxLayout* root)
         // Rejected here rather than passed on: an empty or whitespace-bearing entry
         // is accepted by the connection manager and then simply never resolves, which
         // is indistinguishable from a peer that is merely down.
-        if (address.isEmpty() || address.contains(QChar::Space)) {
+        if (address.isEmpty() || std::any_of(address.cbegin(), address.cend(), [](QChar ch) { return ch.isSpace(); })) {
             setAddPeerResult(tr("Enter a peer address, with no spaces."));
             return;
         }
@@ -386,13 +387,13 @@ void NetworkPage::refreshBootstrapDiagnosis(int peers)
     }
     switch (diagnoseBootstrap(!Params().FixedSeeds().empty(), FixedSeedsAreOnionOnly(), OnionProxyConfigured())) {
     case BootstrapObstacle::NoSeeds:
-        m_bootstrap_diagnosis->setText(tr("This network ships no seed addresses, so this node has nothing to look for on its own. Name a peer below to connect to one."));
+        m_bootstrap_diagnosis->setText(tr("This network ships no seed addresses. Unless this node already knows peers from an earlier run or from its settings, it has nothing to look for: name a peer below to connect to one."));
         break;
     case BootstrapObstacle::OnionSeedsNeedTor:
-        m_bootstrap_diagnosis->setText(tr("Every seed address this network ships is reachable only through Tor, and no Tor proxy is configured — so this node has nothing it can dial. Set up Tor above, or name a peer below. Until one of those happens it will stay at zero peers, and anything it mines will be on a chain of its own."));
+        m_bootstrap_diagnosis->setText(tr("Every seed address this network ships is reachable only through Tor, and no Tor proxy is configured. Unless this node already knows other peers, it has nothing it can dial: set up Tor above, or name a peer below. Until one of those happens it will stay at zero peers, and anything it mines will be on a chain of its own."));
         break;
     case BootstrapObstacle::None:
-        m_bootstrap_diagnosis->setText(tr("No peers yet. This node is still trying the seed addresses it ships with."));
+        m_bootstrap_diagnosis->setText(tr("No peers yet. This node is still trying the addresses it knows, including the seed addresses it ships with."));
         break;
     }
     m_bootstrap_diagnosis->setVisible(true);
@@ -514,8 +515,22 @@ void NetworkPage::updateStatus(int peers, ClientModel::SyncState sync_state, dou
         : sync_text);
 }
 
+void NetworkPage::setNetworkActive(bool active)
+{
+    m_network_active = active;
+}
+
 void NetworkPage::setPeerCount(int peers)
 {
+    if (!m_network_active) {
+        m_intro->setText(tr("Network activity is disabled, so this node is not connecting to peers. Turn it back on from the connections icon in the status bar."));
+        m_status_value->setText(tr("Network disabled"));
+        m_peers_value->setText(QString::number(peers));
+        m_bootstrap_diagnosis->setVisible(false);
+        setNodeControlsEnabled(false);
+        setReviewConsensusVisible(true);
+        return;
+    }
     m_intro->setText(tr("Independent verification is running on this desktop."));
     m_status_value->setText(peers > 0 ? tr("Online") : tr("Offline"));
     m_peers_value->setText(QString::number(peers));

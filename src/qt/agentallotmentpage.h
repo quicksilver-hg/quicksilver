@@ -43,6 +43,7 @@ private:
     void reviewAgentAllotmentPolicyRequest();
     void reviewPaymentReceipt();
     void savePaymentReceiptToAgentInbox();
+    void saveFundingReceipts(const vault::AgentAllotmentRecord& record, CAmount funding_available);
     void copyAgentBundle(const vault::AgentAllotmentRecord& record, CAmount funding_available);
     void reviewAgentSpendRequest();
     void cosignAgentSpendRequest();

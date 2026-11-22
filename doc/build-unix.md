@@ -244,6 +244,10 @@ be compiled in disable-vault mode with:
 
     cmake -B build -DENABLE_VAULT=OFF
 
+This builds the node and command-line tools only. The desktop application needs
+the vault, so configuring with both `-DENABLE_VAULT=OFF` and `-DBUILD_GUI=ON` is
+refused.
+
 In this case there is no dependency on SQLite.
 
 Mining is also possible in disable-vault mode using the `getblocktemplate` RPC call.

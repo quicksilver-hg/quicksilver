@@ -56,10 +56,6 @@ static void CheckAdd(const int64_t& num1, const int64_t& num2)
     const CScriptNum10 bignum2(num2);
     const CScriptNum scriptnum1(num1);
     const CScriptNum scriptnum2(num2);
-    CScriptNum10 bignum3(num1);
-    CScriptNum10 bignum4(num1);
-    CScriptNum scriptnum3(num1);
-    CScriptNum scriptnum4(num1);
 
     // int64_t overflow is undefined.
     bool invalid = (((num2 > 0) && (num1 > (std::numeric_limits<int64_t>::max() - num2))) ||
@@ -69,6 +65,11 @@ static void CheckAdd(const int64_t& num1, const int64_t& num2)
         BOOST_CHECK(verify(bignum1 + bignum2, scriptnum1 + scriptnum2));
         BOOST_CHECK(verify(bignum1 + bignum2, scriptnum1 + num2));
         BOOST_CHECK(verify(bignum1 + bignum2, scriptnum2 + num1));
+        CScriptNum10 reference{num1};
+        CScriptNum production{num1};
+        reference += bignum2;
+        production += scriptnum2;
+        BOOST_CHECK(verify(reference, production));
     }
 }
 
@@ -96,6 +97,11 @@ static void CheckSubtract(const int64_t& num1, const int64_t& num2)
     {
         BOOST_CHECK(verify(bignum1 - bignum2, scriptnum1 - scriptnum2));
         BOOST_CHECK(verify(bignum1 - bignum2, scriptnum1 - num2));
+        CScriptNum10 reference{num1};
+        CScriptNum production{num1};
+        reference -= bignum2;
+        production -= scriptnum2;
+        BOOST_CHECK(verify(reference, production));
     }
 
     invalid = ((num1 > 0 && num2 < std::numeric_limits<int64_t>::min() + num1) ||
@@ -152,6 +158,7 @@ static void RunCreate(const int64_t& num)
     else
     {
         BOOST_CHECK_THROW (CheckCreateVch(num), scriptnum10_error);
+        BOOST_CHECK_THROW(CScriptNum(scriptnum.getvch(), false), scriptnum_error);
     }
 }
 
@@ -180,7 +187,7 @@ BOOST_AUTO_TEST_CASE(operators)
 {
     for(size_t i = 0; i < std::size(values); ++i)
     {
-        for(size_t j = 0; j < std::size(offsets); ++j)
+        for(size_t j = 0; j < std::size(values); ++j)
         {
             RunOperators(values[i], values[i]);
             RunOperators(values[i], -values[i]);
@@ -196,6 +203,14 @@ BOOST_AUTO_TEST_CASE(operators)
             RunOperators(values[i] - values[j], values[i] - values[j]);
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(reference_int64_min_and_oversize)
+{
+    const auto encoded = CScriptNum10::serialize(std::numeric_limits<int64_t>::min());
+    BOOST_CHECK(encoded == CScriptNum{std::numeric_limits<int64_t>::min()}.getvch());
+    BOOST_CHECK_EQUAL(CScriptNum10(encoded, false, 9).getint(), std::numeric_limits<int>::min());
+    BOOST_CHECK_THROW(CScriptNum10(std::vector<unsigned char>(10, 0), false, 10), scriptnum10_error);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -31,6 +31,21 @@ using node::AnalyzePSQT;
 using node::PSQTAnalysis;
 using node::TransactionError;
 
+bool WritePSQTFile(const fs::path& path, const std::string& bytes)
+{
+    std::ofstream out{path, std::ios::binary};
+    if (!out) return false;
+    out.write(bytes.data(), bytes.size());
+    out.close();
+    return bool(out);
+}
+
+QString PSQTBroadcastFailureMessage(const QString& error, const QString& reason)
+{
+    if (reason.isEmpty()) return QCoreApplication::translate("PSQTOperationsDialog", "Transaction broadcast failed: %1").arg(error);
+    return QCoreApplication::translate("PSQTOperationsDialog", "Transaction broadcast failed: %1 (%2)").arg(error, reason);
+}
+
 PSQTOperationsDialog::PSQTOperationsDialog(
     QWidget* parent, VaultModel* vault_model, ClientModel* client_model) : QDialog(parent, GUIUtil::dialog_flags),
                                                                              m_ui(new Ui::PSQTOperationsDialog),
@@ -48,6 +63,7 @@ PSQTOperationsDialog::PSQTOperationsDialog(
 
     m_ui->signTransactionButton->setEnabled(false);
     m_ui->broadcastTransactionButton->setEnabled(false);
+    if (!m_client_model) m_ui->broadcastTransactionButton->setToolTip(tr("Broadcasting needs consensus to be running."));
 }
 
 PSQTOperationsDialog::~PSQTOperationsDialog()
@@ -55,8 +71,26 @@ PSQTOperationsDialog::~PSQTOperationsDialog()
     delete m_ui;
 }
 
+QuicksilverUnit PSQTOperationsDialog::displayUnit() const
+{
+    if (m_vault_model && m_vault_model->getOptionsModel()) return m_vault_model->getOptionsModel()->getDisplayUnit();
+    if (m_client_model && m_client_model->getOptionsModel()) return m_client_model->getOptionsModel()->getDisplayUnit();
+    return QuicksilverUnit::HG;
+}
+
 void PSQTOperationsDialog::openWithPSQT(PartiallySignedQuicksilverTransaction psqtx)
 {
+    CAmount total{0};
+    for (const CTxOut& out : psqtx.tx->vout) {
+        if (!MoneyRange(out.nValue) || out.nValue > MAX_MONEY - total) {
+            m_ui->signTransactionButton->setEnabled(false);
+            m_ui->broadcastTransactionButton->setEnabled(false);
+            m_ui->transactionDescription->clear();
+            showStatus(tr("Failed to load transaction: %1").arg(QStringLiteral("PSQT is not valid. Output amount invalid")), StatusLevel::ERR);
+            return;
+        }
+        total += out.nValue;
+    }
     m_transaction_data = psqtx;
 
     bool complete = FinalizePSQT(psqtx); // Make sure all existing signatures are fully combined before checking for completeness.
@@ -74,16 +108,17 @@ void PSQTOperationsDialog::openWithPSQT(PartiallySignedQuicksilverTransaction ps
         m_ui->signTransactionButton->setEnabled(false);
     }
 
-    m_ui->broadcastTransactionButton->setEnabled(complete);
+    m_ui->broadcastTransactionButton->setEnabled(complete && m_client_model);
 
     updateTransactionDisplay();
 }
 
 void PSQTOperationsDialog::signTransaction()
 {
+    if (!m_vault_model) return;
     QPointer<PSQTOperationsDialog> self(this);
     m_vault_model->requestUnlock([this, self](std::shared_ptr<VaultModel::UnlockContext> ctx) {
-        if (!self) return;
+        if (!self || !m_vault_model) return;
 
         bool complete;
         size_t n_signed;
@@ -107,13 +142,14 @@ void PSQTOperationsDialog::signTransaction()
         } else {
             showStatus(tr("Signed transaction successfully. Transaction is ready to broadcast."),
                 StatusLevel::INFO);
-            m_ui->broadcastTransactionButton->setEnabled(true);
+            m_ui->broadcastTransactionButton->setEnabled(bool(m_client_model));
         }
     });
 }
 
 void PSQTOperationsDialog::broadcastTransaction()
 {
+    if (!m_client_model) return;
     CMutableTransaction mtx;
     if (!FinalizeAndExtractPSQT(m_transaction_data, mtx)) {
         // This is never expected to fail unless we were given a malformed PSQT
@@ -131,8 +167,8 @@ void PSQTOperationsDialog::broadcastTransaction()
         showStatus(tr("Transaction broadcast successfully! Transaction ID: %1")
             .arg(QString::fromStdString(tx->GetHash().GetHex())), StatusLevel::INFO);
     } else {
-        showStatus(tr("Transaction broadcast failed: %1")
-            .arg(QString::fromStdString(TransactionErrorString(error).translated)), StatusLevel::ERR);
+        showStatus(PSQTBroadcastFailureMessage(QString::fromStdString(TransactionErrorString(error).translated),
+                                               QString::fromStdString(err_string)), StatusLevel::ERR);
     }
 }
 
@@ -155,7 +191,7 @@ void PSQTOperationsDialog::saveTransaction() {
         }
         CTxDestination address;
         ExtractDestination(out.scriptPubKey, address);
-        QString amount = QuicksilverUnits::format(m_client_model->getOptionsModel()->getDisplayUnit(), out.nValue);
+        QString amount = QuicksilverUnits::format(displayUnit(), out.nValue);
         QString address_str = QString::fromStdString(EncodeDestination(address));
         filename_suggestion.append(address_str + "-" + amount);
         first = false;
@@ -168,10 +204,11 @@ void PSQTOperationsDialog::saveTransaction() {
         tr("Partially Signed Transaction (Binary)") + QLatin1String(" (*.psqt)"),
         [self, payload = ssTx.str()](const QString& filename) {
             if (!self || filename.isEmpty()) return;
-            std::ofstream out{filename.toLocal8Bit().data(), std::ofstream::out | std::ofstream::binary};
-            out << payload;
-            out.close();
-            self->showStatus(self->tr("PSQT saved to disk."), StatusLevel::INFO);
+            if (WritePSQTFile(GUIUtil::QStringToPath(filename), payload)) {
+                self->showStatus(self->tr("PSQT saved to disk."), StatusLevel::INFO);
+            } else {
+                self->showStatus(self->tr("Could not save the PSQT to %1.").arg(filename), StatusLevel::ERR);
+            }
         });
 }
 
@@ -209,12 +246,12 @@ QString PSQTOperationsDialog::renderTransaction(const PartiallySignedQuicksilver
         QStringList alternativeUnits;
         for (const QuicksilverUnits::Unit u : QuicksilverUnits::availableUnits())
         {
-            if(u != m_client_model->getOptionsModel()->getDisplayUnit()) {
+            if(u != displayUnit()) {
                 alternativeUnits.append(QuicksilverUnits::formatHtmlWithUnit(u, totalAmount));
             }
         }
         tx_description.append(QString("<b>%1</b>: <b>%2</b>").arg(tr("Total Amount"))
-            .arg(QuicksilverUnits::formatHtmlWithUnit(m_client_model->getOptionsModel()->getDisplayUnit(), totalAmount)));
+            .arg(QuicksilverUnits::formatHtmlWithUnit(displayUnit(), totalAmount)));
         tx_description.append(QString("<br /><span style='font-size:10pt; font-weight:normal;'>(=%1)</span>")
             .arg(alternativeUnits.join(" " + tr("or") + " ")));
     }

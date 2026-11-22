@@ -12,6 +12,7 @@
 #include <streams.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
+#include <util/check.h>
 #include <util/fs.h>
 #include <validation.h>
 
@@ -26,7 +27,8 @@
  * The LoadExternalBlockFile() function is used during -reindex and -loadblock.
  *
  * Create a test file that's similar to a datadir/blocks/blk?????.dat file,
- * It contains around 134 copies of the same block (typical size of real block files).
+ * It contains MAX_BLOCKFILE_SIZE / (record size) copies of the same block: 524 with the
+ * current fixture block (255,978 bytes plus 8 bytes of framing per record).
  * For each block in the file, LoadExternalBlockFile() won't find its parent,
  * and so will skip the block. (In the real system, it will re-read the block
  * from disk later when it encounters its parent.)
@@ -50,24 +52,38 @@ static void LoadExternalBlockFile(benchmark::Bench& bench)
     ss << Span{benchmark::data::quicksilver_block};
 
     // Create the test file.
+    const size_t n_records{node::MAX_BLOCKFILE_SIZE / ss.size()};
     {
         // "wb+" is "binary, O_RDWR | O_CREAT | O_TRUNC".
         FILE* file{fsbridge::fopen(blkfile, "wb+")};
+        if (!file) throw std::runtime_error("cannot create test file");
         // Make the test block file about 128 MB in length.
-        for (size_t i = 0; i < node::MAX_BLOCKFILE_SIZE / ss.size(); ++i) {
+        for (size_t i = 0; i < n_records; ++i) {
             if (fwrite(ss.data(), 1, ss.size(), file) != ss.size()) {
                 throw std::runtime_error("write to test file failed\n");
             }
         }
-        fclose(file);
+        if (fclose(file) != 0) throw std::runtime_error("close of test file failed");
     }
 
-    std::multimap<uint256, FlatFilePos> blocks_with_unknown_parent;
     FlatFilePos pos;
+    // Every record must be read and set aside as having an unknown parent, or the
+    // benchmark times something other than the header scan it describes.
+    {
+        std::multimap<uint256, FlatFilePos> blocks_with_unknown_parent;
+        AutoFile file{fsbridge::fopen(blkfile, "rb")};
+        if (file.IsNull()) throw std::runtime_error("cannot open test file");
+        testing_setup->m_node.chainman->LoadExternalBlockFile(file, &pos, &blocks_with_unknown_parent);
+        Assert(blocks_with_unknown_parent.size() == n_records);
+    }
     bench.run([&] {
+        // A fresh map each run, so every sample scans the same state; a map kept across
+        // runs would gain n_records entries per run.
+        std::multimap<uint256, FlatFilePos> blocks_with_unknown_parent;
         // "rb" is "binary, O_RDONLY", positioned to the start of the file.
         // The file will be closed by LoadExternalBlockFile().
         AutoFile file{fsbridge::fopen(blkfile, "rb")};
+        if (file.IsNull()) throw std::runtime_error("cannot open test file");
         testing_setup->m_node.chainman->LoadExternalBlockFile(file, &pos, &blocks_with_unknown_parent);
     });
     fs::remove(blkfile);

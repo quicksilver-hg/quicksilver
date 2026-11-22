@@ -201,6 +201,8 @@ public:
     bool ReadBackupIdentity(BackupIdentity& identity);
     bool WriteAgentAllotmentRecords(const std::vector<AgentAllotmentRecord>& records);
     bool ReadAgentAllotmentRecords(std::vector<AgentAllotmentRecord>& records);
+    enum class AllotmentRecordsRead { MISSING, OK, LEGACY, NEWER, CORRUPT, READ_ERROR };
+    AllotmentRecordsRead ReadAgentAllotmentRecordsClassified(std::vector<AgentAllotmentRecord>& records);
     //! True when the records key is present, including when its value cannot be deserialized.
     bool HasAgentAllotmentRecords();
 

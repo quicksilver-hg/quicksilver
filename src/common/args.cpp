@@ -813,6 +813,11 @@ std::vector<common::SettingsValue> ArgsManager::GetSettingsList(const std::strin
     return common::GetSettingsList(m_settings, m_network, SettingName(arg), !UseDefaultSection(arg));
 }
 
+static std::string LogArgValue(const common::SettingsValue& value, std::optional<unsigned int> flags)
+{
+    return flags && (*flags & ArgsManager::SENSITIVE) ? "****" : value.write();
+}
+
 void ArgsManager::logArgsPrefix(
     const std::string& source,
     const std::string& section,
@@ -823,7 +828,7 @@ void ArgsManager::logArgsPrefix(
         for (const auto& value : arg.second) {
             std::optional<unsigned int> flags = GetArgFlags('-' + arg.first);
             if (flags) {
-                std::string value_str = (*flags & SENSITIVE) ? "****" : value.write();
+                std::string value_str = LogArgValue(value, flags);
                 LogInfo(HgLog::INIT, "arg source=%s %s%s=%s\n", source, section_str, arg.first, value_str);
             }
         }
@@ -837,7 +842,9 @@ void ArgsManager::LogArgs() const
         logArgsPrefix("config-file", section.first, section.second);
     }
     for (const auto& setting : m_settings.rw_settings) {
-        LogInfo(HgLog::INIT, "arg source=settings-file %s=%s\n", setting.first, setting.second.write());
+        const KeyInfo key = InterpretKey(setting.first);
+        LogInfo(HgLog::INIT, "arg source=settings-file %s=%s\n", setting.first,
+                LogArgValue(setting.second, GetArgFlags('-' + key.name)));
     }
     logArgsPrefix("command-line", "", m_settings.command_line_options);
 }

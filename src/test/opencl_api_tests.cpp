@@ -42,8 +42,10 @@ BOOST_AUTO_TEST_CASE(constants_match_khronos)
     static_assert(qsgpu::cl::kMemReadWrite == CL_MEM_READ_WRITE);
     static_assert(qsgpu::cl::kProgramBuildLog == CL_PROGRAM_BUILD_LOG);
     static_assert(qsgpu::cl::kKernelWorkGroupSize == CL_KERNEL_WORK_GROUP_SIZE);
+    static_assert(qsgpu::cl::kTrue == CL_TRUE);
     static_assert(qsgpu::cl::kDevicePciBusInfoKhr == CL_DEVICE_PCI_BUS_INFO_KHR);
     static_assert(qsgpu::cl::kDeviceTopologyAmd == CL_DEVICE_TOPOLOGY_AMD);
+    static_assert(qsgpu::cl::kDeviceBoardNameAmd == CL_DEVICE_BOARD_NAME_AMD);
     static_assert(qsgpu::cl::kDeviceTopologyTypePcieAmd == CL_DEVICE_TOPOLOGY_TYPE_PCIE_AMD);
 #ifdef CL_DEVICE_PCI_BUS_ID_NV
     static_assert(qsgpu::cl::kDevicePciBusIdNv == CL_DEVICE_PCI_BUS_ID_NV);
@@ -51,7 +53,14 @@ BOOST_AUTO_TEST_CASE(constants_match_khronos)
     static_assert(qsgpu::cl::kDevicePciDomainIdNv == CL_DEVICE_PCI_DOMAIN_ID_NV);
 #endif
     static_assert(sizeof(qsgpu::cl::PciBusInfoKhr) == sizeof(cl_device_pci_bus_info_khr));
+    static_assert(offsetof(qsgpu::cl::PciBusInfoKhr, pci_domain) == offsetof(cl_device_pci_bus_info_khr, pci_domain));
+    static_assert(offsetof(qsgpu::cl::PciBusInfoKhr, pci_bus) == offsetof(cl_device_pci_bus_info_khr, pci_bus));
+    static_assert(offsetof(qsgpu::cl::PciBusInfoKhr, pci_device) == offsetof(cl_device_pci_bus_info_khr, pci_device));
+    static_assert(offsetof(qsgpu::cl::PciBusInfoKhr, pci_function) == offsetof(cl_device_pci_bus_info_khr, pci_function));
     static_assert(sizeof(qsgpu::cl::TopologyAmd) == sizeof(cl_device_topology_amd));
+    static_assert(offsetof(qsgpu::cl::TopologyAmd, pcie.bus) == offsetof(cl_device_topology_amd, pcie.bus));
+    static_assert(offsetof(qsgpu::cl::TopologyAmd, pcie.device) == offsetof(cl_device_topology_amd, pcie.device));
+    static_assert(offsetof(qsgpu::cl::TopologyAmd, pcie.function) == offsetof(cl_device_topology_amd, pcie.function));
     BOOST_CHECK(true);
 #else
     BOOST_TEST_MESSAGE("Khronos OpenCL headers not installed; constants compared on hosts that have them");

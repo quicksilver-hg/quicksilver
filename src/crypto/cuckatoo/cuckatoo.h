@@ -71,6 +71,7 @@ uint256 CuckatooProofHash(const Cycle& cycle);
 //! Returns true iff `cycle` is a valid 42-cycle in the graph keyed by `keys`
 //! at graph size `edgebits`. Consensus. ~1 us. edgebits must be in {19,28}.
 bool CuckatooVerify(const Cycle& cycle, const Keys& keys, uint8_t edgebits);
+bool ConsensusVerifiesEdgeBits(uint8_t edgebits);
 
 //! Mining only — NEVER call from validation. Sweeps nonces start_nonce ..
 //! start_nonce+max_attempts-1 (written into the pre-pow's nNonce slot), solving

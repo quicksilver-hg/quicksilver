@@ -404,6 +404,93 @@
     ["-create",
       "in=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff:0",
       "set=privatekeys:[\"RZFfunpL4X5pkuCWoaXF9thrK8MHaU1g2LQdtQWiWS79kT3T8GCa\"]",
+      "set=prevtxs:[{\"txid\":\"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\",\"vout\":0,\"amount\":\"0.01\",\"output_script\":\"00201863143c14c5166804bd19203356da136c985678cd4d27a1b8c6329604903262\",\"witness_script\":\"210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ac\"}]",
+      "sign=ALL",
+      "outaddr=0.001:QUeNCeBdcXf2DtJwmVE1uHUVwgnQG6z1Y9"],
+    "output_cmp": "txcreatesignp2wsh1.hex",
+    "description": "Signs a native P2WSH input from its witness_script (F-639)"
+  },
+  { "exec": "./quicksilver-tx",
+    "args":
+    ["-create",
+      "in=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff:0",
+      "set=privatekeys:[\"RZFfunpL4X5pkuCWoaXF9thrK8MHaU1g2LQdtQWiWS79kT3T8GCa\"]",
+      "set=prevtxs:[{\"txid\":\"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\",\"vout\":0,\"amount\":\"0.01\",\"output_script\":\"00201863143c14c5166804bd19203356da136c985678cd4d27a1b8c6329604903262\",\"redeem_script\":\"210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ac\"}]",
+      "sign=ALL"],
+    "return_code": 1,
+    "error_txt": "error: Missing witness_script",
+    "description": "A native P2WSH input does not take redeem_script (F-639)"
+  },
+  { "exec": "./quicksilver-tx",
+    "args":
+    ["-create",
+      "in=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff:0",
+      "set=privatekeys:[\"RZFfunpL4X5pkuCWoaXF9thrK8MHaU1g2LQdtQWiWS79kT3T8GCa\"]",
+      "set=prevtxs:[{\"txid\":\"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\",\"vout\":0,\"amount\":\"0.01\",\"output_script\":\"00201863143c14c5166804bd19203356da136c985678cd4d27a1b8c6329604903262\",\"redeem_script\":\"210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ac\",\"witness_script\":\"210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ac\"}]",
+      "sign=ALL"],
+    "return_code": 1,
+    "error_txt": "error: redeem_script is not valid for a P2WSH input",
+    "description": "A native P2WSH input refuses redeem_script beside witness_script (F-639)"
+  },
+  { "exec": "./quicksilver-tx",
+    "args":
+    ["-create",
+      "in=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff:0",
+      "set=privatekeys:[\"RZFfunpL4X5pkuCWoaXF9thrK8MHaU1g2LQdtQWiWS79kT3T8GCa\"]",
+      "set=prevtxs:[{\"txid\":\"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\",\"vout\":0,\"amount\":\"0.01\",\"output_script\":\"00201863143c14c5166804bd19203356da136c985678cd4d27a1b8c6329604903262\",\"witness_script\":\"51\"}]",
+      "sign=ALL"],
+    "return_code": 1,
+    "error_txt": "error: witness_script does not match output_script",
+    "description": "The witness_script must hash to the P2WSH output_script (F-639)"
+  },
+  { "exec": "./quicksilver-tx",
+    "args":
+    ["-create",
+      "in=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff:0",
+      "set=privatekeys:[\"RZFfunpL4X5pkuCWoaXF9thrK8MHaU1g2LQdtQWiWS79kT3T8GCa\"]",
+      "set=prevtxs:[{\"txid\":\"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\",\"vout\":0,\"amount\":\"0.01\",\"output_script\":\"a91423b0ad3477f2178bc0b3eed26e4e6316f4e83aa187\",\"witness_script\":\"210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ac\"}]",
+      "sign=ALL"],
+    "return_code": 1,
+    "error_txt": "error: Missing redeem_script",
+    "description": "A P2SH input does not take witness_script (F-639)"
+  },
+  { "exec": "./quicksilver-tx",
+    "args":
+    ["-create",
+      "in=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff:0:1:junk"],
+    "return_code": 1,
+    "error_txt": "error: Too many parameters",
+    "description": "An input has at most TXID:VOUT:SEQUENCE (S0043-A-02)"
+  },
+  { "exec": "./quicksilver-tx",
+    "args":
+    ["-create",
+      "outscript=0:1:W:extra"],
+    "return_code": 1,
+    "error_txt": "error: Too many parameters",
+    "description": "outscript has at most VALUE:SCRIPT:FLAGS, so a W is never silently dropped (S0043-A-02)"
+  },
+  { "exec": "./quicksilver-tx",
+    "args":
+    ["-create",
+      "outscript=0:1:X"],
+    "return_code": 1,
+    "error_txt": "error: invalid TX output flags 'X'",
+    "description": "Output flags are empty, W or S (S0043-A-02)"
+  },
+  { "exec": "./quicksilver-tx",
+    "args":
+    ["-create",
+      "outscript=0:1:WW"],
+    "return_code": 1,
+    "error_txt": "error: invalid TX output flags 'WW'",
+    "description": "A repeated output flag is refused (S0043-A-02)"
+  },
+  { "exec": "./quicksilver-tx",
+    "args":
+    ["-create",
+      "in=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff:0",
+      "set=privatekeys:[\"RZFfunpL4X5pkuCWoaXF9thrK8MHaU1g2LQdtQWiWS79kT3T8GCa\"]",
       "set=prevtxs:[{\"txid\":\"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\",\"vout\":0,\"output_script\":\"0014751e76e8199196d454941c45d1b3a323f1433bd6\"}]",
       "sign=ALL",
       "outaddr=0.001:QUeNCeBdcXf2DtJwmVE1uHUVwgnQG6z1Y9"],

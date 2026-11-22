@@ -15,6 +15,7 @@
 #include <netmessagemaker.h>
 #include <node/protocol_version.h>
 #include <protocol.h>
+#include <random.h>
 #include <streams.h>
 #include <tinyformat.h>
 #include <util/result.h>
@@ -28,6 +29,7 @@
 #include <cstring>
 #include <exception>
 #include <memory>
+#include <limits>
 #include <vector>
 
 namespace agent {
@@ -105,6 +107,7 @@ util::Result<std::vector<unsigned char>> ReceiveBytes(const Sock& sock,
 
 util::Result<CSerializedNetMsg> ReceiveWireMessage(const Sock& sock, std::chrono::milliseconds timeout)
 {
+    const auto deadline{std::chrono::steady_clock::now() + timeout};
     auto header_bytes{ReceiveBytes(sock, CMessageHeader::HEADER_SIZE, timeout)};
     if (!header_bytes) return util::Error{util::ErrorString(header_bytes)};
 
@@ -126,7 +129,9 @@ util::Result<CSerializedNetMsg> ReceiveWireMessage(const Sock& sock, std::chrono
         return util::Error{Untranslated(strprintf("Peer message %s is too large: %s bytes", header.GetMessageType(), util::ToString(header.nMessageSize)))};
     }
 
-    auto payload{ReceiveBytes(sock, header.nMessageSize, timeout)};
+    const auto now{std::chrono::steady_clock::now()};
+    if (now >= deadline) return util::Error{Untranslated("Peer message timed out")};
+    auto payload{ReceiveBytes(sock, header.nMessageSize, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now))};
     if (!payload) return util::Error{util::ErrorString(payload)};
 
     const uint256 payload_hash{Hash(*payload)};
@@ -169,12 +174,7 @@ util::Result<void> SendHandshakeFeatureMessages(const Sock& sock, std::chrono::m
     return {};
 }
 
-struct PeerHandshakeResult {
-    bool peer_version_received{false};
-    bool peer_verack_received{false};
-    bool local_verack_sent{false};
-    std::string error;
-};
+} // namespace
 
 PeerHandshakeResult CompletePeerHandshake(const Sock& sock, const CService& peer, std::chrono::milliseconds timeout)
 {
@@ -227,8 +227,6 @@ PeerHandshakeResult CompletePeerHandshake(const Sock& sock, const CService& peer
     return result;
 }
 
-} // namespace
-
 std::vector<CService> FixedSeedPeers()
 {
     return FixedSeedPeers(Params());
@@ -261,6 +259,51 @@ std::unique_ptr<Sock> ConnectToPeer(const CService& peer)
     return ConnectDirectly(peer, /*manual_connection=*/true);
 }
 
+PeerTransactionRelayResult RelayTransactionOnSocket(const Sock& sock,
+                                                    const CSerializedNetMsg& tx_payload,
+                                                    std::chrono::milliseconds timeout,
+                                                    uint64_t nonce)
+{
+    PeerTransactionRelayResult result;
+    auto sent_tx{SendWireMessage(sock, tx_payload, timeout)};
+    if (!sent_tx) {
+        result.error = util::ErrorString(sent_tx).original;
+        return result;
+    }
+    result.sent_tx = true;
+    result.wire_tx_bytes = *sent_tx;
+
+    const auto deadline{std::chrono::steady_clock::now() + timeout};
+    auto sent_ping{SendWireMessage(sock, NetMsg::Make(NetMsgType::PING, nonce), timeout)};
+    if (!sent_ping) {
+        result.error = util::ErrorString(sent_ping).original;
+        return result;
+    }
+    while (std::chrono::steady_clock::now() < deadline) {
+        const auto remaining{std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now())};
+        if (remaining <= std::chrono::milliseconds::zero()) break;
+        auto message{ReceiveWireMessage(sock, remaining)};
+        if (!message) break;
+        if (message->m_type == NetMsgType::PONG && message->data.size() == sizeof(uint64_t)) {
+            DataStream stream{Span<const unsigned char>{message->data.data(), message->data.size()}};
+            uint64_t received_nonce{0};
+            stream >> received_nonce;
+            if (received_nonce == nonce) {
+                result.peer_acknowledged = true;
+                return result;
+            }
+        } else if (message->m_type == NetMsgType::PING && message->data.size() == sizeof(uint64_t)) {
+            CSerializedNetMsg pong;
+            pong.m_type = NetMsgType::PONG;
+            pong.data = message->data;
+            auto sent_pong{SendWireMessage(sock, pong, remaining)};
+            if (!sent_pong) break;
+        }
+    }
+    result.error = "peer did not acknowledge the transaction within the timeout";
+    return result;
+}
+
 PeerTransactionRelayResult SendTransactionToOnePeer(const CService& peer,
                                                     const CSerializedNetMsg& tx_payload,
                                                     std::chrono::milliseconds timeout)
@@ -268,6 +311,7 @@ PeerTransactionRelayResult SendTransactionToOnePeer(const CService& peer,
     PeerTransactionRelayResult result;
     result.peer = peer;
 
+    nConnectTimeout = static_cast<int>(std::min<int64_t>(timeout.count(), std::numeric_limits<int>::max()));
     std::unique_ptr<Sock> sock{ConnectToPeer(peer)};
     if (!sock) {
         result.error = strprintf("could not connect to peer %s", peer.ToStringAddrPort());
@@ -284,13 +328,11 @@ PeerTransactionRelayResult SendTransactionToOnePeer(const CService& peer,
         return result;
     }
 
-    auto sent_tx{SendWireMessage(*sock, tx_payload, timeout)};
-    if (!sent_tx) {
-        result.error = util::ErrorString(sent_tx).original;
-        return result;
-    }
-    result.sent_tx = true;
-    result.wire_tx_bytes = *sent_tx;
+    const auto relay{RelayTransactionOnSocket(*sock, tx_payload, timeout, GetRandHash().GetUint64(0))};
+    result.sent_tx = relay.sent_tx;
+    result.peer_acknowledged = relay.peer_acknowledged;
+    result.wire_tx_bytes = relay.wire_tx_bytes;
+    result.error = relay.error;
     return result;
 }
 

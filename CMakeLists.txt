@@ -30,9 +30,9 @@ get_directory_property(precious_variables CACHE_VARIABLES)
 set(CLIENT_NAME "Quicksilver")
 set(CLIENT_VERSION_MAJOR 0)
 set(CLIENT_VERSION_MINOR 1)
-set(CLIENT_VERSION_BUILD 9)
+set(CLIENT_VERSION_BUILD 10)
 set(CLIENT_VERSION_RC 0)
-set(CLIENT_VERSION_IS_RELEASE "true")
+set(CLIENT_VERSION_IS_RELEASE "false")
 set(COPYRIGHT_YEAR "2026")
 
 # During the enabling of the CXX and CXXOBJ languages, we modify
@@ -108,6 +108,10 @@ option(BUILD_UTIL_CHAINSTATE "Build experimental quicksilver-chainstate executab
 option(BUILD_KERNEL_LIB "Build experimental quicksilverkernel library." ${BUILD_UTIL_CHAINSTATE})
 
 option(ENABLE_VAULT "Enable vault." ON)
+if(BUILD_GUI AND NOT ENABLE_VAULT)
+  # The GUI is built around the vault; a vault-less GUI is not a supported build.
+  message(FATAL_ERROR "BUILD_GUI=ON requires ENABLE_VAULT=ON: the Quicksilver desktop application needs the vault. Use -DBUILD_GUI=OFF for a node-only build.")
+endif()
 option(WITH_SQLITE "Enable SQLite vault support." ${ENABLE_VAULT})
 if(WITH_SQLITE)
   if(VCPKG_TARGET_TRIPLET)

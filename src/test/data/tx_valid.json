@@ -236,7 +236,7 @@
   "Tests for CheckTransaction()"
  ],
  [
-  "MAX_MONEY output"
+  "21,000,000-coin output"
  ],
  [
   [
@@ -250,7 +250,7 @@
   "LOW_S"
  ],
  [
-  "MAX_MONEY output + 0 output"
+  "21,000,000-coin output + 0 output"
  ],
  [
   [

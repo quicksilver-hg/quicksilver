@@ -18,6 +18,7 @@ private Q_SLOTS:
     void benchPaletteTokens();
     void benchSheetRules();
     void dialogButtonsCarryNoStockIcon();
+    void restoreApplicationStyleKeepsTheProxy();
     void disabledPrimaryButtonLooksDisabled();
     void redCommandsAreFilledWithCinnabar();
 };

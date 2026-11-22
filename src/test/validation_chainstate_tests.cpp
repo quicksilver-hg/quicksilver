@@ -29,7 +29,7 @@ BOOST_AUTO_TEST_CASE(validation_chainstate_resize_caches)
     CTxRelayPool& relaypool = *Assert(m_node.relaypool);
     Chainstate& c1 = WITH_LOCK(cs_main, return manager.InitializeChainstate(&relaypool));
     c1.InitCoinsDB(
-        /*cache_size_bytes=*/1 << 23, /*in_memory=*/true, /*should_wipe=*/false);
+        /*cache_size_bytes=*/1 << 23, /*in_memory=*/false, /*should_wipe=*/false);
     WITH_LOCK(::cs_main, c1.InitCoinsCache(1 << 23));
     BOOST_REQUIRE(c1.LoadGenesisBlock()); // Need at least one block loaded to be able to flush caches
 
@@ -44,18 +44,18 @@ BOOST_AUTO_TEST_CASE(validation_chainstate_resize_caches)
 
         BOOST_CHECK(c1.CoinsTip().HaveCoinInCache(outpoint));
 
-        c1.ResizeCoinsCaches(
+        BOOST_REQUIRE(c1.ResizeCoinsCaches(
             1 << 24,  // upsizing the coinsview cache
             1 << 22  // downsizing the coinsdb cache
-        );
+        ));
 
         // View should still have the coin cached, since we haven't destructed the cache on upsize.
         BOOST_CHECK(c1.CoinsTip().HaveCoinInCache(outpoint));
 
-        c1.ResizeCoinsCaches(
+        BOOST_REQUIRE(c1.ResizeCoinsCaches(
             1 << 22,  // downsizing the coinsview cache
             1 << 23  // upsizing the coinsdb cache
-        );
+        ));
 
         // The view cache should be empty since we had to destruct to downsize.
         BOOST_CHECK(!c1.CoinsTip().HaveCoinInCache(outpoint));
@@ -74,8 +74,10 @@ BOOST_FIXTURE_TEST_CASE(chainstate_update_tip, TestChain100Setup)
 
     mineBlocks(10);
 
-    // After adding some blocks to the tip, best block should have changed.
-    BOOST_CHECK(get_notify_tip() != curr_tip);
+    // The notification must identify the new active tip, not merely a changed hash.
+    const uint256 active_tip = WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Tip()->GetBlockHash());
+    BOOST_CHECK(active_tip != curr_tip);
+    BOOST_CHECK(get_notify_tip() == active_tip);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

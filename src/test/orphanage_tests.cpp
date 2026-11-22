@@ -22,6 +22,7 @@
 
 BOOST_FIXTURE_TEST_SUITE(orphanage_tests, TestingSetup)
 
+
 class TxOrphanageTest : public TxOrphanage
 {
 public:
@@ -69,9 +70,9 @@ static CTransactionRef MakeTransactionSpending(const std::vector<COutPoint>& out
     // Ensure txid != wtxid
     tx.vin[0].scriptWitness.stack.push_back({1});
     tx.vout.resize(2);
-    tx.vout[0].nValue = CENT;
+    tx.vout[0].nValue = 1;
     tx.vout[0].scriptPubKey = GetScriptForDestination(PKHash(key.GetPubKey()));
-    tx.vout[1].nValue = 3 * CENT;
+    tx.vout[1].nValue = 3;
     tx.vout[1].scriptPubKey = GetScriptForDestination(WitnessV0KeyHash(key.GetPubKey()));
     return MakeTransactionRef(tx);
 }
@@ -93,6 +94,27 @@ static bool EqualTxns(const std::set<CTransactionRef>& set_txns, const std::vect
         if (!set_txns.contains(tx)) return false;
     }
     return true;
+}
+
+BOOST_AUTO_TEST_CASE(flooding_peer_evicts_its_own_orphans)
+{
+    FastRandomContext transactions{/*fDeterministic=*/true};
+    FastRandomContext eviction{/*fDeterministic=*/true};
+    TxOrphanage orphanage;
+    constexpr NodeId honest_peer{2};
+    constexpr NodeId flooding_peer{1};
+    const auto honest = MakeTransactionSpending({}, transactions);
+    BOOST_REQUIRE(orphanage.AddTx(honest, honest_peer));
+    for (int i = 0; i < 200; ++i) {
+        const auto flood = MakeTransactionSpending({}, transactions);
+        BOOST_REQUIRE(orphanage.AddTx(flood, flooding_peer));
+        orphanage.LimitOrphans(10, eviction);
+        BOOST_REQUIRE_MESSAGE(orphanage.HaveTx(honest->GetWitnessHash()),
+                              "honest orphan evicted after " << (i + 1) << " flooding inserts");
+        BOOST_CHECK_EQUAL(orphanage.UsageByPeer(honest_peer), GetTransactionWeight(*honest));
+        orphanage.SanityCheck();
+    }
+    BOOST_CHECK_EQUAL(orphanage.Size(), 10U);
 }
 
 BOOST_AUTO_TEST_CASE(DoS_mapOrphans)
@@ -124,7 +146,7 @@ BOOST_AUTO_TEST_CASE(DoS_mapOrphans)
         tx.vin[0].prevout.hash = Txid::FromUint256(m_rng.rand256());
         tx.vin[0].scriptSig << OP_1;
         tx.vout.resize(1);
-        tx.vout[0].nValue = i*CENT;
+        tx.vout[0].nValue = i;
         tx.vout[0].scriptPubKey = GetScriptForDestination(PKHash(key.GetPubKey()));
 
         orphanage.AddTx(MakeTransactionRef(tx), i);
@@ -140,7 +162,7 @@ BOOST_AUTO_TEST_CASE(DoS_mapOrphans)
         tx.vin[0].prevout.n = 0;
         tx.vin[0].prevout.hash = txPrev->GetHash();
         tx.vout.resize(1);
-        tx.vout[0].nValue = i*CENT;
+        tx.vout[0].nValue = i;
         tx.vout[0].scriptPubKey = GetScriptForDestination(PKHash(key.GetPubKey()));
         SignatureData empty;
         BOOST_CHECK(SignSignature(keystore, *txPrev, tx, 0, SIGHASH_ALL, empty));
@@ -155,7 +177,7 @@ BOOST_AUTO_TEST_CASE(DoS_mapOrphans)
 
         CMutableTransaction tx;
         tx.vout.resize(1);
-        tx.vout[0].nValue = 1*CENT;
+        tx.vout[0].nValue = 1;
         tx.vout[0].scriptPubKey = GetScriptForDestination(PKHash(key.GetPubKey()));
         tx.vin.resize(2777);
         for (unsigned int j = 0; j < tx.vin.size(); j++)
@@ -471,6 +493,7 @@ BOOST_AUTO_TEST_CASE(multiple_announcers)
 
         // Same with using AddTx for an existing tx, which is equivalent to using AddAnnouncer
         BOOST_CHECK(!orphanage.AddTx(ptx, node1));
+        BOOST_CHECK(orphanage.HaveTxFromPeer(ptx->GetWitnessHash(), node1));
         BOOST_CHECK_EQUAL(orphanage.Size(), expected_total_count);
 
         // if EraseForPeer is called for an orphan with multiple announcers, the orphanage should only
@@ -550,9 +573,18 @@ BOOST_AUTO_TEST_CASE(peer_worksets)
             assigned_peer = node2;
         }
 
-        // EraseForPeer also removes that tx from the workset.
-        orphanage.EraseForPeer(assigned_peer);
-        BOOST_CHECK_EQUAL(orphanage.GetTxToReconsider(node0), nullptr);
+        BOOST_CHECK(orphanage.GetTxToReconsider(assigned_peer) == tx_orphan);
+
+        // Requeue and verify EraseForPeer removes the selected peer's work.
+        orphanage.AddChildrenToWorkSet(*tx_missing_parent, det_rand);
+        NodeId requeued_peer = node0;
+        if (orphanage.HaveTxToReconsider(node1)) requeued_peer = node1;
+        if (orphanage.HaveTxToReconsider(node2)) requeued_peer = node2;
+        BOOST_REQUIRE(orphanage.HaveTxToReconsider(requeued_peer));
+        orphanage.EraseForPeer(requeued_peer);
+        for (NodeId node = node0; node <= node2; ++node) {
+            BOOST_CHECK_EQUAL(orphanage.GetTxToReconsider(node), nullptr);
+        }
 
         // Delete this tx, clearing the orphanage.
         BOOST_CHECK_EQUAL(orphanage.EraseTx(orphan_wtxid), 1);

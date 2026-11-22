@@ -129,7 +129,7 @@ public:
 
         std::vector<unsigned char> result;
         const bool neg = value < 0;
-        uint64_t absvalue = neg ? -value : value;
+        uint64_t absvalue = neg ? ~static_cast<uint64_t>(value) + 1 : static_cast<uint64_t>(value);
 
         while(absvalue)
         {
@@ -161,16 +161,21 @@ private:
       if (vch.empty())
           return 0;
 
-      int64_t result = 0;
-      for (size_t i = 0; i != vch.size(); ++i)
-          result |= static_cast<int64_t>(vch[i]) << 8*i;
-
-      // If the input vector's most significant byte is 0x80, remove it from
-      // the result's msb and return a negative.
-      if (vch.back() & 0x80)
-          return -((int64_t)(result & ~(0x80ULL << (8 * (vch.size() - 1)))));
-
-      return result;
+      if (vch.size() > 9) throw scriptnum10_error("script number overflow");
+      const bool negative = (vch.back() & 0x80) != 0;
+      uint64_t magnitude = 0;
+      for (size_t i = 0; i < vch.size(); ++i) {
+          const uint8_t byte = i + 1 == vch.size() ? vch[i] & 0x7f : vch[i];
+          if (i == 8) {
+              if (byte != 0) throw scriptnum10_error("script number overflow");
+          } else {
+              magnitude |= uint64_t{byte} << (8 * i);
+          }
+      }
+      const uint64_t max_magnitude = static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+      if (magnitude > max_magnitude + (negative ? 1U : 0U)) throw scriptnum10_error("script number overflow");
+      if (negative && magnitude == max_magnitude + 1U) return std::numeric_limits<int64_t>::min();
+      return negative ? -static_cast<int64_t>(magnitude) : static_cast<int64_t>(magnitude);
     }
 
     int64_t m_value;

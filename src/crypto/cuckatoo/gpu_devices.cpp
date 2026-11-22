@@ -17,6 +17,7 @@ std::mutex g_mutex;
 // A detached GUI discovery thread can still be listing during process teardown.
 // Keep the cache alive so that thread can never touch a destroyed map.
 auto* g_cache = new std::map<std::string, GpuDiscovery>;
+auto* g_last = new std::map<std::string, GpuDiscovery>;
 //! Guarded by g_mutex. Tests shorten this; production always uses kListingLimit.
 std::chrono::milliseconds g_listing_limit{kListingLimit};
 
@@ -108,6 +109,7 @@ std::optional<GpuDevice> ParseDeviceLine(std::string_view line)
         const auto key = token.substr(0, eq), value = token.substr(eq + 1);
         if (key == "backend") { out.backend = value; backend = !value.empty(); }
         else if (key == "id") { out.id = value; id = !value.empty(); }
+        else if (key == "alias") { out.alias = value; }
         else if (key == "type") { out.type = value; type = value == "gpu" || value == "cpu" || value == "accel"; }
         else if (key == "integrated") { if (value != "0" && value != "1") return std::nullopt; out.integrated = value == "1"; }
         else if (key == "mem") { if (!Decimal(value, out.mem)) return std::nullopt; }
@@ -124,7 +126,8 @@ std::optional<GpuDevice> ParseDeviceLine(std::string_view line)
         if (end == std::string_view::npos) break;
         pos = end + 1;
     }
-    if (!backend || !id || !type || !status || out.name.empty()) return std::nullopt;
+    if (!backend || !id || !type || !status) return std::nullopt;
+    if (out.name.empty()) out.name = out.id;
     return out;
 }
 
@@ -229,14 +232,16 @@ DeviceSelection SelectDevices(const std::vector<GpuDevice>& listed, const Device
         }
     } else {
         for (const auto& id : choice.ids) {
-            const auto found = std::find_if(listed.begin(), listed.end(), [&](const auto& d) { return d.id == id; });
+            const auto found = std::find_if(listed.begin(), listed.end(), [&](const auto& d) { return d.id == id || d.alias == id; });
             if (found == listed.end()) { out.missing.push_back(id); continue; }
             GpuDevice d = *found;
             if (d.type != "gpu") { d.status = DeviceStatus::kOther; d.reason = "not a graphics card"; out.unusable.push_back(std::move(d)); }
             else if (d.status == DeviceStatus::kOk) out.use.push_back(std::move(d));
             else out.unusable.push_back(std::move(d));
         }
-        for (const auto& d : listed) if (d.type == "gpu" && std::find(choice.ids.begin(), choice.ids.end(), d.id) == choice.ids.end()) {
+        for (const auto& d : listed) if (d.type == "gpu" &&
+            std::find(choice.ids.begin(), choice.ids.end(), d.id) == choice.ids.end() &&
+            (d.alias.empty() || std::find(choice.ids.begin(), choice.ids.end(), d.alias) == choice.ids.end())) {
             if (d.integrated) out.integrated_unchosen.push_back(d);
             else if (d.status == DeviceStatus::kOk) out.unchosen.push_back(d);
         }
@@ -277,6 +282,7 @@ GpuDiscovery DiscoverGpus(uint8_t edgebits)
     result.listing = helper ? ListDevices(*helper, g_listing_limit) : DeviceListing{};
     result.selection = SelectDevices(result.listing.devices, result.choice);
     result.situation = ClassifySituation(result.listing, result.choice, result.selection);
+    (*g_last)[key] = result;
     // A transient helper failure may recover without an application restart.
     // Keep stable outcomes cached, including absent helpers and loaders.
     if (result.listing.outcome != ListOutcome::kFailed && result.listing.outcome != ListOutcome::kTimedOut) {
@@ -285,10 +291,22 @@ GpuDiscovery DiscoverGpus(uint8_t edgebits)
     return result;
 }
 
+std::optional<GpuDiscovery> LastGpuDiscovery(uint8_t edgebits)
+{
+    std::lock_guard<std::mutex> lock{g_mutex};
+    const auto helper = GpuHelperFor(edgebits);
+    const char* configured = std::getenv("CUCKATOO_GPU_DEVICES");
+    const std::string key = helper.value_or("") + "\n" + (configured ? configured : "");
+    const auto found = g_last->find(key);
+    if (found == g_last->end()) return std::nullopt;
+    return found->second;
+}
+
 void ResetGpuDiscoveryForTesting()
 {
     std::lock_guard<std::mutex> lock{g_mutex};
     g_cache->clear();
+    g_last->clear();
     g_listing_limit = kListingLimit;
     auto& r = Registry();
     std::lock_guard<std::mutex> rlock{r.mutex};

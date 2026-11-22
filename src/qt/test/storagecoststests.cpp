@@ -104,7 +104,9 @@ void StorageCostsTests::consensusReviewQuotesTheDerivedArchivalTotal()
     QVERIFY(!text.contains(QStringLiteral("152")));
 
     ConsensusReviewPage distinct(DISTINCT_BLOCKCHAIN_GB, DISTINCT_CHAIN_STATE_GB, nullptr);
-    QVERIFY(distinct.findChild<QLabel*>(QStringLiteral("consensusStorageCostValue"))->text().contains(DISTINCT_SPLIT));
+    QLabel* distinct_cost = distinct.findChild<QLabel*>(QStringLiteral("consensusStorageCostValue"));
+    QVERIFY(distinct_cost);
+    QVERIFY(distinct_cost->text().contains(DISTINCT_SPLIT));
 }
 
 //! The defect was never one wrong number -- it was two adjacent screens disagreeing with

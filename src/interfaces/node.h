@@ -70,6 +70,12 @@ struct MiningStatus {
     };
     std::vector<Device> devices;
     bool active{false};
+    //! F-610: whether the miner may start before any peer has sent headers
+    //! (-minewithoutpeers). Always false on main.
+    bool mines_without_peers{true};
+    //! F-610: armed, but waiting until this node has caught up with the network
+    //! before it builds a block.
+    bool waiting_for_sync{false};
     std::string address;                 //!< payout address (empty if never started)
     std::string payout_script;           //!< payout script, lowercase hex (empty if never started)
     int64_t blocks_found{0};
@@ -85,7 +91,7 @@ struct MiningStatus {
     //! Chain-dependent base for transaction PoW at the current tip, in Cuckatoo
     //! cycles. This is the day-one cost of sending a transaction on a feeless chain,
     //! so it is reported alongside mining telemetry rather than buried in a debug
-    //! RPC. Stage 2 made required work per-transaction, so a sender's actual bill is
+    //! RPC. Per-transaction work pricing made required work per-transaction, so a sender's actual bill is
     //! this scaled by their own serialized bytes and net UTXO creation -- there is no
     //! single "required work" at a tip to publish any more. See RequiredTxWork.
     double base_tx_work{1.0};

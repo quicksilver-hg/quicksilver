@@ -86,6 +86,9 @@ CASE_END = re.compile(r"^\}")
 # every shape the solver contract has needed so far, in both dialects.
 # --------------------------------------------------------------------------
 ALLOWED_WHOLE = {
+    # -- GAP: /dev/full is a Linux device; Windows still needs a native failed-write fixture.
+    ("src/test/settings_tests.cpp", "WriteFailureKeepsOldFile"): "GAP: /dev/full write failure has no Windows device equivalent",
+    ("src/test/settings_tests.cpp", "WriteFailureReported"): "GAP: /dev/full write failure has no Windows device equivalent",
     # -- BENIGN below: the API contract exists only on Windows.
     ("src/test/util_tests.cpp", "acp_to_utf16_ascii"): "BENIGN: exercises the Win32 CP_ACP decode, which exists only on Windows",
     ("src/test/util_tests.cpp", "acp_to_utf16_empty"): "BENIGN: empty input of the Win32 CP_ACP decode makes no API call",

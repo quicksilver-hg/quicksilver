@@ -165,9 +165,30 @@ void TxOrphanage::LimitOrphans(unsigned int max_orphans, FastRandomContext& rng)
     }
     while (m_orphans.size() > max_orphans)
     {
-        // Evict a random orphan:
-        size_t randompos = rng.randrange(m_orphan_list.size());
-        EraseTx(m_orphan_list[randompos]->first);
+        NodeId busiest_peer{};
+        unsigned int max_usage{0};
+        size_t peer_ties{0};
+        for (const auto& [peer, info] : m_peer_orphanage_info) {
+            if (info.m_total_usage > max_usage) {
+                max_usage = info.m_total_usage;
+                busiest_peer = peer;
+                peer_ties = 1;
+            } else if (info.m_total_usage == max_usage && max_usage != 0 && rng.randrange(++peer_ties) == 0) {
+                busiest_peer = peer;
+            }
+        }
+        OrphanMap::iterator victim = m_orphans.end();
+        if (Assume(max_usage != 0)) {
+            size_t orphan_count{0};
+            for (const auto& candidate : m_orphan_list) {
+                if (candidate->second.announcers.contains(busiest_peer) && rng.randrange(++orphan_count) == 0) {
+                    victim = candidate;
+                }
+            }
+        }
+        // Every orphan has an announcer, so a victim is always found; fall back to a random orphan rather than abort.
+        if (!Assume(victim != m_orphans.end())) victim = m_orphan_list[rng.randrange(m_orphan_list.size())];
+        EraseTx(victim->first);
         ++nEvicted;
     }
     if (nEvicted > 0) LogDebug(HgLog::TXPACKAGES, "orphanage overflow, removed %u tx\n", nEvicted);

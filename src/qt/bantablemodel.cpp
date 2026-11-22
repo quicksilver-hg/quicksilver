@@ -110,10 +110,11 @@ int BanTableModel::columnCount(const QModelIndex &parent) const
 
 QVariant BanTableModel::data(const QModelIndex &index, int role) const
 {
-    if(!index.isValid())
+    if (!index.isValid() || index.model() != this || index.row() < 0 || index.row() >= priv->size() ||
+        index.column() < 0 || index.column() >= columnCount({}))
         return QVariant();
 
-    CCombinedBan *rec = static_cast<CCombinedBan*>(index.internalPointer());
+    CCombinedBan* rec = priv->index(index.row());
 
     const auto column = static_cast<ColumnIndex>(index.column());
     if (role == Qt::DisplayRole) {
@@ -153,18 +154,34 @@ Qt::ItemFlags BanTableModel::flags(const QModelIndex &index) const
 
 QModelIndex BanTableModel::index(int row, int column, const QModelIndex &parent) const
 {
-    Q_UNUSED(parent);
-    CCombinedBan *data = priv->index(row);
-
-    if (data)
-        return createIndex(row, column, data);
+    if (!parent.isValid() && row >= 0 && row < rowCount({}) && column >= 0 && column < columnCount({}))
+        return createIndex(row, column);
     return QModelIndex();
 }
 
 void BanTableModel::refresh()
 {
     Q_EMIT layoutAboutToBeChanged();
+    const auto old_indexes = persistentIndexList();
+    QList<CSubNet> old_subnets;
+    old_subnets.reserve(old_indexes.size());
+    for (const auto& index : old_indexes) {
+        old_subnets.append(priv->cachedBanlist.at(index.row()).subnet);
+    }
     priv->refreshBanlist(m_node);
+    QModelIndexList new_indexes;
+    new_indexes.reserve(old_indexes.size());
+    for (int i = 0; i < old_indexes.size(); ++i) {
+        QModelIndex mapped;
+        for (int row = 0; row < priv->size(); ++row) {
+            if (priv->cachedBanlist.at(row).subnet == old_subnets.at(i)) {
+                mapped = index(row, old_indexes.at(i).column(), {});
+                break;
+            }
+        }
+        new_indexes.append(mapped);
+    }
+    changePersistentIndexList(old_indexes, new_indexes);
     Q_EMIT layoutChanged();
 }
 
@@ -182,6 +199,6 @@ bool BanTableModel::shouldShow()
 
 bool BanTableModel::unban(const QModelIndex& index)
 {
-    CCombinedBan* ban{static_cast<CCombinedBan*>(index.internalPointer())};
-    return ban != nullptr && m_node.unban(ban->subnet);
+    if (!index.isValid() || index.model() != this || index.row() < 0 || index.row() >= priv->size()) return false;
+    return m_node.unban(priv->cachedBanlist.at(index.row()).subnet);
 }

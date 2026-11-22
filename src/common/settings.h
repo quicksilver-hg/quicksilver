@@ -17,14 +17,10 @@ class UniValue;
 
 namespace common {
 
-//! Settings value type (string/integer/boolean/null variant).
+//! JSON-compatible settings value (scalar, array, or object).
 //!
-//! @note UniValue is used here for convenience and because it can be easily
-//!       serialized in a readable format. But any other variant type that can
-//!       be assigned strings, int64_t, and bool values and has get_str(),
-//!       getInt<int64_t>(), get_bool(), isNum(), isBool(), isFalse(), isTrue() and
-//!       isNull() methods can be substituted if there's a need to move away
-//!       from UniValue.
+//! @note UniValue provides the JSON serialization and container access used by
+//!       settings file I/O, as well as scalar access for argument merging.
 using SettingsValue = UniValue;
 
 //! Stored settings. This struct combines settings from the command line, a
@@ -91,7 +87,7 @@ struct SettingsSpan {
     explicit SettingsSpan(const std::vector<SettingsValue>& vec) noexcept;
     const SettingsValue* begin() const; //!< Pointer to first non-negated value.
     const SettingsValue* end() const;   //!< Pointer to end of values.
-    bool empty() const;                 //!< True if there are any non-negated values.
+    bool empty() const;                 //!< True if there are no non-negated values.
     bool last_negated() const;          //!< True if the last value is negated.
     size_t negated() const;             //!< Number of negated values.
 
@@ -101,7 +97,7 @@ struct SettingsSpan {
 
 //! Map lookup helper.
 template <typename Map, typename Key>
-auto FindKey(Map&& map, Key&& key) -> decltype(&map.at(key))
+auto FindKey(Map& map, Key&& key) -> decltype(&map.at(key))
 {
     auto it = map.find(key);
     return it == map.end() ? nullptr : &it->second;

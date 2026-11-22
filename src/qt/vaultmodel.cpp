@@ -180,8 +180,9 @@ bool VaultModel::validateAddress(const QString& address) const
     return IsValidDestinationString(address.toStdString());
 }
 
-VaultModel::SendCoinsReturn VaultModel::prepareTransaction(VaultModelTransaction& transaction, const CCoinControl& coinControl, const std::function<void(uint32_t nonce)>& tx_proof_progress)
+VaultModel::SendCoinsReturn VaultModel::prepareTransaction(VaultModelTransaction& transaction, const CCoinControl& coinControl, const std::function<void(uint32_t nonce)>& tx_proof_progress, std::shared_ptr<ProofOfWorkAttempt> attempt)
 {
+    if (!attempt) attempt = beginProofOfWorkAttempt();
     CAmount total = 0;
     QList<SendCoinsRecipient> recipients = transaction.getRecipients();
     std::vector<CRecipient> vecSend;
@@ -236,11 +237,8 @@ VaultModel::SendCoinsReturn VaultModel::prepareTransaction(VaultModelTransaction
         int nChangePosRet = -1;
 
         auto& newTx = transaction.getWtx();
-        // Marked in flight for the whole call, not merely the grind: coin selection
-        // and signing hold cs_vault too, and an unload is no safer during those.
-        ProofOfWorkScope proof_scope(*this);
         const auto& res = m_vault->createTransaction(vecSend, coinControl, /*sign=*/!vault().privateKeysDisabled(), nChangePosRet, tx_proof_progress,
-                                                     [this] { return proofOfWorkCancelRequested(); });
+                                                     [attempt] { return attempt->cancelRequested(); });
         newTx = res ? *res : nullptr;
 
         if (!newTx) {
@@ -373,11 +371,9 @@ bool VaultModel::setVaultLocked(bool locked, const SecureString& passPhrase)
 bool VaultModel::changePassphrase(const SecureString& oldPass, const SecureString& newPass)
 {
     m_vault->lock(); // Make sure vault is locked before attempting pass change
-    const bool changed{m_vault->changeVaultPassphrase(oldPass, newPass)};
-    // The lock status is Locked before and after, so updateStatus() would not notice; but the master key
-    // records changed, and with them the backup state (F-567: an earlier backup no longer matches).
-    if (changed) Q_EMIT backupStateChanged();
-    return changed;
+    // The lock status is Locked before and after, so updateStatus() would not notice. The vault itself
+    // reports the master-key write (F-613), so Home hears of it as it does of an RPC change.
+    return m_vault->changeVaultPassphrase(oldPass, newPass);
 }
 
 // Handlers for core signals
@@ -435,6 +431,14 @@ static void NotifyTransferExpired(VaultModel* vaultmodel)
     assert(invoked);
 }
 
+// F-613: the vault may fire this with cs_vault held, mid-transaction, from any thread. Queue it so Home
+// reads the backup state after the write's caller has returned.
+static void NotifyBackupStateChanged(VaultModel* vaultmodel)
+{
+    bool invoked = QMetaObject::invokeMethod(vaultmodel, "backupStateChanged", Qt::QueuedConnection);
+    assert(invoked);
+}
+
 static void NotifyCanGetAddressesChanged(VaultModel* vaultmodel)
 {
     bool invoked = QMetaObject::invokeMethod(vaultmodel, "canGetAddressesChanged");
@@ -451,6 +455,7 @@ void VaultModel::subscribeToCoreSignals()
     m_handler_show_progress = m_vault->handleShowProgress(std::bind(ShowProgress, this, std::placeholders::_1, std::placeholders::_2));
     m_handler_can_get_addrs_changed = m_vault->handleCanGetAddressesChanged(std::bind(NotifyCanGetAddressesChanged, this));
     m_handler_transfer_expired = m_vault->handleTransferExpired(std::bind(NotifyTransferExpired, this));
+    m_handler_backup_state_changed = m_vault->handleBackupStateChanged(std::bind(NotifyBackupStateChanged, this));
 }
 
 void VaultModel::unsubscribeFromCoreSignals()
@@ -463,6 +468,7 @@ void VaultModel::unsubscribeFromCoreSignals()
     m_handler_show_progress->disconnect();
     m_handler_can_get_addrs_changed->disconnect();
     m_handler_transfer_expired->disconnect();
+    m_handler_backup_state_changed->disconnect();
 }
 
 // VaultModel::UnlockContext implementation
@@ -521,18 +527,30 @@ VaultModel::UnlockContext::~UnlockContext()
     }
 }
 
-VaultModel::ProofOfWorkScope::ProofOfWorkScope(VaultModel& model) : m_model(model)
+std::shared_ptr<VaultModel::ProofOfWorkAttempt> VaultModel::beginProofOfWorkAttempt()
 {
-    // Clearing on the first grind rather than on the last one to end means a cancel
-    // requested while nothing was running cannot poison the transfer that follows.
-    if (m_model.m_proofs_in_flight.fetch_add(1) == 0) {
-        m_model.m_proof_cancel_requested = false;
-    }
+    auto attempt = std::shared_ptr<ProofOfWorkAttempt>(new ProofOfWorkAttempt(*this));
+    LOCK(m_proof_mutex);
+    m_proof_attempts.insert(attempt.get());
+    return attempt;
 }
 
-VaultModel::ProofOfWorkScope::~ProofOfWorkScope()
+VaultModel::ProofOfWorkAttempt::~ProofOfWorkAttempt()
 {
-    m_model.m_proofs_in_flight.fetch_sub(1);
+    LOCK(m_model.m_proof_mutex);
+    m_model.m_proof_attempts.erase(this);
+}
+
+bool VaultModel::proofOfWorkInFlight() const
+{
+    LOCK(m_proof_mutex);
+    return !m_proof_attempts.empty();
+}
+
+void VaultModel::requestProofOfWorkCancel()
+{
+    LOCK(m_proof_mutex);
+    for (ProofOfWorkAttempt* attempt : m_proof_attempts) attempt->cancel();
 }
 
 void VaultModel::displayAddress(std::string sAddress) const
@@ -576,11 +594,9 @@ vault::BackupState VaultModel::backupState() const
 
 util::Result<vault::AgentAllotmentRecord> VaultModel::recordAgentAllotmentSetup(const QString& label, CAmount funding_limit, CAmount daily_limit)
 {
-    auto record{m_vault->recordAgentAllotmentSetup(label.toStdString(), funding_limit, daily_limit)};
     // The allotment adds a descriptor an earlier backup does not hold. An unencrypted or unlocked vault
-    // asks for no unlock, so no lock change tells Home (F-567).
-    if (record) Q_EMIT backupStateChanged();
-    return record;
+    // asks for no unlock, so no lock change tells Home; the vault reports the descriptor write (F-613).
+    return m_vault->recordAgentAllotmentSetup(label.toStdString(), funding_limit, daily_limit);
 }
 
 std::vector<vault::AgentAllotmentRecord> VaultModel::listAgentAllotmentRecords() const
@@ -662,11 +678,6 @@ bool VaultModel::canCreateTransactionsNow()
 bool VaultModel::isMultivault() const
 {
     return m_node.vaultLoader().getVaults().size() > 1;
-}
-
-void VaultModel::refresh(bool pk_hash_only)
-{
-    addressTableModel = new AddressTableModel(this, pk_hash_only);
 }
 
 uint256 VaultModel::getLastBlockProcessed() const

@@ -26,6 +26,7 @@
 
 #ifdef ENABLE_VAULT
 #include <qt/vaultcontroller.h>
+#include <logging.h>
 #include <qt/vaultframe.h>
 #include <qt/vaultmodel.h>
 #include <qt/vaultview.h>
@@ -694,7 +695,7 @@ void QuicksilverGUI::createMenuBar()
     QAction* minimize_action = window_menu->addAction(tr("&Minimize"));
     minimize_action->setShortcut(QKeySequence(tr("Ctrl+M")));
     connect(minimize_action, &QAction::triggered, [] {
-        QApplication::activeWindow()->showMinimized();
+        if (QWidget* window = QApplication::activeWindow()) window->showMinimized();
     });
     connect(qApp, &QApplication::focusWindowChanged, this, [minimize_action] (QWindow* window) {
         minimize_action->setEnabled(window != nullptr && (window->flags() & Qt::Dialog) != Qt::Dialog && window->windowState() != Qt::WindowMinimized);
@@ -704,6 +705,7 @@ void QuicksilverGUI::createMenuBar()
     QAction* zoom_action = window_menu->addAction(tr("Zoom"));
     connect(zoom_action, &QAction::triggered, [] {
         QWindow* window = qApp->focusWindow();
+        if (!window) return;
         if (window->windowState() != Qt::WindowMaximized) {
             window->showMaximized();
         } else {
@@ -1174,7 +1176,7 @@ void QuicksilverGUI::setClientModel(ClientModel *_clientModel, interfaces::Block
             trayIcon->setVisible(optionsModel->getShowTrayIcon());
         }
 
-        m_mask_values_action->setChecked(_clientModel->getOptionsModel()->getOption(OptionsModel::OptionID::MaskValues).toBool());
+        if (optionsModel) m_mask_values_action->setChecked(optionsModel->getOption(OptionsModel::OptionID::MaskValues).toBool());
     } else {
         // Shutdown requested, disable menus
         if (trayIconMenu)
@@ -1193,7 +1195,7 @@ void QuicksilverGUI::setClientModel(ClientModel *_clientModel, interfaces::Block
         m_mining_status_word.clear();
         refreshStatusStrip();
 #endif // ENABLE_VAULT
-        unitDisplayControl->setOptionsModel(nullptr);
+        unitDisplayControl->setOptionsModel(m_options_model);
         // Disable top bar menu actions
         appMenuBar->clear();
     }
@@ -1212,6 +1214,7 @@ void QuicksilverGUI::setVaultController(VaultController* vault_controller, bool 
 {
     assert(!m_vault_controller);
     assert(vault_controller);
+    assert(vaultFrame);
 
     m_vault_controller = vault_controller;
     vaultFrame->setVaultRuntimeAvailable(true);
@@ -1425,7 +1428,15 @@ void QuicksilverGUI::beginConsensusActivation()
         if (!m_vault_controller) return;
         m_vault_controller->stopProofOfWork([this] {
             if (!m_vault_controller) return;
-            m_vault_controller->closeAllVaultsForHandover([this] {
+            m_vault_controller->closeAllVaultsForHandover([this](bool ok) {
+                if (!ok) {
+                    LogWarning(HgLog::QT, "Could not close every vault for consensus handover\n");
+                    if (vaultFrame) {
+                        vaultFrame->revertConsensusOptIn();
+                        gotoHomePage();
+                    }
+                    return;
+                }
                 Q_EMIT consensusActivationRequested();
             });
         });
@@ -1769,6 +1780,7 @@ void QuicksilverGUI::setNetworkActive(bool network_active)
 void QuicksilverGUI::setOptionsModel(OptionsModel* options_model)
 {
     m_options_model = options_model;
+    unitDisplayControl->setOptionsModel(options_model);
 }
 
 void QuicksilverGUI::openOptionsDialogWithTab(OptionsDialog::Tab tab)
@@ -2365,10 +2377,10 @@ void UnitDisplayStatusBarControl::createContextMenu()
 /** Lets the control know about the Options Model (and its signals) */
 void UnitDisplayStatusBarControl::setOptionsModel(OptionsModel *_optionsModel)
 {
+    if (optionsModel) disconnect(optionsModel, &OptionsModel::displayUnitChanged, this, &UnitDisplayStatusBarControl::updateDisplayUnit);
+    optionsModel = _optionsModel;
     if (_optionsModel)
     {
-        this->optionsModel = _optionsModel;
-
         // be aware of a display unit change reported by the OptionsModel object.
         connect(_optionsModel, &OptionsModel::displayUnitChanged, this, &UnitDisplayStatusBarControl::updateDisplayUnit);
 
@@ -2393,7 +2405,7 @@ void UnitDisplayStatusBarControl::onDisplayUnitsClicked(const QPoint& point)
 /** Tells underlying optionsModel to update its current display unit. */
 void UnitDisplayStatusBarControl::onMenuSelection(QAction* action)
 {
-    if (action)
+    if (action && optionsModel)
     {
         optionsModel->setDisplayUnit(action->data());
     }

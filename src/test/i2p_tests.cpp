@@ -17,7 +17,9 @@
 #include <boost/test/unit_test.hpp>
 
 #include <memory>
+#include <functional>
 #include <string>
+#include <vector>
 
 /// Save the log level and the value of CreateSock and restore them when the test ends.
 class EnvTestingSetup : public BasicTestingSetup
@@ -170,6 +172,131 @@ BOOST_AUTO_TEST_CASE(damaged_private_key)
             BOOST_CHECK(!session.Connect(CService{}, conn, proxy_error));
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(session_create_error_redacts_private_key)
+{
+    const auto key_path = m_args.GetDataDirNet() / "test_i2p_private_key_rejected";
+    std::string key(387, 'J');
+    key[385] = key[386] = '\0';
+    BOOST_REQUIRE(WriteBinaryFile(key_path, key));
+    CreateSock = [](int, int, int) {
+        return std::make_unique<StaticContentsSock>(
+            "HELLO REPLY RESULT=OK VERSION=3.1\n"
+            "SESSION STATUS RESULT=I2P_ERROR PRIV=reply-private-sentinel\n");
+    };
+
+    CThreadInterrupt interrupt;
+    const Proxy sam_proxy{CService{in6_addr(IN6ADDR_LOOPBACK_INIT), 7656}, false};
+    i2p::sam::Session session(key_path, sam_proxy, &interrupt);
+    std::string logged;
+    auto callback = LogInstance().PushBackCallback([&](const std::string& line) { logged += line; });
+    i2p::Connection conn;
+    bool proxy_error;
+    BOOST_CHECK(!session.Connect(CService{}, conn, proxy_error));
+    LogInstance().DeleteCallback(callback);
+
+    BOOST_CHECK(logged.find("SESSION CREATE ...") != std::string::npos);
+    BOOST_CHECK(logged.find("SkpKSkpKSkpKSkpK") == std::string::npos);
+    BOOST_CHECK(logged.find("reply-private-sentinel") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(decode_error_redacts_input)
+{
+    CreateSock = [](int, int, int) {
+        return std::make_unique<StaticContentsSock>(
+            "HELLO REPLY RESULT=OK VERSION=3.1\n"
+            "SESSION STATUS RESULT=OK DESTINATION=invalid-private-sentinel!\n");
+    };
+    CThreadInterrupt interrupt;
+    const Proxy sam_proxy{CService{in6_addr(IN6ADDR_LOOPBACK_INIT), 7656}, false};
+    i2p::sam::Session session(sam_proxy, &interrupt);
+    std::string logged;
+    auto callback = LogInstance().PushBackCallback([&](const std::string& line) { logged += line; });
+    i2p::Connection conn;
+    bool proxy_error;
+    BOOST_CHECK(!session.Connect(CService{}, conn, proxy_error));
+    LogInstance().DeleteCallback(callback);
+    BOOST_CHECK(logged.find("Cannot decode Base64") != std::string::npos);
+    BOOST_CHECK(logged.find("invalid-private-sentinel!") == std::string::npos);
+}
+
+class SessionControlSock final : public StaticContentsSock
+{
+public:
+    SessionControlSock(const std::string& contents, bool& connected) : StaticContentsSock(contents), m_connected(connected) {}
+    bool IsConnected(std::string&) const override { return m_connected; }
+    SessionControlSock& operator=(Sock&&) override { assert(false); return *this; }
+private:
+    bool& m_connected;
+};
+
+class ReplacingReplySock final : public StaticContentsSock
+{
+public:
+    ReplacingReplySock(const std::string& contents, std::function<void()> replace)
+        : StaticContentsSock(contents), m_replace(std::move(replace)) {}
+    ReplacingReplySock& operator=(Sock&&) override { assert(false); return *this; }
+    ssize_t Recv(void* buf, size_t len, int flags) const override
+    {
+        const ssize_t count = StaticContentsSock::Recv(buf, len, flags);
+        if (count > 0 && !(flags & MSG_PEEK) && !m_replaced) {
+            m_seen.append(static_cast<const char*>(buf), static_cast<size_t>(count));
+            if (m_seen.find("STREAM STATUS RESULT=INVALID_ID\n") != std::string::npos) {
+                m_replaced = true;
+                m_replace();
+            }
+        }
+        return count;
+    }
+private:
+    const std::function<void()> m_replace;
+    mutable std::string m_seen;
+    mutable bool m_replaced{false};
+};
+
+BOOST_AUTO_TEST_CASE(stale_invalid_id_keeps_replacement_session)
+{
+    const auto key_path = m_args.GetDataDirNet() / "test_i2p_private_key_stale_id";
+    std::string key(387, 'J');
+    key[385] = key[386] = '\0';
+    BOOST_REQUIRE(WriteBinaryFile(key_path, key));
+
+    CThreadInterrupt interrupt;
+    const Proxy sam_proxy{CService{in6_addr(IN6ADDR_LOOPBACK_INIT), 7656}, false};
+    i2p::sam::Session session(key_path, sam_proxy, &interrupt);
+    bool old_connected{true};
+    bool new_connected{true};
+    bool replacement_listened{false};
+    size_t sockets{0};
+    CreateSock = [&](int, int, int) -> std::unique_ptr<Sock> {
+        ++sockets;
+        if (sockets == 1) return std::make_unique<SessionControlSock>(
+            "HELLO REPLY RESULT=OK VERSION=3.1\nSESSION STATUS RESULT=OK\n", old_connected);
+        if (sockets == 2) return std::make_unique<ReplacingReplySock>(
+            "HELLO REPLY RESULT=OK VERSION=3.1\n"
+            "NAMING REPLY RESULT=OK VALUE=public-destination\n"
+            "STREAM STATUS RESULT=INVALID_ID\n",
+            [&] {
+                old_connected = false;
+                i2p::Connection listener;
+                replacement_listened = session.Listen(listener);
+            });
+        if (sockets == 3) return std::make_unique<SessionControlSock>(
+            "HELLO REPLY RESULT=OK VERSION=3.1\nSESSION STATUS RESULT=OK\n", new_connected);
+        return std::make_unique<StaticContentsSock>(
+            "HELLO REPLY RESULT=OK VERSION=3.1\nSTREAM STATUS RESULT=OK\n");
+    };
+
+    CNetAddr peer;
+    BOOST_REQUIRE(peer.SetSpecial(std::string(52, 'a') + ".b32.i2p"));
+    i2p::Connection conn;
+    bool proxy_error;
+    BOOST_CHECK(!session.Connect(CService{peer, I2P_SAM31_PORT}, conn, proxy_error));
+    BOOST_CHECK(replacement_listened);
+    i2p::Connection later_listener;
+    BOOST_CHECK(session.Listen(later_listener));
+    BOOST_CHECK_EQUAL(sockets, 5U);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

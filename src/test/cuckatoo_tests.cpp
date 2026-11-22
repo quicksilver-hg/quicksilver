@@ -17,14 +17,13 @@ BOOST_AUTO_TEST_CASE(proofhash_is_deterministic_and_binds_every_edge)
 {
     cuckatoo::Cycle a{};
     for (uint32_t i = 0; i < cuckatoo::PROOFSIZE; ++i) a[i] = i + 1;
-    cuckatoo::Cycle b = a;
-    b[41] = 99999;  // change one edge
-
     const uint256 ha = cuckatoo::CuckatooProofHash(a);
-    const uint256 hb = cuckatoo::CuckatooProofHash(b);
-
     BOOST_CHECK(ha == cuckatoo::CuckatooProofHash(a));  // deterministic
-    BOOST_CHECK(ha != hb);                              // every edge matters
+    for (size_t i = 0; i < cuckatoo::PROOFSIZE; ++i) {
+        cuckatoo::Cycle changed = a;
+        changed[i] ^= 1;
+        BOOST_CHECK(ha != cuckatoo::CuckatooProofHash(changed));
+    }
     BOOST_CHECK(ha != uint256::ZERO);
 }
 
@@ -76,7 +75,7 @@ BOOST_AUTO_TEST_CASE(blockheader_roundtrips_cycle_and_binds_hash)
     DataStream ds;
     ds << h;
     // 84-byte pre-pow + 42 * 4-byte edges = 252 bytes. (Was 80/248 before nCongestion
-    // entered the header in #5c-1 Phase 2 — a spec change, not a loosened bound.)
+    // entered the header in header-field congestion pricing — a spec change, not a loosened bound.)
     BOOST_CHECK_EQUAL(ds.size(), 252u);
 
     CBlockHeader r;
@@ -164,22 +163,19 @@ BOOST_AUTO_TEST_CASE(cuckatoo_solve_bytes_28_dispatches)
     // the users are GPU-running agents). Recurring a full solve here would cripple
     // the suite; the committed GOLDEN28 vector below is what proves solve/verify
     // correctness at this size. Here we only assert the E28 path links, allocates
-    // its context, and routes through dispatch (max_attempts=0 → no solve) without
-    // tripping the default-case assert. Solve correctness at E28 is structurally
-    // identical to the E19 Bytes solver proven above.
+    // through the zero-attempt dispatch path without solving or allocating a
+    // context. A bounded E28 solve would require GPU-class resources.
     std::vector<unsigned char> pre(40, 0xCD);
     cuckatoo::Cycle cyc{};
     uint32_t won = 0;
     const bool found = cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), /*edgebits=*/28,
                                                     /*start=*/0, /*max=*/0, cyc, won);
-    BOOST_CHECK(!found);  // 0 attempts -> no cycle; proves the 28 path links + routes
+    BOOST_CHECK(!found);  // 0 attempts -> no cycle
 }
 
 // Golden EDGEBITS-28 solution, captured at the shipped graph size. This is what
-// makes cross-platform parity a standing property rather than a one-off event: it
-// re-verifies on every build on every platform, so a solver that diverges between
-// Linux and Windows fails the unit suite instead of failing in production. It also
-// discharges the committed-vector debt left over from the E29 cross-platform work.
+// checks the consensus verifier on every platform. Solver parity needs a real
+// solve, which the hardware-gated GPU parity suite exercises separately.
 //
 // Reproducible: 80-byte pre-image, ASCII "QUICKSILVER-E28-GOLDEN-91" at offset 0
 // and zero elsewhere, solved at nonce 0. Bytes 76..79 are zero, which IS nonce 0

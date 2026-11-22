@@ -10,7 +10,13 @@
 #include <qt/optionsmodel.h>
 #include <univalue.h>
 
+#include <QMap>
 #include <QObject>
+#include <QString>
+#include <QVariant>
+
+#include <optional>
+#include <string>
 
 //! F-595: keeps the real bundled helper off the build machine's hardware for the
 //! whole test binary. A helper a test named itself still runs.
@@ -25,6 +31,7 @@ public:
 private Q_SLOTS:
     void optionsUseBenchPanelAndExplainAutomaticThreads();
     void init(); // called before each test function execution.
+    void cleanup(); // called after each test function execution, failed or not.
     void leftoverQSettingsKeysAreIgnored();
     void legacyDisplayUnitSettingIsIgnored();
     void displayUnitsAreFocused();
@@ -69,6 +76,9 @@ private Q_SLOTS:
 private:
     interfaces::Node& m_node;
     common::Settings m_previous_settings;
+    //! settings.json as this class found it (nullopt: absent).
+    std::optional<std::string> m_previous_settings_file;
+    QMap<QString, QVariant> m_previous_qsettings;
 };
 
 #endif // QUICKSILVER_QT_TEST_OPTIONTESTS_H

@@ -804,8 +804,9 @@ static bool rest_getutxos(const std::any& context, HTTPRequest* req, const std::
     switch (rf) {
     case RESTResponseFormat::HEX: {
         // convert hex to bin, continue then with bin part
-        std::vector<unsigned char> strRequestV = ParseHex(strRequestMutable);
-        strRequestMutable.assign(strRequestV.begin(), strRequestV.end());
+        auto bytes = TryParseHex<uint8_t>(strRequestMutable);
+        if (!bytes) return RESTERR(req, HTTP_BAD_REQUEST, "Parse error");
+        strRequestMutable.assign(bytes->begin(), bytes->end());
         [[fallthrough]];
     }
 
@@ -817,10 +818,10 @@ static bool rest_getutxos(const std::any& context, HTTPRequest* req, const std::
                 if (fInputParsed) //don't allow sending input over URI and HTTP RAW DATA
                     return RESTERR(req, HTTP_BAD_REQUEST, "Combination of URI scheme inputs and raw post data is not allowed");
 
-                DataStream oss{};
-                oss << strRequestMutable;
+                DataStream oss{MakeByteSpan(strRequestMutable)};
                 oss >> fCheckRelayPool;
                 oss >> vOutPoints;
+                if (!oss.empty()) return RESTERR(req, HTTP_BAD_REQUEST, "Parse error");
             }
         } catch (const std::ios_base::failure&) {
             // abort in case of unreadable binary data
@@ -838,6 +839,9 @@ static bool rest_getutxos(const std::any& context, HTTPRequest* req, const std::
         return RESTERR(req, HTTP_NOT_FOUND, "output format not found (available: " + AvailableDataFormatsString() + ")");
     }
     }
+
+    if (vOutPoints.empty())
+        return RESTERR(req, HTTP_BAD_REQUEST, "Error: empty request");
 
     // limit max outpoints
     if (vOutPoints.size() > MAX_GETUTXOS_OUTPOINTS)

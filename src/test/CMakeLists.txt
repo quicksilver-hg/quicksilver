@@ -119,6 +119,7 @@ add_executable(test_quicksilver
   txindex_tests.cpp
   txpackage_tests.cpp
   txpow_tests.cpp
+  trust_anchor_tests.cpp
   txwork_ranking_tests.cpp
   mint_tests.cpp
   mining_service_tests.cpp
@@ -266,11 +267,13 @@ add_all_test_targets()
 set_property(TEST gpu_parity_tests APPEND PROPERTY
   SKIP_REGULAR_EXPRESSION "CUCKATOO_GPU_SOLVER unset"
 )
-set_property(TEST opencl_parity_tests APPEND PROPERTY
-  SKIP_REGULAR_EXPRESSION "QS_OPENCL_TEST_DEVICE unset"
-)
-set_property(TEST opencl_two_device_tests APPEND PROPERTY
-  SKIP_REGULAR_EXPRESSION "QS_OPENCL_TWO_DEVICES unset"
-)
+if(QS_BUILD_GPU_HELPER)
+  set_property(TEST opencl_parity_tests APPEND PROPERTY
+    SKIP_REGULAR_EXPRESSION "QS_OPENCL_TEST_DEVICE unset"
+  )
+  set_property(TEST opencl_two_device_tests APPEND PROPERTY
+    SKIP_REGULAR_EXPRESSION "QS_OPENCL_TWO_DEVICES unset"
+  )
+endif()
 
 install_binary_component(test_quicksilver DEVELOPER_TOOL)

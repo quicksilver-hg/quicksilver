@@ -8,6 +8,7 @@
 #include <crypto/sha256.h>
 #include <tinyformat.h>
 #include <util/fs.h>
+#include <util/strencodings.h>
 #include <util/string.h>
 #include <test/util/setup_common.h>
 
@@ -16,7 +17,10 @@
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <locale>
 #include <sstream>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 using util::SplitString;
@@ -42,17 +46,29 @@ static void SetupBenchArgs(ArgsManager& argsman)
                                                            benchmark::ListPriorities(), DEFAULT_PRIORITY), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
 }
 
-// parses a comma separated list like "10,20,30,50"
+// parses a comma separated list like "10,20,30,50"; anything else is an error
 static std::vector<double> parseAsymptote(const std::string& str) {
-    std::stringstream ss(str);
     std::vector<double> numbers;
-    double d;
-    char c;
-    while (ss >> d) {
+    if (str.empty()) return numbers;
+    for (const auto& item : SplitString(str, ',')) {
+        std::istringstream ss{std::string{item}};
+        ss.imbue(std::locale::classic());
+        double d;
+        if (!(ss >> d) || !(ss >> std::ws).eof() || !(d > 0)) {
+            throw std::runtime_error(strprintf("-asymptote must be a comma-separated list of positive numbers, got '%s'", str));
+        }
         numbers.push_back(d);
-        ss >> c;
     }
     return numbers;
+}
+
+static std::chrono::milliseconds parseMinTime(const ArgsManager& argsman) {
+    const std::string str{argsman.GetArg("-min-time", util::ToString(DEFAULT_MIN_TIME_MS))};
+    const auto ms{ToIntegral<int64_t>(str)};
+    if (!ms || *ms <= 0) {
+        throw std::runtime_error(strprintf("-min-time must be a positive number of milliseconds, got '%s'", str));
+    }
+    return std::chrono::milliseconds{*ms};
 }
 
 static uint8_t parsePriorityLevel(const std::string& str) {
@@ -140,7 +156,7 @@ int main(int argc, char** argv)
         benchmark::Args args;
         args.asymptote = parseAsymptote(argsman.GetArg("-asymptote", ""));
         args.is_list_only = argsman.GetBoolArg("-list", false);
-        args.min_time = std::chrono::milliseconds(argsman.GetIntArg("-min-time", DEFAULT_MIN_TIME_MS));
+        args.min_time = parseMinTime(argsman);
         args.output_csv = argsman.GetPathArg("-output-csv");
         args.output_json = argsman.GetPathArg("-output-json");
         args.regex_filter = argsman.GetArg("-filter", DEFAULT_BENCH_FILTER);

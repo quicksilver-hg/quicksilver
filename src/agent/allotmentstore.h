@@ -8,6 +8,7 @@
 #include <agent/allotmentpolicy.h>
 #include <uint256.h>
 #include <util/fs.h>
+#include <util/fs_helpers.h>
 #include <util/result.h>
 
 #include <cstddef>
@@ -26,6 +27,7 @@ enum class AllotmentStoreResult {
     DESERIALIZE_FAILED,
     BAD_MAGIC,
     BAD_VERSION,
+    BAD_ACTIVITY,
     BAD_GENESIS,
     TOO_MANY_RECEIPTS,
     TOO_MANY_ACTIVITIES,
@@ -70,6 +72,9 @@ struct AllotmentReceiptDirectoryScanResult {
 
 const char* AllotmentStoreResultString(AllotmentStoreResult status);
 const char* AllotmentReceiptActivityTypeString(AllotmentReceiptActivityType type);
+
+/** Hold the receipt store directory lock until the process exits. */
+util::LockResult LockReceiptStoreDirectory(const fs::path& directory);
 
 AllotmentStoreResult SaveAllotmentReceiptStore(const AllotmentReceiptStoreData& data,
                                          const fs::path& path,

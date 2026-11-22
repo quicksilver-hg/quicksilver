@@ -140,7 +140,7 @@ util::Result<void> ProveAgentSpend(CMutableTransaction& transaction,
     }
     // F-51: this used to refuse outright, because a header-only chain carried no
     // congestion multiplier and proving against the wrong target is worse than not
-    // proving at all. nCongestion is now a header field (#5c-1 Phase 2), so the anchor
+    // proving at all. nCongestion is now a header field (header-field congestion pricing), so the anchor
     // index carries the real m. See doc/design/agent-client.md for what that is and is
     // not worth: the value is unvalidated SPV-grade — a full node would have rejected
     // the block at connect if it were wrong — and both failure directions are bounded
@@ -189,7 +189,7 @@ util::Result<void> ProveAgentSpend(CMutableTransaction& transaction,
             return util::Error{Untranslated("Could not produce per-tx proof-of-work")};
         }
         // A cycle is necessary but not sufficient: it must also meet the target this
-        // transaction's size implies. Required work was 1 before the Stage 2 flag day,
+        // transaction's size implies. Required work was 1 before the byte-pricing flag day,
         // so the first cycle always passed; it does not now, and a single attempt
         // would fail almost every time.
         if (UintToArith256(cuckatoo::CuckatooProofHash(cycle)) <= target) break;

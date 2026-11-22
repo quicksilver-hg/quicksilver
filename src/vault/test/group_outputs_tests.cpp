@@ -12,6 +12,9 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <algorithm>
+#include <vector>
+
 namespace vault {
 BOOST_FIXTURE_TEST_SUITE(group_outputs_tests, TestingSetup)
 
@@ -20,7 +23,7 @@ static int nextLockTime = 0;
 static std::shared_ptr<CVault> NewVault(const node::NodeContext& m_node)
 {
     std::unique_ptr<CVault> vault = std::make_unique<CVault>(m_node.chain.get(), "", CreateMockableVaultDatabase());
-    vault->LoadVault();
+    BOOST_REQUIRE(vault->LoadVault() == DBErrors::LOAD_OK);
     LOCK(vault->cs_vault);
     vault->SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
     vault->SetupDescriptorScriptPubKeyMans();
@@ -153,7 +156,9 @@ BOOST_AUTO_TEST_CASE(outputs_grouping_tests)
             /*expected_without_partial_spends_size=*/ 3,
             /*positive_only=*/ true);
 
-    // Then expect changes with "positive_only" disabled
+    // Then the same counts with "positive_only" disabled: every coin so far is
+    // positive, so the two pools hold the same coins. The split itself is pinned by
+    // outputs_grouping_zero_value_coins (F-668, S0206-A-02).
     group_verifier.GroupAndVerify(OutputType::BECH32,
             BASIC_FILTER,
             /*expected_with_partial_spends_size=*/ GROUP_SIZE * 2 + 1,
@@ -219,6 +224,51 @@ BOOST_AUTO_TEST_CASE(outputs_grouping_tests)
             /*expected_with_partial_spends_size=*/ PREVIOUS_ROUND_COUNT + NUM_SINGLE_ENTRIES,
             /*expected_without_partial_spends_size=*/ 5,
             /*positive_only=*/ false);
+}
+
+// F-668 (S0206-A-02): a zero-value coin is the one coin a feeless chain can put in the
+// mixed pool but not the positive-only one. Without it, removing the nValue > 0 filter
+// in GroupOutputs, or swapping which map it pushes as positive-only, leaves
+// outputs_grouping_tests green.
+BOOST_AUTO_TEST_CASE(outputs_grouping_zero_value_coins)
+{
+    const auto& vault = NewVault(m_node);
+    GroupVerifier group_verifier;
+    group_verifier.vault = vault;
+    const CoinEligibilityFilter& BASIC_FILTER{1, 6, 0};
+
+    // Two positive coins and one zero-value coin on one address, and a zero-value coin
+    // alone on a second address.
+    const CTxDestination shared = *Assert(vault->GetNewDestination(OutputType::BECH32, ""));
+    const CTxDestination zero_only = *Assert(vault->GetNewDestination(OutputType::BECH32, ""));
+    addCoin(group_verifier.coins_pool, *vault, shared, 10 * COIN, /*is_from_me=*/true);
+    addCoin(group_verifier.coins_pool, *vault, shared, 10 * COIN, /*is_from_me=*/true);
+    addCoin(group_verifier.coins_pool, *vault, shared, 0, /*is_from_me=*/true);
+    addCoin(group_verifier.coins_pool, *vault, zero_only, 0, /*is_from_me=*/true);
+
+    // Positive-only: the two 10 Hg coins, as two groups or as one address group.
+    group_verifier.GroupAndVerify(OutputType::BECH32, BASIC_FILTER,
+                                  /*expected_with_partial_spends_size=*/2,
+                                  /*expected_without_partial_spends_size=*/1,
+                                  /*positive_only=*/true);
+    // Mixed: all four coins, as four groups or as two address groups.
+    group_verifier.GroupAndVerify(OutputType::BECH32, BASIC_FILTER,
+                                  /*expected_with_partial_spends_size=*/4,
+                                  /*expected_without_partial_spends_size=*/2,
+                                  /*positive_only=*/false);
+
+    // The shared address's group holds its zero-value coin only in the mixed pool.
+    OutputGroupTypeMap groups = GroupOutputs(*vault, group_verifier.coins_pool,
+                                             makeSelectionParams(group_verifier.rand, /*avoid_partial_spends=*/true),
+                                             {{BASIC_FILTER}})[BASIC_FILTER];
+    const auto& by_type = groups.groups_by_type[OutputType::BECH32];
+    BOOST_REQUIRE_EQUAL(by_type.positive_group.size(), 1U);
+    BOOST_CHECK_EQUAL(by_type.positive_group[0].m_outputs.size(), 2U);
+    BOOST_CHECK_EQUAL(by_type.positive_group[0].GetSelectionAmount(), 20 * COIN);
+    std::vector<size_t> mixed_sizes;
+    for (const OutputGroup& group : by_type.mixed_group) mixed_sizes.push_back(group.m_outputs.size());
+    std::sort(mixed_sizes.begin(), mixed_sizes.end());
+    BOOST_CHECK(mixed_sizes == (std::vector<size_t>{1, 3}));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

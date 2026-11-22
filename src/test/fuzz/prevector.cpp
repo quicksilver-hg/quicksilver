@@ -287,6 +287,7 @@ FUZZ_TARGET(prevector)
             test.pop_back();
             break;
         }
+        test.test();
     }
 
     test.test();

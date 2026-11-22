@@ -72,8 +72,7 @@ BOOST_AUTO_TEST_CASE(basic_allocating)
     BOOST_TEST(1 == PoolResourceTester::FreeListSizes(resource)[1]);
     BOOST_TEST(expected_bytes_available == PoolResourceTester::AvailableMemoryFromChunk(resource));
 
-    // it's possible that 0 bytes are allocated, make sure this works. In that case the call is forwarded to operator new
-    // 0 bytes takes one entry from the first freelist
+    // A zero-byte request rounds to one pooled element and uses the first freelist.
     void* p = resource.Allocate(0, 1);
     BOOST_TEST(0 == PoolResourceTester::FreeListSizes(resource)[1]);
     BOOST_TEST(expected_bytes_available == PoolResourceTester::AvailableMemoryFromChunk(resource));

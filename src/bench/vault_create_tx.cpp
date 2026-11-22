@@ -20,6 +20,7 @@
 #include <sync.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
+#include <util/check.h>
 #include <util/result.h>
 #include <util/time.h>
 #include <validation.h>
@@ -136,11 +137,14 @@ static void VaultCreateTx(benchmark::Bench& bench, const OutputType output_type,
 
     CAmount target = 0;
     if (preset_inputs) {
-        // Select inputs, each has 49 Hg
+        // Select inputs, each has 49 Hg: every coinbase pays 49 Hg and 1 Hg, so the
+        // filter skips the 1-Hg outputs.
         vault::CoinFilterParams filter_coins;
+        filter_coins.min_amount = 49 * COIN;
         filter_coins.max_count = preset_inputs->num_of_internal_inputs;
         const auto& res = WITH_LOCK(vault.cs_vault,
                                     return vault::AvailableCoins(vault, /*coinControl=*/nullptr, filter_coins));
+        Assert(res.coins.at(output_type).size() == static_cast<size_t>(preset_inputs->num_of_internal_inputs));
         for (int i=0; i < preset_inputs->num_of_internal_inputs; i++) {
             const auto& coin{res.coins.at(output_type)[i]};
             target += coin.txout.nValue;
@@ -148,12 +152,13 @@ static void VaultCreateTx(benchmark::Bench& bench, const OutputType output_type,
         }
     }
 
-    // If automatic coin selection is enabled, add the value of another UTXO to the target
-    if (coin_control.m_allow_other_inputs) target += 50 * COIN;
+    // If automatic coin selection is enabled, add the value of another 49-Hg UTXO to the target
+    if (coin_control.m_allow_other_inputs) target += 49 * COIN;
     std::vector<vault::CRecipient> recipients = {{dest, target}};
 
+    // No caller-held cs_vault: CreateTransaction takes it for building and signing and
+    // releases it for the proof grind, as production callers see it.
     bench.epochIterations(5).run([&] {
-        LOCK(vault.cs_vault);
         const auto& tx_res = CreateTransaction(vault, recipients, /*change_pos=*/std::nullopt, coin_control);
         assert(tx_res);
     });

@@ -39,6 +39,11 @@ static bool ProofValidForNonce(const unsigned char* prepow, size_t len, uint8_t 
 bool Verify19(const Cycle&, const Keys&);
 bool Verify28(const Cycle&, const Keys&);
 
+bool ConsensusVerifiesEdgeBits(uint8_t edgebits)
+{
+    return edgebits == 19 || edgebits == 28;
+}
+
 bool CuckatooVerify(const Cycle& cycle, const Keys& keys, uint8_t edgebits)
 {
     switch (edgebits) {

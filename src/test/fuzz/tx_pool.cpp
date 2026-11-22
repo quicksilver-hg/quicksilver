@@ -12,6 +12,7 @@
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
 #include <test/fuzz/util/relaypool.h>
+#include <test/fuzz/util/txpow.h>
 #include <test/util/mining.h>
 #include <test/util/script.h>
 #include <test/util/setup_common.h>
@@ -33,7 +34,7 @@ std::vector<COutPoint> g_outpoints_coinbase_init_immature;
 
 void initialize_tx_pool()
 {
-    static const auto testing_setup = MakeNoLogFileContext<const TestingSetup>();
+    static const auto testing_setup = MakeNoLogFileContext<const TestingSetup>(ChainType::SANDBOX, {.extra_args = {"-txpownocycle"}});
     g_setup = testing_setup.get();
 
     BlockAssembler::Options options;
@@ -188,9 +189,6 @@ FUZZ_TARGET(tx_pool_standard, .init = initialize_tx_pool)
     }
     outpoints_replaceable = outpoints_supply;
 
-    // The sum of the values of all spendable outpoints
-    constexpr CAmount SUPPLY_TOTAL{COINBASE_MATURITY * 50 * COIN};
-
     SetRelayPoolConstraints(*node.args, fuzzed_data_provider);
     auto tx_pool_{MakeRelayPool(fuzzed_data_provider, node)};
     CTxRelayPool& tx_pool = *tx_pool_;
@@ -203,6 +201,9 @@ FUZZ_TARGET(tx_pool_standard, .init = initialize_tx_pool)
         auto coin{amount_view.GetCoin(outpoint).value()};
         return coin.out.nValue;
     };
+    // Sandbox subsidy changes during the maturity window.
+    CAmount supply_total{0};
+    for (const auto& outpoint : outpoints_supply) supply_total += GetAmount(outpoint);
 
     LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 300)
     {
@@ -211,7 +212,7 @@ FUZZ_TARGET(tx_pool_standard, .init = initialize_tx_pool)
             for (const auto& op : outpoints_supply) {
                 supply_now += GetAmount(op);
             }
-            Assert(supply_now == SUPPLY_TOTAL);
+            Assert(supply_now == supply_total);
         }
         Assert(!outpoints_supply.empty());
 
@@ -244,11 +245,14 @@ FUZZ_TARGET(tx_pool_standard, .init = initialize_tx_pool)
 
                 tx_mut.vin.push_back(in);
             }
-            const auto leftover = fuzzed_data_provider.ConsumeIntegralInRange<CAmount>(-1000, amount_in);
+            // The zero-surplus branch reaches relaypool admission; nonzero surplus
+            // deliberately exercises the feeless rejection path.
+            const auto leftover = fuzzed_data_provider.ConsumeBool() ? 0 : fuzzed_data_provider.ConsumeIntegralInRange<CAmount>(-1000, amount_in);
             const auto amount_out = (amount_in - leftover) / num_out;
             for (int i = 0; i < num_out; ++i) {
-                tx_mut.vout.emplace_back(amount_out, P2WSH_OP_TRUE);
+                tx_mut.vout.emplace_back(amount_out + (i == 0 ? (amount_in - leftover) % num_out : 0), P2WSH_OP_TRUE);
             }
+            ProveFuzzTxPow(tx_mut, WITH_LOCK(::cs_main, return chainstate.m_chain.Tip()));
             auto tx = MakeTransactionRef(tx_mut);
             // Restore previously removed outpoints
             for (const auto& in : tx->vin) {
@@ -365,7 +369,18 @@ FUZZ_TARGET(tx_pool, .init = initialize_tx_pool)
 
     LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 300)
     {
-        const auto mut_tx = ConsumeTransaction(fuzzed_data_provider, txids);
+        CMutableTransaction mut_tx;
+        if (fuzzed_data_provider.ConsumeBool()) {
+            // Admit a real, value-conserving spend of a mature sandbox coinbase.
+            const auto& outpoint = PickValue(fuzzed_data_provider, g_outpoints_coinbase_init_mature);
+            mut_tx.vin.emplace_back(outpoint);
+            mut_tx.vin.back().scriptWitness.stack = {WITNESS_STACK_ELEM_OP_TRUE};
+            const CAmount value = WITH_LOCK(::cs_main, return chainstate.CoinsTip().AccessCoin(outpoint).out.nValue);
+            mut_tx.vout.emplace_back(value, P2WSH_OP_TRUE);
+            ProveFuzzTxPow(mut_tx, WITH_LOCK(::cs_main, return chainstate.m_chain.Tip()));
+        } else {
+            mut_tx = ConsumeTransaction(fuzzed_data_provider, txids);
+        }
 
         if (fuzzed_data_provider.ConsumeBool()) {
             MockTime(fuzzed_data_provider, chainstate);

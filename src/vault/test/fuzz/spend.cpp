@@ -24,7 +24,7 @@ const TestingSetup* g_setup;
 
 void initialize_setup()
 {
-    static const auto testing_setup = MakeNoLogFileContext<const TestingSetup>();
+    static const auto testing_setup = MakeNoLogFileContext<const TestingSetup>(ChainType::SANDBOX, {.extra_args = {"-txpownocycle"}});
     g_setup = testing_setup.get();
 }
 
@@ -48,7 +48,7 @@ FUZZ_TARGET(vault_create_transaction, .init = initialize_setup)
     coin_control.destChange = fuzzed_data_provider.ConsumeBool() ? fuzzed_vault.GetDestination(fuzzed_data_provider) : ConsumeTxDestination(fuzzed_data_provider);
     if (fuzzed_data_provider.ConsumeBool()) coin_control.m_change_type = fuzzed_data_provider.PickValueInArray(OUTPUT_TYPES);
     coin_control.m_allow_other_inputs = fuzzed_data_provider.ConsumeBool();
-    coin_control.m_locktime = fuzzed_data_provider.ConsumeIntegral<unsigned int>();
+    if (fuzzed_data_provider.ConsumeBool()) coin_control.m_locktime = fuzzed_data_provider.ConsumeIntegral<unsigned int>();
 
     int next_locktime{0};
     CAmount all_values{0};
@@ -90,7 +90,11 @@ FUZZ_TARGET(vault_create_transaction, .init = initialize_setup)
 
     std::optional<unsigned int> change_pos;
     if (fuzzed_data_provider.ConsumeBool()) change_pos = fuzzed_data_provider.ConsumeIntegral<unsigned int>();
-    (void)CreateTransaction(*fuzzed_vault.vault, recipients, change_pos, coin_control);
+    auto result = CreateTransaction(*fuzzed_vault.vault, recipients, change_pos, coin_control);
+    if (result) {
+        LOCK(fuzzed_vault.vault->cs_vault);
+        assert(fuzzed_vault.vault->GetDebit(*result->tx, ISMINE_SPENDABLE) == result->tx->GetValueOut());
+    }
 }
 } // namespace
 } // namespace vault

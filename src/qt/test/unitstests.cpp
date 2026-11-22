@@ -28,9 +28,13 @@
 #include <QMenu>
 #include <QRawFont>
 #include <QRegularExpression>
+#include <QSignalSpy>
 #include <QString>
 #include <QTextLayout>
 #include <QValidator>
+
+#include <memory>
+#include <optional>
 
 namespace {
 using Unit = QuicksilverUnit;
@@ -317,7 +321,8 @@ void UnitsTests::namesStayTheCodes()
     QCOMPARE(units.data(cinnabar, Qt::ToolTipRole).toString(), QStringLiteral("cinnabar (0.00000001 Quicksilver)"));
     QVERIFY(!units.data(cinnabar, Qt::ToolTipRole).toString().contains(CinnabarSign()));
 
-    const QFont previous = QApplication::font();
+    // Restored on every exit, not only after the checks below (S0297-A-01).
+    const RestoreApplicationFont restore_font;
     GUIUtil::LoadUnitGlyph();
     QuicksilverAmountField field;
     field.setDisplayUnit(Unit::HGS);
@@ -336,7 +341,6 @@ void UnitsTests::namesStayTheCodes()
     QVERIFY(QMetaObject::invokeMethod(&status_control, "updateDisplayUnit", Qt::DirectConnection,
                                       Q_ARG(QuicksilverUnit, Unit::HGS)));
     QCOMPARE(status_control.text(), QStringLiteral("HgS"));
-    QApplication::setFont(previous);
 }
 
 void UnitsTests::cinnabarGlyphUsesTheBundledFace()
@@ -345,7 +349,7 @@ void UnitsTests::cinnabarGlyphUsesTheBundledFace()
     if (QGuiApplication::platformName() == QLatin1String("minimal")) {
         QSKIP("the minimal platform does not support application fonts");
     }
-    const QFont previous = QApplication::font();
+    std::optional<RestoreApplicationFont> restore_font{std::in_place};
     GUIUtil::LoadUnitGlyph();
     const QString bundled = GUIUtil::UnitGlyphFamily();
     QCOMPARE(bundled, QStringLiteral("Quicksilver Unit Glyphs"));
@@ -375,14 +379,14 @@ void UnitsTests::cinnabarGlyphUsesTheBundledFace()
     const QList<QGlyphRun> digits = layout.glyphRuns(0, 1);
     QVERIFY(!digits.isEmpty());
     QVERIFY(digits.first().rawFont().familyName() != bundled);
-    QApplication::setFont(previous);
+    restore_font.reset();
 
     const QString dir = qEnvironmentVariable("QS_UNIT_DISPLAY_SCREENSHOTS");
     if (dir.isEmpty()) return;
     QVERIFY(QDir().mkpath(dir));
 
     const RestoreApplicationStyle restore;
-    const QFont capture_previous = QApplication::font();
+    const RestoreApplicationFont restore_capture_font;
     QuicksilverStyle::Apply(*qApp);
     GUIUtil::LoadUnitGlyph();
 
@@ -414,7 +418,6 @@ void UnitsTests::cinnabarGlyphUsesTheBundledFace()
     QVERIFY(menu->isVisible());
     QVERIFY(menu->grab().save(QDir(dir).filePath(QStringLiteral("status-bar-unit-menu.png"))));
     menu->hide();
-    QApplication::setFont(capture_previous);
 }
 
 void UnitsTests::unitGlyphCmapHasWindowsBmpEncoding()
@@ -470,4 +473,17 @@ void UnitsTests::failedFontLoadsChangeNothing()
     QVERIFY(!GUIUtil::LoadUnitGlyph(QStringLiteral(":/fonts/no-such-font")));
     QCOMPARE(GUIUtil::UnitGlyphFamily(), family);
     QCOMPARE(QApplication::font(), previous);
+}
+
+void UnitsTests::amountFieldUnitChangeSignalsAClearedValue()
+{
+    QuicksilverAmountField field;
+    field.setDisplayUnit(Unit::HG);
+    auto* edit = field.findChild<QLineEdit*>();
+    QVERIFY(edit);
+    edit->setText(QStringLiteral("1,5"));
+    QSignalSpy changes(&field, &QuicksilverAmountField::valueChanged);
+    field.setDisplayUnit(Unit::HGS);
+    QCOMPARE(edit->text(), QString());
+    QCOMPARE(changes.count(), 1);
 }

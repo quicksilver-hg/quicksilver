@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <cuckoocache.h>
+#include <crypto/common.h>
 #include <random.h>
 #include <script/sigcache.h>
 #include <test/util/random.h>
@@ -31,6 +32,19 @@
  *
  */
 BOOST_FIXTURE_TEST_SUITE(cuckoocache_tests, BasicTestingSetup);
+
+BOOST_AUTO_TEST_CASE(large_size_arithmetic)
+{
+    using Cache = CuckooCache::cache<uint256, SignatureCacheHasher>;
+    BOOST_CHECK_EQUAL(CuckooCache::bit_packed_atomic_flags::ByteCount(UINT32_MAX), uint32_t{536870912});
+    BOOST_CHECK_EQUAL(CuckooCache::bit_packed_atomic_flags::ByteCount(UINT32_MAX - 1), uint32_t{536870912});
+    BOOST_CHECK_EQUAL(Cache::EpochSize(UINT32_MAX - 1), uint32_t{1932735282});
+    BOOST_CHECK_EQUAL(Cache::ClampSize(UINT32_MAX), UINT32_MAX - 1);
+    BOOST_CHECK_EQUAL(Cache::ClampSize(0), uint32_t{2});
+    BOOST_CHECK_EQUAL(Cache::ClampSize(100), uint32_t{100});
+    Cache cache;
+    BOOST_CHECK_EQUAL(cache.setup(0), uint32_t{2});
+}
 
 /* Test that no values not inserted into the cache are read out of it.
  *
@@ -65,9 +79,8 @@ double test_cache(size_t megabytes, double load)
     uint32_t n_insert = static_cast<uint32_t>(load * (bytes / sizeof(uint256)));
     hashes.resize(n_insert);
     for (uint32_t i = 0; i < n_insert; ++i) {
-        uint32_t* ptr = (uint32_t*)hashes[i].begin();
         for (uint8_t j = 0; j < 8; ++j)
-            *(ptr++) = m_rng.rand32();
+            WriteLE32(hashes[i].begin() + 4 * j, m_rng.rand32());
     }
     /** We make a copy of the hashes because future optimizations of the
      * cuckoocache may overwrite the inserted element, so the test is
@@ -138,9 +151,8 @@ void test_cache_erase(size_t megabytes)
     uint32_t n_insert = static_cast<uint32_t>(load * (bytes / sizeof(uint256)));
     hashes.resize(n_insert);
     for (uint32_t i = 0; i < n_insert; ++i) {
-        uint32_t* ptr = (uint32_t*)hashes[i].begin();
         for (uint8_t j = 0; j < 8; ++j)
-            *(ptr++) = m_rng.rand32();
+            WriteLE32(hashes[i].begin() + 4 * j, m_rng.rand32());
     }
     /** We make a copy of the hashes because future optimizations of the
      * cuckoocache may overwrite the inserted element, so the test is
@@ -203,9 +215,8 @@ void test_cache_erase_parallel(size_t megabytes)
     uint32_t n_insert = static_cast<uint32_t>(load * (bytes / sizeof(uint256)));
     hashes.resize(n_insert);
     for (uint32_t i = 0; i < n_insert; ++i) {
-        uint32_t* ptr = (uint32_t*)hashes[i].begin();
         for (uint8_t j = 0; j < 8; ++j)
-            *(ptr++) = m_rng.rand32();
+            WriteLE32(hashes[i].begin() + 4 * j, m_rng.rand32());
     }
     /** We make a copy of the hashes because future optimizations of the
      * cuckoocache may overwrite the inserted element, so the test is
@@ -232,9 +243,8 @@ void test_cache_erase_parallel(size_t megabytes)
         */
         threads.emplace_back([&, x] {
             std::shared_lock<std::shared_mutex> l(mtx);
-            size_t ntodo = (n_insert/4)/3;
-            size_t start = ntodo*x;
-            size_t end = ntodo*(x+1);
+            size_t start = (n_insert / 4) * x / 3;
+            size_t end = (n_insert / 4) * (x + 1) / 3;
             for (uint32_t i = start; i < end; ++i) {
                 bool contains = set.contains(hashes[i], true);
                 assert(contains);
@@ -317,9 +327,8 @@ void test_cache_generations()
             inserts.resize(n_insert);
             reads.reserve(n_insert / 2);
             for (uint32_t i = 0; i < n_insert; ++i) {
-                uint32_t* ptr = (uint32_t*)inserts[i].begin();
                 for (uint8_t j = 0; j < 8; ++j)
-                    *(ptr++) = rng.rand32();
+                    WriteLE32(inserts[i].begin() + 4 * j, rng.rand32());
             }
             for (uint32_t i = 0; i < n_insert / 4; ++i)
                 reads.push_back(inserts[i]);

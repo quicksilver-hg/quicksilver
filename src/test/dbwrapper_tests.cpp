@@ -27,6 +27,19 @@ static bool is_null_key(const std::vector<unsigned char>& key) {
 
 BOOST_FIXTURE_TEST_SUITE(dbwrapper_tests, BasicTestingSetup)
 
+BOOST_AUTO_TEST_CASE(read_checked_throws_on_undecodable_value)
+{
+    CDBWrapper db{{.path = m_args.GetDataDirBase() / "checked_read", .cache_bytes = 1 << 20,
+                   .memory_only = true, .wipe_data = false, .obfuscate = false}};
+    const uint8_t key{'k'};
+    uint256 value;
+    BOOST_CHECK(!db.Read(key, value));
+    BOOST_CHECK(!db.ReadChecked(key, value));
+    BOOST_REQUIRE(db.Write(key, uint8_t{7}));
+    BOOST_CHECK(!db.Read(key, value));
+    BOOST_CHECK_THROW(db.ReadChecked(key, value), dbwrapper_error);
+}
+
 BOOST_AUTO_TEST_CASE(dbwrapper)
 {
     // Perform tests both obfuscated and non-obfuscated.
@@ -41,7 +54,7 @@ BOOST_AUTO_TEST_CASE(dbwrapper)
         BOOST_CHECK(obfuscate != is_null_key(dbwrapper_private::GetObfuscateKey(dbw)));
 
         BOOST_CHECK(dbw.Write(key, in));
-        BOOST_CHECK(dbw.Read(key, res));
+        BOOST_REQUIRE(dbw.Read(key, res));
         BOOST_CHECK_EQUAL(res.ToString(), in.ToString());
     }
 }
@@ -60,57 +73,57 @@ BOOST_AUTO_TEST_CASE(dbwrapper_basic_data)
         // Ensure that we're doing real obfuscation when obfuscate=true
         BOOST_CHECK(obfuscate != is_null_key(dbwrapper_private::GetObfuscateKey(dbw)));
 
-        //Simulate block raw data - "b + block hash"
+        // Generic string key for a wrapper round trip; not the block database schema.
         std::string key_block = "b" + m_rng.rand256().ToString();
 
         uint256 in_block = m_rng.rand256();
         BOOST_CHECK(dbw.Write(key_block, in_block));
-        BOOST_CHECK(dbw.Read(key_block, res));
+        BOOST_REQUIRE(dbw.Read(key_block, res));
         BOOST_CHECK_EQUAL(res.ToString(), in_block.ToString());
 
-        //Simulate file raw data - "f + file_number"
+        // Generic file-like string key for a wrapper round trip.
         std::string key_file = strprintf("f%04x", m_rng.rand32());
 
         uint256 in_file_info = m_rng.rand256();
         BOOST_CHECK(dbw.Write(key_file, in_file_info));
-        BOOST_CHECK(dbw.Read(key_file, res));
+        BOOST_REQUIRE(dbw.Read(key_file, res));
         BOOST_CHECK_EQUAL(res.ToString(), in_file_info.ToString());
 
-        //Simulate transaction raw data - "t + transaction hash"
+        // Generic transaction-like string key for a wrapper round trip.
         std::string key_transaction = "t" + m_rng.rand256().ToString();
 
         uint256 in_transaction = m_rng.rand256();
         BOOST_CHECK(dbw.Write(key_transaction, in_transaction));
-        BOOST_CHECK(dbw.Read(key_transaction, res));
+        BOOST_REQUIRE(dbw.Read(key_transaction, res));
         BOOST_CHECK_EQUAL(res.ToString(), in_transaction.ToString());
 
-        //Simulate UTXO raw data - "c + transaction hash"
+        // Generic output-like string key for a wrapper round trip.
         std::string key_utxo = "c" + m_rng.rand256().ToString();
 
         uint256 in_utxo = m_rng.rand256();
         BOOST_CHECK(dbw.Write(key_utxo, in_utxo));
-        BOOST_CHECK(dbw.Read(key_utxo, res));
+        BOOST_REQUIRE(dbw.Read(key_utxo, res));
         BOOST_CHECK_EQUAL(res.ToString(), in_utxo.ToString());
 
-        //Simulate last block file number - "l"
+        // Generic byte key for a wrapper round trip.
         uint8_t key_last_blockfile_number{'l'};
         uint32_t lastblockfilenumber = m_rng.rand32();
         BOOST_CHECK(dbw.Write(key_last_blockfile_number, lastblockfilenumber));
-        BOOST_CHECK(dbw.Read(key_last_blockfile_number, res_uint_32));
+        BOOST_REQUIRE(dbw.Read(key_last_blockfile_number, res_uint_32));
         BOOST_CHECK_EQUAL(lastblockfilenumber, res_uint_32);
 
-        //Simulate Is Reindexing - "R"
+        // Generic boolean key for a wrapper round trip.
         uint8_t key_IsReindexing{'R'};
         bool isInReindexing = m_rng.randbool();
         BOOST_CHECK(dbw.Write(key_IsReindexing, isInReindexing));
-        BOOST_CHECK(dbw.Read(key_IsReindexing, res_bool));
+        BOOST_REQUIRE(dbw.Read(key_IsReindexing, res_bool));
         BOOST_CHECK_EQUAL(isInReindexing, res_bool);
 
         //Simulate last block hash up to which UXTO covers - 'B'
         uint8_t key_lastblockhash_uxto{'B'};
         uint256 lastblock_hash = m_rng.rand256();
         BOOST_CHECK(dbw.Write(key_lastblockhash_uxto, lastblock_hash));
-        BOOST_CHECK(dbw.Read(key_lastblockhash_uxto, res));
+        BOOST_REQUIRE(dbw.Read(key_lastblockhash_uxto, res));
         BOOST_CHECK_EQUAL(lastblock_hash, res);
 
         //Simulate file raw data - "F + filename_number + filename"
@@ -121,7 +134,7 @@ BOOST_AUTO_TEST_CASE(dbwrapper_basic_data)
 
         bool in_file_bool = m_rng.randbool();
         BOOST_CHECK(dbw.Write(key_file_option, in_file_bool));
-        BOOST_CHECK(dbw.Read(key_file_option, res_bool));
+        BOOST_REQUIRE(dbw.Read(key_file_option, res_bool));
         BOOST_CHECK_EQUAL(res_bool, in_file_bool);
    }
 }
@@ -153,13 +166,13 @@ BOOST_AUTO_TEST_CASE(dbwrapper_batch)
 
         BOOST_CHECK(dbw.WriteBatch(batch));
 
-        BOOST_CHECK(dbw.Read(key, res));
+        BOOST_REQUIRE(dbw.Read(key, res));
         BOOST_CHECK_EQUAL(res.ToString(), in.ToString());
-        BOOST_CHECK(dbw.Read(key2, res));
+        BOOST_REQUIRE(dbw.Read(key2, res));
         BOOST_CHECK_EQUAL(res.ToString(), in2.ToString());
 
         // key3 should've never been written
-        BOOST_CHECK(dbw.Read(key3, res) == false);
+        BOOST_REQUIRE(dbw.Read(key3, res) == false);
     }
 }
 
@@ -229,7 +242,7 @@ BOOST_AUTO_TEST_CASE(existing_data_no_obfuscate)
     // Check that the key/val we wrote with unobfuscated wrapper exists and
     // is readable.
     uint256 res2;
-    BOOST_CHECK(odbw.Read(key, res2));
+    BOOST_REQUIRE(odbw.Read(key, res2));
     BOOST_CHECK_EQUAL(res2.ToString(), in.ToString());
 
     BOOST_CHECK(!odbw.IsEmpty()); // There should be existing data
@@ -240,7 +253,7 @@ BOOST_AUTO_TEST_CASE(existing_data_no_obfuscate)
 
     // Check that we can write successfully
     BOOST_CHECK(odbw.Write(key, in2));
-    BOOST_CHECK(odbw.Read(key, res3));
+    BOOST_REQUIRE(odbw.Read(key, res3));
     BOOST_CHECK_EQUAL(res3.ToString(), in2.ToString());
 }
 
@@ -277,7 +290,7 @@ BOOST_AUTO_TEST_CASE(existing_data_reindex)
 
     // Check that we can write successfully
     BOOST_CHECK(odbw.Write(key, in2));
-    BOOST_CHECK(odbw.Read(key, res3));
+    BOOST_REQUIRE(odbw.Read(key, res3));
     BOOST_CHECK_EQUAL(res3.ToString(), in2.ToString());
 }
 
@@ -308,12 +321,12 @@ BOOST_AUTO_TEST_CASE(iterator_ordering)
             BOOST_CHECK(it->Valid());
             if (!it->Valid()) // Avoid spurious errors about invalid iterator's key and value in case of failure
                 break;
-            BOOST_CHECK(it->GetKey(key));
+            BOOST_REQUIRE(it->GetKey(key));
             if (x & 1) {
                 BOOST_CHECK_EQUAL(key, x + 1);
                 continue;
             }
-            BOOST_CHECK(it->GetValue(value));
+            BOOST_REQUIRE(it->GetValue(value));
             BOOST_CHECK_EQUAL(key, x);
             BOOST_CHECK_EQUAL(value, x*x);
             it->Next();
@@ -376,8 +389,8 @@ BOOST_AUTO_TEST_CASE(iterator_string_ordering)
                 BOOST_CHECK(it->Valid());
                 if (!it->Valid()) // Avoid spurious errors about invalid iterator's key and value in case of failure
                     break;
-                BOOST_CHECK(it->GetKey(key));
-                BOOST_CHECK(it->GetValue(value));
+                BOOST_REQUIRE(it->GetKey(key));
+                BOOST_REQUIRE(it->GetValue(value));
                 BOOST_CHECK_EQUAL(key.str, exp_key);
                 BOOST_CHECK_EQUAL(value, x*x);
                 it->Next();

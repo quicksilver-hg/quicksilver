@@ -9,9 +9,11 @@ Quicksilver.
 
 ## Which mining path to use
 
-`startmining` is the bootstrap path. It builds templates in-process, is not
-gated on peer count, and is what you want when you are the only node on a chain
-or are otherwise starting one from nothing.
+`startmining` builds templates in-process. On `main` it waits until a peer has
+sent this node block headers and the node has caught up with them, so it never
+mines on a tip the network has already passed. On sandbox and publictest it may
+also mine with no peers (`-minewithoutpeers`, on by default there), which is
+what you want when you are the only node on a test chain.
 
 `getblocktemplate` is for external pool and miner software on an already-
 populated network. On `main` it is peer-gated: with zero peers, or while the

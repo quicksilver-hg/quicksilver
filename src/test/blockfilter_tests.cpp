@@ -165,6 +165,7 @@ BOOST_AUTO_TEST_CASE(gcsfilter_test)
     }
 
     GCSFilter filter({0, 0, 10, 1 << 10}, included_elements);
+    BOOST_CHECK(!filter.MatchAny({}));
     for (const auto& element : included_elements) {
         BOOST_CHECK(filter.Match(element));
 
@@ -196,34 +197,31 @@ BOOST_AUTO_TEST_CASE(gcsfilter_encoding_independent_of_insertion_order)
     // block differently would stay in perfect agreement about the chain while serving
     // permanently contradictory filters, and no rule, reorg or peer exchange would surface
     // it.
-    std::vector<GCSFilter::Element> elements;
-    for (int i = 0; i < 100; ++i) {
-        GCSFilter::Element element(32);
-        element[0] = static_cast<unsigned char>(i);
-        element[1] = static_cast<unsigned char>(i * 7);
-        elements.push_back(std::move(element));
-    }
-
-    GCSFilter::ElementSet forward_insert, reverse_insert;
-    for (auto it = elements.begin(); it != elements.end(); ++it) forward_insert.insert(*it);
-    for (auto it = elements.rbegin(); it != elements.rend(); ++it) reverse_insert.insert(*it);
-    BOOST_REQUIRE_EQUAL(forward_insert.size(), elements.size());
-    BOOST_REQUIRE_EQUAL(reverse_insert.size(), elements.size());
-
-    // The assertion below is only meaningful if the two containers genuinely iterate in
-    // different orders. If they ever iterate identically, byte-equality would hold with the
-    // sort deleted and this test would pin nothing, so fail loudly here instead of passing
-    // vacuously. The fix is different elements -- never deleting this check.
-    const std::vector<GCSFilter::Element> forward_order(forward_insert.begin(), forward_insert.end());
-    const std::vector<GCSFilter::Element> reverse_order(reverse_insert.begin(), reverse_insert.end());
-    BOOST_REQUIRE(forward_order != reverse_order);
-
+    bool observed_different_iteration_order{false};
     const GCSFilter::Params params{0, 0, 10, 1 << 10};
-    BOOST_CHECK(GCSFilter(params, forward_insert).GetEncoded() ==
-                GCSFilter(params, reverse_insert).GetEncoded());
+    for (const int count : {16, 32, 64, 100, 128}) {
+        std::vector<GCSFilter::Element> elements;
+        for (int i = 0; i < count; ++i) {
+            GCSFilter::Element element(32);
+            element[0] = static_cast<unsigned char>(i);
+            element[1] = static_cast<unsigned char>(i * 7);
+            elements.push_back(std::move(element));
+        }
 
-    // Mutation note, so nobody re-derives this the hard way: deleting the std::sort does
-    // not make this check fail, it makes the encoder HANG. GCSFilter::Encode emits
+        GCSFilter::ElementSet forward_insert, reverse_insert;
+        for (auto it = elements.begin(); it != elements.end(); ++it) forward_insert.insert(*it);
+        for (auto it = elements.rbegin(); it != elements.rend(); ++it) reverse_insert.insert(*it);
+        BOOST_REQUIRE_EQUAL(forward_insert.size(), elements.size());
+        BOOST_REQUIRE_EQUAL(reverse_insert.size(), elements.size());
+        const std::vector<GCSFilter::Element> forward_order(forward_insert.begin(), forward_insert.end());
+        const std::vector<GCSFilter::Element> reverse_order(reverse_insert.begin(), reverse_insert.end());
+        observed_different_iteration_order |= forward_order != reverse_order;
+        BOOST_CHECK(GCSFilter(params, forward_insert).GetEncoded() ==
+                    GCSFilter(params, reverse_insert).GetEncoded());
+    }
+    BOOST_REQUIRE(observed_different_iteration_order);
+
+    // Deleting the std::sort can make the encoder hang. GCSFilter::Encode emits
     // Golomb-Rice deltas between successive hashed values, so out-of-order values underflow
     // to near-2^64 and the unary part becomes an effectively unbounded run of bits. The
     // sort is therefore not merely a canonicalisation -- it is what keeps the encoder

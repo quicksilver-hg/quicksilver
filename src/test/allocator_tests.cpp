@@ -7,6 +7,7 @@
 #include <support/lockedpool.h>
 
 #include <limits>
+#include <cstddef>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -18,11 +19,9 @@ BOOST_AUTO_TEST_SUITE(allocator_tests)
 
 BOOST_AUTO_TEST_CASE(arena_tests)
 {
-    // Fake memory base address for testing
-    // without actually using memory.
-    void *synth_base = reinterpret_cast<void*>(0x08000000);
     const size_t synth_size = 1024*1024;
-    Arena b(synth_base, synth_size, 16);
+    std::vector<std::byte> backing(synth_size);
+    Arena b(backing.data(), synth_size, 16);
     void *chunk = b.alloc(1000);
 #ifdef ARENA_DEBUG
     b.walk();
@@ -136,7 +135,8 @@ BOOST_AUTO_TEST_CASE(arena_tests)
 class TestLockedPageAllocator: public LockedPageAllocator
 {
 public:
-    TestLockedPageAllocator(int count_in, int lockedcount_in): count(count_in), lockedcount(lockedcount_in) {}
+    TestLockedPageAllocator(int count_in, int lockedcount_in)
+        : count(count_in), lockedcount(lockedcount_in), backing(count_in * LockedPool::ARENA_SIZE) {}
     void* AllocateLocked(size_t len, bool *lockingSuccess) override
     {
         *lockingSuccess = false;
@@ -148,7 +148,7 @@ public:
                 *lockingSuccess = true;
             }
 
-            return reinterpret_cast<void*>(uint64_t{static_cast<uint64_t>(0x08000000) + (count << 24)}); // Fake address, do not actually use this memory
+            return backing.data() + count * LockedPool::ARENA_SIZE;
         }
         return nullptr;
     }
@@ -162,6 +162,7 @@ public:
 private:
     int count;
     int lockedcount;
+    std::vector<std::byte> backing;
 };
 
 BOOST_AUTO_TEST_CASE(lockedpool_tests_mock)
@@ -183,7 +184,7 @@ BOOST_AUTO_TEST_CASE(lockedpool_tests_mock)
     BOOST_CHECK(pool.stats().free == 0);
 
     void *a0 = pool.alloc(LockedPool::ARENA_SIZE / 2);
-    BOOST_CHECK(a0);
+    BOOST_REQUIRE(a0);
     BOOST_CHECK(pool.stats().locked == LockedPool::ARENA_SIZE);
     void *a1 = pool.alloc(LockedPool::ARENA_SIZE / 2);
     BOOST_CHECK(a1);

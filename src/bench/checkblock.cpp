@@ -40,7 +40,7 @@ static void DeserializeBlockTest(benchmark::Bench& bench)
     });
 }
 
-// The fixture's 21 transactions are untouched by #5c-1 Phase 2, but its header widened
+// The fixture's 21 transactions are untouched by header-field congestion pricing, but its header widened
 // with nCongestion (248 -> 252 bytes). The field was set to the value the EIP-1559
 // recurrence gives for this block's own weight against a parent at the floor, so the
 // header is self-consistent rather than carrying a placeholder. The trivial sandbox
@@ -54,9 +54,9 @@ static void DeserializeAndCheckBlockTest(benchmark::Bench& bench)
     ArgsManager bench_args;
     // The fixture is a real sandbox block, so it is checked under sandbox rules --
     // CheckBlock verifies proof of work by default, and a sandbox block does not
-    // satisfy main's. What this benchmark measures is dominated by transaction
-    // checks and the merkle root either way; the block-PoW step is one hash here
-    // against one ~1 us Cuckatoo verify on main, and CheckPoW has its own benchmarks.
+    // satisfy main's. The figure is therefore transaction checks, the merkle root
+    // and the sandbox proof hash: it excludes the Cuckatoo cycle verify that main
+    // and publictest pay for the block, which no benchmark prices yet.
     const auto chainParams = CreateChainParams(bench_args, ChainType::SANDBOX);
 
     bench.unit("block").run([&] {

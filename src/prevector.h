@@ -15,6 +15,7 @@
 #include <iterator>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 /** Implements a drop-in replacement for std::vector<T> which stores up to N
  *  elements directly (without heap allocation). The types Size and Diff are
@@ -51,6 +52,7 @@ public:
         T* ptr{};
     public:
         typedef Diff difference_type;
+        typedef T value_type;
         typedef T* pointer;
         typedef T& reference;
         using element_type = T;
@@ -78,30 +80,13 @@ public:
         bool operator<(iterator x) const { return ptr < x.ptr; }
     };
 
-    class reverse_iterator {
-        T* ptr{};
-    public:
-        typedef Diff difference_type;
-        typedef T value_type;
-        typedef T* pointer;
-        typedef T& reference;
-        typedef std::bidirectional_iterator_tag iterator_category;
-        reverse_iterator() = default;
-        reverse_iterator(T* ptr_) : ptr(ptr_) {}
-        T& operator*() const { return *ptr; }
-        T* operator->() const { return ptr; }
-        reverse_iterator& operator--() { ptr++; return *this; }
-        reverse_iterator& operator++() { ptr--; return *this; }
-        reverse_iterator operator++(int) { reverse_iterator copy(*this); ++(*this); return copy; }
-        reverse_iterator operator--(int) { reverse_iterator copy(*this); --(*this); return copy; }
-        bool operator==(reverse_iterator x) const { return ptr == x.ptr; }
-        bool operator!=(reverse_iterator x) const { return ptr != x.ptr; }
-    };
+    using reverse_iterator = std::reverse_iterator<iterator>;
 
     class const_iterator {
         const T* ptr{};
     public:
         typedef Diff difference_type;
+        typedef T value_type;
         typedef const T* pointer;
         typedef const T& reference;
         using element_type = const T;
@@ -130,26 +115,7 @@ public:
         bool operator<(const_iterator x) const { return ptr < x.ptr; }
     };
 
-    class const_reverse_iterator {
-        const T* ptr{};
-    public:
-        typedef Diff difference_type;
-        typedef const T value_type;
-        typedef const T* pointer;
-        typedef const T& reference;
-        typedef std::bidirectional_iterator_tag iterator_category;
-        const_reverse_iterator() = default;
-        const_reverse_iterator(const T* ptr_) : ptr(ptr_) {}
-        const_reverse_iterator(reverse_iterator x) : ptr(&(*x)) {}
-        const T& operator*() const { return *ptr; }
-        const T* operator->() const { return ptr; }
-        const_reverse_iterator& operator--() { ptr++; return *this; }
-        const_reverse_iterator& operator++() { ptr--; return *this; }
-        const_reverse_iterator operator++(int) { const_reverse_iterator copy(*this); ++(*this); return copy; }
-        const_reverse_iterator operator--(int) { const_reverse_iterator copy(*this); --(*this); return copy; }
-        bool operator==(const_reverse_iterator x) const { return ptr == x.ptr; }
-        bool operator!=(const_reverse_iterator x) const { return ptr != x.ptr; }
-    };
+    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
 private:
 #pragma pack(push, 1)
@@ -230,9 +196,9 @@ public:
         fill(item_ptr(0), n, val);
     }
 
-    template <std::input_iterator InputIterator>
+    template <std::forward_iterator InputIterator>
     void assign(InputIterator first, InputIterator last) {
-        size_type n = last - first;
+        size_type n = std::distance(first, last);
         clear();
         if (capacity() < n) {
             change_capacity(n);
@@ -253,9 +219,9 @@ public:
         fill(item_ptr(0), n, val);
     }
 
-    template <std::input_iterator InputIterator>
+    template <std::forward_iterator InputIterator>
     prevector(InputIterator first, InputIterator last) {
-        size_type n = last - first;
+        size_type n = std::distance(first, last);
         change_capacity(n);
         _size += n;
         fill(item_ptr(0), first, last);
@@ -305,10 +271,10 @@ public:
     iterator end() { return iterator(item_ptr(size())); }
     const_iterator end() const { return const_iterator(item_ptr(size())); }
 
-    reverse_iterator rbegin() { return reverse_iterator(item_ptr(size() - 1)); }
-    const_reverse_iterator rbegin() const { return const_reverse_iterator(item_ptr(size() - 1)); }
-    reverse_iterator rend() { return reverse_iterator(item_ptr(-1)); }
-    const_reverse_iterator rend() const { return const_reverse_iterator(item_ptr(-1)); }
+    reverse_iterator rbegin() { return reverse_iterator(end()); }
+    const_reverse_iterator rbegin() const { return const_reverse_iterator(end()); }
+    reverse_iterator rend() { return reverse_iterator(begin()); }
+    const_reverse_iterator rend() const { return const_reverse_iterator(begin()); }
 
     size_t capacity() const {
         if (is_direct()) {
@@ -358,6 +324,7 @@ public:
     }
 
     iterator insert(iterator pos, const T& value) {
+        const T copy{value};
         size_type p = pos - begin();
         size_type new_size = size() + 1;
         if (capacity() < new_size) {
@@ -367,11 +334,12 @@ public:
         T* dst = ptr + 1;
         memmove(dst, ptr, (size() - p) * sizeof(T));
         _size++;
-        new(static_cast<void*>(ptr)) T(value);
+        new(static_cast<void*>(ptr)) T(copy);
         return iterator(ptr);
     }
 
     void insert(iterator pos, size_type count, const T& value) {
+        const T copy{value};
         size_type p = pos - begin();
         size_type new_size = size() + count;
         if (capacity() < new_size) {
@@ -381,13 +349,26 @@ public:
         T* dst = ptr + count;
         memmove(dst, ptr, (size() - p) * sizeof(T));
         _size += count;
-        fill(item_ptr(p), count, value);
+        fill(item_ptr(p), count, copy);
     }
 
-    template <std::input_iterator InputIterator>
+    template <std::forward_iterator InputIterator>
     void insert(iterator pos, InputIterator first, InputIterator last) {
         size_type p = pos - begin();
-        difference_type count = last - first;
+        difference_type count = std::distance(first, last);
+        if (count == 0) return;
+        if constexpr (std::is_lvalue_reference_v<decltype(*first)> &&
+                      std::is_same_v<std::remove_cvref_t<decltype(*first)>, T>) {
+            // Compare addresses as integers so unrelated ranges are safe to check.
+            const auto source = reinterpret_cast<uintptr_t>(&*first);
+            const auto start = reinterpret_cast<uintptr_t>(item_ptr(0));
+            const auto stop = reinterpret_cast<uintptr_t>(item_ptr(size()));
+            if (source >= start && source < stop) {
+                const std::vector<T> copy(first, last);
+                insert(begin() + p, copy.begin(), copy.end());
+                return;
+            }
+        }
         size_type new_size = size() + count;
         if (capacity() < new_size) {
             change_capacity(new_size + (new_size >> 1));
@@ -434,11 +415,12 @@ public:
 
     template<typename... Args>
     void emplace_back(Args&&... args) {
+        T value(std::forward<Args>(args)...);
         size_type new_size = size() + 1;
         if (capacity() < new_size) {
             change_capacity(new_size + (new_size >> 1));
         }
-        new(item_ptr(size())) T(std::forward<Args>(args)...);
+        new(item_ptr(size())) T(value);
         _size++;
     }
 

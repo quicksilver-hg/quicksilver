@@ -7,12 +7,14 @@
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
 #include <kernel/coinstats.h>
+#include <pow.h>
 #include <node/miner.h>
 #include <script/interpreter.h>
 #include <streams.h>
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
+#include <test/fuzz/util/txpow.h>
 #include <test/util/mining.h>
 #include <test/util/setup_common.h>
 #include <util/chaintype.h>
@@ -25,13 +27,14 @@ FUZZ_TARGET(utxo_total_supply)
 {
     SeedRandomStateForTest(SeedRand::ZEROS);
     FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());
-    const auto mock_time{ConsumeTime(fuzzed_data_provider, /*min=*/1296688602)}; // sandbox genesis block timestamp
+    const auto mock_time{ConsumeTime(fuzzed_data_provider, /*min=*/1750000001, /*max=*/1800000000)};
     /** The testing setup that creates a chainman only (no chainstate) */
     ChainTestingSetup test_setup{
         ChainType::SANDBOX,
         {
             .extra_args = {
                 "-testactivationheight=bip34@2",
+                "-txpownocycle",
                 strprintf("-mocktime=%d", mock_time).c_str()
             },
         },
@@ -111,6 +114,8 @@ FUZZ_TARGET(utxo_total_supply)
     // Mine the first block with this duplicate
     current_block = PrepareNextBlock();
     StoreLastTxo();
+    std::pair<COutPoint, CTxOut> first_coinbase;
+    bool minted{false};
 
     {
         // Create duplicate (CScript should match exact format as in CreateNewBlock)
@@ -119,6 +124,7 @@ FUZZ_TARGET(utxo_total_supply)
 
         // Mine block and create next block template
         current_block->vtx.front() = MakeTransactionRef(tx);
+        first_coinbase = {COutPoint{tx.GetHash(), 0}, tx.vout.at(0)};
     }
     current_block->hashMerkleRoot = BlockMerkleRoot(*current_block);
     assert(!MineBlock(node, current_block).IsNull());
@@ -151,6 +157,8 @@ FUZZ_TARGET(utxo_total_supply)
             },
             [&] {
                 // Append the current block to the active chain
+                const CAmount mint_allowance = GetBlockMintAllowance(*current_block, Params().GetConsensus(),
+                    WITH_LOCK(chainman.GetMutex(), return chainman.ActiveChain().Tip()));
                 node::RegenerateCommitments(*current_block, chainman);
                 const bool was_valid = !MineBlock(node, current_block).IsNull();
 
@@ -162,6 +170,7 @@ FUZZ_TARGET(utxo_total_supply)
                     }
 
                     circulation += GetBlockSubsidy(ActiveHeight(), Params().GetConsensus());
+                    circulation += mint_allowance;
                 }
 
                 UpdateUtxoStats();
@@ -173,6 +182,39 @@ FUZZ_TARGET(utxo_total_supply)
 
                 current_block = PrepareNextBlock();
                 StoreLastTxo();
+            },
+            [&] {
+                if (minted) return;
+                // Mature the first coinbase with empty blocks. Keep the oracle
+                // current, then claim a Frame-B mint in the next block.
+                current_block = PrepareNextBlock();
+                while (ActiveHeight() < COINBASE_MATURITY) {
+                    CMutableTransaction coinbase{*current_block->vtx.front()};
+                    coinbase.vin[0].scriptSig << OP_1;
+                    current_block->vtx.front() = MakeTransactionRef(coinbase);
+                    node::RegenerateCommitments(*current_block, chainman);
+                    assert(!MineBlock(node, current_block).IsNull());
+                    circulation += GetBlockSubsidy(ActiveHeight(), Params().GetConsensus());
+                    current_block = PrepareNextBlock();
+                }
+                CMutableTransaction spend;
+                spend.vin.emplace_back(first_coinbase.first);
+                spend.vout.emplace_back(first_coinbase.second.nValue, first_coinbase.second.scriptPubKey);
+                ProveFuzzTxPow(spend, WITH_LOCK(chainman.GetMutex(), return chainman.ActiveChain().Tip()));
+                current_block->vtx.push_back(MakeTransactionRef(spend));
+                const CAmount allowance = GetBlockMintAllowance(*current_block, Params().GetConsensus(),
+                    WITH_LOCK(chainman.GetMutex(), return chainman.ActiveChain().Tip()));
+                assert(allowance > 0);
+                CMutableTransaction coinbase{*current_block->vtx.front()};
+                coinbase.vout[0].nValue += allowance;
+                current_block->vtx.front() = MakeTransactionRef(coinbase);
+                node::RegenerateCommitments(*current_block, chainman);
+                assert(!MineBlock(node, current_block).IsNull());
+                circulation += GetBlockSubsidy(ActiveHeight(), Params().GetConsensus()) + allowance;
+                UpdateUtxoStats();
+                current_block = PrepareNextBlock();
+                StoreLastTxo();
+                minted = true;
             });
     }
 }

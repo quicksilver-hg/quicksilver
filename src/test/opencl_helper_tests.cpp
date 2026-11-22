@@ -23,6 +23,13 @@ Run RunHelper(const std::vector<std::string>& argv)
     return {child->Wait(), out};
 }
 const std::string kPre84(168, '0');
+boost::test_tools::assertion_result OpenClLoaderAvailable(boost::unit_test::test_unit_id)
+{
+    if (RunHelper({QSGPUSOLVE_OPENCL_E19_PATH, "--list-devices"}).exit_code == 0) return true;
+    boost::test_tools::assertion_result skipped(false);
+    skipped.message() << "OpenCL loader unavailable; device-selection test skipped";
+    return skipped;
+}
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(opencl_helper_tests)
@@ -39,8 +46,9 @@ BOOST_AUTO_TEST_CASE(edgebits_mismatch_exits_3)
     BOOST_CHECK_EQUAL(RunHelper({QSGPUSOLVE_OPENCL_E19_PATH, "28", kPre84, "0", "1"}).exit_code, 3);
     BOOST_CHECK_EQUAL(RunHelper({QSGPUSOLVE_OPENCL_E19_PATH, "--device", "pci:0000:04:00.0", "28", kPre84, "0", "1"}).exit_code, 3);
 }
-BOOST_AUTO_TEST_CASE(absent_device_exits_4)
+BOOST_AUTO_TEST_CASE(absent_device_exits_4, *boost::unit_test::precondition(OpenClLoaderAvailable))
 {
+    // An absent loader also exits 4; the precondition proves we reached selection.
     const Run r = RunHelper({QSGPUSOLVE_OPENCL_E19_PATH, "--device", "pci:ffff:ff:1f.7", "19", kPre84, "0", "1"});
     BOOST_CHECK_EQUAL(r.exit_code, 4);
     BOOST_CHECK(r.out.find("nonce=") == std::string::npos);

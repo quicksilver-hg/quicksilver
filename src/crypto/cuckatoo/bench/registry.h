@@ -35,8 +35,8 @@ struct SolverVTable {
     //! Check `cycle` against the graph keyed by `prepow` (with the nonce already
     //! placed at the tail), using the vendored verifier compiled at this same
     //! EDGEBITS. Exists because the consensus verifier — cuckatoo::CuckatooVerify
-    //! — dispatches over {19, 29} only, so it cannot check the swept sizes; and
-    //! teaching it to would be a consensus change, which Stage 1 forbids. The
+    //! — dispatches over {19, 28} only, so it cannot check the swept sizes; and
+    //! teaching it to would be a consensus change, which calibration forbids. The
     //! bench harness is tied to consensus at E19 instead, where both verifiers
     //! exist and a graph is cheap. See cuckatoo_bench_solve_tests.cpp.
     bool (*verify_one)(const Cycle& cycle, const unsigned char* prepow, size_t len);

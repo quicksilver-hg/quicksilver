@@ -252,7 +252,7 @@ void UnserializeTransaction(TxType& tx, Stream& s, const TransactionSerParams& p
         throw std::ios_base::failure("Unknown transaction optional data");
     }
     s >> tx.nLockTime;
-    // Quicksilver (#5c-1): anchor height, then the per-tx Cuckatoo proof tail (txid-bound).
+    // Quicksilver per-transaction PoW anchor: anchor height, then the per-tx Cuckatoo proof tail (txid-bound).
     s >> tx.nAnchorHeight;
     s >> tx.nPowNonce;
     for (auto& edge : tx.nCycle) s >> edge;
@@ -286,7 +286,7 @@ void SerializeTransaction(const TxType& tx, Stream& s, const TransactionSerParam
         }
     }
     s << tx.nLockTime;
-    // Quicksilver (#5c-1): anchor height, then the per-tx Cuckatoo proof tail (txid-bound).
+    // Quicksilver per-transaction PoW anchor: anchor height, then the per-tx Cuckatoo proof tail (txid-bound).
     s << tx.nAnchorHeight;
     s << tx.nPowNonce;
     for (const auto& edge : tx.nCycle) s << edge;
@@ -317,7 +317,7 @@ public:
     const std::vector<CTxOut> vout;
     const uint32_t version;
     const uint32_t nLockTime;
-    //! Quicksilver (#5c-1): anchor height — see CMutableTransaction::nAnchorHeight.
+    //! Quicksilver per-transaction PoW anchor: anchor height — see CMutableTransaction::nAnchorHeight.
     const uint32_t nAnchorHeight;
     //! Quicksilver: per-tx Cuckatoo proof. Part of the base serialization, so the
     //! proof is bound into the txid. nPowNonce is the grind field (trailing pre-image).
@@ -405,7 +405,7 @@ struct CMutableTransaction
     std::vector<CTxOut> vout;
     uint32_t version;
     uint32_t nLockTime;
-    //! Quicksilver (#5c-1): height of the recent active-chain block this tx's per-tx
+    //! Quicksilver per-transaction PoW anchor: height of the recent active-chain block this tx's per-tx
     //! PoW is anchored to. The PoW preimage commits that block's hash, so the proof
     //! cannot be ground before the block exists (precompute resistance) and validity
     //! is deterministic. Serialized before the proof tail.

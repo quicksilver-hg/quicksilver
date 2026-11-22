@@ -230,6 +230,17 @@ BOOST_AUTO_TEST_CASE(device_without_amd_extension_uses_device_name)
     BOOST_CHECK_EQUAL(g_board_queries, 0);
 }
 
+BOOST_AUTO_TEST_CASE(empty_device_name_falls_back_to_id_on_parse)
+{
+    g_device = {"", "", "", false};
+    g_devices.clear();
+    const auto listed = qsgpu::EnumerateDevices(FakeApi(), false, kNoRenderNodes);
+    BOOST_REQUIRE_EQUAL(listed.size(), 1U);
+    const auto parsed = cuckatoo::ParseDeviceLine(qsgpu::FormatListingLine(listed.front().fields));
+    BOOST_REQUIRE(parsed.has_value());
+    BOOST_CHECK_EQUAL(parsed->name, parsed->id);
+}
+
 // F-514: where no slot extension answers (Mesa clover on 22.04), the id comes from the
 // device's DRM render node. Measured on precision 2026-10-23: clover enumerates its
 // devices in render-node *name* order, not PCI order and not /dev/dri readdir order
@@ -339,6 +350,16 @@ BOOST_FIXTURE_TEST_CASE(a_missing_dev_dri_scans_to_nothing, BasicTestingSetup)
     BOOST_CHECK(qsgpu::ScanRenderNodes(paths).empty());
 }
 
+BOOST_FIXTURE_TEST_CASE(scan_render_nodes_unreadable_dir_is_empty, BasicTestingSetup)
+{
+    const fs::path regular = m_path_root / "not-a-directory";
+    std::ofstream{regular} << "ordinary file";
+    qsgpu::DrmPaths paths;
+    paths.dev_dri = fs::PathToString(regular);
+    paths.sys_class_drm = fs::PathToString(m_path_root);
+    BOOST_CHECK(qsgpu::ScanRenderNodes(paths).empty());
+}
+
 BOOST_AUTO_TEST_CASE(a_card_with_no_slot_extension_is_listed_by_its_render_nodes_address)
 {
     g_device = NoExtensionGpu();
@@ -426,19 +447,23 @@ BOOST_AUTO_TEST_CASE(a_slot_extension_still_wins_over_the_render_nodes_address)
     BOOST_CHECK_EQUAL(ids[0], "pci:0000:0c:00.0");
 }
 
-BOOST_AUTO_TEST_CASE(the_enumeration_id_stays_on_the_device_without_being_printed)
+BOOST_AUTO_TEST_CASE(the_enumeration_id_is_printed_as_an_alias_when_needed)
 {
     g_devices = {NoExtensionGpu(), NoExtensionGpu()};
     const auto listed = qsgpu::EnumerateDevices(FakeApi(), false, {kNode128, kNode129});
     BOOST_REQUIRE_EQUAL(listed.size(), 2U);
     BOOST_CHECK_EQUAL(listed[0].enumeration_id, "opencl:0:0");
     BOOST_CHECK_EQUAL(listed[1].enumeration_id, "opencl:0:1");
-    // The printed contract keeps its fields: the enumeration id is not one of them.
+    // The printed id stays canonical and the old choice is carried before name=.
     const std::string line = qsgpu::FormatListingLine(listed[1].fields);
-    BOOST_CHECK_EQUAL(line.find("opencl:0:1"), std::string::npos);
+    BOOST_CHECK(line.find(" alias=opencl:0:1 name=") != std::string::npos);
     const auto parsed = cuckatoo::ParseDeviceLine(line);
     BOOST_REQUIRE(parsed.has_value());
     BOOST_CHECK_EQUAL(parsed->id, "pci:0000:04:00.0");
+    BOOST_CHECK_EQUAL(parsed->alias, "opencl:0:1");
+    const auto fallback = qsgpu::EnumerateDevices(FakeApi(), false, {});
+    BOOST_REQUIRE_EQUAL(fallback.size(), 2U);
+    BOOST_CHECK_EQUAL(qsgpu::FormatListingLine(fallback[1].fields).find(" alias="), std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(a_saved_choice_selects_its_card_by_either_id)

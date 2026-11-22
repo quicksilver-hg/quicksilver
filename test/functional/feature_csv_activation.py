@@ -203,7 +203,7 @@ class BIP68_112_113Test(QuicksilverTestFramework):
         self.tipheight = COINBASE_BLOCK_COUNT  # height of the next block to build
         self.last_block_time = long_past_time
         self.tip = int(self.nodes[0].getbestblockhash(), 16)
-        # Quicksilver (#5c-1 Phase 2): nCongestion is consensus-checked and derived from the
+        # Quicksilver header-field congestion pricing: nCongestion is consensus-checked and derived from the
         # parent's value, so it has to be tracked alongside tip/tipheight. This test builds
         # runs of blocks before sending them, so the parent is often a block the node has
         # not seen yet and cannot be asked about.

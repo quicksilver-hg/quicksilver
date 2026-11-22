@@ -333,7 +333,7 @@ arith_uint256 GetTxWorkSurplus(const CTransaction& tx, const CBlockIndex* anchor
                                const Consensus::Params& params)
 {
     const arith_uint256 actual = GetTxActualWork(tx);
-    // Stage 2: the floor is the TRANSACTION's own requirement, not a shared scalar.
+    // Per-transaction work pricing: the floor is the TRANSACTION's own requirement, not a shared scalar.
     // That is what keeps the relay ranking honest once transactions of different
     // sizes owe different work — otherwise a bloat transaction would out-rank a
     // payment simply by being charged the same floor.

@@ -12,6 +12,7 @@
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
 #include <test/fuzz/util/relaypool.h>
+#include <test/fuzz/util/txpow.h>
 #include <test/util/mining.h>
 #include <test/util/script.h>
 #include <test/util/setup_common.h>
@@ -31,7 +32,7 @@ std::vector<COutPoint> g_outpoints_coinbase_init_mature;
 
 void initialize_tx_pool()
 {
-    static const auto testing_setup = MakeNoLogFileContext<const TestingSetup>();
+    static const auto testing_setup = MakeNoLogFileContext<const TestingSetup>(ChainType::SANDBOX, {.extra_args = {"-txpownocycle"}});
     g_setup = testing_setup.get();
 
     BlockAssembler::Options options;
@@ -146,7 +147,7 @@ FUZZ_TARGET(tx_package_eval, .init = initialize_tx_pool)
     std::map<COutPoint, CAmount> outpoints_value;
     for (const auto& outpoint : g_outpoints_coinbase_init_mature) {
         Assert(relaypool_outpoints.insert(outpoint).second);
-        outpoints_value[outpoint] = 50 * COIN;
+        outpoints_value[outpoint] = WITH_LOCK(::cs_main, return chainstate.CoinsTip().AccessCoin(outpoint).out.nValue);
     }
 
     auto outpoints_updater = std::make_shared<OutpointsUpdater>(relaypool_outpoints);
@@ -227,11 +228,13 @@ FUZZ_TARGET(tx_package_eval, .init = initialize_tx_pool)
                     amount_in -= 1000;
                 }
 
-                const auto leftover = fuzzed_data_provider.ConsumeIntegralInRange<CAmount>(0, amount_in);
+                // Keep a valid feeless branch; positive surplus deliberately tests rejection.
+                const auto leftover = fuzzed_data_provider.ConsumeBool() ? 0 : fuzzed_data_provider.ConsumeIntegralInRange<CAmount>(0, amount_in);
                 const auto amount_out = (amount_in - leftover) / num_out;
                 for (int i = 0; i < num_out; ++i) {
-                    tx_mut.vout.emplace_back(amount_out, P2WSH_EMPTY);
+                    tx_mut.vout.emplace_back(amount_out + (i == 0 ? (amount_in - leftover) % num_out : 0), P2WSH_EMPTY);
                 }
+                ProveFuzzTxPow(tx_mut, WITH_LOCK(::cs_main, return chainstate.m_chain.Tip()));
                 auto tx = MakeTransactionRef(tx_mut);
                 // Restore previously removed outpoints, except in-package outpoints
                 if (!last_tx) {
@@ -285,12 +288,17 @@ FUZZ_TARGET(tx_package_eval, .init = initialize_tx_pool)
                 Assert(added.size() == 1);
                 Assert(txs.back() == *added.begin());
             }
-        } else if (result_package.m_state.GetResult() != PackageValidationResult::PCKG_POLICY) {
+        } else if (result_package.m_state.GetResult() != PackageValidationResult::PCKG_POLICY && result_package.m_tx_results.size() == txs.size()) {
             // We don't know anything about the validity since transactions were randomly generated, so
             // just use result_package.m_state here. This makes the expect_valid check meaningless, but
             // we can still verify that the contents of m_tx_results are consistent with m_state.
             const bool expect_valid{result_package.m_state.IsValid()};
             Assert(!CheckPackageRelayPoolAcceptResult(txs, result_package, expect_valid, &tx_pool));
+        } else if (result_package.m_state.GetResult() == PackageValidationResult::PCKG_TX) {
+            // An early transaction precheck returns only that transaction's result.
+            Assert(result_package.m_state.IsInvalid());
+            Assert(result_package.m_tx_results.size() == 1);
+            Assert(result_package.m_tx_results.contains(txs.front()->GetWitnessHash()));
         } else {
             // This is empty if it fails early checks, or "full" if transactions are looked at deeper
             Assert(result_package.m_tx_results.size() == txs.size() || result_package.m_tx_results.empty());

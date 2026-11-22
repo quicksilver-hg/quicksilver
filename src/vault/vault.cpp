@@ -567,6 +567,7 @@ bool CVault::ChangeVaultPassphrase(const SecureString& strOldVaultPassphrase, co
             if (!crypter.Decrypt(pMasterKey.second.vchCryptedKey, _vMasterKey))
                 return false;
             if (Unlock(_vMasterKey)) {
+                const CMasterKey old_master_key{pMasterKey.second};
                 constexpr MillisecondsDouble target{100};
                 auto start{SteadyClock::now()};
                 crypter.SetKeyFromPassphrase(strNewVaultPassphrase, pMasterKey.second.vchSalt, pMasterKey.second.nDeriveIterations);
@@ -585,9 +586,14 @@ bool CVault::ChangeVaultPassphrase(const SecureString& strOldVaultPassphrase, co
                     return false;
                 if (!crypter.Encrypt(_vMasterKey, pMasterKey.second.vchCryptedKey))
                     return false;
-                VaultBatch(GetDatabase()).WriteMasterKey(pMasterKey.first, pMasterKey.second);
+                if (!VaultBatch(GetDatabase()).WriteMasterKey(pMasterKey.first, pMasterKey.second)) {
+                    pMasterKey.second = old_master_key;
+                    if (fWasLocked) Lock();
+                    return false;
+                }
                 if (fWasLocked)
                     Lock();
+                NotifyBackupStateChanged();
                 return true;
             }
         }
@@ -787,14 +793,19 @@ bool CVault::EncryptVault(const SecureString& strVaultPassphrase)
 
     {
         LOCK2(m_relock_mutex, cs_vault);
-        mapMasterKeys[++nMasterKeyMaxID] = kMasterKey;
         VaultBatch* encrypted_batch = new VaultBatch(GetDatabase());
         if (!encrypted_batch->TxnBegin()) {
             delete encrypted_batch;
             encrypted_batch = nullptr;
             return false;
         }
-        encrypted_batch->WriteMasterKey(nMasterKeyMaxID, kMasterKey);
+        mapMasterKeys[++nMasterKeyMaxID] = kMasterKey;
+        if (!encrypted_batch->WriteMasterKey(nMasterKeyMaxID, kMasterKey)) {
+            encrypted_batch->TxnAbort();
+            delete encrypted_batch;
+            mapMasterKeys.erase(nMasterKeyMaxID--);
+            return false;
+        }
 
         for (const auto& spk_man_pair : m_spk_managers) {
             auto spk_man = spk_man_pair.second.get();
@@ -820,19 +831,21 @@ bool CVault::EncryptVault(const SecureString& strVaultPassphrase)
         encrypted_batch = nullptr;
 
         Lock();
-        Unlock(strVaultPassphrase);
+        const bool unlocked{Unlock(strVaultPassphrase)};
+        if (!unlocked) VaultLogPrintf("failed to re-unlock after encryption; new descriptors were not created");
 
         // If we are using descriptors, make new descriptors with a new seed
-        if (!IsVaultFlagSet(VAULT_FLAG_BLANK_VAULT)) {
+        if (unlocked && !IsVaultFlagSet(VAULT_FLAG_BLANK_VAULT)) {
             SetupDescriptorScriptPubKeyMans();
         }
         Lock();
 
         // Rewrite vault storage to avoid leaving unencrypted private key material in slack space.
-        GetDatabase().Rewrite();
+        if (!GetDatabase().Rewrite()) VaultLogPrintf("failed to rewrite vault storage after encryption");
         GetDatabase().ReloadDbEnv();
     }
     NotifyStatusChanged(this);
+    NotifyBackupStateChanged();
 
     return true;
 }
@@ -891,7 +904,7 @@ bool CVault::IsSpentKey(const CScript& scriptPubKey) const
     return false;
 }
 
-CVaultTx* CVault::AddToVault(CTransactionRef tx, const TxState& state, const UpdateVaultTxFn& update_wtx, bool fFlushOnClose, bool rescanning_old_block)
+CVaultTx* CVault::AddToVault(CTransactionRef tx, const TxState& state, const UpdateVaultTxFn& update_wtx, bool fFlushOnClose, bool rescanning_old_block, std::optional<std::pair<int64_t, uint32_t>> archived_times)
 {
     LOCK(cs_vault);
 
@@ -917,10 +930,10 @@ CVaultTx* CVault::AddToVault(CTransactionRef tx, const TxState& state, const Upd
     bool fInsertedNew = ret.second;
     bool fUpdated = update_wtx && update_wtx(wtx, fInsertedNew);
     if (fInsertedNew) {
-        wtx.nTimeReceived = GetTime();
+        wtx.nTimeReceived = archived_times ? archived_times->first : GetTime();
         wtx.nOrderPos = IncOrderPosNext(&batch);
         wtx.m_it_wtxOrdered = wtxOrdered.insert(std::make_pair(wtx.nOrderPos, &wtx));
-        wtx.nTimeSmart = ComputeTimeSmart(wtx, rescanning_old_block);
+        wtx.nTimeSmart = archived_times ? archived_times->second : ComputeTimeSmart(wtx, rescanning_old_block);
         AddToSpends(wtx, &batch);
 
         // Update birth time when tx time is older than it.
@@ -3324,6 +3337,19 @@ util::Result<AgentAllotmentRecord> CVault::RecordAgentAllotmentSetup(const std::
         return util::Error{_("This vault does not support agent allotment setup.")};
     }
 
+    VaultBatch batch(GetDatabase());
+    std::vector<AgentAllotmentRecord> records;
+    const auto read_status{batch.ReadAgentAllotmentRecordsClassified(records)};
+    if (read_status == VaultBatch::AllotmentRecordsRead::NEWER) {
+        return util::Error{_("Agent allotment records in this vault were written by a newer version. No allotment was created, and the records were left unchanged.")};
+    }
+    if (read_status == VaultBatch::AllotmentRecordsRead::CORRUPT || read_status == VaultBatch::AllotmentRecordsRead::READ_ERROR) {
+        return util::Error{_("Agent allotment records in this vault could not be read. No allotment was created, and the records were left unchanged.")};
+    }
+    if (read_status == VaultBatch::AllotmentRecordsRead::LEGACY) {
+        VaultLogPrintf("Agent allotment records from before 0.1.2 were not loaded; their funding outputs stay locked. See doc/design/agent-client.md, \"Bundles exported before 0.1.2\".");
+    }
+
     const CKey vault_key{GenerateRandomKey()};
     const CKey agent_key{GenerateRandomKey()};
     const CKey cosigner_key{GenerateRandomKey()};
@@ -3351,17 +3377,6 @@ util::Result<AgentAllotmentRecord> CVault::RecordAgentAllotmentSetup(const std::
     VaultDescriptor vault_descriptor{descriptor, /*creation_time=*/static_cast<uint64_t>(GetTime()), /*range_start=*/0, /*range_end=*/0, /*next_index=*/0};
     if (!AddVaultDescriptor(vault_descriptor, provider, address_label, /*internal=*/false)) {
         return util::Error{_("Agent allotment descriptor could not be imported.")};
-    }
-
-    VaultBatch batch(GetDatabase());
-    std::vector<AgentAllotmentRecord> records;
-    if (!batch.ReadAgentAllotmentRecords(records)) {
-        // A missing key is a first allotment. A present key that does not deserialize is a
-        // pre-0.1.2 record: do not append to whatever a failed read left behind.
-        if (batch.HasAgentAllotmentRecords()) {
-            VaultLogPrintf("Agent allotment records from before 0.1.2 were not loaded; their funding outputs stay locked. See doc/design/agent-client.md, \"Bundles exported before 0.1.2\".");
-        }
-        records.clear();
     }
 
     unsigned int next_index{static_cast<unsigned int>(records.size() + 1)};
@@ -3830,6 +3845,7 @@ void CVault::AddActiveScriptPubKeyManWithDb(VaultBatch& batch, uint256 id, Outpu
         throw std::runtime_error(std::string(__func__) + ": writing active ScriptPubKeyMan id failed");
     }
     LoadActiveScriptPubKeyMan(id, type, internal);
+    NotifyBackupStateChanged();
 }
 
 void CVault::LoadActiveScriptPubKeyMan(uint256 id, OutputType type, bool internal)
@@ -3862,6 +3878,7 @@ void CVault::DeactivateScriptPubKeyMan(uint256 id, OutputType type, bool interna
 
         auto& spk_mans = internal ? m_internal_spk_managers : m_external_spk_managers;
         spk_mans.erase(type);
+        NotifyBackupStateChanged();
     }
 
     NotifyCanGetAddressesChanged();
@@ -3906,6 +3923,7 @@ ScriptPubKeyMan* CVault::AddVaultDescriptor(VaultDescriptor& desc, const FlatSig
     Assert(IsVaultFlagSet(VAULT_FLAG_DESCRIPTORS));
 
     auto spk_man = GetDescriptorScriptPubKeyMan(desc);
+    const bool added{spk_man == nullptr};
     if (spk_man) {
         VaultLogPrintf("saved descriptor=%s existing=1", desc.descriptor->ToString());
         spk_man->UpdateVaultDescriptor(desc);
@@ -3951,6 +3969,8 @@ ScriptPubKeyMan* CVault::AddVaultDescriptor(VaultDescriptor& desc, const FlatSig
 
     // Save the descriptor to DB
     spk_man->WriteDescriptor();
+    // A new descriptor id is one an earlier backup does not hold (F-613). An update keeps the id.
+    if (added) NotifyBackupStateChanged();
 
     return spk_man;
 }

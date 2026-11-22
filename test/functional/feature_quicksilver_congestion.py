@@ -2,7 +2,7 @@
 # Copyright (c) 2026 The Quicksilver developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""#5c-1 Phase 2: per-tx congestion floor — end-to-end on a sandbox node.
+"""header-field congestion pricing: per-tx congestion floor — end-to-end on a sandbox node.
 
 Proves the wired-up node moves the cached EIP-1559 congestion multiplier m in
 response to real block fullness, and that m persists across a restart:
@@ -84,7 +84,7 @@ class CongestionMultiplierTest(QuicksilverTestFramework):
         m_after = self.m_of(self.nodes[0], heavy_hash)
         assert_equal(m_before, m_after)
 
-        self.log.info("Quicksilver #5c-1 congestion multiplier (rise + decay + persist): PASS")
+        self.log.info("Quicksilver header congestion multiplier (rise + decay + persist): PASS")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,8 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #include <crypto/cuckatoo/gpu_devices.h>
 #include <test/util/gpucardtables.h>
+#include <util/fs.h>
+#include <util/string.h>
 
 #include <boost/test/unit_test.hpp>
 #include <chrono>
@@ -10,7 +12,10 @@
 #include <cstdlib>
 #include <fstream>
 #include <future>
+#include <optional>
 #include <thread>
+#include <utility>
+#include <vector>
 #ifdef WIN32
 #include <windows.h>
 #else
@@ -39,16 +44,34 @@ void Unset(const char* n) {
     unsetenv(n);
 #endif
 }
-struct Guard { Guard(){ ResetGpuDiscoveryForTesting(); } ~Guard(){ for (const char* n : {"CUCKATOO_GPU_SOLVER","CUCKATOO_GPU_BUNDLED","CUCKATOO_GPU_DEVICES","QS_SOLVER_STUB_LISTING","QS_SOLVER_STUB_SCRIPT"}) Unset(n); ResetGpuDiscoveryForTesting(); } };
+struct Guard {
+    std::vector<std::pair<const char*, std::optional<std::string>>> saved;
+    Guard() {
+        for (const char* n : {"CUCKATOO_GPU_SOLVER","CUCKATOO_GPU_BUNDLED","CUCKATOO_GPU_DEVICES","QS_SOLVER_STUB_LISTING","QS_SOLVER_STUB_SCRIPT"}) {
+            const char* value = std::getenv(n);
+            saved.emplace_back(n, value ? std::optional<std::string>{value} : std::nullopt);
+            Unset(n);
+        }
+        ResetGpuDiscoveryForTesting();
+    }
+    ~Guard() {
+        for (const auto& [name, value] : saved) {
+            if (value) SetEnv(name, *value);
+            else Unset(name);
+        }
+        ResetGpuDiscoveryForTesting();
+    }
+};
 std::vector<GpuDevice> Parse(std::initializer_list<std::string> lines) { std::string s; for (const auto& l : lines) s += l + "\n"; return ParseDeviceListing(s); }
 DeviceChoice Chosen(std::vector<std::string> ids) { return {DeviceChoice::Mode::kChosen, std::move(ids)}; }
 std::vector<std::string> Ids(const std::vector<GpuDevice>& ds) { std::vector<std::string> r; for (const auto& d : ds) r.push_back(d.id); return r; }
 std::string Tmp(const char* name) {
 #ifdef WIN32
-    return name;
+    const auto pid = util::ToString(GetCurrentProcessId());
 #else
-    return std::string{"/tmp/"} + name;
+    const auto pid = util::ToString(getpid());
 #endif
+    return fs::PathToString(fs::temp_directory_path() / (std::string{"qs-gpu-devices-"} + pid + "-" + name));
 }
 std::string Script(const char* name, const std::string& content) {
     const std::string p = Tmp(name);
@@ -59,10 +82,42 @@ long Appended(const std::string& mark) { std::ifstream f(mark, std::ios::binary 
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(gpu_devices_tests, GpuCardTablesTestSetup)
+BOOST_AUTO_TEST_CASE(environment_guard_restores_value_and_absence)
+{
+    constexpr const char* name{"CUCKATOO_GPU_DEVICES"};
+    const char* original = std::getenv(name);
+    const std::optional<std::string> saved = original ? std::optional<std::string>{original} : std::nullopt;
+    SetEnv(name, "inherited-device");
+    {
+        Guard guard;
+        BOOST_CHECK(std::getenv(name) == nullptr);
+        SetEnv(name, "changed-device");
+    }
+    const char* restored = std::getenv(name);
+    BOOST_CHECK(restored != nullptr);
+    if (restored) BOOST_CHECK_EQUAL(std::string{restored}, "inherited-device");
+    Unset(name);
+    {
+        Guard guard;
+        SetEnv(name, "changed-device");
+    }
+    BOOST_CHECK(std::getenv(name) == nullptr);
+    if (saved) SetEnv(name, *saved);
+    else Unset(name);
+}
 BOOST_AUTO_TEST_CASE(parse_name_is_rest_of_line)
 {
     auto d = ParseDeviceLine(RX); BOOST_REQUIRE(d); BOOST_CHECK_EQUAL(d->mem, 8589934592ULL); BOOST_CHECK_EQUAL(d->name, "AMD Radeon RX 480 Graphics (radeonsi, polaris10)");
     auto t = ParseDeviceLine("device backend=opencl id=pci:0000:04:00.0 type=gpu status=ok name=X id=wrong type=cpu"); BOOST_REQUIRE(t); BOOST_CHECK_EQUAL(t->id, "pci:0000:04:00.0"); BOOST_CHECK_EQUAL(t->name, "X id=wrong type=cpu");
+}
+BOOST_AUTO_TEST_CASE(parse_device_line_accepts_empty_name)
+{
+    const auto d = ParseDeviceLine("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=6 status=ok name=");
+    BOOST_REQUIRE(d);
+    BOOST_CHECK_EQUAL(d->name, d->id);
+    BOOST_CHECK_EQUAL(d->mem, 6U);
+    BOOST_CHECK(d->status == DeviceStatus::kOk);
+    BOOST_CHECK(!ParseDeviceLine("device backend=opencl type=gpu status=ok name="));
 }
 BOOST_AUTO_TEST_CASE(malformed_and_status)
 {
@@ -81,6 +136,19 @@ BOOST_AUTO_TEST_CASE(selection_ignores_listing_order)
 {
     DeviceChoice a; auto x = SelectDevices(Parse({IGPU, RX, NV}), a); auto y = SelectDevices(Parse({RX, NV, IGPU}), a);
     BOOST_CHECK(Ids(x.use) == Ids(y.use)); BOOST_CHECK((Ids(x.use) == std::vector<std::string>{"pci:0000:01:00.0", "pci:0000:04:00.0"})); BOOST_CHECK_EQUAL(*SolveDevice(x), "pci:0000:01:00.0");
+}
+BOOST_AUTO_TEST_CASE(select_devices_accepts_saved_enumeration_id)
+{
+    const auto listed = Parse({"device backend=opencl id=pci:0000:04:00.0 type=gpu status=ok alias=opencl:0:1 name=Card"});
+    BOOST_REQUIRE_EQUAL(listed.size(), 1U);
+    BOOST_CHECK_EQUAL(listed[0].alias, "opencl:0:1");
+    const auto selected = SelectDevices(listed, Chosen({"opencl:0:1"}));
+    BOOST_REQUIRE_EQUAL(selected.use.size(), 1U);
+    BOOST_CHECK_EQUAL(selected.use[0].id, "pci:0000:04:00.0");
+    BOOST_CHECK_EQUAL(*SolveDevice(selected), "pci:0000:04:00.0");
+    const auto without_alias = Parse({RX});
+    BOOST_REQUIRE_EQUAL(without_alias.size(), 1U);
+    BOOST_CHECK(without_alias[0].alias.empty());
 }
 BOOST_AUTO_TEST_CASE(chosen_never_substitutes_and_classifies)
 {
@@ -160,13 +228,22 @@ BOOST_AUTO_TEST_CASE(timed_out_listing_retries)
     std::remove(script.c_str());
     std::remove(mark.c_str());
 }
+static bool WaitFor(bool want_held, const std::string& path, std::chrono::milliseconds bound);
 BOOST_AUTO_TEST_CASE(listing_timeout_kills_the_helper)
 {
     Guard g;
-    SetEnv("QS_SOLVER_STUB_LISTING", Script("qs-list-timeout", "sleep 60000\n"));
+    const std::string lock{Tmp("qs-list-timeout-lock")};
+    std::remove(lock.c_str());
+    SetEnv("QS_SOLVER_STUB_LISTING", Script("qs-list-timeout", "hold " + lock + "\nsleep 60000\n"));
     const auto start = std::chrono::steady_clock::now();
-    BOOST_CHECK(ListDevices(SOLVER_STUB_PATH, std::chrono::milliseconds{100}).outcome == ListOutcome::kTimedOut);
+    auto listing = std::async(std::launch::async, [] {
+        return ListDevices(SOLVER_STUB_PATH, std::chrono::milliseconds{3000});
+    });
+    BOOST_REQUIRE_MESSAGE(WaitFor(true, lock, std::chrono::milliseconds{2000}), "listing helper did not reach its lock");
+    BOOST_CHECK(listing.get().outcome == ListOutcome::kTimedOut);
+    BOOST_CHECK_MESSAGE(WaitFor(false, lock, std::chrono::milliseconds{2000}), "timed-out listing helper remains alive");
     BOOST_CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds{20});
+    std::remove(lock.c_str());
 }
 BOOST_AUTO_TEST_CASE(helper_graph_size)
 {

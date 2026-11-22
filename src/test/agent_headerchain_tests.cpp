@@ -26,6 +26,7 @@
 #include <crypto/cuckatoo/gpu_devices.h>
 #include <key.h>
 #include <key_io.h>
+#include <hash.h>
 #include <netmessagemaker.h>
 #include <policy/policy.h>
 #include <pow.h>
@@ -41,12 +42,14 @@
 #include <script/script.h>
 #include <streams.h>
 #include <test/util/mining.h>
+#include <test/util/net.h>
 #include <test/util/random.h>
 #include <test/util/gpucardtables.h>
 #include <test/util/setup_common.h>
 #include <tinyformat.h>
 #include <uint256.h>
 #include <util/fs.h>
+#include <util/fs_helpers.h>
 #include <util/readwritefile.h>
 #include <util/result.h>
 #include <util/string.h>
@@ -56,6 +59,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <atomic>
+#include <cstring>
 #include <csignal>
 #include <cstdlib>
 #include <string>
@@ -68,6 +72,11 @@
 #include <optional>
 #include <string_view>
 #include <vector>
+
+#ifndef WIN32
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -512,6 +521,48 @@ BOOST_AUTO_TEST_CASE(rejects_future_headers)
     CBlockHeader future{NextHeader(chain, TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()) + MAX_FUTURE_BLOCK_TIME + 1)};
 
     BOOST_CHECK_EQUAL(chain.AcceptHeader(future).code, agent::HeaderAcceptCode::TIME_TOO_NEW);
+}
+
+BOOST_AUTO_TEST_CASE(accept_header_rejects_outdated_version)
+{
+    for (int version{1}; version <= 4; ++version) {
+        agent::HeaderChain chain{Params().GetConsensus(), Params().GenesisBlock()};
+        CBlockHeader header{NextHeader(chain)};
+        header.nVersion = version;
+        SolveBlockPoW(header, Params().GetConsensus());
+        const auto result{chain.AcceptHeader(header)};
+        BOOST_CHECK_EQUAL(result.code, version < 4 ? agent::HeaderAcceptCode::BAD_VERSION : agent::HeaderAcceptCode::ACCEPTED);
+        BOOST_CHECK_EQUAL(chain.Height(), version < 4 ? 0 : 1);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(relay_transaction_waits_for_matching_pong)
+{
+    const uint64_t nonce{123456789};
+    const CSerializedNetMsg tx{NetMsg::Make(NetMsgType::TX, uint64_t{42})};
+    const auto framed_pong{[](uint64_t value) {
+        const CSerializedNetMsg pong{NetMsg::Make(NetMsgType::PONG, value)};
+        const uint256 payload_hash{Hash(pong.data)};
+        CMessageHeader header{Params().MessageStart(), pong.m_type.c_str(), static_cast<unsigned int>(pong.data.size())};
+        std::memcpy(header.pchChecksum, payload_hash.begin(), CMessageHeader::CHECKSUM_SIZE);
+        std::vector<unsigned char> bytes;
+        VectorWriter{bytes, 0, header};
+        bytes.insert(bytes.end(), pong.data.begin(), pong.data.end());
+        return std::string{bytes.begin(), bytes.end()};
+    }};
+
+    StaticContentsSock matching{framed_pong(nonce)};
+    const auto acknowledged{agent::RelayTransactionOnSocket(matching, tx, std::chrono::milliseconds{100}, nonce)};
+    BOOST_CHECK(acknowledged.sent_tx);
+    BOOST_CHECK(acknowledged.peer_acknowledged);
+
+    for (const std::string& reply : {framed_pong(nonce + 1), std::string{}}) {
+        StaticContentsSock peer{reply};
+        const auto failed{agent::RelayTransactionOnSocket(peer, tx, std::chrono::milliseconds{100}, nonce)};
+        BOOST_CHECK(failed.sent_tx);
+        BOOST_CHECK(!failed.peer_acknowledged);
+        BOOST_CHECK_EQUAL(failed.error, "peer did not acknowledge the transaction within the timeout");
+    }
 }
 
 BOOST_AUTO_TEST_CASE(persists_and_loads_headers)
@@ -2789,7 +2840,7 @@ BOOST_AUTO_TEST_CASE(agent_allotment_proof_matches_anchor_derived_target)
     consensus.nTxWorkCouplingK = 1;
     agent::HeaderChain chain{consensus, Params().GenesisBlock()};
     // The elevated multiplier arrives IN the header, the way an agent actually gets it —
-    // not written onto the index afterwards. That is the whole point of #5c-1 Phase 2.
+    // not written onto the index afterwards. That is the whole point of header-field congestion pricing.
     const CBlockHeader anchor_header{
         NextHeader(chain, /*time=*/0, /*merkle_root=*/uint256{},
                    /*congestion=*/static_cast<uint32_t>(8 * CONGESTION_ONE))};
@@ -3055,6 +3106,87 @@ BOOST_AUTO_TEST_CASE(agent_allotment_import_rejects_mismatched_bundle_key)
         BOOST_CHECK_EQUAL(util::ErrorString(imported).original, "agent_secret_wif does not match the descriptor agent key");
     }
 
+}
+
+BOOST_AUTO_TEST_CASE(bundle_refuses_duplicate_funding_output)
+{
+    const CKey key{GenerateRandomKey()};
+    const agent::AllotmentFundingOutputArtifact output{
+        .txid = Txid::FromUint256(ArithToUint256(91)).ToString(), .vout = 0, .amount = COIN / 2};
+    const auto decoded{agent::DecodeAllotmentPolicyBundle(
+        AgentAllotmentBundleJson(key, COIN, COIN, {output, output}),
+        Params().GetChainTypeString(), Params().GenesisBlock().GetHash().ToString())};
+    BOOST_CHECK(!decoded);
+    BOOST_CHECK_EQUAL(util::ErrorString(decoded).original,
+                      strprintf("Agent allotment policy bundle funding output %s:%u appears more than once.", output.txid, output.vout));
+}
+
+BOOST_AUTO_TEST_CASE(bundle_refuses_available_above_limit)
+{
+    const CKey key{GenerateRandomKey()};
+    const auto decoded{agent::DecodeAllotmentPolicyBundle(
+        AgentAllotmentBundleJson(key, 2 * COIN), Params().GetChainTypeString(), Params().GenesisBlock().GetHash().ToString())};
+    BOOST_CHECK(!decoded);
+    BOOST_CHECK_EQUAL(util::ErrorString(decoded).original,
+                      "Agent allotment policy bundle funding available is more than its funding limit.");
+}
+
+BOOST_AUTO_TEST_CASE(receipt_store_refuses_unknown_activity_type)
+{
+    const fs::path path{HeaderStorePath("bad_activity_receipts.dat")};
+    agent::AllotmentReceiptStoreData data;
+    data.activities.push_back({});
+    BOOST_REQUIRE(agent::SaveAllotmentReceiptStore(data, path, Params().GenesisBlock().GetHash()) == agent::AllotmentStoreResult::OK);
+    std::fstream file{path, std::ios::in | std::ios::out | std::ios::binary};
+    BOOST_REQUIRE(file.is_open());
+    file.seekp(4 + 4 + 32 + 8 + 8);
+    file.put(static_cast<char>(7));
+    file.close();
+    const auto loaded{agent::LoadAllotmentPaymentReceipts(path, Params().GenesisBlock().GetHash())};
+    BOOST_CHECK_EQUAL(loaded.status, agent::AllotmentStoreResult::BAD_ACTIVITY);
+}
+
+bool SecondReceiptStoreLockFails(const fs::path& directory)
+{
+#ifdef WIN32
+    return agent::LockReceiptStoreDirectory(directory) == util::LockResult::ErrorLock;
+#else
+    const pid_t child{fork()};
+    if (child < 0) return false;
+    if (child == 0) {
+        _exit(agent::LockReceiptStoreDirectory(directory) == util::LockResult::ErrorLock ? 0 : 1);
+    }
+    int status{0};
+    return waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+#endif
+}
+
+BOOST_AUTO_TEST_CASE(receipt_store_lock_refuses_a_second_holder)
+{
+    const fs::path directory{HeaderStorePath("receipt_lock_dir")};
+    fs::create_directories(directory);
+    const fs::path lock_path{directory / ".lock"};
+    std::ofstream{lock_path}.close();
+    fsbridge::FileLock first{lock_path};
+    BOOST_REQUIRE(first.TryLock());
+    BOOST_CHECK(SecondReceiptStoreLockFails(directory));
+}
+
+BOOST_AUTO_TEST_CASE(apply_receipts_refuses_out_of_range_amount)
+{
+    const CKey key{GenerateRandomKey()};
+    auto context{agent::ImportAllotmentBundle(AgentAllotmentBundleJson(key),
+        Params().GetChainTypeString(), Params().GenesisBlock().GetHash().ToString())};
+    BOOST_REQUIRE(context);
+    auto& outputs{context->bundle.funding_outputs};
+    outputs.clear();
+    outputs.push_back({.txid = Txid::FromUint256(ArithToUint256(92)).ToString(), .vout = 0, .amount = -1});
+    BOOST_CHECK(!agent::ApplyPaymentReceiptsToBundle(context->bundle, {}, {}));
+    outputs[0].amount = 0;
+    BOOST_CHECK(!agent::ApplyPaymentReceiptsToBundle(context->bundle, {}, {}));
+    outputs[0].amount = MAX_MONEY;
+    outputs.push_back({.txid = Txid::FromUint256(ArithToUint256(93)).ToString(), .vout = 0, .amount = 1});
+    BOOST_CHECK(!agent::ApplyPaymentReceiptsToBundle(context->bundle, {}, {}));
 }
 
 BOOST_AUTO_TEST_CASE(apply_payment_receipts_drops_spent_bundle_outputs)

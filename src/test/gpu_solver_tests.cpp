@@ -9,6 +9,7 @@
 #include <crypto/cuckatoo/cuckatoo.h>
 #include <crypto/cuckatoo/gpu_solver.h>
 #include <primitives/block.h>
+#include <util/fs.h>
 
 #include <test/util/gpucardtables.h>
 
@@ -111,14 +112,16 @@ void set_env(const char* name, const std::string& value) {
 #endif
 }
 
-// Absolute-or-cwd path for a fixture file. The stub inherits the test process's
-// working directory, so a bare name on Windows resolves the same for both.
+BOOST_AUTO_TEST_CASE(no_progress_timeout_is_clamped)
+{
+    set_env("CUCKATOO_GPU_TIMEOUT", "3000000");
+    BOOST_CHECK_EQUAL(cuckatoo::NoProgressTimeoutMs(), 86400000);
+    qs_test_unsetenv("CUCKATOO_GPU_TIMEOUT");
+}
+
+// Give concurrent test processes distinct fixture paths.
 std::string tmp_path(const std::string& name) {
-#ifdef WIN32
-    return name;
-#else
-    return "/tmp/" + name;
-#endif
+    return fs::PathToString(fs::temp_directory_path() / ("qs-gpu-solver-" + num(getpid()) + "-" + name));
 }
 
 // --- The two primitives every stub is built from ----------------------------
@@ -314,22 +317,51 @@ bool stub_holds_lock(const std::string& path) {
     return true;
 }
 struct EnvGuard {
-    EnvGuard() { cuckatoo::ResetGpuDiscoveryForTesting(); }
+    std::vector<std::pair<const char*, std::optional<std::string>>> saved;
+    EnvGuard() {
+        for (const char* name : {"CUCKATOO_GPU_SOLVER", "CUCKATOO_GPU_BUNDLED", "CUCKATOO_GPU_DEVICES",
+                                "CUCKATOO_GPU_TIMEOUT", "CUCKATOO_GPU_FAULT", "QS_SOLVER_STUB_SCRIPT",
+                                "QS_SOLVER_STUB_ARGV", "QS_SOLVER_STUB_ARGV_APPEND",
+                                "QS_SOLVER_STUB_DEVICE_SCRIPTS", "QS_SOLVER_STUB_LISTING"}) {
+            const char* value = std::getenv(name);
+            saved.emplace_back(name, value ? std::optional<std::string>{value} : std::nullopt);
+            qs_test_unsetenv(name);
+        }
+        cuckatoo::ResetGpuDiscoveryForTesting();
+    }
     ~EnvGuard() {
-        qs_test_unsetenv("CUCKATOO_GPU_SOLVER");
-        qs_test_unsetenv("CUCKATOO_GPU_BUNDLED");
-        qs_test_unsetenv("CUCKATOO_GPU_DEVICES");
-        qs_test_unsetenv("CUCKATOO_GPU_TIMEOUT");
-        qs_test_unsetenv("CUCKATOO_GPU_FAULT");
-        qs_test_unsetenv("QS_SOLVER_STUB_SCRIPT");
-        qs_test_unsetenv("QS_SOLVER_STUB_ARGV");
-        qs_test_unsetenv("QS_SOLVER_STUB_ARGV_APPEND");
-        qs_test_unsetenv("QS_SOLVER_STUB_DEVICE_SCRIPTS");
-        qs_test_unsetenv("QS_SOLVER_STUB_LISTING");
+        for (const auto& [name, value] : saved) {
+            if (value) set_env(name, *value);
+            else qs_test_unsetenv(name);
+        }
         cuckatoo::ResetGpuDiscoveryForTesting();
     }
 };
 } // namespace
+
+BOOST_AUTO_TEST_CASE(environment_guard_restores_value_and_absence)
+{
+    constexpr const char* name{"CUCKATOO_GPU_DEVICES"};
+    const char* original = std::getenv(name);
+    const std::optional<std::string> saved = original ? std::optional<std::string>{original} : std::nullopt;
+    set_env(name, "inherited-device");
+    {
+        EnvGuard guard;
+        BOOST_CHECK(std::getenv(name) == nullptr);
+        set_env(name, "changed-device");
+    }
+    const char* restored = std::getenv(name);
+    BOOST_CHECK(restored != nullptr);
+    if (restored) BOOST_CHECK_EQUAL(std::string{restored}, "inherited-device");
+    qs_test_unsetenv(name);
+    {
+        EnvGuard guard;
+        set_env(name, "changed-device");
+    }
+    BOOST_CHECK(std::getenv(name) == nullptr);
+    if (saved) set_env(name, *saved);
+    else qs_test_unsetenv(name);
+}
 
 BOOST_AUTO_TEST_CASE(returns_false_when_unset)
 {

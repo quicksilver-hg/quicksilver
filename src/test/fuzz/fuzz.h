@@ -21,7 +21,7 @@
  * for useful data and avoids bloating the fuzz input folder with useless data.
  */
 #define LIMITED_WHILE(condition, limit) \
-    for (unsigned _count{limit}; (condition) && _count; --_count)
+    for (unsigned _count{limit}; _count && (condition); --_count)
 
 using FuzzBufferType = std::span<const uint8_t>;
 

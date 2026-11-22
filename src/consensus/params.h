@@ -120,44 +120,45 @@ struct Params {
      *  blake2b(cycle)). GetTxPowTarget applies the block-coupled congestion law
      *  and never returns a target easier than this ceiling. */
     uint256 txPowLimit;
-    /** Quicksilver (#5c-1): max age (in blocks) of a tx's PoW anchor: the W grace
+    /** Quicksilver per-transaction PoW anchor: max age (in blocks) of a tx's PoW anchor: the W grace
      *  window. A tx's nAnchorHeight must satisfy tip_height - nMaxAnchorAge <=
      *  nAnchorHeight <= tip_height. */
     int nMaxAnchorAge;
-    /** Quicksilver (#5c-1): congestion-floor parameters. Public-network values
+    /** Quicksilver congestion-floor parameters. Public-network values
      *  are Phase 3 calibrated; sandbox keeps smaller windows/targets for fast tests. */
     int nCongestionTargetPermille; //!< target block fullness T, in permille (500 = 0.5)
     int nCongestionStepDenom;      //!< max per-block step s = 1/denom (8 = 0.125)
     int nCongestionMaxMultiplier;  //!< m_cap: ceiling on the congestion multiplier
     int nBaseWorkMAWindow;         //!< blocks averaged for base_coupled (difficulty smoothing)
     uint32_t nTxWorkCouplingK;     //!< K: divides MA(blockwork) to set the per-tx base floor
-    /** Quicksilver Frame-B mint (#4): coins minted to the block miner per valid
+    /** Quicksilver Frame-B mint: coins minted to the block miner per valid
      *  per-tx PoW (the cap C). Public-network values are Phase 3 calibrated;
      *  sandbox keeps a test-scale value. */
     CAmount nTxPowMint;
-    /** Quicksilver Stage 2 flag day: serialized bytes that cost one unit of base
+    /** Quicksilver byte-pricing flag day: serialized bytes that cost one unit of base
      *  work. RequiredTxWork charges bytes/nTxWorkRefBytes of base, so a transaction
      *  is priced by what it writes to everyone's disk rather than by existing.
      *  Denominated in WITH-WITNESS serialized bytes: weight is 4*total - 3*witness,
      *  so weight overstates an attacker's cost by up to 4x in their favour, and the
      *  witness discount is fee-market residue in a feeless chain. 4,739 = R/4 where
-     *  R = 18,957 is the Stage 1 weight reference. Uniform across networks. */
+     *  R = 18,957 is the calibration weight reference. Uniform across networks. */
     uint32_t nTxWorkRefBytes;
-    /** Quicksilver Stage 2 flag day: net new UTXOs that cost one unit of base work.
+    /** Quicksilver byte-pricing flag day: net new UTXOs that cost one unit of base work.
      *  ADDITIVE with the byte term, not max() -- under max() it is inert, because
      *  the bloat shape is already byte-heavy. M5 measured chainstate at 75-83% of
      *  an operator's real on-disk cost, so UTXO creation, not transaction bytes, is
      *  what a storage bound must price. Uniform across networks. */
     uint32_t nTxUtxoRefCount;
-    /** Quicksilver Stage 2 flag day: ceiling on the total per-tx mint one block may
+    /** Quicksilver byte-pricing flag day: ceiling on the total per-tx mint one block may
      *  authorize (decision criterion 4). Without it, maximum issuance depends on
      *  how small transactions are -- M4 measured a 357x span. Applied inside
      *  GetBlockMintAllowance, so the assembler and the validator cannot disagree. */
     CAmount nMaxBlockMint;
     /** Quicksilver tail emission: genesis per-block base subsidy S0 — the top of the
-     *  linear bootstrap ramp. FINALIZED (round-S0 anchor): 50 COIN, giving ≈26.8M COIN
-     *  total bootstrap supply; legible headline subsidy, distinct from the 1-COIN tail.
-     *  See doc/design/tail-emission.md. */
+     *  linear bootstrap ramp. FINALIZED (round-S0 anchor): 50 COIN, so the bootstrap
+     *  subsidies sum to ≈26.8M COIN at most. A block may claim less than its allowance and
+     *  the rest is never created (F-578), so this is a ceiling, not the supply. Legible
+     *  headline subsidy, distinct from the 1-COIN tail. See doc/design/tail-emission.md. */
     CAmount nInitialSubsidy;
     /** Quicksilver tail emission: perpetual per-block tail subsidy, reached at the end of
      *  bootstrap and paid forever after (no hard cap; economics §7). FINALIZED: 1 COIN

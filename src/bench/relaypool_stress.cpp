@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <bench/bench.h>
+#include <coins.h>
 #include <consensus/amount.h>
 #include <policy/policy.h>
 #include <primitives/transaction.h>
@@ -13,14 +14,17 @@
 #include <test/util/setup_common.h>
 #include <test/util/txrelaypool.h>
 #include <txrelaypool.h>
+#include <uint256.h>
+#include <util/check.h>
 #include <validation.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
-class CCoinsViewCache;
 
 static void AddTx(const CTransactionRef& tx, CTxRelayPool& pool) EXCLUSIVE_LOCKS_REQUIRED(cs_main, pool.cs)
 {
@@ -35,12 +39,30 @@ static void AddTx(const CTransactionRef& tx, CTxRelayPool& pool) EXCLUSIVE_LOCKS
 
 struct Available {
     CTransactionRef ref;
-    size_t vin_left{0};
+    size_t vout_next{0}; // the next unspent output of ref
     size_t tx_count;
     Available(CTransactionRef& ref, size_t tx_count) : ref(ref), tx_count(tx_count){}
 };
 
-static std::vector<CTransactionRef> CreateOrderedCoins(FastRandomContext& det_rand, int childTxs, int min_ancestors)
+/** Split total exactly across tx's outputs (feeless: value in equals value out). */
+static void SetFeelessOutputs(CMutableTransaction& tx, size_t num_outputs, CAmount total, size_t tx_counter)
+{
+    tx.vout.resize(num_outputs);
+    const CAmount per_output{total / CAmount(num_outputs)};
+    for (size_t n = 0; n < num_outputs; ++n) {
+        tx.vout[n].scriptPubKey = CScript() << CScriptNum(tx_counter) << OP_EQUAL;
+        tx.vout[n].nValue = per_output + (n == 0 ? total - per_output * CAmount(num_outputs) : 0);
+    }
+}
+
+/**
+ * Build a relay-pool topology that normal admission could produce: every outpoint is
+ * spent at most once and every transaction is feeless. The base transactions spend
+ * distinct outpoints outside the pool; base_coins receives each of them with its value,
+ * so a coins view can be built for CTxRelayPool::check.
+ */
+static std::vector<CTransactionRef> CreateOrderedCoins(FastRandomContext& det_rand, int childTxs, int min_ancestors,
+                                                       std::vector<std::pair<COutPoint, CAmount>>& base_coins)
 {
     std::vector<Available> available_coins;
     std::vector<CTransactionRef> ordered_coins;
@@ -49,43 +71,45 @@ static std::vector<CTransactionRef> CreateOrderedCoins(FastRandomContext& det_ra
     for (auto x = 0; x < 100; ++x) {
         CMutableTransaction tx = CMutableTransaction();
         tx.vin.resize(1);
+        tx.vin[0].prevout = COutPoint(Txid::FromUint256(uint256{static_cast<uint8_t>(x + 1)}), 0);
         tx.vin[0].scriptSig = CScript() << CScriptNum(tx_counter);
         tx.vin[0].scriptWitness.stack.push_back(CScriptNum(x).getvch());
-        tx.vout.resize(det_rand.randrange(10)+2);
-        for (auto& out : tx.vout) {
-            out.scriptPubKey = CScript() << CScriptNum(tx_counter) << OP_EQUAL;
-            out.nValue = 10 * COIN;
-        }
+        const size_t num_outputs = det_rand.randrange(10) + 2;
+        const CAmount total{CAmount(num_outputs) * 10 * COIN};
+        SetFeelessOutputs(tx, num_outputs, total, tx_counter);
+        base_coins.emplace_back(tx.vin[0].prevout, total);
         ordered_coins.emplace_back(MakeTransactionRef(tx));
         available_coins.emplace_back(ordered_coins.back(), tx_counter++);
     }
     for (auto x = 0; x < childTxs && !available_coins.empty(); ++x) {
         CMutableTransaction tx = CMutableTransaction();
+        CAmount total_in{0};
         size_t n_ancestors = det_rand.randrange(10)+1;
         for (size_t ancestor = 0; ancestor < n_ancestors && !available_coins.empty(); ++ancestor){
             size_t idx = det_rand.randrange(available_coins.size());
-            Available coin = available_coins[idx];
+            Available& coin = available_coins[idx];
+            const size_t left{coin.ref->vout.size() - coin.vout_next};
             Txid hash = coin.ref->GetHash();
             // biased towards taking min_ancestors parents, but maybe more
             size_t n_to_take = det_rand.randrange(2) == 0 ?
                                min_ancestors :
-                               min_ancestors + det_rand.randrange(coin.ref->vout.size() - coin.vin_left);
+                               min_ancestors + det_rand.randrange(left);
+            n_to_take = std::min(n_to_take, left);
             for (size_t i = 0; i < n_to_take; ++i) {
                 tx.vin.emplace_back();
-                tx.vin.back().prevout = COutPoint(hash, coin.vin_left++);
+                tx.vin.back().prevout = COutPoint(hash, coin.vout_next);
+                total_in += coin.ref->vout[coin.vout_next].nValue;
+                ++coin.vout_next;
                 tx.vin.back().scriptSig = CScript() << coin.tx_count;
                 tx.vin.back().scriptWitness.stack.push_back(CScriptNum(coin.tx_count).getvch());
             }
-            if (coin.vin_left == coin.ref->vin.size()) {
-                coin = available_coins.back();
+            if (coin.vout_next == coin.ref->vout.size()) {
+                // Every output is spent: drop this record (not the vector's last one).
+                available_coins[idx] = std::move(available_coins.back());
                 available_coins.pop_back();
             }
-            tx.vout.resize(det_rand.randrange(10)+2);
-            for (auto& out : tx.vout) {
-                out.scriptPubKey = CScript() << CScriptNum(tx_counter) << OP_EQUAL;
-                out.nValue = 10 * COIN;
-            }
         }
+        SetFeelessOutputs(tx, det_rand.randrange(10) + 2, total_in, tx_counter);
         ordered_coins.emplace_back(MakeTransactionRef(tx));
         available_coins.emplace_back(ordered_coins.back(), tx_counter++);
     }
@@ -99,10 +123,27 @@ static void ComplexRelayPool(benchmark::Bench& bench)
     if (bench.complexityN() > 1) {
         childTxs = static_cast<int>(bench.complexityN());
     }
-    std::vector<CTransactionRef> ordered_coins = CreateOrderedCoins(det_rand, childTxs, /*min_ancestors=*/1);
-    const auto testing_setup = MakeNoLogFileContext<const TestingSetup>(ChainType::MAIN);
+    std::vector<std::pair<COutPoint, CAmount>> base_coins;
+    std::vector<CTransactionRef> ordered_coins = CreateOrderedCoins(det_rand, childTxs, /*min_ancestors=*/1, base_coins);
+    const auto testing_setup = MakeNoLogFileContext<const TestingSetup>(ChainType::MAIN, {.extra_args = {"-checkrelaypool=1"}});
     CTxRelayPool& pool = *testing_setup.get()->m_node.relaypool;
     LOCK2(cs_main, pool.cs);
+
+    // The fixture must be a pool that admission could have built: stage it once, run the
+    // full consistency check (spend index, ancestry, feeless inputs) against a view that
+    // holds the base transactions' inputs, then empty the pool for the timed runs.
+    {
+        CCoinsView base_view;
+        CCoinsViewCache coins{&base_view};
+        for (const auto& [outpoint, value] : base_coins) {
+            coins.AddCoin(outpoint, Coin{CTxOut{value, CScript() << OP_TRUE}, /*nHeightIn=*/1, /*fCoinBaseIn=*/false}, /*possible_overwrite=*/false);
+        }
+        for (auto& tx : ordered_coins) AddTx(tx, pool);
+        Assert(pool.size() == ordered_coins.size());
+        pool.check(coins, /*spendheight=*/2);
+        pool.TrimToSize(0);
+        Assert(pool.size() == 0);
+    }
     // bench.run calls this lambda before returning, while the LOCK2 above
     // still holds cs_main and pool.cs. AddTx requires both; TrimToSize
     // requires pool.cs. Clang treats the lambda as its own function and

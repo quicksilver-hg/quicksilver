@@ -84,7 +84,7 @@ private:
     const bool spendsCoinbase;      //!< keep track of transactions that spend a coinbase
     const int64_t sigOpCost;        //!< Total sigop cost
     mutable LockPoints lockPoints;  //!< Track the height and time at which tx was final
-    const arith_uint256 m_txwork_surplus; //!< #5c-2 surplus per-tx work (actual - floor); the inclusion-ranking key
+    const arith_uint256 m_txwork_surplus; //!< surplus-work ranking surplus per-tx work (actual - floor); the inclusion-ranking key
 
     // Information about descendants of this transaction that are in the
     // relaypool; if we remove this transaction we must remove all of these
@@ -135,7 +135,7 @@ public:
     unsigned int GetHeight() const { return entryHeight; }
     uint64_t GetSequence() const { return entry_sequence; }
     int64_t GetSigOpCost() const { return sigOpCost; }
-    //! #5c-2 inclusion-ranking key: surplus per-tx work per vsize byte. Higher = included first.
+    //! surplus-work ranking key: surplus per-tx work per vsize byte. Higher = included first.
     double GetTxWorkRate() const { return m_txwork_surplus.getdouble() / GetTxSize(); }
     const arith_uint256& GetTxWorkSurplusValue() const { return m_txwork_surplus; }
     size_t DynamicMemoryUsage() const { return nUsageSize; }

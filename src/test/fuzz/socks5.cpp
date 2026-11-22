@@ -30,6 +30,7 @@ void initialize_socks5()
 
 FUZZ_TARGET(socks5, .init = initialize_socks5)
 {
+    g_socks5_interrupt.reset();
     FuzzedDataProvider fuzzed_data_provider{buffer.data(), buffer.size()};
     SetMockTime(ConsumeTime(fuzzed_data_provider));
     ProxyCredentials proxy_credentials;
@@ -48,4 +49,5 @@ FUZZ_TARGET(socks5, .init = initialize_socks5)
     auto port = fuzzed_data_provider.ConsumeIntegral<uint16_t>();
     auto* auth = fuzzed_data_provider.ConsumeBool() ? &proxy_credentials : nullptr;
     (void)Socks5(str_dest, port, auth, fuzzed_sock);
+    g_socks5_interrupt.reset();
 }

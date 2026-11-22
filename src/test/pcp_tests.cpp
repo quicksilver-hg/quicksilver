@@ -12,6 +12,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <deque>
 
 using namespace std::literals;
@@ -108,7 +109,14 @@ public:
             FailScript();
             return len;
         }
-        if (CurOp().error) return -1; // Inject failure
+        if (CurOp().error) {
+#ifdef _WIN32
+            WSASetLastError(CurOp().error);
+#else
+            errno = CurOp().error;
+#endif
+            return -1;
+        }
         if (CurOp().data.empty() || std::ranges::equal(CurOp().data, in_pkt)) {
             AdvanceOp();
         } else {
@@ -123,7 +131,14 @@ public:
         if (!m_connected || AtEndOfScript() || CurOp().op != TestOp::RECV || m_time_left != 0s) {
             return -1;
         }
-        if (CurOp().error) return -1; // Inject failure
+        if (CurOp().error) {
+#ifdef _WIN32
+            WSASetLastError(CurOp().error);
+#else
+            errno = CurOp().error;
+#endif
+            return -1;
+        }
         const auto &recv_pkt = CurOp().data;
         const size_t consume_bytes{std::min(len, recv_pkt.size())};
         std::memcpy(buf, recv_pkt.data(), consume_bytes);
@@ -199,7 +214,7 @@ public:
             if (CurOp().op == TestOp::RECV && m_time_left == 0s && occurred != nullptr) {
                 *occurred = Sock::RECV;
             }
-            if (CurOp().op == TestOp::NOP) {
+            if (CurOp().op == TestOp::NOP && m_time_left == 0ms) {
                 // This was a pure delay operation, move to the next op.
                 AdvanceOp();
             }
@@ -460,7 +475,7 @@ BOOST_AUTO_TEST_CASE(pcp_ipv6_timeout_success)
             }, 0
         },
         {
-            2001ms, TestOp::NOP, // Takes longer to respond than timeout of 2000ms
+            2000ms, TestOp::NOP, // Exhausts the first request's timeout before retry
             {}, 0
         },
         {

@@ -8,11 +8,13 @@
 #include <util/process/contained_child.h>
 
 #include <util/fs.h>
+#include <tinyformat.h>
 
 #include <boost/test/unit_test.hpp>
 
 #include <atomic>
 #include <chrono>
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -23,9 +25,17 @@
 #include <thread>
 #include <vector>
 
+#ifdef WIN32
+#include <windows.h>
+#endif
+
 #ifndef WIN32
 #include <stdlib.h>   // setenv
+#include <signal.h>
+#include <sys/time.h>
+#include <unistd.h>
 #endif
+
 
 BOOST_AUTO_TEST_SUITE(contained_child_tests)
 
@@ -192,6 +202,43 @@ void check_concurrent_child_does_not_inherit_an_existing_childs_pipe()
 #endif
 } // namespace
 
+#ifdef WIN32
+void check_non_ascii_program_path_starts()
+{
+    const std::string program = write_script("cc_unicode", "echo unicode-ready\nexit 0\n");
+    const fs::path dir = fs::path{fs::temp_directory_path()} / fs::PathFromString("\xE2\x98\xBF-child-" + strprintf("%lu", static_cast<unsigned long>(GetCurrentProcessId())));
+    fs::create_directories(dir);
+    const fs::path copied = dir / fs::PathFromString("solverstub.exe");
+    fs::copy_file(fs::PathFromString(program), copied, fs::copy_options::overwrite_existing);
+    auto child = util::ContainedChild::Spawn({fs::PathToString(copied)}, util::ChildStdout::kPipe);
+    BOOST_REQUIRE(child);
+    char buf[128]{};
+    size_t got = 0;
+    BOOST_REQUIRE(child->ReadStdout(buf, sizeof(buf), 5000, got) == util::ContainedChild::ReadStatus::kData);
+    BOOST_CHECK(std::string(buf, got).find("unicode-ready") != std::string::npos);
+    BOOST_CHECK_EQUAL(child->Wait(), 0);
+    fs::remove_all(dir);
+}
+
+void check_last_stdout_write_survives_child_exit()
+{
+    const std::string program = write_script("cc_last_write", "echo final-byte\nexit 0\n");
+    auto child = util::ContainedChild::Spawn({program}, util::ChildStdout::kPipe);
+    BOOST_REQUIRE(child);
+    char buf[128]{};
+    size_t got = 0;
+    BOOST_REQUIRE(child->ReadStdout(buf, sizeof(buf), 5000, got) == util::ContainedChild::ReadStatus::kData);
+    BOOST_CHECK(std::string(buf, got).find("final-byte") != std::string::npos);
+    BOOST_CHECK_EQUAL(child->Wait(), 0);
+}
+#else
+void check_non_ascii_program_path_starts() { BOOST_TEST_MESSAGE("skipped: Windows Unicode process path"); }
+void check_last_stdout_write_survives_child_exit() { BOOST_TEST_MESSAGE("skipped: Windows pipe exit race"); }
+#endif
+
+BOOST_AUTO_TEST_CASE(non_ascii_program_path_starts) { check_non_ascii_program_path_starts(); }
+BOOST_AUTO_TEST_CASE(last_stdout_write_survives_child_exit) { check_last_stdout_write_survives_child_exit(); }
+
 BOOST_AUTO_TEST_CASE(spawn_reads_stdout_and_reports_the_exit_code)
 {
     const std::string program = write_script("cc_echo", "echo hello\nexit 7\n");
@@ -211,15 +258,68 @@ BOOST_AUTO_TEST_CASE(spawn_reads_stdout_and_reports_the_exit_code)
     BOOST_CHECK_EQUAL(child->Wait(), 7);
 }
 
+#ifndef WIN32
+namespace {
+void noop_alarm_handler(int) {}
+}
+
+void check_wait_survives_a_signal()
+{
+    struct sigaction handler{};
+    handler.sa_handler = noop_alarm_handler;
+    sigemptyset(&handler.sa_mask);
+    struct sigaction old_handler{};
+    BOOST_REQUIRE_EQUAL(sigaction(SIGALRM, &handler, &old_handler), 0);
+    auto child = util::ContainedChild::Spawn({"/bin/sh", "-c", "sleep 1; exit 5"}, util::ChildStdout::kDiscard);
+    BOOST_REQUIRE(child);
+    struct itimerval timer{};
+    timer.it_value.tv_usec = 100000;
+    BOOST_REQUIRE_EQUAL(setitimer(ITIMER_REAL, &timer, nullptr), 0);
+    const int code = child->Wait();
+    struct itimerval stopped{};
+    setitimer(ITIMER_REAL, &stopped, nullptr);
+    sigaction(SIGALRM, &old_handler, nullptr);
+    BOOST_CHECK_EQUAL(code, 5);
+}
+
+void check_kill_group_reaches_a_grandchild_after_the_leader_is_reaped()
+{
+    auto child = util::ContainedChild::Spawn({"/bin/sh", "-c", "sleep 30 & echo $!"}, util::ChildStdout::kPipe);
+    BOOST_REQUIRE(child);
+    char buf[64]{};
+    size_t got = 0;
+    BOOST_REQUIRE(child->ReadStdout(buf, sizeof(buf) - 1, 5000, got) == util::ContainedChild::ReadStatus::kData);
+    pid_t grandchild{};
+    BOOST_REQUIRE(std::from_chars(buf, buf + got, grandchild).ec == std::errc{});
+    BOOST_REQUIRE_EQUAL(child->Wait(), 0);
+    child->KillGroup();
+    bool gone = false;
+    for (int i = 0; i < 50; ++i) {
+        if (kill(grandchild, 0) < 0 && errno == ESRCH) { gone = true; break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    BOOST_CHECK(gone);
+}
+#else
+void check_wait_survives_a_signal() { BOOST_TEST_MESSAGE("skipped: POSIX signal wait"); }
+void check_kill_group_reaches_a_grandchild_after_the_leader_is_reaped() { BOOST_TEST_MESSAGE("skipped: POSIX process groups"); }
+#endif
+
+BOOST_AUTO_TEST_CASE(wait_survives_a_signal) { check_wait_survives_a_signal(); }
+BOOST_AUTO_TEST_CASE(kill_group_reaches_a_grandchild_after_the_leader_is_reaped)
+{
+    check_kill_group_reaches_a_grandchild_after_the_leader_is_reaped();
+}
+
 BOOST_AUTO_TEST_CASE(a_discarded_stdout_is_never_a_pipe_the_parent_must_drain)
 {
     // The failure this rules out: a long-lived child whose output nobody reads
     // fills the pipe buffer, blocks in write(), and can never exit -- the exact
     // deadlock the solver bridge shipped, with the GPU pinned on abandoned work.
     // A kDiscard child writes to the null device, so it runs to completion with
-    // the parent reading nothing at all. 200 lines is well past any pipe buffer.
+    // the parent reading nothing at all. The output exceeds a 64 KiB pipe.
     std::string body;
-    for (int i = 0; i < 200; ++i) body += "echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n";
+    for (int i = 0; i < 5000; ++i) body += "echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n";
     body += "exit 0\n";
     const std::string program = write_script("cc_discard", body);
 

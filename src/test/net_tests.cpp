@@ -1404,7 +1404,7 @@ public:
     void ReceiveMessage(uint8_t short_id, Span<const uint8_t> payload)
     {
         auto ret = ReceivePacket();
-        BOOST_CHECK(ret.size() == payload.size() + 1);
+        BOOST_REQUIRE(ret.size() == payload.size() + 1);
         BOOST_CHECK(ret[0] == short_id);
         BOOST_CHECK(std::ranges::equal(Span{ret}.subspan(1), payload));
     }

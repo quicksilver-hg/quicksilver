@@ -54,7 +54,7 @@ bool CheckDiskSpace(const fs::path& dir, uint64_t additional_bytes = 0);
  * @param[in] max Stop seeking beyond this limit
  * @return The file size or max
  */
-std::streampos GetFileSize(const char* path, std::streamsize max = std::numeric_limits<std::streamsize>::max());
+std::streampos GetFileSize(const fs::path& path, std::streamsize max = std::numeric_limits<std::streamsize>::max());
 
 /** Release all directory locks. This is used for unit testing only, at runtime
  * the global destructor will take care of the locks.

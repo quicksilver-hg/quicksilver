@@ -233,6 +233,19 @@ static T TrimAndParse(const std::string& int_str, const std::string& err)
     return parsed.value();
 }
 
+// S0043-A-02: an output's FLAGS field is empty, W or S. Any other character, or a
+// repeated one, is refused rather than ignored; W with S keeps its own error below.
+static void ParseOutputFlags(const std::string& flags, bool& segwit, bool& script_hash)
+{
+    segwit = false;
+    script_hash = false;
+    for (const char c : flags) {
+        bool& flag = c == 'W' ? segwit : script_hash;
+        if ((c != 'W' && c != 'S') || flag) throw std::runtime_error("invalid TX output flags '" + flags + "'");
+        flag = true;
+    }
+}
+
 static void MutateTxAddInput(CMutableTransaction& tx, const std::string& strInput)
 {
     std::vector<std::string> vStrInputParts = SplitString(strInput, ':');
@@ -240,6 +253,8 @@ static void MutateTxAddInput(CMutableTransaction& tx, const std::string& strInpu
     // separate TXID:VOUT in string
     if (vStrInputParts.size()<2)
         throw std::runtime_error("TX input missing separator");
+    if (vStrInputParts.size() > 3)
+        throw std::runtime_error("Too many parameters");
 
     // extract and validate TXID
     auto txid{Txid::FromHex(vStrInputParts[0])};
@@ -312,9 +327,7 @@ static void MutateTxAddOutPubKey(CMutableTransaction& tx, const std::string& str
     bool bSegWit = false;
     bool bScriptHash = false;
     if (vStrInputParts.size() == 3) {
-        const std::string& flags = vStrInputParts[2];
-        bSegWit = (flags.find('W') != std::string::npos);
-        bScriptHash = (flags.find('S') != std::string::npos);
+        ParseOutputFlags(vStrInputParts[2], bSegWit, bScriptHash);
     }
 
     if (bSegWit && bScriptHash) {
@@ -377,9 +390,7 @@ static void MutateTxAddOutMultiSig(CMutableTransaction& tx, const std::string& s
     bool bSegWit = false;
     bool bScriptHash = false;
     if (vStrInputParts.size() == numkeys + 4) {
-        const std::string& flags = vStrInputParts.back();
-        bSegWit = (flags.find('W') != std::string::npos);
-        bScriptHash = (flags.find('S') != std::string::npos);
+        ParseOutputFlags(vStrInputParts.back(), bSegWit, bScriptHash);
     }
     else if (vStrInputParts.size() > numkeys + 4) {
         // Validate that there were no more parameters passed
@@ -451,6 +462,8 @@ static void MutateTxAddOutScript(CMutableTransaction& tx, const std::string& str
     std::vector<std::string> vStrInputParts = SplitString(strInput, ':');
     if (vStrInputParts.size() < 2)
         throw std::runtime_error("TX output missing separator");
+    if (vStrInputParts.size() > 3)
+        throw std::runtime_error("Too many parameters");
 
     // Extract and validate VALUE
     CAmount value = ExtractAndValidateValue(vStrInputParts[0]);
@@ -463,9 +476,7 @@ static void MutateTxAddOutScript(CMutableTransaction& tx, const std::string& str
     bool bSegWit = false;
     bool bScriptHash = false;
     if (vStrInputParts.size() == 3) {
-        const std::string& flags = vStrInputParts.back();
-        bSegWit = (flags.find('W') != std::string::npos);
-        bScriptHash = (flags.find('S') != std::string::npos);
+        ParseOutputFlags(vStrInputParts.back(), bSegWit, bScriptHash);
     }
 
     if (bSegWit && bScriptHash) {
@@ -656,14 +667,37 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
                 view.AddCoin(out, std::move(newcoin), true);
             }
 
-            // if redeem_script given and private keys given,
-            // add redeem_script to the tempKeystore so it can be signed:
-            if ((scriptPubKey.IsPayToScriptHash() || scriptPubKey.IsPayToWitnessScriptHash()) &&
-                prevOut.exists("redeem_script")) {
-                UniValue v = prevOut["redeem_script"];
-                std::vector<unsigned char> rsData(ParseHexUV(v, "redeem_script"));
-                CScript redeemScript(rsData.begin(), rsData.end());
+            // F-639: the same rule as signrawtransactionwithkey (ParsePrevouts in
+            // rpc/rawtransaction_util.cpp): redeem_script only for P2SH,
+            // witness_script only for native P2WSH, and the script must hash to
+            // output_script. A script for another output type is not consulted.
+            const bool is_p2sh = scriptPubKey.IsPayToScriptHash();
+            const bool is_p2wsh = scriptPubKey.IsPayToWitnessScriptHash();
+            const bool has_rs = prevOut.exists("redeem_script");
+            const bool has_ws = prevOut.exists("witness_script");
+            if (is_p2sh && (has_rs || has_ws)) {
+                if (!has_rs) throw std::runtime_error("Missing redeem_script");
+                if (has_ws) throw std::runtime_error("witness_script is not valid for a P2SH input");
+                const std::vector<unsigned char> rsData(ParseHexUV(prevOut["redeem_script"], "redeem_script"));
+                const CScript redeemScript(rsData.begin(), rsData.end());
+                int witness_version;
+                std::vector<unsigned char> witness_program;
+                if (redeemScript.IsWitnessProgram(witness_version, witness_program)) {
+                    throw std::runtime_error("P2SH-wrapped witness programs are not supported");
+                }
+                if (scriptPubKey != GetScriptForDestination(ScriptHash(redeemScript))) {
+                    throw std::runtime_error("redeem_script does not match output_script");
+                }
                 tempKeystore.AddCScript(redeemScript);
+            } else if (is_p2wsh && (has_rs || has_ws)) {
+                if (!has_ws) throw std::runtime_error("Missing witness_script");
+                if (has_rs) throw std::runtime_error("redeem_script is not valid for a P2WSH input");
+                const std::vector<unsigned char> wsData(ParseHexUV(prevOut["witness_script"], "witness_script"));
+                const CScript witnessScript(wsData.begin(), wsData.end());
+                if (scriptPubKey != GetScriptForDestination(WitnessV0ScriptHash(witnessScript))) {
+                    throw std::runtime_error("witness_script does not match output_script");
+                }
+                tempKeystore.AddCScript(witnessScript);
             }
         }
     }

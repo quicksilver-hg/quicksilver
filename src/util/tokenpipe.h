@@ -70,6 +70,7 @@ public:
     TokenPipeEnd& operator=(const TokenPipeEnd&) = delete;
 };
 
+
 /** An interprocess or interthread pipe for sending tokens (one-byte values)
  * over.
  */
@@ -124,5 +125,9 @@ public:
 };
 
 #endif // WIN32
+
+/** The daemonwait parent may report success only after an explicit child success token.
+ * A pure decision with no platform dependency, so its test runs everywhere. */
+inline bool DaemonWaitSucceeded(int token) { return token == 1; }
 
 #endif // QUICKSILVER_UTIL_TOKENPIPE_H

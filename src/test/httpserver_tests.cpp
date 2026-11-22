@@ -10,6 +10,23 @@
 
 BOOST_FIXTURE_TEST_SUITE(httpserver_tests, BasicTestingSetup)
 
+BOOST_AUTO_TEST_CASE(request_tracker_closes_before_empty_barrier)
+{
+    http_detail::HTTPRequestTracker tracker;
+    const auto* first = reinterpret_cast<const evhttp_connection*>(1);
+    const auto* refused = reinterpret_cast<const evhttp_connection*>(2);
+    BOOST_REQUIRE(tracker.AddRequest(first));
+    tracker.Close();
+    BOOST_CHECK(!tracker.AddRequest(refused));
+    tracker.RemoveRequest(first);
+    tracker.WaitUntilEmpty();
+    BOOST_CHECK_EQUAL(tracker.CountActiveConnections(), 0U);
+    BOOST_CHECK(!tracker.AddRequest(first));
+    tracker.Open();
+    BOOST_CHECK(tracker.AddRequest(first));
+    tracker.RemoveRequest(first);
+}
+
 BOOST_AUTO_TEST_CASE(test_query_parameters)
 {
     std::string uri {};

@@ -9,6 +9,8 @@
 #include <test/util/setup_common.h>
 #include <vault/crypter.h>
 
+#include <algorithm>
+
 namespace vault {
 namespace {
 
@@ -36,7 +38,7 @@ FUZZ_TARGET(crypter, .init = initialize_crypter)
 
         // Limiting the value of rounds since it is otherwise uselessly expensive and causes a timeout when fuzzing.
         crypt.SetKeyFromPassphrase(/*key_data=*/secure_string,
-                                   /*salt=*/ConsumeFixedLengthByteVector(fuzzed_data_provider, VAULT_CRYPTO_SALT_SIZE),
+                                   /*salt=*/ConsumeRandomLengthByteVector(fuzzed_data_provider, 16),
                                    /*rounds=*/fuzzed_data_provider.ConsumeIntegralInRange<unsigned int>(0, 25000));
     }
 
@@ -45,7 +47,7 @@ FUZZ_TARGET(crypter, .init = initialize_crypter)
         CallOneOf(
             fuzzed_data_provider,
             [&] {
-                const std::vector<unsigned char> random_vector = ConsumeFixedLengthByteVector(fuzzed_data_provider, VAULT_CRYPTO_KEY_SIZE);
+                const std::vector<unsigned char> random_vector = ConsumeRandomLengthByteVector(fuzzed_data_provider, 128);
                 plain_text_ed = CKeyingMaterial(random_vector.begin(), random_vector.end());
             },
             [&] {
@@ -56,6 +58,24 @@ FUZZ_TARGET(crypter, .init = initialize_crypter)
             },
             [&] {
                 (void)crypt.Decrypt(cipher_text_ed, plain_text_ed);
+            },
+            [&] {
+                const auto key = ConsumeRandomLengthByteVector(fuzzed_data_provider, 64);
+                const auto iv = ConsumeRandomLengthByteVector(fuzzed_data_provider, 32);
+                (void)crypt.SetKey(CKeyingMaterial(key.begin(), key.end()), iv);
+            },
+            [&] {
+                CCrypter roundtrip;
+                const auto iv = ConsumeFixedLengthByteVector(fuzzed_data_provider, VAULT_CRYPTO_IV_SIZE);
+                const CKeyingMaterial key(random_key.begin(), random_key.end());
+                assert(roundtrip.SetKey(key, iv));
+                auto plaintext = ConsumeRandomLengthByteVector(fuzzed_data_provider, 128);
+                if (plaintext.empty()) plaintext.push_back(0);
+                std::vector<unsigned char> ciphertext;
+                CKeyingMaterial decrypted;
+                assert(roundtrip.Encrypt(plaintext, ciphertext));
+                assert(roundtrip.Decrypt(ciphertext, decrypted));
+                assert(std::equal(plaintext.begin(), plaintext.end(), decrypted.begin(), decrypted.end()));
             },
             [&] {
                 const CKeyingMaterial master_key(random_key.begin(), random_key.end());

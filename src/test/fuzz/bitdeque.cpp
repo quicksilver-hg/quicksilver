@@ -313,7 +313,7 @@ FUZZ_TARGET(bitdeque, .init = InitRandData)
                 // operator[] const
                 if (!cdeq.empty()) {
                     size_t pos = provider.ConsumeIntegralInRange<size_t>(0, cdeq.size() - 1);
-                    assert(deq[pos] == bitdeq[pos]);
+                    assert(cdeq[pos] == cbitdeq[pos]);
                 }
             },
             [&] {
@@ -527,6 +527,8 @@ FUZZ_TARGET(bitdeque, .init = InitRandData)
                     assert(bitit == bitdeq.begin() + before);
                 }
             });
+        assert(deq.size() == bitdeq.size());
+        for (size_t i = 0; i < cdeq.size(); ++i) assert(cdeq[i] == cbitdeq[i]);
     }
     {
         assert(deq.size() == bitdeq.size());

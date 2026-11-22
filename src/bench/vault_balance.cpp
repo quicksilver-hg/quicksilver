@@ -62,11 +62,9 @@ static void VaultBalance(benchmark::Bench& bench, const bool set_dirty, const bo
 
 static void VaultBalanceDirty(benchmark::Bench& bench) { VaultBalance(bench, /*set_dirty=*/true, /*add_mine=*/true); }
 static void VaultBalanceClean(benchmark::Bench& bench) { VaultBalance(bench, /*set_dirty=*/false, /*add_mine=*/true); }
-static void VaultBalanceMine(benchmark::Bench& bench) { VaultBalance(bench, /*set_dirty=*/false, /*add_mine=*/true); }
 static void VaultBalanceNoMine(benchmark::Bench& bench) { VaultBalance(bench, /*set_dirty=*/false, /*add_mine=*/false); }
 
 BENCHMARK(VaultBalanceDirty, benchmark::PriorityLevel::HIGH);
 BENCHMARK(VaultBalanceClean, benchmark::PriorityLevel::HIGH);
-BENCHMARK(VaultBalanceMine, benchmark::PriorityLevel::HIGH);
 BENCHMARK(VaultBalanceNoMine, benchmark::PriorityLevel::HIGH);
 } // namespace vault

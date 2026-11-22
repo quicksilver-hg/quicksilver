@@ -129,6 +129,7 @@ VaultView::~VaultView() = default;
 
 void VaultView::setClientModel(ClientModel *_clientModel)
 {
+    if (clientModel) disconnect(clientModel, nullptr, this, nullptr);
     this->clientModel = _clientModel;
 
     sendCoinsPage->setClientModel(_clientModel);
@@ -166,8 +167,8 @@ void VaultView::setClientModel(ClientModel *_clientModel)
         ? QString::fromStdString(_clientModel->node().configuredMiningPayoutScript()) : QString());
 
     if (_clientModel) {
-        auto refresh_network = [this]{
-            const int peers = clientModel->getNumConnections(CONNECTIONS_ALL);
+        auto refresh_network = [this, _clientModel]{
+            const int peers = _clientModel->getNumConnections(CONNECTIONS_ALL);
             mineMintPage->setPeerCount(peers);
         };
         connect(clientModel, &ClientModel::numBlocksChanged, this,
@@ -300,7 +301,9 @@ void VaultView::backupVault(std::function<void(bool)> done)
                 if (done) done(false);
                 return;
             }
-            const std::string path{filename.toLocal8Bit().data()};
+            // UTF-8, which is what the vault's backup and check expect (F-614). toLocal8Bit() is the ANSI
+            // code page on Windows and lost or mangled any character outside it.
+            const std::string path{fs::PathToString(GUIUtil::QStringToPath(filename))};
             interfaces::Vault& vault{self->vaultModel->vault()};
             if (!vault.backupVault(path)) {
                 Q_EMIT self->message(self->tr("Backup Failed"), self->tr("There was an error trying to save the vault data to %1.").arg(filename),
@@ -415,7 +418,11 @@ void VaultView::usedReceivingAddresses()
 void VaultView::showProgress(const QString &title, int nProgress)
 {
     if (nProgress == 0) {
-        progressDialog = new QProgressDialog(title, tr("Cancel"), 0, 100);
+        if (progressDialog) {
+            progressDialog->close();
+            delete progressDialog;
+        }
+        progressDialog = new QProgressDialog(title, tr("Cancel"), 0, 100, this);
         GUIUtil::PolishProgressDialog(progressDialog);
         progressDialog->setWindowModality(Qt::ApplicationModal);
         progressDialog->setAutoClose(false);

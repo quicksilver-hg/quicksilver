@@ -103,8 +103,8 @@ void SignVerifyMessageDialog::on_addressBookButton_SM_clicked()
 {
     if (model && model->getAddressTableModel())
     {
-        model->refresh(/*pk_hash_only=*/true);
         auto dlg = new AddressBookPage(platformStyle, AddressBookPage::ForSelection, AddressBookPage::ReceivingTab, this);
+        dlg->setKeyHashOnly(true);
         dlg->setModel(model->getAddressTableModel());
         connect(dlg, &QDialog::accepted, this, [this, dlg] {
             setAddress_SM(dlg->getReturnValue());
@@ -201,6 +201,7 @@ void SignVerifyMessageDialog::on_addressBookButton_VM_clicked()
     if (model && model->getAddressTableModel())
     {
         auto dlg = new AddressBookPage(platformStyle, AddressBookPage::ForSelection, AddressBookPage::SendingTab, this);
+        dlg->setKeyHashOnly(true);
         dlg->setModel(model->getAddressTableModel());
         connect(dlg, &QDialog::accepted, this, [this, dlg] {
             setAddress_VM(dlg->getReturnValue());

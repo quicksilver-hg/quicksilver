@@ -113,13 +113,13 @@ BOOST_AUTO_TEST_CASE(RelayPoolRemoveTest)
 
 BOOST_AUTO_TEST_CASE(RelayPoolSizeLimitTest)
 {
-    // #5c-2 migration: TrimToSize now evicts by surplus-work rate (lowest first),
+    // surplus-work ranking migration: TrimToSize now evicts by surplus-work rate (lowest first),
     // not by feerate. Two behaviors this test used to cover no longer exist and
     // their assertions are intentionally removed:
     //   - child-rescues-parent eviction: per-tx individual scoring has no
     //     package re-ranking (5c-2 decision 1.1.1).
     //   - the rolling-minimum-fee floor (GetMinFee dynamics): the chain is
-    //     feeless (#5b), so there is no fee floor to bump or decay.
+    //     feeless, so there is no fee floor to bump or decay.
     // What remains is the core size-limiting contract: evict lowest priority
     // first, and never orphan a child (descendant cascade), now keyed on surplus.
     auto& pool = *Assert(m_node.relaypool);
@@ -185,8 +185,7 @@ BOOST_AUTO_TEST_CASE(RelayPoolSizeLimitTest)
     AddToRelayPool(pool, entry.TxWorkSurplus(arith_uint256(100)).FromTx(txParent)); // lowest
     AddToRelayPool(pool, entry.TxWorkSurplus(arith_uint256(900)).FromTx(txChild));  // high, but child of parent
 
-    // Trim so the lowest-rate package (parent+child) is evicted, leaving the
-    // independent high-surplus tx.
+    // Trim evicts the lowest-rate parent, then removes its descendant.
     pool.TrimToSize(pool.DynamicMemoryUsage() * 2 / 5);
     BOOST_CHECK(pool.exists(GenTxid::Txid(txIndep.GetHash())));
     BOOST_CHECK(!pool.exists(GenTxid::Txid(txParent.GetHash())));
@@ -234,7 +233,7 @@ BOOST_AUTO_TEST_CASE(RelayPoolAncestryTests)
     //
     // [tx1].0 <- [tx2]
     //
-    CTransactionRef tx2 = make_tx(/*output_values=*/{495 * CENT, 5 * COIN}, /*inputs=*/{tx1});
+    CTransactionRef tx2 = make_tx(/*output_values=*/{5 * COIN, 5 * COIN}, /*inputs=*/{tx1});
     AddToRelayPool(pool, entry.FromTx(tx2));
 
     // Ancestors / descendants should be:
@@ -253,7 +252,7 @@ BOOST_AUTO_TEST_CASE(RelayPoolAncestryTests)
     //
     // [tx1].0 <- [tx2].0 <- [tx3]
     //
-    CTransactionRef tx3 = make_tx(/*output_values=*/{290 * CENT, 200 * CENT}, /*inputs=*/{tx2});
+    CTransactionRef tx3 = make_tx(/*output_values=*/{3 * COIN, 2 * COIN}, /*inputs=*/{tx2});
     AddToRelayPool(pool, entry.FromTx(tx3));
 
     // Ancestors / descendants should be:
@@ -278,7 +277,7 @@ BOOST_AUTO_TEST_CASE(RelayPoolAncestryTests)
     //              |
     //              \---1 <- [tx4]
     //
-    CTransactionRef tx4 = make_tx(/*output_values=*/{290 * CENT, 250 * CENT}, /*inputs=*/{tx2}, /*input_indices=*/{1});
+    CTransactionRef tx4 = make_tx(/*output_values=*/{3 * COIN, 2 * COIN}, /*inputs=*/{tx2}, /*input_indices=*/{1});
     AddToRelayPool(pool, entry.FromTx(tx4));
 
     // Ancestors / descendants should be:
@@ -315,13 +314,12 @@ BOOST_AUTO_TEST_CASE(RelayPoolAncestryTests)
     for (uint64_t i = 0; i < 5; i++) {
         CTransactionRef& tyi = *ty[i];
         tyi = make_tx(/*output_values=*/{v}, /*inputs=*/i > 0 ? std::vector<CTransactionRef>{*ty[i - 1]} : std::vector<CTransactionRef>{});
-        v -= 50 * CENT;
         AddToRelayPool(pool, entry.FromTx(tyi));
         pool.GetTransactionAncestry(tyi->GetHash(), ancestors, descendants);
         BOOST_CHECK_EQUAL(ancestors, i+1);
         BOOST_CHECK_EQUAL(descendants, i+1);
     }
-    CTransactionRef ty6 = make_tx(/*output_values=*/{5 * COIN}, /*inputs=*/{tx3, ty5});
+    CTransactionRef ty6 = make_tx(/*output_values=*/{8 * COIN}, /*inputs=*/{tx3, ty5});
     AddToRelayPool(pool, entry.FromTx(ty6));
 
     // Ancestors / descendants should be:
@@ -385,9 +383,9 @@ BOOST_AUTO_TEST_CASE(RelayPoolAncestryTestsDiamond)
     //
     CTransactionRef ta, tb, tc, td;
     ta = make_tx(/*output_values=*/{10 * COIN});
-    tb = make_tx(/*output_values=*/{5 * COIN, 3 * COIN}, /*inputs=*/ {ta});
-    tc = make_tx(/*output_values=*/{2 * COIN}, /*inputs=*/{tb}, /*input_indices=*/{1});
-    td = make_tx(/*output_values=*/{6 * COIN}, /*inputs=*/{tb, tc}, /*input_indices=*/{0, 0});
+    tb = make_tx(/*output_values=*/{7 * COIN, 3 * COIN}, /*inputs=*/ {ta});
+    tc = make_tx(/*output_values=*/{3 * COIN}, /*inputs=*/{tb}, /*input_indices=*/{1});
+    td = make_tx(/*output_values=*/{10 * COIN}, /*inputs=*/{tb, tc}, /*input_indices=*/{0, 0});
     AddToRelayPool(pool, entry.FromTx(ta));
     AddToRelayPool(pool, entry.FromTx(tb));
     AddToRelayPool(pool, entry.FromTx(tc));

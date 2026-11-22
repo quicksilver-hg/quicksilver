@@ -7,7 +7,7 @@ configure some other framework (we want as few impediments to creating
 unit tests as possible).
 
 The build system is set up to compile an executable called `test_quicksilver`
-that runs all of the unit tests. The main source file for the test library is found in
+that runs all of the unit tests. The test runner starts in `main.cpp`; common test setup lives in
 `util/setup_common.cpp`.
 
 The examples in this document assume the build directory is named
@@ -43,7 +43,8 @@ An unknown class or a first argument starting with `-` prints usage and the
 available classes to stderr, runs no tests, and returns a non-zero exit code.
 
 To add more GUI unit tests, add them to the `src/qt/test/` directory and
-the `src/qt/test/test_main.cpp` file.
+the `src/qt/test/test_main.cpp` file, and list new sources in
+`src/qt/test/CMakeLists.txt` (under `ENABLE_VAULT` for vault tests).
 
 ### Running individual tests
 
@@ -85,13 +86,12 @@ The `-printtoconsole=1` after the two dashes sends debug logging, which
 normally goes only to `debug.log` within the data directory, to the
 standard terminal output as well.
 
-Running `test_quicksilver` creates a temporary working (data) directory with a randomly
+Tests using `BasicTestingSetup` create a temporary working (data) directory with a randomly
 generated pathname within `test_common quicksilver/`, which in turn is within
 the system's temporary directory (see
 [`temp_directory_path`](https://en.cppreference.com/w/cpp/filesystem/temp_directory_path)).
 This data directory looks like a simplified form of the standard `quicksilver-daemon` data
-directory. Its content will vary depending on the test, but it will always
-have a `debug.log` file, for example.
+directory. Its content will vary depending on the test, and fixture-backed cases create a `debug.log` file, for example.
 
 The location of the temporary data directory can be specified with the
 `-testdatadir` option. This can make debugging easier. The directory
@@ -116,9 +116,8 @@ drwxrwxr-x 2 admin admin 4096 Nov 27 22:45 blocks
 -rw-rw-r-- 1 admin admin 1003 Nov 27 22:45 debug.log
 ```
 
-If you run an entire test suite, such as `--run_test=getarg_tests`, or all the test suites
-(by not specifying `--run_test`), a separate directory
-will be created for each individual test.
+If you run an entire fixture-backed test suite, such as `--run_test=getarg_tests`,
+a separate directory is created for each individual case using that fixture.
 
 ### Adding test cases
 

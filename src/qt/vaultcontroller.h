@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <QMessageBox>
+#include <QPointer>
 #include <QMutex>
 #include <QProgressDialog>
 #include <QThread>
@@ -83,6 +84,9 @@ public:
      * how the send path previously froze.
      */
     void stopProofOfWork(std::function<void()> done);
+    void stopProofOfWork(VaultModel* vault_model, std::function<void()> done);
+    void prepareForShutdown(std::function<void()> done);
+    bool controllerMutexAvailableForTesting(int timeout_ms);
 
     /** Close every open vault, leaving the startup vault list untouched.
      *
@@ -91,7 +95,7 @@ public:
      * that is left behind. `done` runs once the last model is gone and, with it, the
      * database handle that node initialisation needs to take.
      */
-    void closeAllVaultsForHandover(std::function<void()> done);
+    void closeAllVaultsForHandover(std::function<void(bool ok)> done);
 
     //! Asks whether a running transfer may be given up, then calls `done`.
     void confirmAbandonProofOfWork(QWidget* parent, std::function<void(bool)> done);
@@ -151,7 +155,7 @@ protected:
 
     VaultController* const m_vault_controller;
     QWidget* const m_parent_widget;
-    VaultModel* m_vault_model{nullptr};
+    QPointer<VaultModel> m_vault_model;
     bilingual_str m_error_message;
     std::vector<bilingual_str> m_warning_message;
 };

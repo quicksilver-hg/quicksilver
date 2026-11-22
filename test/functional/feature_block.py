@@ -105,7 +105,7 @@ class FullBlockTest(QuicksilverTestFramework):
         self.bootstrap_p2p()  # Add one p2p connection to the node
 
         self.block_heights = {}
-        # Quicksilver (#5c-1 Phase 2): nCongestion is a consensus-checked header field
+        # Quicksilver header-field congestion pricing: nCongestion is a consensus-checked header field
         # derived from the parent's multiplier and this block's weight, so a block builder
         # has to track it per branch exactly as it tracks heights.
         self.block_congestion = {}

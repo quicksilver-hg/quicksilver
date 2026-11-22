@@ -709,6 +709,36 @@ BOOST_AUTO_TEST_CASE(util_GetChainTypeString)
     BOOST_CHECK_THROW(test_args.GetChainTypeString(), std::runtime_error);
 }
 
+BOOST_AUTO_TEST_CASE(util_chain_argument_and_alias_conflicts)
+{
+    for (const auto& [argument, expected] : {
+             std::pair{"-chain=main", "main"},
+             std::pair{"-chain=publictest", "publictest"},
+             std::pair{"-chain=sandbox", "sandbox"},
+             std::pair{"-chain=unknown", "unknown"},
+         }) {
+        TestArgsManager args;
+        args.SetupArgs({{"-chain", ArgsManager::ALLOW_ANY},
+                        {"-publictest", ArgsManager::ALLOW_ANY},
+                        {"-sandbox", ArgsManager::ALLOW_ANY}});
+        const char* argv[]{"cmd", argument};
+        std::string error;
+        BOOST_REQUIRE(args.ParseParameters(2, argv, error));
+        BOOST_CHECK_EQUAL(args.GetChainTypeString(), expected);
+    }
+
+    for (const char* alias : {"-publictest", "-sandbox"}) {
+        TestArgsManager args;
+        args.SetupArgs({{"-chain", ArgsManager::ALLOW_ANY},
+                        {"-publictest", ArgsManager::ALLOW_ANY},
+                        {"-sandbox", ArgsManager::ALLOW_ANY}});
+        const char* argv[]{"cmd", "-chain=main", alias};
+        std::string error;
+        BOOST_REQUIRE(args.ParseParameters(3, argv, error));
+        BOOST_CHECK_THROW(args.GetChainTypeString(), std::runtime_error);
+    }
+}
+
 // Test different ways settings can be merged, and verify results. This test can
 // be used to confirm that updates to settings code don't change behavior
 // unintentionally.
@@ -905,7 +935,7 @@ BOOST_FIXTURE_TEST_CASE(util_ArgsMerge, ArgsMergeTestingSetup)
     // Results file is formatted like:
     //
     //   <input> || <IsArgSet/IsArgNegated/GetArg output> | <GetArgs output> | <GetUnsuitable output>
-    BOOST_CHECK_EQUAL(out_sha_hex, "1738236c70b946934a26d66dac28b8798eec11e014ed963f0d8bcb58ca1b2454");
+    BOOST_CHECK_EQUAL(out_sha_hex, "57f25d1112449b22edf22c46463a01041910ae62465d23812ded65ccc7bafb8f");
 }
 
 // Similar test as above, but for ArgsManager::GetChainTypeString function.

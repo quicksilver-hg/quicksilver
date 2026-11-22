@@ -140,7 +140,13 @@ bool WriteSettings(const fs::path& path,
         return false;
     }
     file << out.write(/* prettyIndent= */ 4, /* indentLevel= */ 1) << std::endl;
+    file.flush();
+    const bool write_failed = file.fail();
     file.close();
+    if (write_failed || file.fail()) {
+        errors.emplace_back(strprintf("Error: Unable to write settings file %s", fs::PathToString(path)));
+        return false;
+    }
     return true;
 }
 
@@ -208,9 +214,13 @@ bool OnlyHasDefaultSectionSetting(const Settings& settings, const std::string& s
     bool has_default_section_setting = false;
     bool has_other_setting = false;
     MergeSettings(settings, section, name, [&](SettingsSpan span, Source source) {
-        if (span.empty()) return;
-        else if (source == Source::CONFIG_FILE_DEFAULT_SECTION) has_default_section_setting = true;
-        else has_other_setting = true;
+        // A default-section value counts only if it is not negated; a negation
+        // from any other source is still an explicit override.
+        if (source == Source::CONFIG_FILE_DEFAULT_SECTION) {
+            if (!span.empty()) has_default_section_setting = true;
+        } else if (span.size > 0) {
+            has_other_setting = true;
+        }
     });
     // If a value is set in the default section and not explicitly overwritten by the
     // user on the command line or in a different section, then we want to enable

@@ -41,7 +41,8 @@ static void VaultIsMine(benchmark::Bench& bench, int num_combo = 0)
     auto vault = TestLoadVault(std::move(database), context, VAULT_FLAG_DESCRIPTORS);
 
     // Fill with num_combo combo descriptors with random keys.
-    // This benchmarks a non-HD vault migrated to descriptors.
+    // This benchmarks a vault holding many imported, non-active descriptors,
+    // as importdescriptors can add: every IsMine lookup has to ask each of them.
     if (num_combo > 0) {
         LOCK(vault->cs_vault);
         for (int i = 0; i < num_combo; ++i) {
@@ -69,6 +70,8 @@ static void VaultIsMine(benchmark::Bench& bench, int num_combo = 0)
 
 #ifdef USE_SQLITE
 static void VaultIsMineDescriptors(benchmark::Bench& bench) { VaultIsMine(bench); }
+// 2,000 imported combo() descriptors. The registered name is inherited; Quicksilver has no
+// legacy-vault migration.
 static void VaultIsMineMigratedDescriptors(benchmark::Bench& bench) { VaultIsMine(bench, /*num_combo=*/2000); }
 BENCHMARK(VaultIsMineDescriptors, benchmark::PriorityLevel::LOW);
 BENCHMARK(VaultIsMineMigratedDescriptors, benchmark::PriorityLevel::LOW);

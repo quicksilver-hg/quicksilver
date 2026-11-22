@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
 #include <utility>
 #include <vector>
 
@@ -26,7 +27,10 @@ static const unsigned int QUEUE_BATCH_SIZE = 128;
 static void CCheckQueueSpeedPrevectorJob(benchmark::Bench& bench)
 {
     // We shouldn't ever be running with the checkqueue on a single core machine.
-    if (GetNumCores() <= 1) return;
+    if (GetNumCores() <= 1) {
+        std::cerr << "CCheckQueueSpeedPrevectorJob: skipped, this benchmark needs more than one core." << std::endl;
+        return;
+    }
 
     ECC_Context ecc_context{};
 

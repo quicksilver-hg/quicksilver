@@ -87,7 +87,7 @@ struct MemoryCheck {
     {
         return std::nullopt;
     }
-    MemoryCheck(const MemoryCheck& x)
+    MemoryCheck(const MemoryCheck& x) : b(x.b)
     {
         // We have to do this to make sure that destructor calls are paired
         //
@@ -298,6 +298,16 @@ BOOST_AUTO_TEST_CASE(test_CheckQueue_UniqueCheck)
 // time could leave the data hanging across a sequence of blocks.
 BOOST_AUTO_TEST_CASE(test_CheckQueue_Memory)
 {
+    // Queue copies must preserve ownership of the synthetic allocation.
+    // An unbalanced copy can leave this test green if the copied flag is lost.
+    {
+        MemoryCheck original{true};
+        MemoryCheck copy{original};
+        BOOST_CHECK(copy.b);
+        BOOST_CHECK_EQUAL(MemoryCheck::fake_allocated_memory, 2U);
+    }
+    BOOST_CHECK_EQUAL(MemoryCheck::fake_allocated_memory, 0U);
+
     auto queue = std::make_unique<Memory_Queue>(QUEUE_BATCH_SIZE, SCRIPT_CHECK_THREADS);
     for (size_t i = 0; i < 1000; ++i) {
         size_t total = i;
@@ -339,7 +349,10 @@ BOOST_AUTO_TEST_CASE(test_CheckQueue_FrozenCleanup)
     }
     // Try to get control of the queue a bunch of times
     for (auto x = 0; x < 100 && !fails; ++x) {
-        fails = queue->m_control_mutex.try_lock();
+        if (queue->m_control_mutex.try_lock()) {
+            fails = true;
+            queue->m_control_mutex.unlock();
+        }
     }
     {
         // Unfreeze (we need lock n case of spurious wakeup)
@@ -404,7 +417,10 @@ BOOST_AUTO_TEST_CASE(test_CheckQueueControl_Locks)
             cv.wait(l, [&](){return has_lock;});
             bool fails = false;
             for (auto x = 0; x < 100 && !fails; ++x) {
-                fails = queue->m_control_mutex.try_lock();
+                if (queue->m_control_mutex.try_lock()) {
+                    fails = true;
+                    queue->m_control_mutex.unlock();
+                }
             }
             has_tried = true;
             cv.notify_one();
@@ -420,18 +436,10 @@ BOOST_AUTO_TEST_CASE(test_CheckQueueControl_Locks)
     }
 }
 
-BOOST_AUTO_TEST_CASE(worker_threads_are_wrapped_so_an_escaping_exception_is_logged)
+BOOST_AUTO_TEST_CASE(worker_threads_emit_start_log)
 {
-    // An exception that escapes a thread entry point calls std::terminate() --
-    // on Windows that is a __fastfail, which exits 0xC0000409 with no log line,
-    // no exception type and no message. util::TraceThread is the project's
-    // wrapper for exactly this: it logs the exception via PrintExceptionContinue
-    // before rethrowing.
-    //
-    // Assert the wrapper is in place by the start line it emits. Reverting the
-    // constructor to a bare lambda that only ThreadRename()s removes that line
-    // and fails this case. Destroying the queue joins, so the entry point has
-    // certainly run by the time the unique_ptr goes out of scope.
+    // The queue starts a named worker and emits its start line. This case does
+    // not inject an escaping worker exception.
     {
         ASSERT_DEBUG_LOG("scriptch.0 thread start");
         auto queue = std::make_unique<Standard_Queue>(QUEUE_BATCH_SIZE, /*worker_threads_num=*/1);

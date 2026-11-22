@@ -14,8 +14,10 @@
 
 #include <cassert>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace agent {
@@ -94,6 +96,7 @@ static util::Result<std::vector<AllotmentFundingOutputArtifact>> ReadBundleFundi
     }
 
     std::vector<AllotmentFundingOutputArtifact> funding_outputs;
+    std::set<std::pair<uint256, uint32_t>> seen_outputs;
     funding_outputs.reserve(outputs.size());
     for (const UniValue& output : outputs.get_array().getValues()) {
         if (!output.isObject()) {
@@ -102,7 +105,8 @@ static util::Result<std::vector<AllotmentFundingOutputArtifact>> ReadBundleFundi
 
         auto txid{ReadPolicyStringField(output, "txid")};
         if (!txid) return util::Error{util::ErrorString(txid)};
-        if (!uint256::FromHex(*txid)) {
+        const auto parsed_txid{uint256::FromHex(*txid)};
+        if (!parsed_txid) {
             return util::Error{Untranslated("Agent allotment policy bundle funding output txid must be a transaction id hex string.")};
         }
 
@@ -110,6 +114,9 @@ static util::Result<std::vector<AllotmentFundingOutputArtifact>> ReadBundleFundi
         const auto vout_index{vout.isNum() ? ToIntegral<uint32_t>(vout.getValStr()) : std::optional<uint32_t>{}};
         if (!vout_index.has_value()) {
             return util::Error{Untranslated("Agent allotment policy bundle funding output vout must be a uint32 value.")};
+        }
+        if (!seen_outputs.emplace(*parsed_txid, *vout_index).second) {
+            return util::Error{Untranslated(strprintf("Agent allotment policy bundle funding output %s:%u appears more than once.", *txid, *vout_index))};
         }
 
         auto amount{ReadPolicyAmountField(output, "amount_cinnabar")};
@@ -263,6 +270,9 @@ util::Result<AllotmentPolicyBundleArtifact> DecodeAllotmentPolicyBundle(std::str
     const std::string policy_request_json{policy_request.write()};
     auto policy_artifact{DecodeAllotmentPolicyRequest(policy_request_json, expected_chain, expected_genesis_hash)};
     if (!policy_artifact) return util::Error{util::ErrorString(policy_artifact)};
+    if (policy_artifact->funding_available > policy_artifact->policy.funding_limit) {
+        return util::Error{Untranslated("Agent allotment policy bundle funding available is more than its funding limit.")};
+    }
 
     auto funding_address{ReadPolicyStringField(bundle, "funding_address")};
     if (!funding_address) return util::Error{util::ErrorString(funding_address)};

@@ -537,7 +537,28 @@ class ConfArgsTest(QuicksilverTestFramework):
         self.nodes[0].chain = 'sandbox'
         self.nodes[0].replace_in_config([('publictest=', 'sandbox='), ('[publictest]', '[sandbox]')])
 
+    def test_mocktime_startup(self):
+        node = self.nodes[0]
+        node.chain = 'publictest'
+        node.replace_in_config([('sandbox=', 'publictest='), ('[sandbox]', '[publictest]')])
+        self.ensure_debug_log()
+        node.assert_start_raises_init_error(
+            [f'-mocktime={int(time.time())}'],
+            '-mocktime is for regression testing on sandbox only.',
+            match=ErrorMatch.PARTIAL_REGEX,
+        )
+        self.start_node(0, extra_args=['-mocktime=0'])
+        self.stop_node(0)
+        node.chain = 'sandbox'
+        node.replace_in_config([('publictest=', 'sandbox='), ('[publictest]', '[sandbox]')])
+        node.assert_start_raises_init_error(
+            ['-mocktime=-1'],
+            re.escape('-mocktime must be in the range [0,'),
+            match=ErrorMatch.PARTIAL_REGEX,
+        )
+
     def run_test(self):
+        self.test_mocktime_startup()
         self.test_log_buffer()
         self.test_args_log()
         self.test_seed_peers()

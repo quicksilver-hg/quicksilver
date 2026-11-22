@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 //
-// #5c-2 surplus-work inclusion ranking: work-space helpers, relaypool entry
+// surplus-work inclusion ranking: work-space helpers, relaypool entry
 // ranking key, by_txwork_rate index, miner/eviction ordering.
 
 #include <arith_uint256.h>
@@ -257,12 +257,9 @@ BOOST_FIXTURE_TEST_CASE(equal_rate_eviction_drops_the_newest, TestingSetup)
     BOOST_CHECK(!pool.exists(GenTxid::Txid(CTransaction(newer).GetHash())));  // newcomer refused
 }
 
-// Consistency guarantee (the "mined set ⊆ eviction-survivor set" property):
-// the miner includes txs highest-surplus first, and eviction drops them
-// lowest-surplus first — exact reverses. So for any block (top-K by surplus) and
-// any survivor set after trimming (top-L, L>=K), every mined tx survives:
-// mined ⊆ survivors, and evicted ∩ mined = empty. Verified through public
-// behavior: a block template vs. repeated TrimToSize.
+// For independent, equal-size transactions, miner inclusion and trimming rank
+// the entries in reverse order. Package ancestry and unequal sizes are outside
+// this case; this comparison is not a general mined-set survival guarantee.
 BOOST_FIXTURE_TEST_CASE(mined_order_is_reverse_of_eviction_order, TestChain100Setup)
 {
     CTxRelayPool& pool = *Assert(m_node.relaypool);

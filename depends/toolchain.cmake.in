@@ -118,7 +118,9 @@ endif()
 
 # Set configuration options for the main build system.
 set(qt_packages @qt_packages@)
-if("${qt_packages}" STREQUAL "")
+set(vault_packages @vault_packages@)
+# The GUI needs the vault, so a NO_VAULT=1 depends build is a node-only build.
+if("${qt_packages}" STREQUAL "" OR "${vault_packages}" STREQUAL "")
   set(BUILD_GUI OFF CACHE BOOL "")
 else()
   set(BUILD_GUI ON CACHE BOOL "")
