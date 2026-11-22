@@ -136,7 +136,10 @@ void RunBothDevices(const std::vector<std::string>& ids)
             return std::chrono::steady_clock::now() - started > std::chrono::seconds{240};
         });
     BOOST_CHECK(result.had_devices);
-    BOOST_CHECK(result.all_benched);
+    // all_benched means every device faulted out of the window (multi_device.cpp
+    // counts a device as benched only on a fault). Both devices ran and the stop
+    // predicate ended the window, so neither is benched.
+    BOOST_CHECK(!result.all_benched);
     BOOST_CHECK(result.faults.empty());
 
     const auto stats = cuckatoo::GetGpuDeviceStats();
