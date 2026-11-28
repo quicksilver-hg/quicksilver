@@ -25,9 +25,6 @@
 #endif
 #elif defined(WIN32)
 #include <iphlpapi.h>
-#elif defined(__APPLE__)
-#include <net/route.h>
-#include <sys/sysctl.h>
 #endif
 
 namespace {
@@ -83,44 +80,55 @@ std::optional<CNetAddr> QueryDefaultGatewayImpl(sa_family_t family)
         return std::nullopt;
     }
 
-    // Receive response.
-    char response[4096];
-    int64_t recv_result;
-    do {
-        recv_result = sock->Recv(response, sizeof(response), 0);
-    } while (recv_result < 0 && (errno == EINTR || errno == EAGAIN));
-    if (recv_result < 0) {
-        LogPrintLevel(HgLog::MESH, HgLog::Level::Error, "recv() from netlink socket: %s\n", NetworkErrorString(errno));
-        return std::nullopt;
-    }
+    // Receive the response. A dump arrives as one or more datagrams of NLM_F_MULTI messages ended
+    // by NLMSG_DONE; a single reply (FreeBSD without NLM_F_DUMP) has no NLM_F_MULTI. Read until the
+    // reply is complete, bounded so a misbehaving peer cannot keep us reading forever.
+    static constexpr size_t MAX_DATAGRAMS{256};
+    alignas(nlmsghdr) char response[32768];
+    for (size_t datagram = 0; datagram < MAX_DATAGRAMS; ++datagram) {
+        int64_t recv_result;
+        do {
+            recv_result = sock->Recv(response, sizeof(response), 0);
+        } while (recv_result < 0 && (errno == EINTR || errno == EAGAIN));
+        if (recv_result < 0) {
+            LogPrintLevel(HgLog::MESH, HgLog::Level::Error, "recv() from netlink socket: %s\n", NetworkErrorString(errno));
+            return std::nullopt;
+        }
+        if (recv_result == 0) return std::nullopt;
 
-    for (nlmsghdr* hdr = (nlmsghdr*)response; NLMSG_OK(hdr, recv_result); hdr = NLMSG_NEXT(hdr, recv_result)) {
-        rtmsg* r = (rtmsg*)NLMSG_DATA(hdr);
-        int remaining_len = RTM_PAYLOAD(hdr);
+        bool more{false};
+        for (nlmsghdr* hdr = (nlmsghdr*)response; NLMSG_OK(hdr, recv_result); hdr = NLMSG_NEXT(hdr, recv_result)) {
+            if (hdr->nlmsg_type == NLMSG_DONE || hdr->nlmsg_type == NLMSG_ERROR) return std::nullopt;
+            more = (hdr->nlmsg_flags & NLM_F_MULTI) != 0;
 
-        // Iterate over the attributes.
-        rtattr *rta_gateway = nullptr;
-        int scope_id = 0;
-        for (rtattr* attr = RTM_RTA(r); RTA_OK(attr, remaining_len); attr = RTA_NEXT(attr, remaining_len)) {
-            if (attr->rta_type == RTA_GATEWAY) {
-                rta_gateway = attr;
-            } else if (attr->rta_type == RTA_OIF && sizeof(int) == RTA_PAYLOAD(attr)) {
-                std::memcpy(&scope_id, RTA_DATA(attr), sizeof(scope_id));
+            rtmsg* r = (rtmsg*)NLMSG_DATA(hdr);
+            int remaining_len = RTM_PAYLOAD(hdr);
+
+            // Iterate over the attributes.
+            rtattr *rta_gateway = nullptr;
+            int scope_id = 0;
+            for (rtattr* attr = RTM_RTA(r); RTA_OK(attr, remaining_len); attr = RTA_NEXT(attr, remaining_len)) {
+                if (attr->rta_type == RTA_GATEWAY) {
+                    rta_gateway = attr;
+                } else if (attr->rta_type == RTA_OIF && sizeof(int) == RTA_PAYLOAD(attr)) {
+                    std::memcpy(&scope_id, RTA_DATA(attr), sizeof(scope_id));
+                }
+            }
+
+            // Found gateway?
+            if (rta_gateway != nullptr) {
+                if (family == AF_INET && sizeof(in_addr) == RTA_PAYLOAD(rta_gateway)) {
+                    in_addr gw;
+                    std::memcpy(&gw, RTA_DATA(rta_gateway), sizeof(gw));
+                    return CNetAddr(gw);
+                } else if (family == AF_INET6 && sizeof(in6_addr) == RTA_PAYLOAD(rta_gateway)) {
+                    in6_addr gw;
+                    std::memcpy(&gw, RTA_DATA(rta_gateway), sizeof(gw));
+                    return CNetAddr(gw, scope_id);
+                }
             }
         }
-
-        // Found gateway?
-        if (rta_gateway != nullptr) {
-            if (family == AF_INET && sizeof(in_addr) == RTA_PAYLOAD(rta_gateway)) {
-                in_addr gw;
-                std::memcpy(&gw, RTA_DATA(rta_gateway), sizeof(gw));
-                return CNetAddr(gw);
-            } else if (family == AF_INET6 && sizeof(in6_addr) == RTA_PAYLOAD(rta_gateway)) {
-                in6_addr gw;
-                std::memcpy(&gw, RTA_DATA(rta_gateway), sizeof(gw));
-                return CNetAddr(gw, scope_id);
-            }
-        }
+        if (!more) break;
     }
 
     return std::nullopt;
@@ -159,73 +167,6 @@ std::optional<CNetAddr> QueryDefaultGatewayImpl(sa_family_t family)
         return CNetAddr(best_route.NextHop.Ipv4.sin_addr);
     } else if(family == AF_INET6) {
         return CNetAddr(best_route.NextHop.Ipv6.sin6_addr, best_route.InterfaceIndex);
-    }
-    return std::nullopt;
-}
-
-#elif defined(__APPLE__)
-
-#define ROUNDUP32(a) \
-    ((a) > 0 ? (1 + (((a) - 1) | (sizeof(uint32_t) - 1))) : sizeof(uint32_t))
-
-std::optional<CNetAddr> FromSockAddr(const struct sockaddr* addr)
-{
-    // Fill in a CService from the sockaddr, then drop the port part.
-    CService service;
-    if (service.SetSockAddr(addr, addr->sa_len)) {
-        return (CNetAddr)service;
-    }
-    return std::nullopt;
-}
-
-//! MacOS: Get default gateway from route table. See route(4) for the format.
-std::optional<CNetAddr> QueryDefaultGatewayImpl(sa_family_t family)
-{
-    // net.route.0.inet[6].flags.gateway
-    int mib[] = {CTL_NET, PF_ROUTE, 0, family, NET_RT_FLAGS, RTF_GATEWAY};
-    // The size of the available data is determined by calling sysctl() with oldp=nullptr. See sysctl(3).
-    size_t l = 0;
-    if (sysctl(/*name=*/mib, /*namelen=*/sizeof(mib) / sizeof(int), /*oldp=*/nullptr, /*oldlenp=*/&l, /*newp=*/nullptr, /*newlen=*/0) < 0) {
-        LogPrintLevel(HgLog::MESH, HgLog::Level::Error, "Could not get sysctl length of routing table: %s\n", SysErrorString(errno));
-        return std::nullopt;
-    }
-    std::vector<std::byte> buf(l);
-    if (sysctl(/*name=*/mib, /*namelen=*/sizeof(mib) / sizeof(int), /*oldp=*/buf.data(), /*oldlenp=*/&l, /*newp=*/nullptr, /*newlen=*/0) < 0) {
-        LogPrintLevel(HgLog::MESH, HgLog::Level::Error, "Could not get sysctl data of routing table: %s\n", SysErrorString(errno));
-        return std::nullopt;
-    }
-    // Iterate over messages (each message is a routing table entry).
-    for (size_t msg_pos = 0; msg_pos < buf.size(); ) {
-        if ((msg_pos + sizeof(rt_msghdr)) > buf.size()) return std::nullopt;
-        const struct rt_msghdr* rt = (const struct rt_msghdr*)(buf.data() + msg_pos);
-        const size_t next_msg_pos = msg_pos + rt->rtm_msglen;
-        if (rt->rtm_msglen < sizeof(rt_msghdr) || next_msg_pos > buf.size()) return std::nullopt;
-        // Iterate over addresses within message, get destination and gateway (if present).
-        // Address data starts after header.
-        size_t sa_pos = msg_pos + sizeof(struct rt_msghdr);
-        std::optional<CNetAddr> dst, gateway;
-        for (int i = 0; i < RTAX_MAX; i++) {
-            if (rt->rtm_addrs & (1 << i)) {
-                // 2 is just sa_len + sa_family, the theoretical minimum size of a socket address.
-                if ((sa_pos + 2) > next_msg_pos) return std::nullopt;
-                const struct sockaddr* sa = (const struct sockaddr*)(buf.data() + sa_pos);
-                if ((sa_pos + sa->sa_len) > next_msg_pos) return std::nullopt;
-                if (i == RTAX_DST) {
-                    dst = FromSockAddr(sa);
-                } else if (i == RTAX_GATEWAY) {
-                    gateway = FromSockAddr(sa);
-                }
-                // Skip sockaddr entries for bit flags we're not interested in,
-                // move cursor.
-                sa_pos += ROUNDUP32(sa->sa_len);
-            }
-        }
-        // Found default gateway?
-        if (dst && gateway && dst->IsBindAny()) { // Route to 0.0.0.0 or :: ?
-            return *gateway;
-        }
-        // Skip to next message.
-        msg_pos = next_msg_pos;
     }
     return std::nullopt;
 }

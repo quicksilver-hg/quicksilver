@@ -64,7 +64,7 @@ extern const std::string UNIX_EPOCH_TIME;
  */
 extern const std::string EXAMPLE_ADDRESS[2];
 
-class FillableSigningProvider;
+class CBlockIndex;
 class CScript;
 struct Sections;
 
@@ -114,10 +114,9 @@ int ParseVerbosity(const UniValue& arg, int default_verbosity);
  * Validate and return a CAmount from a UniValue number or string.
  *
  * @param[in] value     UniValue number or string to parse.
- * @param[in] decimals  Number of significant digits (default: 8).
  * @returns a CAmount if the various checks pass.
  */
-CAmount AmountFromValue(const UniValue& value, int decimals = 8);
+CAmount AmountFromValue(const UniValue& value);
 
 using RPCArgList = std::vector<std::pair<std::string, UniValue>>;
 std::string HelpExampleCli(const std::string& methodname, const std::string& args);
@@ -126,7 +125,6 @@ std::string HelpExampleRpc(const std::string& methodname, const std::string& arg
 std::string HelpExampleRpcNamed(const std::string& methodname, const RPCArgList& args);
 
 CPubKey HexToPubKey(const std::string& hex_in);
-CPubKey AddrToPubKey(const FillableSigningProvider& keystore, const std::string& addr_in);
 CTxDestination AddAndGetMultisigDestination(const int required, const std::vector<CPubKey>& pubkeys, OutputType type, FlatSigningProvider& keystore, CScript& script_out);
 
 UniValue DescribeAddress(const CTxDestination& dest);
@@ -515,6 +513,6 @@ std::vector<RPCResult> ScriptPubKeyDoc();
  *
  * @return  the target
  */
-uint256 GetTarget(const CBlockIndex& blockindex, const uint256 pow_limit);
+uint256 GetTarget(const CBlockIndex& blockindex, uint256 pow_limit);
 
 #endif // QUICKSILVER_RPC_UTIL_H

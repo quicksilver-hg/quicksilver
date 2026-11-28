@@ -45,7 +45,7 @@ public:
     /** No default constructor; keys must be provided to create a BIP324Cipher. */
     BIP324Cipher() = delete;
 
-    /** Initialize a BIP324 cipher with specified key and encoding entropy (testing only). */
+    /** Initialize a BIP324 cipher with a specified key and encoding entropy. */
     BIP324Cipher(const CKey& key, Span<const std::byte> ent32) noexcept;
 
     /** Initialize a BIP324 cipher with specified key (testing only). */

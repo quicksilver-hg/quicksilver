@@ -208,7 +208,7 @@ private:
     //! Holds addrs inserted into tried table that collide with existing entries. Test-before-evict discipline used to resolve these collisions.
     std::set<nid_type> m_tried_collisions;
 
-    /** Perform consistency checks every m_consistency_check_ratio operations (if non-zero). */
+    /** Run each enabled consistency check with probability 1 / m_consistency_check_ratio. */
     const int32_t m_consistency_check_ratio;
 
     /** Reference to the netgroup manager. netgroupman must be constructed before addrman and destructed after. */

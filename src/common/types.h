@@ -18,8 +18,6 @@ namespace common {
 enum class PSQTError {
     MISSING_INPUTS,
     SIGHASH_MISMATCH,
-    EXTERNAL_SIGNER_NOT_FOUND,
-    EXTERNAL_SIGNER_FAILED,
     UNSUPPORTED,
 };
 } // namespace common

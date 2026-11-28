@@ -4,7 +4,6 @@
 
 #include <agent/agentclient.h>
 #include <agent/agentpeer.h>
-#include <agent/agentpeerset.h>
 #include <agent/headerchain.h>
 #include <agent/headerdriver.h>
 #include <agent/headermessages.h>
@@ -27,7 +26,11 @@
 #include <key.h>
 #include <key_io.h>
 #include <hash.h>
+#include <netbase.h>
 #include <netmessagemaker.h>
+#include <node/interface_ui.h>
+#include <node/protocol_version.h>
+#include <noui.h>
 #include <policy/policy.h>
 #include <pow.h>
 #include <primitives/block.h>
@@ -45,6 +48,7 @@
 #include <test/util/net.h>
 #include <test/util/random.h>
 #include <test/util/gpucardtables.h>
+#include <test/util/logging.h>
 #include <test/util/setup_common.h>
 #include <tinyformat.h>
 #include <uint256.h>
@@ -82,6 +86,27 @@ namespace {
 
 constexpr uint32_t TEST_HEADER_STORE_MAGIC{0x47415351};
 constexpr uint32_t TEST_HEADER_STORE_VERSION{1};
+
+//! A node's headers reply. Only tests build one: the agent sends getheaders and
+//! never serves headers.
+CSerializedNetMsg MakeHeadersMessage(std::span<const CBlockHeader> headers)
+{
+    CSerializedNetMsg message;
+    message.m_type = NetMsgType::HEADERS;
+    VectorWriter writer{message.data, 0};
+    WriteCompactSize(writer, headers.size());
+    for (const CBlockHeader& header : headers) {
+        writer << header;
+        WriteCompactSize(writer, 0);
+    }
+    return message;
+}
+
+//! CInv has no operator==.
+bool SameInv(const CInv& a, const CInv& b)
+{
+    return a.type == b.type && a.hash == b.hash;
+}
 
 // GpuCardTablesTestSetup: this suite reaches the global card tables through the
 // solver seams, and every suite that touches them resets them (F-555).
@@ -350,6 +375,15 @@ BOOST_AUTO_TEST_CASE(header_chain_starts_at_genesis)
     BOOST_CHECK(chain.ChainWork() > arith_uint256{0});
 }
 
+BOOST_AUTO_TEST_CASE(header_chain_refuses_a_foreign_genesis)
+{
+    // Another chain's genesis is a well-formed header, so only the hash check can
+    // refuse it; Assume() let it through in release builds.
+    const auto other{CChainParams::Main()};
+    BOOST_REQUIRE(other->GenesisBlock().GetHash() != Params().GetConsensus().hashGenesisBlock);
+    BOOST_CHECK_THROW((agent::HeaderChain{Params().GetConsensus(), other->GenesisBlock()}), std::invalid_argument);
+}
+
 BOOST_AUTO_TEST_CASE(accepts_contiguous_headers_and_builds_locator)
 {
     agent::HeaderChain chain{Params().GetConsensus(), Params().GenesisBlock()};
@@ -565,6 +599,46 @@ BOOST_AUTO_TEST_CASE(relay_transaction_waits_for_matching_pong)
     }
 }
 
+BOOST_AUTO_TEST_CASE(handshake_refuses_an_empty_or_obsolete_version)
+{
+    const auto framed{[](const CSerializedNetMsg& message) {
+        const uint256 payload_hash{Hash(message.data)};
+        CMessageHeader header{Params().MessageStart(), message.m_type.c_str(), static_cast<unsigned int>(message.data.size())};
+        std::memcpy(header.pchChecksum, payload_hash.begin(), CMessageHeader::CHECKSUM_SIZE);
+        std::vector<unsigned char> bytes;
+        VectorWriter{bytes, 0, header};
+        bytes.insert(bytes.end(), message.data.begin(), message.data.end());
+        return std::string{bytes.begin(), bytes.end()};
+    }};
+    const auto version_from{[](int32_t protocol_version) {
+        return NetMsg::Make(NetMsgType::VERSION, protocol_version, uint64_t{NODE_NETWORK}, int64_t{1'700'000'000},
+                            uint64_t{NODE_NONE}, CNetAddr::V1(CService{}), uint64_t{NODE_NONE}, CNetAddr::V1(CService{}),
+                            uint64_t{7}, std::string{"/node/"}, int32_t{100}, true);
+    }};
+    const std::string verack{framed(NetMsg::Make(NetMsgType::VERACK))};
+    const CService peer{LookupNumeric("127.0.0.1", 19556)};
+    const std::chrono::milliseconds timeout{200};
+
+    StaticContentsSock current{framed(version_from(PROTOCOL_VERSION)) + verack};
+    const auto ok{agent::CompletePeerHandshake(current, peer, timeout)};
+    BOOST_CHECK_EQUAL(ok.error, "");
+    BOOST_CHECK(ok.peer_version_received && ok.peer_verack_received && ok.local_verack_sent);
+
+    // A checksummed "version" with nothing in it used to complete the handshake,
+    // and the agent then sent its transaction or getheaders.
+    StaticContentsSock empty{framed(NetMsg::Make(NetMsgType::VERSION)) + verack};
+    const auto refused_empty{agent::CompletePeerHandshake(empty, peer, timeout)};
+    BOOST_CHECK_EQUAL(refused_empty.error, "peer sent a malformed version message");
+    BOOST_CHECK(!refused_empty.peer_version_received);
+    BOOST_CHECK(!refused_empty.local_verack_sent);
+
+    StaticContentsSock obsolete{framed(version_from(MIN_PEER_PROTO_VERSION - 1)) + verack};
+    const auto refused_old{agent::CompletePeerHandshake(obsolete, peer, timeout)};
+    BOOST_CHECK_EQUAL(refused_old.error, strprintf("peer protocol version %d is older than the minimum %d",
+                                                   MIN_PEER_PROTO_VERSION - 1, MIN_PEER_PROTO_VERSION));
+    BOOST_CHECK(!refused_old.local_verack_sent);
+}
+
 BOOST_AUTO_TEST_CASE(persists_and_loads_headers)
 {
     const auto chain{ChainWithHeaders(12)};
@@ -578,6 +652,95 @@ BOOST_AUTO_TEST_CASE(persists_and_loads_headers)
     BOOST_CHECK_EQUAL(loaded.chain->Height(), chain->Height());
     BOOST_CHECK(loaded.chain->Tip().GetBlockHash() == chain->Tip().GetBlockHash());
     BOOST_CHECK(loaded.chain->Genesis().GetBlockHash() == chain->Genesis().GetBlockHash());
+}
+
+BOOST_AUTO_TEST_CASE(store_saves_leave_no_temp_file_behind_on_failure)
+{
+    // A directory where the store should be makes the final rename fail after the
+    // temp file is fully written. Nothing of the attempt may be left beside it.
+    const fs::path dir{m_path_root / "failed_saves"};
+    fs::create_directories(dir / "headers.dat");
+    fs::create_directories(dir / "receipts.dat");
+
+    BOOST_CHECK_EQUAL(agent::SaveHeaderChain(*ChainWithHeaders(2), dir / "headers.dat"),
+                      agent::HeaderStoreResult::FILE_RENAME_FAILED);
+    BOOST_CHECK_EQUAL(agent::SaveAllotmentReceiptStore({}, dir / "receipts.dat", Params().GenesisBlock().GetHash()),
+                      agent::AllotmentStoreResult::FILE_RENAME_FAILED);
+
+    std::vector<std::string> names;
+    for (const auto& entry : fs::directory_iterator(dir)) names.push_back(fs::PathToString(entry.path().filename()));
+    std::sort(names.begin(), names.end());
+    BOOST_CHECK_EQUAL(util::Join(names, ","), "headers.dat,receipts.dat");
+}
+
+BOOST_AUTO_TEST_CASE(store_saves_are_not_blocked_by_a_stale_temp_path)
+{
+    // A fixed "<store>.new" name let a leftover from another run, or a concurrent
+    // writer, block or clobber the save.
+    const fs::path dir{m_path_root / "stale_temp"};
+    fs::create_directories(dir / "headers.dat.new");
+    fs::create_directories(dir / "receipts.dat.new");
+
+    BOOST_CHECK_EQUAL(agent::SaveHeaderChain(*ChainWithHeaders(2), dir / "headers.dat"), agent::HeaderStoreResult::OK);
+    BOOST_CHECK_EQUAL(agent::SaveAllotmentReceiptStore({}, dir / "receipts.dat", Params().GenesisBlock().GetHash()),
+                      agent::AllotmentStoreResult::OK);
+    BOOST_CHECK(agent::LoadHeaderChain(Params().GetConsensus(), Params().GenesisBlock(), dir / "headers.dat").ok());
+    BOOST_CHECK(agent::LoadAllotmentPaymentReceipts(dir / "receipts.dat", Params().GenesisBlock().GetHash()).ok());
+}
+
+BOOST_AUTO_TEST_CASE(store_loads_report_an_unprobeable_path_instead_of_throwing)
+{
+    // A parent the process may not search makes fs::exists throw. The load must
+    // come back as a result. (As root the probe succeeds and the file is simply
+    // missing, so only "did not throw and did not load" is asserted.)
+    const fs::path locked{m_path_root / "locked"};
+    fs::create_directories(locked);
+    fs::permissions(locked, fs::perms::none);
+
+    agent::HeaderStoreResult header_status{agent::HeaderStoreResult::OK};
+    agent::AllotmentStoreResult receipt_status{agent::AllotmentStoreResult::OK};
+    BOOST_CHECK_NO_THROW(header_status = agent::LoadHeaderChain(Params().GetConsensus(), Params().GenesisBlock(), locked / "headers.dat").status);
+    BOOST_CHECK_NO_THROW(receipt_status = agent::LoadAllotmentPaymentReceipts(locked / "receipts.dat", Params().GenesisBlock().GetHash()).status);
+    fs::permissions(locked, fs::perms::owner_all);
+
+    BOOST_CHECK(header_status == agent::HeaderStoreResult::FILE_OPEN_FAILED || header_status == agent::HeaderStoreResult::FILE_NOT_FOUND);
+    BOOST_CHECK(receipt_status == agent::AllotmentStoreResult::FILE_OPEN_FAILED || receipt_status == agent::AllotmentStoreResult::FILE_NOT_FOUND);
+}
+
+BOOST_AUTO_TEST_CASE(receipt_store_refuses_to_save_what_it_could_not_load)
+{
+    const fs::path path{m_path_root / "capped_receipts.dat"};
+    const uint256 genesis{Params().GenesisBlock().GetHash()};
+    const agent::AllotmentStoreLimits limits{.max_receipts = 1, .max_activities = 1};
+    agent::AllotmentReceiptStoreData data;
+    data.receipts.resize(1);
+    data.activities.resize(1);
+    BOOST_REQUIRE_EQUAL(agent::SaveAllotmentReceiptStore(data, path, genesis, limits), agent::AllotmentStoreResult::OK);
+    BOOST_REQUIRE(agent::LoadAllotmentPaymentReceipts(path, genesis, limits).ok());
+    const auto saved_size{fs::file_size(path)};
+
+    data.receipts.resize(2);
+    BOOST_CHECK_EQUAL(agent::SaveAllotmentReceiptStore(data, path, genesis, limits), agent::AllotmentStoreResult::TOO_MANY_RECEIPTS);
+    data.receipts.resize(1);
+    data.activities.resize(2);
+    BOOST_CHECK_EQUAL(agent::SaveAllotmentReceiptStore(data, path, genesis, limits), agent::AllotmentStoreResult::TOO_MANY_ACTIVITIES);
+
+    // The refused saves left the last good store in place, and it still loads.
+    BOOST_CHECK_EQUAL(fs::file_size(path), saved_size);
+    BOOST_CHECK(agent::LoadAllotmentPaymentReceipts(path, genesis, limits).ok());
+}
+
+BOOST_AUTO_TEST_CASE(receipt_store_rejects_a_count_its_file_cannot_hold)
+{
+    // A few bytes claiming the maximum record count: the load must fail on the
+    // missing records, without sizing anything by the claim first.
+    const fs::path path{m_path_root / "lying_receipts.dat"};
+    {
+        AutoFile file{fsbridge::fopen(path, "wb")};
+        file << uint32_t{0x47525351} << uint32_t{3} << Params().GenesisBlock().GetHash() << uint64_t{agent::MAX_ALLOTMENT_RECEIPTS};
+    }
+    const auto loaded{agent::LoadAllotmentPaymentReceipts(path, Params().GenesisBlock().GetHash())};
+    BOOST_CHECK_EQUAL(loaded.status, agent::AllotmentStoreResult::DESERIALIZE_FAILED);
 }
 
 BOOST_AUTO_TEST_CASE(reports_missing_header_store)
@@ -645,6 +808,15 @@ BOOST_AUTO_TEST_CASE(revalidates_stored_headers)
 
     BOOST_CHECK_EQUAL(loaded.status, agent::HeaderStoreResult::INVALID_HEADER);
     BOOST_CHECK_EQUAL(loaded.invalid_header.code, agent::HeaderAcceptCode::BAD_POW);
+}
+
+BOOST_AUTO_TEST_CASE(headers_sync_refuses_a_zero_headers_cap)
+{
+    // With a zero cap every non-empty reply is "too many" and the peer can never
+    // be synced, so the session refuses to exist rather than stall.
+    agent::HeaderChain chain{Params().GetConsensus(), Params().GenesisBlock()};
+    BOOST_CHECK_THROW((agent::HeaderSyncSession{chain, 0}), std::invalid_argument);
+    BOOST_CHECK_NO_THROW((agent::HeaderSyncSession{chain, 1}));
 }
 
 BOOST_AUTO_TEST_CASE(headers_sync_request_uses_current_locator_and_stop_hash)
@@ -834,7 +1006,7 @@ BOOST_AUTO_TEST_CASE(header_messages_round_trip_headers_payload)
     const CBlockHeader second{NextHeader(served_chain, 0, ArithToUint256(2))};
     std::vector<CBlockHeader> headers{first, second};
 
-    const CSerializedNetMsg message{agent::MakeHeadersMessage(headers)};
+    const CSerializedNetMsg message{MakeHeadersMessage(headers)};
     const auto decoded{agent::DecodeHeadersMessage(message, 2)};
 
     BOOST_REQUIRE(decoded.ok());
@@ -862,7 +1034,7 @@ BOOST_AUTO_TEST_CASE(header_messages_reject_oversized_payload_before_decoding_he
     const CBlockHeader first{NextHeader(served_chain, 0, ArithToUint256(1))};
     BOOST_REQUIRE(served_chain.AcceptHeader(first).accepted());
     const CBlockHeader second{NextHeader(served_chain, 0, ArithToUint256(2))};
-    const CSerializedNetMsg message{agent::MakeHeadersMessage(std::vector<CBlockHeader>{first, second})};
+    const CSerializedNetMsg message{MakeHeadersMessage(std::vector<CBlockHeader>{first, second})};
 
     const auto decoded{agent::DecodeHeadersMessage(message, 1)};
 
@@ -896,7 +1068,7 @@ BOOST_AUTO_TEST_CASE(header_messages_reject_trailing_data)
 {
     agent::HeaderChain served_chain{Params().GetConsensus(), Params().GenesisBlock()};
     const CBlockHeader first{NextHeader(served_chain)};
-    CSerializedNetMsg message{agent::MakeHeadersMessage(std::span{&first, 1})};
+    CSerializedNetMsg message{MakeHeadersMessage(std::span{&first, 1})};
     VectorWriter{message.data, message.data.size(), uint8_t{1}};
 
     const auto decoded{agent::DecodeHeadersMessage(message, 1)};
@@ -938,6 +1110,22 @@ BOOST_AUTO_TEST_CASE(agent_message_io_round_trips_serialized_payload)
     BOOST_CHECK_EQUAL(agent::AgentMessageIoResultCodeString(decoded.code), "decoded");
 }
 
+BOOST_AUTO_TEST_CASE(agent_message_io_applies_the_node_message_type_rule)
+{
+    // The node rejects these in a received header (CMessageHeader::IsMessageTypeValid);
+    // the agent must not frame them.
+    using namespace std::literals;
+    for (const std::string_view type : {"tx\x01"sv, "tx\0x"sv, "ab\tcd"sv, "ab\ncd"sv, "tx\x7f"sv, "tx\x80"sv}) {
+        BOOST_TEST_INFO("type " << HexStr(MakeUCharSpan(type)));
+        BOOST_CHECK_EQUAL(agent::DecodeAgentMessage(type, "00").code, agent::AgentMessageIoResultCode::INVALID_MESSAGE_TYPE);
+    }
+    // Surrounding whitespace is still trimmed, and a space inside is printable.
+    const auto trimmed{agent::DecodeAgentMessage(" \ttx\n", "00")};
+    BOOST_REQUIRE(trimmed.ok());
+    BOOST_CHECK_EQUAL(trimmed.message.m_type, NetMsgType::TX);
+    BOOST_CHECK(agent::DecodeAgentMessage("a b", "00").ok());
+}
+
 BOOST_AUTO_TEST_CASE(agent_message_io_rejects_invalid_cli_payloads)
 {
     agent::AgentMessageDecodeResult no_type{agent::DecodeAgentMessage("  ", "00")};
@@ -964,7 +1152,7 @@ BOOST_AUTO_TEST_CASE(agent_client_processes_cli_style_header_payload)
         agent::AgentClientOptions{.header_store_path = path},
     };
     const CBlockHeader next{NextHeader(client.Headers())};
-    CSerializedNetMsg headers_message{agent::MakeHeadersMessage(std::span{&next, 1})};
+    CSerializedNetMsg headers_message{MakeHeadersMessage(std::span{&next, 1})};
     agent::AgentMessageDecodeResult decoded{agent::DecodeAgentMessage(NetMsgType::HEADERS, agent::AgentMessagePayloadHex(headers_message))};
     BOOST_REQUIRE(decoded.ok());
 
@@ -1062,7 +1250,7 @@ BOOST_AUTO_TEST_CASE(header_messages_process_decoded_headers_through_sync_sessio
     BOOST_REQUIRE(served_chain.AcceptHeader(first).accepted());
     const CBlockHeader second{NextHeader(served_chain, 0, ArithToUint256(2))};
     std::vector<CBlockHeader> headers{first, second};
-    const CSerializedNetMsg message{agent::MakeHeadersMessage(headers)};
+    const CSerializedNetMsg message{MakeHeadersMessage(headers)};
 
     BOOST_REQUIRE(sync.NextHeadersRequest().locator.vHave.front() == Params().GenesisBlock().GetHash());
     const auto processed{agent::ProcessHeadersMessage(sync, message, 2)};
@@ -1158,7 +1346,7 @@ BOOST_AUTO_TEST_CASE(header_driver_processes_full_batch_and_emits_followup_reque
     std::vector<CBlockHeader> headers{first, second};
 
     BOOST_REQUIRE(driver.RequestHeaders().outbound_message.has_value());
-    const auto processed{driver.ProcessMessage(agent::MakeHeadersMessage(headers))};
+    const auto processed{driver.ProcessMessage(MakeHeadersMessage(headers))};
 
     BOOST_REQUIRE(processed.ok());
     BOOST_CHECK_EQUAL(processed.code, agent::HeaderSyncDriverResultCode::HEADERS_ACCEPTED);
@@ -1188,7 +1376,7 @@ BOOST_AUTO_TEST_CASE(header_driver_marks_peer_synced_on_short_batch)
     const CBlockHeader first{NextHeader(chain)};
 
     BOOST_REQUIRE(driver.RequestHeaders().outbound_message.has_value());
-    const auto processed{driver.ProcessMessage(agent::MakeHeadersMessage(std::span{&first, 1}))};
+    const auto processed{driver.ProcessMessage(MakeHeadersMessage(std::span{&first, 1}))};
 
     BOOST_CHECK(processed.ok());
     BOOST_CHECK_EQUAL(processed.code, agent::HeaderSyncDriverResultCode::PEER_SYNCED);
@@ -1232,7 +1420,7 @@ BOOST_AUTO_TEST_CASE(header_driver_reports_sync_failure_for_stale_headers)
     BOOST_REQUIRE(chain.AcceptHeader(first).accepted());
 
     BOOST_REQUIRE(driver.RequestHeaders().outbound_message.has_value());
-    const auto processed{driver.ProcessMessage(agent::MakeHeadersMessage(std::span{&first, 1}))};
+    const auto processed{driver.ProcessMessage(MakeHeadersMessage(std::span{&first, 1}))};
 
     BOOST_CHECK(!processed.ok());
     BOOST_CHECK_EQUAL(processed.code, agent::HeaderSyncDriverResultCode::SYNC_FAILED);
@@ -1256,9 +1444,9 @@ BOOST_AUTO_TEST_CASE(header_driver_accepts_duplicate_response_from_superseded_pa
 
     BOOST_REQUIRE(first_driver.RequestHeaders().outbound_message.has_value());
     BOOST_REQUIRE(second_driver.RequestHeaders().outbound_message.has_value());
-    BOOST_REQUIRE(first_driver.ProcessMessage(agent::MakeHeadersMessage(std::span{&first, 1})).ok());
+    BOOST_REQUIRE(first_driver.ProcessMessage(MakeHeadersMessage(std::span{&first, 1})).ok());
 
-    const auto processed{second_driver.ProcessMessage(agent::MakeHeadersMessage(std::span{&first, 1}))};
+    const auto processed{second_driver.ProcessMessage(MakeHeadersMessage(std::span{&first, 1}))};
 
     BOOST_CHECK(processed.ok());
     BOOST_CHECK_EQUAL(processed.code, agent::HeaderSyncDriverResultCode::PEER_SYNCED);
@@ -1333,7 +1521,7 @@ BOOST_AUTO_TEST_CASE(header_peer_queues_followup_request_after_full_batch)
 
     BOOST_REQUIRE(peer.StartHeaders().queued_outbound_message);
     BOOST_REQUIRE(peer.PopOutboundMessage().has_value());
-    const auto action{peer.ProcessMessage(agent::MakeHeadersMessage(headers))};
+    const auto action{peer.ProcessMessage(MakeHeadersMessage(headers))};
 
     BOOST_CHECK(action.ok());
     BOOST_CHECK_EQUAL(action.driver_result.code, agent::HeaderSyncDriverResultCode::HEADERS_ACCEPTED);
@@ -1381,21 +1569,6 @@ BOOST_AUTO_TEST_CASE(header_peer_does_not_queue_ignored_or_failed_messages)
     BOOST_CHECK(!peer.HasOutboundMessages());
     BOOST_CHECK(peer.WaitingForHeaders());
     BOOST_CHECK_EQUAL(chain.Height(), 0);
-}
-
-BOOST_AUTO_TEST_CASE(tx_messages_convert_gentxid_to_transaction_inventory)
-{
-    const uint256 txid_hash{ArithToUint256(10)};
-    const uint256 wtxid_hash{ArithToUint256(11)};
-    const std::vector<GenTxid> txids{GenTxid::Txid(txid_hash), GenTxid::Wtxid(wtxid_hash)};
-
-    const auto inventory{agent::TransactionInventory(txids)};
-
-    BOOST_REQUIRE_EQUAL(inventory.size(), 2U);
-    BOOST_CHECK_EQUAL(inventory[0].type, MSG_TX);
-    BOOST_CHECK(inventory[0].hash == txid_hash);
-    BOOST_CHECK_EQUAL(inventory[1].type, MSG_WTX);
-    BOOST_CHECK(inventory[1].hash == wtxid_hash);
 }
 
 BOOST_AUTO_TEST_CASE(tx_messages_round_trip_inv_payload)
@@ -1466,14 +1639,37 @@ BOOST_AUTO_TEST_CASE(tx_messages_reject_oversized_inventory_before_decoding_entr
     BOOST_CHECK(decoded.inventory.empty());
 }
 
-BOOST_AUTO_TEST_CASE(tx_messages_reject_non_transaction_inventory)
+BOOST_AUTO_TEST_CASE(tx_messages_skip_non_transaction_entries_in_inv)
 {
+    // A node's inv announces blocks too; one block entry must not cost the
+    // transactions announced beside it.
+    const std::vector<CInv> inventory{
+        CInv{MSG_BLOCK, ArithToUint256(1)},
+        CInv{MSG_TX, ArithToUint256(2)},
+        CInv{MSG_BLOCK, ArithToUint256(3)},
+        CInv{MSG_WTX, ArithToUint256(4)},
+    };
+
+    const auto decoded{agent::DecodeTxInvMessage(agent::MakeTxInvMessage(inventory))};
+
+    BOOST_REQUIRE(decoded.ok());
+    BOOST_CHECK_EQUAL(decoded.announced_count, 4U);
+    BOOST_CHECK_EQUAL(decoded.decoded_count, 4U);
+    BOOST_CHECK_EQUAL(decoded.skipped_count, 2U);
+    BOOST_REQUIRE_EQUAL(decoded.inventory.size(), 2U);
+    BOOST_CHECK(SameInv(decoded.inventory[0], inventory[1]));
+    BOOST_CHECK(SameInv(decoded.inventory[1], inventory[3]));
+}
+
+BOOST_AUTO_TEST_CASE(tx_messages_reject_non_transaction_getdata)
+{
+    // The agent announces only transactions, so a getdata for anything else is refused.
     const std::vector<CInv> inventory{
         CInv{MSG_TX, ArithToUint256(1)},
         CInv{MSG_BLOCK, ArithToUint256(2)},
     };
 
-    const auto decoded{agent::DecodeTxInvMessage(agent::MakeTxInvMessage(inventory))};
+    const auto decoded{agent::DecodeTxGetDataMessage(agent::MakeTxGetDataMessage(inventory))};
 
     BOOST_CHECK(!decoded.ok());
     BOOST_CHECK_EQUAL(decoded.code, agent::TxMessageResultCode::NON_TRANSACTION_INVENTORY);
@@ -1666,9 +1862,12 @@ BOOST_AUTO_TEST_CASE(tx_peer_ignores_non_transaction_messages)
 BOOST_AUTO_TEST_CASE(tx_peer_decode_failures_do_not_queue_or_mutate)
 {
     agent::TxPeer peer;
-    const std::vector<CInv> inventory{CInv{MSG_BLOCK, ArithToUint256(1)}};
+    // Declares two entries and carries one: the second cannot be read.
+    const std::vector<CInv> inventory{CInv{MSG_TX, ArithToUint256(1)}, CInv{MSG_TX, ArithToUint256(2)}};
+    CSerializedNetMsg truncated_inv{agent::MakeTxInvMessage(inventory)};
+    truncated_inv.data.resize(truncated_inv.data.size() - 10);
 
-    const auto bad_inv{peer.ProcessMessage(agent::MakeTxInvMessage(inventory))};
+    const auto bad_inv{peer.ProcessMessage(truncated_inv)};
 
     BOOST_CHECK(!bad_inv.ok());
     BOOST_CHECK_EQUAL(bad_inv.result.code, agent::TxPeerResultCode::DECODE_FAILED);
@@ -1676,7 +1875,7 @@ BOOST_AUTO_TEST_CASE(tx_peer_decode_failures_do_not_queue_or_mutate)
     BOOST_CHECK(!bad_inv.queued_outbound_message);
     BOOST_REQUIRE(bad_inv.result.inventory_message.has_value());
     BOOST_CHECK(!bad_inv.result.inventory_message->ok());
-    BOOST_CHECK_EQUAL(bad_inv.result.inventory_message->code, agent::TxMessageResultCode::NON_TRANSACTION_INVENTORY);
+    BOOST_CHECK_EQUAL(bad_inv.result.inventory_message->code, agent::TxMessageResultCode::DESERIALIZE_FAILED);
     BOOST_CHECK(!peer.HasOutboundMessages());
     BOOST_CHECK_EQUAL(peer.PendingRequestCount(), 0U);
 
@@ -1693,6 +1892,158 @@ BOOST_AUTO_TEST_CASE(tx_peer_decode_failures_do_not_queue_or_mutate)
     BOOST_CHECK_EQUAL(malformed_tx.result.tx_message->code, agent::TxMessageResultCode::DESERIALIZE_FAILED);
     BOOST_CHECK(!peer.HasOutboundMessages());
     BOOST_CHECK_EQUAL(peer.PendingRequestCount(), 0U);
+}
+
+BOOST_AUTO_TEST_CASE(tx_peer_requests_only_the_transactions_in_a_mixed_inv)
+{
+    agent::TxPeer peer;
+    const std::vector<CInv> mixed{CInv{MSG_BLOCK, ArithToUint256(1)}, CInv{MSG_WTX, ArithToUint256(2)}};
+
+    const auto action{peer.ProcessMessage(agent::MakeTxInvMessage(mixed))};
+
+    BOOST_CHECK(action.ok());
+    BOOST_CHECK_EQUAL(action.result.code, agent::TxPeerResultCode::GETDATA_SENT);
+    BOOST_REQUIRE_EQUAL(action.result.requested_inventory.size(), 1U);
+    BOOST_CHECK(SameInv(action.result.requested_inventory[0], mixed[1]));
+    BOOST_CHECK_EQUAL(action.result.inventory_message->skipped_count, 1U);
+    BOOST_CHECK_EQUAL(peer.PendingRequestCount(), 1U);
+
+    const std::vector<CInv> blocks_only{CInv{MSG_BLOCK, ArithToUint256(3)}};
+    const auto blocks{peer.ProcessMessage(agent::MakeTxInvMessage(blocks_only))};
+    BOOST_CHECK(blocks.ok());
+    BOOST_CHECK_EQUAL(blocks.result.code, agent::TxPeerResultCode::INV_NO_TRANSACTIONS);
+    BOOST_CHECK_EQUAL(agent::TxPeerResultCodeString(blocks.result.code), "inv-no-transactions");
+    BOOST_CHECK(!blocks.queued_outbound_message);
+    BOOST_CHECK_EQUAL(peer.OutboundMessageCount(), 1U);
+}
+
+BOOST_AUTO_TEST_CASE(tx_peer_expires_an_unanswered_request)
+{
+    agent::TxPeer peer;
+    const CInv inv{MSG_WTX, ArithToUint256(5)};
+    const auto start{GetTime<std::chrono::seconds>()};
+
+    BOOST_REQUIRE_EQUAL(peer.ProcessMessage(agent::MakeTxInvMessage(std::span{&inv, 1})).result.code,
+                        agent::TxPeerResultCode::GETDATA_SENT);
+    peer.DrainOutboundMessages();
+
+    // Still pending just before the expiry: a repeat announcement is a duplicate.
+    SetMockTime(start + agent::TX_REQUEST_EXPIRY - std::chrono::seconds{1});
+    const auto early{peer.ProcessMessage(agent::MakeTxInvMessage(std::span{&inv, 1}))};
+    BOOST_CHECK_EQUAL(early.result.code, agent::TxPeerResultCode::INV_ALREADY_KNOWN);
+    BOOST_CHECK_EQUAL(early.result.duplicate_count, 1U);
+
+    // At the expiry the request is dropped and the transaction is asked for again.
+    SetMockTime(start + agent::TX_REQUEST_EXPIRY);
+    const auto again{peer.ProcessMessage(agent::MakeTxInvMessage(std::span{&inv, 1}))};
+    BOOST_CHECK_EQUAL(again.result.code, agent::TxPeerResultCode::GETDATA_SENT);
+    BOOST_CHECK_EQUAL(again.result.requested_inventory.size(), 1U);
+    BOOST_CHECK_EQUAL(peer.PendingRequestCount(), 1U);
+    SetMockTime(start);
+}
+
+BOOST_AUTO_TEST_CASE(tx_peer_notfound_clears_the_pending_request)
+{
+    agent::TxPeer peer;
+    const CInv inv{MSG_WTX, ArithToUint256(6)};
+    BOOST_REQUIRE(peer.ProcessMessage(agent::MakeTxInvMessage(std::span{&inv, 1})).ok());
+    peer.DrainOutboundMessages();
+    BOOST_REQUIRE_EQUAL(peer.PendingRequestCount(), 1U);
+
+    const std::vector<CInv> notfound{CInv{MSG_BLOCK, ArithToUint256(7)}, inv};
+    const auto action{peer.ProcessMessage(agent::MakeTxNotFoundMessage(notfound))};
+
+    BOOST_CHECK(action.ok());
+    BOOST_CHECK_EQUAL(action.result.code, agent::TxPeerResultCode::NOTFOUND_RECEIVED);
+    BOOST_CHECK_EQUAL(agent::TxPeerResultCodeString(action.result.code), "notfound-received");
+    BOOST_REQUIRE_EQUAL(action.result.matched_requests.size(), 1U);
+    BOOST_CHECK(SameInv(action.result.matched_requests[0], inv));
+    BOOST_CHECK(!action.queued_outbound_message);
+    BOOST_CHECK_EQUAL(peer.PendingRequestCount(), 0U);
+
+    // Freed: the next announcement requests it again.
+    BOOST_CHECK_EQUAL(peer.ProcessMessage(agent::MakeTxInvMessage(std::span{&inv, 1})).result.code,
+                      agent::TxPeerResultCode::GETDATA_SENT);
+}
+
+BOOST_AUTO_TEST_CASE(tx_peer_caps_pending_requests)
+{
+    agent::TxPeer peer{/*max_tx_inventory=*/2};
+    const std::vector<CInv> first{CInv{MSG_WTX, ArithToUint256(11)}, CInv{MSG_WTX, ArithToUint256(12)}};
+    BOOST_REQUIRE_EQUAL(peer.ProcessMessage(agent::MakeTxInvMessage(first)).result.requested_inventory.size(), 2U);
+
+    const std::vector<CInv> more{CInv{MSG_WTX, ArithToUint256(13)}};
+    const auto action{peer.ProcessMessage(agent::MakeTxInvMessage(more))};
+
+    BOOST_CHECK(action.ok());
+    BOOST_CHECK_EQUAL(action.result.code, agent::TxPeerResultCode::INV_ALREADY_KNOWN);
+    BOOST_CHECK(action.result.requested_inventory.empty());
+    BOOST_CHECK_EQUAL(action.result.over_limit_count, 1U);
+    BOOST_CHECK_EQUAL(peer.PendingRequestCount(), 2U);
+}
+
+BOOST_AUTO_TEST_CASE(tx_peer_bounds_known_inventory)
+{
+    // Three inventory forms per transaction, so max_tx_inventory = 1 keeps one
+    // transaction's worth, the newest.
+    agent::TxPeer peer{/*max_tx_inventory=*/1};
+    const CTransactionRef older{TestTransaction(/*anchor_height=*/10)};
+    const CTransactionRef newer{TestTransaction(/*anchor_height=*/11)};
+
+    peer.ProcessMessage(agent::MakeTxMessage(*older));
+    peer.ProcessMessage(agent::MakeTxMessage(*newer));
+
+    BOOST_CHECK_EQUAL(peer.KnownInventoryCount(), 3U);
+    const CInv older_inv{MSG_WTX, older->GetWitnessHash().ToUint256()};
+    const CInv newer_inv{MSG_WTX, newer->GetWitnessHash().ToUint256()};
+    BOOST_CHECK_EQUAL(peer.ProcessMessage(agent::MakeTxInvMessage(std::span{&newer_inv, 1})).result.code,
+                      agent::TxPeerResultCode::INV_ALREADY_KNOWN);
+    BOOST_CHECK_EQUAL(peer.ProcessMessage(agent::MakeTxInvMessage(std::span{&older_inv, 1})).result.code,
+                      agent::TxPeerResultCode::GETDATA_SENT);
+}
+
+BOOST_AUTO_TEST_CASE(tx_peer_never_serves_a_received_transaction)
+{
+    // A transaction from the peer is reported and remembered as known, but the
+    // agent does not relay it: there is no proof-of-work check on this path, so
+    // nothing received may leave it. A getdata for it gets notfound.
+    agent::TxPeer peer;
+    const CTransactionRef received{TestTransaction()};
+    const auto got{peer.ProcessMessage(agent::MakeTxMessage(*received))};
+    BOOST_REQUIRE_EQUAL(got.result.code, agent::TxPeerResultCode::TX_RECEIVED);
+    BOOST_CHECK(!got.queued_outbound_message);
+
+    const std::vector<CInv> asks{
+        CInv{MSG_TX, received->GetHash().ToUint256()},
+        CInv{MSG_WTX, received->GetWitnessHash().ToUint256()},
+    };
+    const auto served{peer.ProcessMessage(agent::MakeTxGetDataMessage(asks))};
+
+    BOOST_CHECK_EQUAL(served.result.code, agent::TxPeerResultCode::TX_NOT_FOUND);
+    BOOST_CHECK(served.result.served_inventory.empty());
+    BOOST_CHECK_EQUAL(served.result.missing_count, 2U);
+    for (const CSerializedNetMsg& message : peer.DrainOutboundMessages()) {
+        BOOST_CHECK(message.m_type != NetMsgType::TX);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(tx_peer_counts_repeated_getdata_entries_as_duplicates)
+{
+    agent::TxPeer peer;
+    const CTransactionRef transaction{TestTransaction()};
+    peer.AnnounceTransaction(*transaction);
+    peer.DrainOutboundMessages();
+    const CInv wtx{MSG_WTX, transaction->GetWitnessHash().ToUint256()};
+    const CInv tx{MSG_TX, transaction->GetHash().ToUint256()};
+    const std::vector<CInv> asks{wtx, tx, wtx};
+
+    const auto served{peer.ProcessMessage(agent::MakeTxGetDataMessage(asks))};
+
+    BOOST_CHECK_EQUAL(served.result.code, agent::TxPeerResultCode::TX_SENT);
+    BOOST_CHECK_EQUAL(served.result.served_inventory.size(), 1U);
+    BOOST_CHECK_EQUAL(served.result.duplicate_count, 2U);
+    BOOST_CHECK_EQUAL(served.result.missing_count, 0U);
+    BOOST_CHECK_EQUAL(peer.OutboundMessageCount(), 1U);
 }
 
 BOOST_AUTO_TEST_CASE(tx_peer_announces_local_transaction_and_answers_getdata)
@@ -1753,7 +2104,7 @@ BOOST_AUTO_TEST_CASE(tx_peer_announces_local_transaction_and_answers_getdata)
     BOOST_CHECK(!peer.HasOutboundMessages());
 }
 
-BOOST_AUTO_TEST_CASE(tx_peer_reports_missing_getdata_without_queueing_tx)
+BOOST_AUTO_TEST_CASE(tx_peer_answers_missing_getdata_with_notfound_not_a_tx)
 {
     agent::TxPeer peer;
     const CInv unknown_inv{MSG_TX, ArithToUint256(909)};
@@ -1763,13 +2114,22 @@ BOOST_AUTO_TEST_CASE(tx_peer_reports_missing_getdata_without_queueing_tx)
     BOOST_CHECK(missing.ok());
     BOOST_CHECK_EQUAL(missing.result.code, agent::TxPeerResultCode::TX_NOT_FOUND);
     BOOST_CHECK_EQUAL(agent::TxPeerResultCodeString(missing.result.code), "tx-not-found");
-    BOOST_CHECK(!missing.queued_outbound_message);
     BOOST_REQUIRE(missing.result.inventory_message.has_value());
     BOOST_CHECK(missing.result.inventory_message->ok());
     BOOST_CHECK(missing.result.served_inventory.empty());
     BOOST_CHECK_EQUAL(missing.result.missing_count, 1U);
-    BOOST_CHECK(!peer.HasOutboundMessages());
     BOOST_CHECK_EQUAL(peer.KnownInventoryCount(), 0U);
+
+    // The node answers a getdata it cannot serve with notfound; so does the agent.
+    BOOST_CHECK(missing.queued_outbound_message);
+    BOOST_REQUIRE_EQUAL(peer.OutboundMessageCount(), 1U);
+    const auto notfound{peer.PopOutboundMessage()};
+    BOOST_REQUIRE(notfound.has_value());
+    BOOST_CHECK_EQUAL(notfound->m_type, NetMsgType::NOTFOUND);
+    const auto decoded{agent::DecodeTxNotFoundMessage(*notfound)};
+    BOOST_REQUIRE(decoded.ok());
+    BOOST_REQUIRE_EQUAL(decoded.inventory.size(), 1U);
+    BOOST_CHECK(SameInv(decoded.inventory[0], unknown_inv));
 }
 
 BOOST_AUTO_TEST_CASE(tx_peer_can_send_local_transaction_directly)
@@ -1840,7 +2200,7 @@ BOOST_AUTO_TEST_CASE(agent_peer_dispatches_header_messages_to_header_sync)
 
     BOOST_REQUIRE(peer.StartHeaders().queued_outbound_count == 1U);
     BOOST_REQUIRE(peer.PopOutboundMessage().has_value());
-    const auto action{peer.ProcessMessage(agent::MakeHeadersMessage(std::span{&first, 1}))};
+    const auto action{peer.ProcessMessage(MakeHeadersMessage(std::span{&first, 1}))};
 
     BOOST_CHECK(action.ok());
     BOOST_CHECK_EQUAL(action.code, agent::AgentPeerActionCode::HEADER_MESSAGE);
@@ -2012,147 +2372,32 @@ BOOST_AUTO_TEST_CASE(agent_peer_ignores_unhandled_messages_without_mutating_stat
     BOOST_CHECK(!peer.HasOutboundMessages());
 }
 
-BOOST_AUTO_TEST_CASE(agent_peer_set_manages_peer_lifecycle)
+BOOST_AUTO_TEST_CASE(agent_client_owns_one_peer_and_forwards_to_it)
 {
-    agent::HeaderChain chain{Params().GetConsensus(), Params().GenesisBlock()};
-    agent::AgentPeerSet peers{chain, uint256{}, 2, 7};
+    // The client owns its single peer directly: every call reaches that peer,
+    // and the options reach it.
+    agent::AgentClient client{Params().GetConsensus(), Params().GenesisBlock(),
+                              agent::AgentClientOptions{.max_headers_result = 2, .max_tx_inventory = 7}};
 
-    BOOST_CHECK_EQUAL(peers.PeerCount(), 1U);
-    BOOST_CHECK(peers.HasPeer(agent::DEFAULT_AGENT_PEER_ID));
-    BOOST_CHECK_EQUAL(peers.MaxTxInventory(), 7U);
+    BOOST_CHECK(!client.WaitingForHeaders());
+    BOOST_CHECK(!client.HasOutboundMessages());
+    BOOST_CHECK_EQUAL(client.OutboundMessageCount(), 0U);
 
-    const auto duplicate{peers.AddPeer(agent::DEFAULT_AGENT_PEER_ID)};
-    BOOST_CHECK(!duplicate.ok());
-    BOOST_CHECK_EQUAL(duplicate.code, agent::AgentPeerSetResultCode::PEER_ALREADY_EXISTS);
-    BOOST_CHECK_EQUAL(agent::AgentPeerSetResultCodeString(duplicate.code), "peer-already-exists");
+    const auto ignored{client.ProcessMessage(NetMsg::Make(NetMsgType::PING, uint64_t{1}))};
+    BOOST_CHECK(ignored.ok());
+    BOOST_CHECK_EQUAL(ignored.code, agent::AgentPeerActionCode::IGNORED_MESSAGE);
+    BOOST_CHECK(!client.WaitingForHeaders());
 
-    const auto added{peers.AddPeer(42)};
-    BOOST_CHECK(added.ok());
-    BOOST_CHECK_EQUAL(added.code, agent::AgentPeerSetResultCode::PEER_ADDED);
-    BOOST_CHECK_EQUAL(agent::AgentPeerSetResultCodeString(added.code), "peer-added");
-    BOOST_CHECK_EQUAL(added.peer_id, 42U);
-    BOOST_CHECK_EQUAL(peers.PeerCount(), 2U);
-    BOOST_REQUIRE_EQUAL(peers.PeerIds().size(), 2U);
-    BOOST_CHECK_EQUAL(peers.PeerIds()[0], agent::DEFAULT_AGENT_PEER_ID);
-    BOOST_CHECK_EQUAL(peers.PeerIds()[1], 42U);
-
-    const auto default_removed{peers.RemovePeer(agent::DEFAULT_AGENT_PEER_ID)};
-    BOOST_CHECK(!default_removed.ok());
-    BOOST_CHECK_EQUAL(default_removed.code, agent::AgentPeerSetResultCode::PEER_NOT_REMOVABLE);
-    BOOST_CHECK_EQUAL(agent::AgentPeerSetResultCodeString(default_removed.code), "peer-not-removable");
-
-    const auto removed{peers.RemovePeer(42)};
-    BOOST_CHECK(removed.ok());
-    BOOST_CHECK_EQUAL(removed.code, agent::AgentPeerSetResultCode::PEER_REMOVED);
-    BOOST_CHECK_EQUAL(agent::AgentPeerSetResultCodeString(removed.code), "peer-removed");
-    BOOST_CHECK(!peers.HasPeer(42));
-
-    const auto missing{peers.StartHeaders(42)};
-    BOOST_CHECK(!missing.ok());
-    BOOST_CHECK_EQUAL(missing.code, agent::AgentPeerSetResultCode::PEER_NOT_FOUND);
-    BOOST_CHECK_EQUAL(agent::AgentPeerSetResultCodeString(missing.code), "peer-not-found");
-}
-
-BOOST_AUTO_TEST_CASE(agent_peer_set_routes_headers_and_outbound_by_peer_id)
-{
-    agent::HeaderChain chain{Params().GetConsensus(), Params().GenesisBlock()};
-    agent::AgentPeerSet peers{chain, uint256{}, 2};
-    const uint256 peer_stop_hash{ArithToUint256(42)};
-    BOOST_REQUIRE(peers.AddPeer(11).ok());
-
-    const auto started{peers.StartHeaders(11, peer_stop_hash)};
-
+    const auto started{client.StartHeaders()};
     BOOST_CHECK(started.ok());
-    BOOST_CHECK_EQUAL(started.code, agent::AgentPeerSetResultCode::PEER_ACTION);
-    BOOST_REQUIRE(started.peer_action.has_value());
-    BOOST_CHECK_EQUAL(started.peer_action->code, agent::AgentPeerActionCode::HEADERS_STARTED);
+    BOOST_CHECK_EQUAL(agent::AgentPeerActionCodeString(started.code), "headers-started");
     BOOST_CHECK_EQUAL(started.queued_outbound_count, 1U);
-    BOOST_CHECK(peers.WaitingForHeaders(11));
-    BOOST_CHECK(!peers.WaitingForHeaders(agent::DEFAULT_AGENT_PEER_ID));
-    BOOST_CHECK(peers.HeaderStopHash(11) == peer_stop_hash);
-    BOOST_CHECK_EQUAL(peers.OutboundMessageCount(11), 1U);
-    BOOST_CHECK_EQUAL(peers.OutboundMessageCount(agent::DEFAULT_AGENT_PEER_ID), 0U);
-    BOOST_CHECK_EQUAL(peers.OutboundMessageCount(), 1U);
-
-    const auto request{peers.PopOutboundMessage(11)};
-    BOOST_REQUIRE(request.has_value());
-    BOOST_CHECK_EQUAL(request->m_type, NetMsgType::GETHEADERS);
-
-    const CBlockHeader first{NextHeader(chain)};
-    const auto processed{peers.ProcessMessage(11, agent::MakeHeadersMessage(std::span{&first, 1}))};
-
-    BOOST_CHECK(processed.ok());
-    BOOST_REQUIRE(processed.peer_action.has_value());
-    BOOST_CHECK_EQUAL(processed.peer_action->code, agent::AgentPeerActionCode::HEADER_MESSAGE);
-    BOOST_REQUIRE(processed.peer_action->header_action.has_value());
-    BOOST_CHECK_EQUAL(processed.peer_action->header_action->driver_result.code, agent::HeaderSyncDriverResultCode::PEER_SYNCED);
-    BOOST_CHECK_EQUAL(chain.Height(), 1);
-    BOOST_CHECK(peers.HeaderPeerSynced(11));
-    BOOST_CHECK(!peers.HasOutboundMessages());
-
-    const auto missing{peers.ProcessMessage(99, NetMsg::Make(NetMsgType::PING, uint64_t{1}))};
-    BOOST_CHECK(!missing.ok());
-    BOOST_CHECK_EQUAL(missing.code, agent::AgentPeerSetResultCode::PEER_NOT_FOUND);
-}
-
-BOOST_AUTO_TEST_CASE(agent_peer_set_accepts_parallel_duplicate_header_responses)
-{
-    agent::HeaderChain chain{Params().GetConsensus(), Params().GenesisBlock()};
-    agent::AgentPeerSet peers{chain, uint256{}, 2};
-    BOOST_REQUIRE(peers.AddPeer(11).ok());
-    BOOST_REQUIRE(peers.AddPeer(12).ok());
-    const CBlockHeader first{NextHeader(chain)};
-
-    BOOST_REQUIRE(peers.StartHeaders(11).ok());
-    BOOST_REQUIRE(peers.StartHeaders(12).ok());
-    BOOST_REQUIRE(peers.DrainOutboundMessages(11).size() == 1U);
-    BOOST_REQUIRE(peers.DrainOutboundMessages(12).size() == 1U);
-    BOOST_REQUIRE(peers.ProcessMessage(11, agent::MakeHeadersMessage(std::span{&first, 1})).ok());
-
-    const auto duplicate{peers.ProcessMessage(12, agent::MakeHeadersMessage(std::span{&first, 1}))};
-
-    BOOST_CHECK(duplicate.ok());
-    BOOST_REQUIRE(duplicate.peer_action.has_value());
-    BOOST_REQUIRE(duplicate.peer_action->header_action.has_value());
-    BOOST_CHECK_EQUAL(duplicate.peer_action->header_action->driver_result.code, agent::HeaderSyncDriverResultCode::PEER_SYNCED);
-    BOOST_REQUIRE(duplicate.peer_action->header_action->driver_result.header_message.has_value());
-    BOOST_REQUIRE(duplicate.peer_action->header_action->driver_result.header_message->sync.has_value());
-    BOOST_CHECK_EQUAL(duplicate.peer_action->header_action->driver_result.header_message->sync->code, agent::HeaderSyncResultCode::DUPLICATE_HEADERS);
-    BOOST_CHECK_EQUAL(duplicate.peer_action->header_action->driver_result.header_message->sync->duplicate_count, 1U);
-    BOOST_CHECK_EQUAL(chain.Height(), 1);
-    BOOST_CHECK(peers.HeaderPeerSynced(12));
-    BOOST_CHECK(!peers.HasOutboundMessages());
-}
-
-BOOST_AUTO_TEST_CASE(agent_peer_set_fans_out_transaction_announces_to_all_peers)
-{
-    agent::HeaderChain chain{Params().GetConsensus(), Params().GenesisBlock()};
-    agent::AgentPeerSet peers{chain};
-    BOOST_REQUIRE(peers.AddPeer(8).ok());
-    const CTransactionRef transaction{TestTransaction()};
-
-    const auto actions{peers.AnnounceTransactionToAll(*transaction)};
-
-    BOOST_REQUIRE_EQUAL(actions.size(), 2U);
-    BOOST_CHECK(actions[0].ok());
-    BOOST_CHECK_EQUAL(actions[0].peer_id, agent::DEFAULT_AGENT_PEER_ID);
-    BOOST_CHECK_EQUAL(actions[0].queued_outbound_count, 1U);
-    BOOST_REQUIRE(actions[0].peer_action.has_value());
-    BOOST_CHECK_EQUAL(actions[0].peer_action->code, agent::AgentPeerActionCode::TRANSACTION_ANNOUNCED);
-    BOOST_CHECK(actions[1].ok());
-    BOOST_CHECK_EQUAL(actions[1].peer_id, 8U);
-    BOOST_CHECK_EQUAL(actions[1].queued_outbound_count, 1U);
-    BOOST_CHECK_EQUAL(peers.KnownTxInventoryCount(agent::DEFAULT_AGENT_PEER_ID), 3U);
-    BOOST_CHECK_EQUAL(peers.KnownTxInventoryCount(8), 3U);
-    BOOST_CHECK_EQUAL(peers.OutboundMessageCount(), 2U);
-
-    const auto messages{peers.DrainOutboundMessages()};
-    BOOST_REQUIRE_EQUAL(messages.size(), 2U);
-    BOOST_CHECK_EQUAL(messages[0].peer_id, agent::DEFAULT_AGENT_PEER_ID);
-    BOOST_CHECK_EQUAL(messages[0].message.m_type, NetMsgType::INV);
-    BOOST_CHECK_EQUAL(messages[1].peer_id, 8U);
-    BOOST_CHECK_EQUAL(messages[1].message.m_type, NetMsgType::INV);
-    BOOST_CHECK(!peers.HasOutboundMessages());
+    BOOST_CHECK(client.WaitingForHeaders());
+    BOOST_CHECK_EQUAL(client.OutboundMessageCount(), 1U);
+    const auto popped{client.PopOutboundMessage()};
+    BOOST_REQUIRE(popped.has_value());
+    BOOST_CHECK_EQUAL(popped->m_type, NetMsgType::GETHEADERS);
+    BOOST_CHECK(!client.HasOutboundMessages());
 }
 
 BOOST_AUTO_TEST_CASE(agent_client_starts_fresh_without_header_store)
@@ -2201,7 +2446,7 @@ BOOST_AUTO_TEST_CASE(agent_client_loads_saves_and_reloads_headers)
     const CBlockHeader next{NextHeader(client.Headers())};
     BOOST_REQUIRE(client.StartHeaders().queued_outbound_count == 1U);
     BOOST_REQUIRE(client.PopOutboundMessage().has_value());
-    const auto processed{client.ProcessMessage(agent::MakeHeadersMessage(std::span{&next, 1}))};
+    const auto processed{client.ProcessMessage(MakeHeadersMessage(std::span{&next, 1}))};
 
     BOOST_CHECK(processed.ok());
     BOOST_CHECK_EQUAL(processed.code, agent::AgentPeerActionCode::HEADER_MESSAGE);
@@ -2269,41 +2514,6 @@ BOOST_AUTO_TEST_CASE(agent_client_delegates_transaction_relay_to_peer_facade)
     BOOST_REQUIRE(decoded_tx.transaction);
     BOOST_CHECK(decoded_tx.transaction->GetWitnessHash() == transaction->GetWitnessHash());
     BOOST_CHECK(!client.HasOutboundMessages());
-}
-
-BOOST_AUTO_TEST_CASE(agent_client_exposes_transport_supplied_peer_ids)
-{
-    agent::AgentClient client{
-        Params().GetConsensus(),
-        Params().GenesisBlock(),
-        agent::AgentClientOptions{.max_headers_result = 2, .max_tx_inventory = 5},
-    };
-    const std::vector<CInv> inventory{CInv{MSG_TX, ArithToUint256(91)}};
-
-    BOOST_CHECK_EQUAL(client.PeerCount(), 1U);
-    BOOST_CHECK(client.HasPeer(agent::DEFAULT_AGENT_PEER_ID));
-    BOOST_REQUIRE(client.AddPeer(3).ok());
-    BOOST_CHECK_EQUAL(client.PeerCount(), 2U);
-
-    const auto action{client.ProcessMessage(3, agent::MakeTxInvMessage(inventory))};
-
-    BOOST_CHECK(action.ok());
-    BOOST_CHECK_EQUAL(action.code, agent::AgentPeerSetResultCode::PEER_ACTION);
-    BOOST_REQUIRE(action.peer_action.has_value());
-    BOOST_CHECK_EQUAL(action.peer_action->code, agent::AgentPeerActionCode::TX_MESSAGE);
-    BOOST_REQUIRE(action.peer_action->tx_action.has_value());
-    BOOST_CHECK_EQUAL(action.peer_action->tx_action->result.code, agent::TxPeerResultCode::GETDATA_SENT);
-    BOOST_CHECK_EQUAL(action.queued_outbound_count, 1U);
-    BOOST_CHECK_EQUAL(client.PendingTxRequestCount(3), 1U);
-    BOOST_CHECK_EQUAL(client.PendingTxRequestCount(agent::DEFAULT_AGENT_PEER_ID), 0U);
-    BOOST_CHECK_EQUAL(client.OutboundMessageCount(3), 1U);
-    BOOST_CHECK_EQUAL(client.OutboundMessageCount(), 0U);
-    BOOST_CHECK(client.HasOutboundMessages(3));
-
-    const auto outbound{client.PopOutboundMessage(3)};
-    BOOST_REQUIRE(outbound.has_value());
-    BOOST_CHECK_EQUAL(outbound->m_type, NetMsgType::GETDATA);
-    BOOST_CHECK(!client.HasOutboundMessages(3));
 }
 
 BOOST_AUTO_TEST_CASE(agent_allotment_policy_decodes_desktop_policy_request)
@@ -2671,6 +2881,38 @@ BOOST_AUTO_TEST_CASE(agent_allotment_policy_rejects_wrong_policy_request_metadat
     BOOST_CHECK_EQUAL(util::ErrorString(wrong_bundle_address).original, "Agent allotment policy bundle funding address does not match the policy request.");
 }
 
+BOOST_AUTO_TEST_CASE(agent_allotment_field_errors_name_the_document_read)
+{
+    // A bad bundle or receipt field used to be reported as a "policy request
+    // field", which sent the reader to the wrong document.
+    const std::string chain{Params().GetChainTypeString()};
+    const std::string genesis{Params().GenesisBlock().GetHash().ToString()};
+    const std::string policy_request{strprintf(
+        R"({"type":"quicksilver.agent_allotment_policy_request","version":2,"chain":"%s","genesis_hash":"%s","id":"agent-1","label":"test-agent","funding_address":"agent-address","funding_limit_cinnabar":"100000000","funding_available_cinnabar":"75000000","daily_limit_cinnabar":"25000000","risk_accepted_time":"123","request_created_time":"456","funding_descriptor":"agent-descriptor"})",
+        chain, genesis)};
+
+    UniValue request;
+    BOOST_REQUIRE(request.read(policy_request));
+    request.pushKV("label", 7);
+    const auto bad_request{agent::DecodeAllotmentPolicyRequest(request.write(), chain, genesis)};
+    BOOST_REQUIRE(!bad_request);
+    BOOST_CHECK_EQUAL(util::ErrorString(bad_request).original, "Agent allotment policy request field 'label' must be a string.");
+
+    const std::string bundle{strprintf(
+        R"({"type":"quicksilver.agent_allotment_cosign_bundle","version":1,"policy_request":%s,"funding_address":"agent-address","agent_secret_wif":"","funding_descriptor":"agent-descriptor"})",
+        policy_request)};
+    const auto bad_bundle{agent::DecodeAllotmentPolicyBundle(bundle, chain, genesis)};
+    BOOST_REQUIRE(!bad_bundle);
+    BOOST_CHECK_EQUAL(util::ErrorString(bad_bundle).original, "Agent allotment policy bundle field 'agent_secret_wif' must not be empty.");
+
+    const std::string receipt{strprintf(
+        R"({"type":"quicksilver.agent_payment_receipt","version":1,"chain":"%s","genesis_hash":"%s","funding_address":"agent-address","txid":"%s","vout":0,"amount_cinnabar":"5","received_time":"x"})",
+        chain, genesis, uint256::ONE.ToString())};
+    const auto bad_receipt{agent::DecodeAllotmentPaymentReceipt(receipt, chain, genesis, "agent-address")};
+    BOOST_REQUIRE(!bad_receipt);
+    BOOST_CHECK_EQUAL(util::ErrorString(bad_receipt).original, "Agent allotment payment receipt field 'received_time' must be a valid nonnegative time.");
+}
+
 BOOST_AUTO_TEST_CASE(agent_allotment_policy_checks_daily_guardrail)
 {
     const agent::AllotmentPolicy policy{.funding_limit = COIN, .daily_limit = COIN / 2};
@@ -2781,6 +3023,22 @@ BOOST_AUTO_TEST_CASE(agent_interrupt_handler_cancels_the_grind_on_sigint)
     BOOST_CHECK_MESSAGE(cancel(),
                         "the cancel callback handed to the solver must report the interrupt, "
                         "otherwise Ctrl-C orphans the graphics helper with the card pinned");
+}
+
+BOOST_AUTO_TEST_CASE(agent_interrupt_handler_restores_the_default_disposition)
+{
+    // SIG_DFL is a null pointer on the Windows CRT. Treating null as "nothing to
+    // restore" left the agent's handler installed after the grind, so Ctrl-C was
+    // swallowed for the rest of the run.
+    const auto saved_int{std::signal(SIGINT, SIG_DFL)};
+    const auto saved_term{std::signal(SIGTERM, SIG_IGN)};
+    {
+        const agent::InterruptHandler interrupt;
+    }
+    const auto after_int{std::signal(SIGINT, saved_int)};
+    const auto after_term{std::signal(SIGTERM, saved_term)};
+    BOOST_CHECK_MESSAGE(after_int == SIG_DFL, "SIGINT was not restored to the default action");
+    BOOST_CHECK_MESSAGE(after_term == SIG_IGN, "SIGTERM was not restored to ignore");
 }
 
 // --- F-153: THE AGENT GRIND MUST BE STOPPABLE ------------------------------
@@ -3496,6 +3754,25 @@ BOOST_AUTO_TEST_CASE(agent_allotment_cpu_fallback_requires_opt_in_past_sandbox)
     BOOST_CHECK(!agent::AllowsAllotmentCpuFallback(29, true));
 }
 
+BOOST_AUTO_TEST_CASE(agent_allotment_cpu_fallback_follows_each_chains_graph)
+{
+    // The gate reads the graph sizes from the chain parameters, so each chain's own
+    // nTxEdgeBits gets that chain's policy: sandbox's graph needs no opt-in, and
+    // mainnet's and publictest's graph needs one.
+    const auto sandbox{CChainParams::Sandbox({})};
+    const uint8_t sandbox_bits{sandbox->GetConsensus().nTxEdgeBits};
+    BOOST_CHECK(agent::AllowsAllotmentCpuFallback(sandbox_bits, /*allow_cpu_txpow=*/false));
+    BOOST_CHECK(agent::AllowsAllotmentCpuFallback(sandbox_bits, /*allow_cpu_txpow=*/true));
+
+    for (const auto& params : {CChainParams::Main(), CChainParams::PublicTest()}) {
+        const uint8_t bits{params->GetConsensus().nTxEdgeBits};
+        BOOST_TEST_INFO("chain " << params->GetChainTypeString() << " edgebits " << int{bits});
+        BOOST_CHECK(bits != sandbox_bits);
+        BOOST_CHECK(!agent::AllowsAllotmentCpuFallback(bits, /*allow_cpu_txpow=*/false));
+        BOOST_CHECK(agent::AllowsAllotmentCpuFallback(bits, /*allow_cpu_txpow=*/true));
+    }
+}
+
 BOOST_AUTO_TEST_CASE(agent_allotment_e28_spend_without_opt_in_names_the_missing_solver)
 {
     // The refusal that exists today: E28, no opt-in, no solver. It must stay a
@@ -3552,7 +3829,17 @@ BOOST_AUTO_TEST_CASE(agent_allotment_e28_spend_without_opt_in_names_the_missing_
         consensus)};
     BOOST_REQUIRE(!signed_spend);
     BOOST_CHECK_EQUAL(util::ErrorString(signed_spend).original,
-                      "Per-transaction proof-of-work failed. No graphics card is in use; install the quicksilver-gpu package, set -cuckatoodevice, or allow processor mining with -allowcpumining");
+                      "Per-transaction proof-of-work failed. No graphics card is in use; install the quicksilver-gpu package, set -cuckatoodevice, or allow processor mining with -allowcputxpow");
+}
+
+// Not agent code, but the agent's tests are this slice's only unit-test home.
+BOOST_AUTO_TEST_CASE(noui_keeps_an_error_with_buttons_at_error_level)
+{
+    // init.cpp's chainstate-recovery question is MSG_ERROR | BTN_ABORT with an empty
+    // caption. Matching the whole style word logged it at info level behind ": ".
+    ASSERT_DEBUG_LOG("[init:error] noui-abort-question-probe");
+    BOOST_CHECK(!noui_ThreadSafeMessageBox(Untranslated("noui-abort-question-probe"), "",
+                                           CClientUIInterface::MSG_ERROR | CClientUIInterface::BTN_ABORT));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

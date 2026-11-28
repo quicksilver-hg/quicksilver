@@ -917,8 +917,8 @@ class RPCOverloadWrapper():
     def __getattr__(self, name):
         return getattr(self.rpc, name)
 
-    def createvault(self, vault_name, disable_private_keys=None, blank=None, passphrase='', avoid_reuse=None, load_on_startup=None, external_signer=None):
-        return self.__getattr__('createvault')(vault_name, disable_private_keys, blank, passphrase, avoid_reuse, load_on_startup, external_signer)
+    def createvault(self, vault_name, disable_private_keys=None, blank=None, passphrase='', avoid_reuse=None, load_on_startup=None):
+        return self.__getattr__('createvault')(vault_name, disable_private_keys, blank, passphrase, avoid_reuse, load_on_startup)
 
     def importprivkey(self, privkey, label=None, rescan=None):
         desc = descsum_create('combo(' + privkey + ')')

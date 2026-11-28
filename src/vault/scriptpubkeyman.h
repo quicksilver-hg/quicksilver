@@ -27,7 +27,6 @@
 
 #include <functional>
 #include <optional>
-#include <unordered_map>
 
 enum class OutputType;
 
@@ -115,8 +114,6 @@ public:
 
     virtual bool HavePrivateKeys() const { return false; }
 
-    virtual std::optional<int64_t> GetOldestKeyPoolTime() const { return GetTime(); }
-
     virtual unsigned int GetKeyPoolSize() const { return 0; }
 
     virtual int64_t GetTimeFirstKey() const { return 0; }
@@ -133,14 +130,14 @@ public:
     /** Creates new signatures and adds them to the transaction. Returns whether all inputs were signed */
     virtual bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const { return false; }
     /** Sign a message with the given script */
-    virtual SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const { return SigningResult::SIGNING_FAILED; };
+    virtual SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const { return SigningResult::SIGNING_FAILED; }
     /** Adds script and derivation path information to a PSQT, and optionally signs it. */
     virtual std::optional<common::PSQTError> FillPSQT(PartiallySignedQuicksilverTransaction& psqt, const PrecomputedTransactionData& txdata, int sighash_type = SIGHASH_DEFAULT, bool sign = true, bool bip32derivs = false, int* n_signed = nullptr, bool finalize = true) const { return common::PSQTError::UNSUPPORTED; }
 
     virtual uint256 GetID() const { return uint256(); }
 
     /** Returns a set of all the scriptPubKeys that this ScriptPubKeyMan watches */
-    virtual std::unordered_set<CScript, SaltedSipHasher> GetScriptPubKeys() const { return {}; };
+    virtual std::unordered_set<CScript, SaltedSipHasher> GetScriptPubKeys() const { return {}; }
 
     /** Tags vault log output with the vault name to ease debugging in multi-vault use cases */
     template <typename... Params>
@@ -150,7 +147,7 @@ public:
         while (msg.ends_with('\n'))
             msg.pop_back();
         LogInfo(HgLog::VAULT, "%s vault=%s", msg, m_storage.GetDisplayName());
-    };
+    }
 
     /** Keypool has new keys */
     boost::signals2::signal<void()> NotifyCanGetAddressesChanged;
@@ -169,13 +166,13 @@ private:
 
     ScriptPubKeyMap m_map_script_pub_keys GUARDED_BY(cs_desc_man);
     PubKeyMap m_map_pubkeys GUARDED_BY(cs_desc_man);
-    int32_t m_max_cached_index = -1;
+    int32_t m_max_cached_index GUARDED_BY(cs_desc_man) = -1;
 
     KeyMap m_map_keys GUARDED_BY(cs_desc_man);
     CryptedKeyMap m_map_crypted_keys GUARDED_BY(cs_desc_man);
 
     //! keeps track of whether Unlock has run a thorough check before
-    bool m_decryption_thoroughly_checked = false;
+    bool m_decryption_thoroughly_checked GUARDED_BY(cs_desc_man) = false;
 
     //! Number of pre-generated keys/scripts (part of the look-ahead process, used to detect payments)
     int64_t m_keypool_size GUARDED_BY(cs_desc_man){DEFAULT_KEYPOOL_SIZE};
@@ -185,7 +182,7 @@ private:
     KeyMap GetKeys() const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man);
 
     // Cached FlatSigningProviders to avoid regenerating them each time they are needed.
-    mutable std::map<int32_t, FlatSigningProvider> m_map_signing_providers;
+    mutable std::map<int32_t, FlatSigningProvider> m_map_signing_providers GUARDED_BY(cs_desc_man);
     // Fetch the SigningProvider for the given script and optionally include private keys
     std::unique_ptr<FlatSigningProvider> GetSigningProvider(const CScript& script, bool include_private = false) const;
     // Fetch the SigningProvider for a given index and optionally include private keys. Called by the above functions.
@@ -239,7 +236,6 @@ public:
     //! Retrieve the particular key if it is available. Returns nullopt if the key is not in the vault, or if the vault is locked.
     std::optional<CKey> GetKey(const CKeyID& keyid) const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man);
 
-    std::optional<int64_t> GetOldestKeyPoolTime() const override;
     unsigned int GetKeyPoolSize() const override;
 
     int64_t GetTimeFirstKey() const override;
@@ -277,6 +273,8 @@ public:
     VaultDescriptor GetVaultDescriptor() const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man);
     std::unordered_set<CScript, SaltedSipHasher> GetScriptPubKeys() const override;
     std::unordered_set<CScript, SaltedSipHasher> GetScriptPubKeys(int32_t minimum_index) const;
+    //! Takes cs_desc_man itself: its callers (FastVaultRescanFilter) hold no
+    //! lock (S0191-B-02).
     int32_t GetEndRange() const;
 
     [[nodiscard]] bool GetDescriptorString(std::string& out, const bool priv) const;

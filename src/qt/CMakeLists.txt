@@ -3,15 +3,6 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or https://opensource.org/license/mit/.
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-  enable_language(OBJCXX)
-  set(CMAKE_OBJCXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
-  set(CMAKE_OBJCXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
-  set(CMAKE_OBJCXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
-  set(CMAKE_OBJCXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL}")
-  string(APPEND CMAKE_OBJCXX_COMPILE_OBJECT " ${APPEND_CPPFLAGS} ${APPEND_CXXFLAGS}")
-endif()
-
 get_target_property(qt_lib_type Qt5::Core TYPE)
 
 function(import_plugins target)
@@ -21,8 +12,6 @@ function(import_plugins target)
       list(APPEND plugins Qt5::QXcbIntegrationPlugin)
     elseif(WIN32)
       list(APPEND plugins Qt5::QWindowsIntegrationPlugin Qt5::QWindowsVistaStylePlugin)
-    elseif(APPLE)
-      list(APPEND plugins Qt5::QCocoaIntegrationPlugin Qt5::QMacStylePlugin)
     endif()
     qt5_import_plugins(${target}
       INCLUDE ${plugins}
@@ -66,17 +55,12 @@ add_library(quicksilver_qt STATIC EXCLUDE_FROM_ALL
   gpusituation.cpp
   gpusituation.h
   maturity.cpp
+  maturity.h
   guiutil.h
   initexecutor.cpp
   initexecutor.h
   intro.cpp
   intro.h
-  $<$<PLATFORM_ID:Darwin>:macdockiconhandler.h>
-  $<$<PLATFORM_ID:Darwin>:macdockiconhandler.mm>
-  $<$<PLATFORM_ID:Darwin>:macnotificationhandler.h>
-  $<$<PLATFORM_ID:Darwin>:macnotificationhandler.mm>
-  $<$<PLATFORM_ID:Darwin>:macos_appnap.h>
-  $<$<PLATFORM_ID:Darwin>:macos_appnap.mm>
   networkstyle.cpp
   networkstyle.h
   notificator.cpp
@@ -120,10 +104,6 @@ target_include_directories(quicksilver_qt
   PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>
 )
-set_property(SOURCE macnotificationhandler.mm
-  # Ignore warnings "'NSUserNotificationCenter' is deprecated: first deprecated in macOS 11.0".
-  APPEND PROPERTY COMPILE_OPTIONS -Wno-deprecated-declarations
-)
 target_link_libraries(quicksilver_qt
   PUBLIC
     Qt5::Widgets
@@ -135,11 +115,10 @@ target_link_libraries(quicksilver_qt
     Boost::headers
     # quicksilver.cpp includes torcontrol.h for DEFAULT_LISTEN_ONION, and that
     # header includes <event2/util.h>. On Linux libevent lives in a default
-    # include directory, so the omission compiled anyway; on macOS it is under
-    # the Homebrew prefix and only reaches targets that declare the dependency.
+    # include directory, so the omission compiled anyway; installed anywhere
+    # else, it only reaches targets that declare the dependency.
     $<TARGET_NAME_IF_EXISTS:libevent::core>
     $<TARGET_NAME_IF_EXISTS:QRencode::QRencode>
-    $<$<PLATFORM_ID:Darwin>:-framework\ AppKit>
     $<$<CXX_COMPILER_ID:MSVC>:shlwapi>
 )
 
@@ -275,7 +254,7 @@ endif()
 # -fPIC has to follow -fPIE. target_link_options is the wrong slot: CMake
 # appends -fPIE -pie after those options. The library list is after -pie.
 function(quicksilver_link_qt_pic target)
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT CMAKE_SYSTEM_NAME MATCHES "(Windows|Darwin)")
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT WIN32)
     # Plain signature, matching the callers. The keyword form is rejected once
     # the plain form has been used on the same target.
     target_link_libraries(${target} -fPIC)
@@ -300,12 +279,12 @@ import_plugins(quicksilver)
 install_binary_component(quicksilver HAS_MANPAGE)
 
 # Linux/BSD desktop integration (matches the DBus guard used elsewhere in the
-# build). macOS ships a .app bundle and Windows an NSIS installer, so both are
-# excluded here. GNUInstallDirs is already in scope (used by the manpage install
+# build). Windows uses an NSIS installer and is excluded here.
+# GNUInstallDirs is already in scope (used by the manpage install
 # above). These install rules are the single source of truth for the desktop
 # entry, AppStream metainfo, and menu icons; Debian packaging consumes them
 # rather than copying these files again.
-if(NOT CMAKE_SYSTEM_NAME MATCHES "(Windows|Darwin)")
+if(NOT WIN32)
   install(FILES ${PROJECT_SOURCE_DIR}/share/applications/io.github.quicksilver_hg.quicksilver.desktop
           DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
   install(FILES ${PROJECT_SOURCE_DIR}/share/applications/io.github.quicksilver_hg.quicksilver.metainfo.xml

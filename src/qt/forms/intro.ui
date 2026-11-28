@@ -261,9 +261,6 @@
      </item>
      <item>
       <widget class="QLabel" name="lblPruneSuffix">
-       <property name="buddy">
-        <cstring>pruneGB</cstring>
-       </property>
       </widget>
      </item>
      <item>

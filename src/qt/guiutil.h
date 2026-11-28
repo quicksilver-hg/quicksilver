@@ -6,7 +6,6 @@
 #ifndef QUICKSILVER_QT_GUIUTIL_H
 #define QUICKSILVER_QT_GUIUTIL_H
 
-#include <consensus/amount.h>
 #include <net.h>
 #include <netaddress.h>
 #include <util/check.h>
@@ -14,18 +13,17 @@
 
 #include <QApplication>
 #include <QEvent>
-#include <QHeaderView>
 #include <QItemDelegate>
 #include <QLabel>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QObject>
 #include <QString>
-#include <QTableView>
 
 #include <cassert>
 #include <chrono>
 #include <functional>
+#include <string>
 #include <utility>
 
 class PlatformStyle;
@@ -60,7 +58,7 @@ namespace GUIUtil
     QString dateTimeStr(qint64 nTime);
 
     // Return a monospace font
-    QFont fixedPitchFont(bool use_embedded_font = false);
+    QFont fixedPitchFont();
 
     // Set up widget for address
     //! Which address form a field's placeholder shows as its example.
@@ -92,8 +90,7 @@ namespace GUIUtil
      */
     void copyEntryData(const QAbstractItemView *view, int column, int role=Qt::EditRole);
 
-    /** Return a field of the currently selected entry as a QString. Does nothing if nothing
-        is selected.
+    /** Return the selected model indexes in the specified column.
        @param[in] column  Data column to extract from the model
        @see  TransactionView::copyLabel, TransactionView::copyAmount, TransactionView::copyAddress
      */
@@ -207,11 +204,14 @@ namespace GUIUtil
 
     bool GetStartOnSystemStartup();
     bool SetStartOnSystemStartup(bool fAutoStart);
+#ifdef Q_OS_LINUX
+    std::string DesktopExecArgument(const std::string& path);
+#endif
 
-    /** Convert QString to OS specific boost path through UTF-8 */
+    /** Convert QString to native filesystem path through UTF-8 */
     fs::path QStringToPath(const QString &path);
 
-    /** Convert OS specific boost path to QString through UTF-8 */
+    /** Convert native filesystem path to QString through UTF-8 */
     QString PathToQString(const fs::path &path);
 
     /** Convert enum Network to QString */
@@ -294,9 +294,6 @@ namespace GUIUtil
 
     /**
      * Returns the distance in pixels appropriate for drawing a subsequent character after text.
-     *
-     * In Qt 5.12 and before the QFontMetrics::width() is used and it is deprecated since Qt 5.13.
-     * In Qt 5.11 the QFontMetrics::horizontalAdvance() was introduced.
      */
     int TextWidth(const QFontMetrics& fm, const QString& text);
 
@@ -312,16 +309,11 @@ namespace GUIUtil
 
     /**
      * Returns the start-moment of the day in local time.
-     *
-     * QDateTime::QDateTime(const QDate& date) is deprecated since Qt 5.15.
-     * QDate::startOfDay() was introduced in Qt 5.14.
      */
     QDateTime StartOfDay(const QDate& date);
 
     /**
      * Returns true if pixmap has been set.
-     *
-     * QPixmap* QLabel::pixmap() is deprecated since Qt 5.15.
      */
     bool HasPixmap(const QLabel* label);
     QImage GetImage(const QLabel* label);
@@ -329,21 +321,11 @@ namespace GUIUtil
     /**
      * Splits the string into substrings wherever separator occurs, and returns
      * the list of those strings. Empty strings do not appear in the result.
-     *
-     * QString::split() signature differs in different Qt versions:
-     *  - QString::SplitBehavior is deprecated since Qt 5.15
-     *  - Qt::SplitBehavior was introduced in Qt 5.14
-     * If {QString|Qt}::SkipEmptyParts behavior is required, use this
-     * function instead of QString::split().
      */
     template <typename SeparatorType>
     QStringList SplitSkipEmptyParts(const QString& string, const SeparatorType& separator)
     {
-    #if (QT_VERSION >= QT_VERSION_CHECK(5, 14, 0))
         return string.split(separator, Qt::SkipEmptyParts);
-    #else
-        return string.split(separator, QString::SkipEmptyParts);
-    #endif
     }
 
 
@@ -412,11 +394,7 @@ namespace GUIUtil
 
     inline bool IsEscapeOrBack(int key)
     {
-        if (key == Qt::Key_Escape) return true;
-#ifdef Q_OS_ANDROID
-        if (key == Qt::Key_Back) return true;
-#endif // Q_OS_ANDROID
-        return false;
+        return key == Qt::Key_Escape;
     }
 
     QString VaultDisplayName(const std::string& name);

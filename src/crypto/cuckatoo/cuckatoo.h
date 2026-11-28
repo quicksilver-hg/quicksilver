@@ -40,7 +40,7 @@ using SolverCancelCallback = std::function<bool()>;
 //! through the public solve entry points, and gpu_solver.h includes this header.
 enum class GpuSolveStatus {
     kSolved,        //!< a cycle was parsed from stdout; dispatch overwrites this if self-verify fails
-    kNoSolver,      //!< CUCKATOO_GPU_SOLVER unset or empty, or the preimage is too short
+    kNoSolver,      //!< no eligible helper configured, CPU-only mode, or preimage too short
     kNoCycle,       //!< the solver ran and exited 0 without producing a cycle
     kNoGpuDevice,   //!< no usable graphics card: none selected, chosen missing, or exit 4
     kDeviceFault,   //!< the device faulted mid-solve, e.g. a driver watchdog reset (exit 5)
@@ -86,16 +86,9 @@ bool ConsensusVerifiesEdgeBits(uint8_t edgebits);
 //! A GPU cycle that fails self-verify is reported as kSolverError, not kSolved.
 //! `accept`, when non-empty, is called for every verified cycle. A rejection
 //! resumes at the following nonce; only an accepted proof ends the sweep.
-//! `discarded_cycles`, when non-null, is incremented for each cycle the CPU solver produced
-//! that failed CuckatooVerify and was therefore swept past (F-253). Such a cycle is not an
-//! error -- the sweep resumes and the caller still gets a sound proof -- but it must not be
-//! indistinguishable from a nonce that simply had no cycle: an elevated attempt count alone
-//! reads the same as a run of hard graphs. This layer has no logging, so the count is
-//! reported out like GpuSolveStatus and the node decides what to do with it.
-//! `gpu_faults`, when non-null, receives each chosen card benched during this call.
-//! `gpu_discovery`, when non-null, receives DescribeDiscovery() of the discovery this
-//! call made, so a caller that must explain a no-device window does not discover again
-//! to describe it (F-554).
+//! `discarded_cycles` counts CPU candidates rejected by the consensus verifier.
+//! `gpu_faults` receives the cards benched during this call.
+//! `gpu_discovery` receives the discovery result from the current call.
 bool CuckatooSolve(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint8_t edgebits,
                    uint32_t start_nonce, uint32_t max_attempts,
                    Cycle& out, uint32_t& out_nonce, bool cpu_fallback = true,
@@ -117,19 +110,10 @@ bool CuckatooSolve(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint8_
 //! node::CpuBlockMiningAllowed and vault::AllowsTxPowCpuFallback. This layer
 //! does not know why.
 //! A GPU cycle that fails self-verify is reported as kSolverError, not kSolved.
-//! A CPU cycle that fails self-verify is swept past; see `discarded_cycles` below.
+//! A CPU cycle that fails self-verify is swept past; see `discarded_cycles`.
 //! `accept`, when non-empty, is called for every verified cycle. A rejection
 //! resumes at the following nonce; only an accepted proof ends the sweep.
-//! `discarded_cycles`, when non-null, is incremented for each cycle the CPU solver produced
-//! that failed CuckatooVerify and was therefore swept past (F-253). Such a cycle is not an
-//! error -- the sweep resumes and the caller still gets a sound proof -- but it must not be
-//! indistinguishable from a nonce that simply had no cycle: an elevated attempt count alone
-//! reads the same as a run of hard graphs. This layer has no logging, so the count is
-//! reported out like GpuSolveStatus and the node decides what to do with it.
-//! `gpu_faults`, when non-null, receives each chosen card benched during this call.
-//! `gpu_discovery`, when non-null, receives DescribeDiscovery() of the discovery this
-//! call made, so a caller that must explain a no-device window does not discover again
-//! to describe it (F-554).
+//! For solver outputs and status reporting, see CuckatooSolve.
 bool CuckatooSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
                         uint32_t start_nonce, uint32_t max_attempts,
                         Cycle& out, uint32_t& out_nonce, bool cpu_fallback = true,

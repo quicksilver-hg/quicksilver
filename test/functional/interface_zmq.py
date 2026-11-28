@@ -138,6 +138,7 @@ class ZMQTest (QuicksilverTestFramework):
             self.test_reorg()
             self.test_multiple_interfaces()
             self.test_ipv6()
+            self.test_hwm_out_of_range()
         finally:
             # Destroy the ZMQ context.
             self.log.debug("Destroying ZMQ context")
@@ -191,11 +192,29 @@ class ZMQTest (QuicksilverTestFramework):
 
         return subscribers
 
+    def test_hwm_out_of_range(self):
+        self.log.info("A -zmqpub*hwm that does not fit an int is refused, not wrapped, and the node does not start")
+        # The refusal leaves no ZMQ interface, and requested ZMQ that cannot start is a startup error
+        # (S0178-C-02), so the node stops rather than running without the notifications asked for.
+        address = f"tcp://127.0.0.1:{self.zmq_port_base}"
+        self.stop_node(0)
+        for hwm in (2**32, -1):
+            with self.nodes[0].assert_debug_log([f"-zmqpubhashblockhwm={hwm} is out of range (0 to 2147483647)"]):
+                self.nodes[0].assert_start_raises_init_error(
+                    extra_args=[f"-zmqpubhashblock={address}", f"-zmqpubhashblockhwm={hwm}", TX_POW_NO_CYCLE],
+                    expected_msg="Error: Unable to initialize the configured ZMQ notification interface",
+                )
+        self.start_node(0)
+
     def test_basic(self, unix = False):
         self.log.info(f"Running basic test with {'ipc' if unix else 'tcp'} protocol")
 
-        # Invalid zmq arguments don't take down the node, see #17185.
-        self.restart_node(0, ["-zmqpubrawtx=foo", "-zmqpubhashtx=bar", TX_POW_NO_CYCLE])
+        self.stop_node(0)
+        self.nodes[0].assert_start_raises_init_error(
+            expected_msg="Error: Unable to initialize the configured ZMQ notification interface",
+            extra_args=["-zmqpubrawtx=foo", "-zmqpubhashtx=bar", TX_POW_NO_CYCLE],
+        )
+        self.start_node(0)
 
         address = f"tcp://127.0.0.1:{self.zmq_port_base}"
 

@@ -75,6 +75,9 @@ public:
 
 BOOST_AUTO_TEST_CASE(sizes)
 {
+    SizeComputer direct_varint;
+    WriteVarInt(direct_varint, uint64_t{300});
+    BOOST_CHECK_EQUAL(direct_varint.size(), 2U);
     BOOST_CHECK_EQUAL(sizeof(unsigned char), GetSerializeSize((unsigned char)0));
     BOOST_CHECK_EQUAL(sizeof(int8_t), GetSerializeSize(int8_t(0)));
     BOOST_CHECK_EQUAL(sizeof(uint8_t), GetSerializeSize(uint8_t(0)));

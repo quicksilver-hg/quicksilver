@@ -13,6 +13,7 @@ import copy
 from decimal import Decimal
 
 from test_framework.blocktools import (
+    KEEP_WINDOW_GROWTH,
     create_coinbase,
     get_witness_script,
     NORMAL_GBT_REQUEST_PARAMS,
@@ -86,7 +87,9 @@ class MiningTest(QuicksilverTestFramework):
     def test_pruning(self):
         self.log.info("Test that submitblock stores previously pruned block")
         prune_node = self.nodes[2]
-        self.generate(prune_node, 400, sync_fun=self.no_op)
+        # Grown by the difference between MIN_BLOCKS_TO_KEEP and upstream's 288, so that
+        # pruneblockchain(400) is clamped to the same height as before.
+        self.generate(prune_node, 400 + KEEP_WINDOW_GROWTH, sync_fun=self.no_op)
         pruned_block = prune_node.getblock(prune_node.getblockhash(2), verbosity=0)
         pruned_height = prune_node.pruneblockchain(400)
         assert_greater_than_or_equal(pruned_height, 2)
@@ -145,6 +148,8 @@ class MiningTest(QuicksilverTestFramework):
 
         # Mine a block to leave initial block download and clear the relaypool
         self.generatetoaddress(node, 1, node.get_deterministic_priv_key().address)
+        assert_raises_rpc_error(-8, "maxtries", self.generatetoaddress,
+                                node, 1, node.get_deterministic_priv_key().address, -1)
         tmpl = node.getblocktemplate(NORMAL_GBT_REQUEST_PARAMS)
         self.log.info("getblocktemplate: Test capability advertised")
         assert 'proposal' in tmpl['capabilities']

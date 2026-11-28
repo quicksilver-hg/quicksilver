@@ -60,7 +60,8 @@ void ReceiveRequestDialog::setInfo(const SendCoinsRecipient &_info)
     ui->qr_code->hide();
 #endif
 
-    ui->uri_content->setText("<a href=\"" + uri + "\">" + GUIUtil::HtmlEscape(uri) + "</a>");
+    // A stored request is the vault database's word; escape it in the attribute too (S0260-C-05).
+    ui->uri_content->setText("<a href=\"" + GUIUtil::HtmlEscape(uri) + "\">" + GUIUtil::HtmlEscape(uri) + "</a>");
     ui->address_content->setText(info.address);
     // Derive the format from the address, including when reopening a saved request.
     const auto type = OutputTypeFromDestination(DecodeDestination(info.address.toStdString()));
@@ -90,18 +91,12 @@ void ReceiveRequestDialog::setInfo(const SendCoinsRecipient &_info)
         ui->message_content->hide();
     }
 
-    if (!model->getVaultName().isEmpty()) {
+    if (model && !model->getVaultName().isEmpty()) {
         ui->vault_content->setText(model->getVaultName());
     } else {
         ui->vault_tag->hide();
         ui->vault_content->hide();
     }
-
-    ui->btnVerify->setVisible(model->vault().hasExternalSigner());
-
-    connect(ui->btnVerify, &QPushButton::clicked, [this] {
-        model->displayAddress(info.address.toStdString());
-    });
 }
 
 void ReceiveRequestDialog::updateDisplayUnit()

@@ -59,6 +59,7 @@ bool LoadRelayPool(CTxRelayPool& pool, const fs::path& load_path, Chainstate& ac
         file >> version;
         std::vector<std::byte> xor_key;
         if (version != RELAYPOOL_DUMP_VERSION) {
+            LogInfo(HgLog::RELAYPOOL, "loaded reason=wrong-version version=%u expected=%u\n", version, RELAYPOOL_DUMP_VERSION);
             return false;
         }
         file >> xor_key;
@@ -149,6 +150,7 @@ bool DumpRelayPool(const CTxRelayPool& pool, const fs::path& dump_path, FopenFn 
 
     AutoFile file{mockable_fopen_function(dump_path + ".new", "wb")};
     if (file.IsNull()) {
+        LogInfo(HgLog::RELAYPOOL, "saved reason=file-open-failed path=%s\n", fs::PathToString(dump_path + ".new"));
         return false;
     }
 
@@ -178,16 +180,18 @@ bool DumpRelayPool(const CTxRelayPool& pool, const fs::path& dump_path, FopenFn 
         if (!RenameOver(dump_path + ".new", dump_path)) {
             throw std::runtime_error("Rename failed");
         }
-        auto last = SteadyClock::now();
-
-        LogInfo(HgLog::RELAYPOOL, "saved copy_ms=%.0f dump_ms=%.0f bytes=%d\n",
-                  Ticks<MillisecondsDouble>(mid - start),
-                  Ticks<MillisecondsDouble>(last - mid),
-                  fs::file_size(dump_path));
     } catch (const std::exception& e) {
         LogInfo(HgLog::RELAYPOOL, "saved reason=dump-failed detail=%s\n", e.what());
         return false;
     }
+    // The dump is in place from here on: nothing below may report it as failed.
+    const auto last = SteadyClock::now();
+    std::error_code size_error;
+    const auto bytes{fs::file_size(dump_path, size_error)};
+    LogInfo(HgLog::RELAYPOOL, "saved copy_ms=%.0f dump_ms=%.0f bytes=%d\n",
+              Ticks<MillisecondsDouble>(mid - start),
+              Ticks<MillisecondsDouble>(last - mid),
+              size_error ? -1 : static_cast<int64_t>(bytes));
     return true;
 }
 

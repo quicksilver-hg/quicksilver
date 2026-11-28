@@ -84,7 +84,6 @@ private:
     QFrame *dateRangeWidget;
     QDateTimeEdit *dateFrom;
     QDateTimeEdit *dateTo;
-    QAction *abandonAction{nullptr};
     QAction *copyAddressAction{nullptr};
     QAction *copyLabelAction{nullptr};
 
@@ -109,7 +108,6 @@ private Q_SLOTS:
     void copyTxHex();
     void copyTxPlainText();
     void openThirdPartyTxUrl(QString url);
-    void abandonTx();
     //! Give Date and Type their content, Amount exactly its figures, and the
     //! rest to Label.
     void fitColumns();

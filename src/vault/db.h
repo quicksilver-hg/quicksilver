@@ -13,7 +13,6 @@
 #include <support/allocators/secure.h>
 #include <util/fs.h>
 
-#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -144,7 +143,7 @@ class VaultDatabase
 {
 public:
     /** Create dummy DB handle */
-    VaultDatabase() : nUpdateCounter(0) {}
+    VaultDatabase() = default;
     virtual ~VaultDatabase() = default;
 
     /** Open the database if it is not already opened. */
@@ -164,23 +163,10 @@ public:
      *  Also close the environment if no other databases are open in it.
      */
     virtual void Close() = 0;
-    /* flush the vault passively (TRY_LOCK)
-       ideal to be called periodically */
-    virtual bool PeriodicFlush() = 0;
-
-    virtual void IncrementUpdateCounter() = 0;
-
-    virtual void ReloadDbEnv() = 0;
-
     /** Return path to main database file for logs and error messages. */
     virtual std::string Filename() = 0;
 
     virtual std::string Format() = 0;
-
-    std::atomic<unsigned int> nUpdateCounter;
-    unsigned int nLastSeen{0};
-    unsigned int nLastFlushed{0};
-    int64_t nLastVaultUpdate{0};
 
     /** Make a DatabaseBatch connected to this database */
     virtual std::unique_ptr<DatabaseBatch> MakeBatch(bool flush_on_close = true) = 0;

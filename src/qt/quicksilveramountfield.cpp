@@ -72,16 +72,8 @@ public:
 
     void fixup(QString &input) const override
     {
-        bool valid;
-        CAmount val;
-
-        if (input.isEmpty() && !m_allow_empty) {
-            valid = true;
-            val = m_min_amount;
-        } else {
-            valid = false;
-            val = parse(input, &valid);
-        }
+        bool valid{false};
+        CAmount val = parse(input, &valid);
 
         if (valid) {
             // Only a parsed amount is rewritten. `1,5` stays as typed.
@@ -102,26 +94,16 @@ public:
         Q_EMIT valueChanged();
     }
 
-    void SetAllowEmpty(bool allow)
-    {
-        m_allow_empty = allow;
-    }
-
     void SetMinValue(const CAmount& value)
     {
         m_min_amount = value;
-    }
-
-    void SetMaxValue(const CAmount& value)
-    {
-        m_max_amount = value;
     }
 
     void stepBy(int steps) override
     {
         bool valid = false;
         CAmount val = value(&valid);
-        val = val + steps * singleStep;
+        val = val + steps * SINGLE_STEP;
         val = qBound(m_min_amount, val, m_max_amount);
         setValue(val);
     }
@@ -139,11 +121,6 @@ public:
             clear();
             Q_EMIT valueChanged();
         }
-    }
-
-    void setSingleStep(const CAmount& step)
-    {
-        singleStep = step;
     }
 
     QSize minimumSizeHint() const override
@@ -180,11 +157,10 @@ public:
 
 private:
     QuicksilverUnit currentUnit{QuicksilverUnit::HGS};
-    CAmount singleStep{CAmount(100000)}; // cinnabar
+    static constexpr CAmount SINGLE_STEP{100000}; // cinnabar
     mutable QSize cachedMinimumSizeHint;
-    bool m_allow_empty{true};
     CAmount m_min_amount{CAmount(0)};
-    CAmount m_max_amount{QuicksilverUnits::maxMoney()};
+    const CAmount m_max_amount{QuicksilverUnits::maxMoney()};
 
     /**
      * Parse a string into a number of base monetary units and
@@ -271,12 +247,6 @@ void QuicksilverAmountField::clear()
     unit->setCurrentIndex(0);
 }
 
-void QuicksilverAmountField::setEnabled(bool fEnabled)
-{
-    amount->setEnabled(fEnabled);
-    unit->setEnabled(fEnabled);
-}
-
 bool QuicksilverAmountField::validate()
 {
     bool valid = false;
@@ -320,24 +290,9 @@ void QuicksilverAmountField::setValue(const CAmount& value)
     amount->setValue(value);
 }
 
-void QuicksilverAmountField::SetAllowEmpty(bool allow)
-{
-    amount->SetAllowEmpty(allow);
-}
-
 void QuicksilverAmountField::SetMinValue(const CAmount& value)
 {
     amount->SetMinValue(value);
-}
-
-void QuicksilverAmountField::SetMaxValue(const CAmount& value)
-{
-    amount->SetMaxValue(value);
-}
-
-void QuicksilverAmountField::setReadOnly(bool fReadOnly)
-{
-    amount->setReadOnly(fReadOnly);
 }
 
 void QuicksilverAmountField::unitChanged(int idx)
@@ -357,9 +312,4 @@ void QuicksilverAmountField::setDisplayUnit(QuicksilverUnit new_unit)
         new_unit = QuicksilverUnit::HGS;
     }
     unit->setValue(QVariant::fromValue(new_unit));
-}
-
-void QuicksilverAmountField::setSingleStep(const CAmount& step)
-{
-    amount->setSingleStep(step);
 }

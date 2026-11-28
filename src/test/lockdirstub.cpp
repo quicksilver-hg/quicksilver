@@ -18,13 +18,7 @@
 // src/qt/test/solverprobestub.cpp is: "executable" is spelled differently per
 // platform, and CreateProcess cannot launch a .bat or .cmd.
 //
-// Synchronisation is by FILE, not by pipe. Byte-at-a-time streaming through the
-// vendored subprocess.h is exercised nowhere else in this tree -- run_command.cpp
-// only ever calls communicate() -- and that header carried two Windows defects
-// (it did not compile under MSVC; Popen::wait() reported success for every failed
-// process) that were only fixed recently. Testing the datadir lock THROUGH an
-// unproven Windows streaming path would turn a bridge bug into a confusing lock
-// failure, or a hang. Spawn and wait() are all this needs, and both are proven.
+// The stub synchronizes with the test through files and reports failure through its exit status.
 
 #include <util/fs.h>
 #include <util/fs_helpers.h>

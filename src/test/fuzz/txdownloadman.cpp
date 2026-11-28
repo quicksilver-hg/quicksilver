@@ -9,6 +9,7 @@
 #include <node/miner.h>
 #include <node/txdownloadman.h>
 #include <node/txdownloadman_impl.h>
+#include <policy/packages.h>
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
@@ -43,7 +44,6 @@ static TxValidationResult TESTED_TX_RESULTS[] = {
     TxValidationResult::TX_RELAYPOOL_POLICY,
     // Skip TX_NO_RELAYPOOL
     TxValidationResult::TX_RECONSIDERABLE,
-    TxValidationResult::TX_UNKNOWN,
 };
 
 // Precomputed transactions. Some may conflict with each other.
@@ -260,6 +260,12 @@ FUZZ_TARGET(txdownloadman, .init = initialize)
                     // returned true.
                     Assert(expect_work);
                 }
+            },
+            [&] {
+                // S0404-A-01: net_processing reports an invalid 1p1c package result
+                // with RelayPoolRejectedPackage (net_processing.cpp, ProcessPackageResult).
+                const Package package{rand_tx, MakeTransactionSpending({COutPoint{rand_tx->GetHash(), 0}}, /*num_outputs=*/1, /*add_witness=*/false)};
+                txdownloadman.RelayPoolRejectedPackage(package);
             }
         );
         // Jump forwards or backwards
@@ -432,6 +438,19 @@ FUZZ_TARGET(txdownloadman_impl, .init = initialize)
                     TxValidationState state_missing_inputs;
                     state_missing_inputs.Invalid(TxValidationResult::TX_MISSING_INPUTS, "");
                     txdownload_impl.RelayPoolRejectedTx(ptx, state_missing_inputs, rand_peer, fuzzed_data_provider.ConsumeBool());
+                }
+            },
+            [&] {
+                // S0404-A-01: as net_processing does for an invalid package result.
+                // The package hash is suppressed until the tip changes.
+                const Package package{rand_tx, MakeTransactionSpending({COutPoint{rand_tx->GetHash(), 0}}, /*num_outputs=*/1, /*add_witness=*/false)};
+                const uint256 package_hash{GetPackageHash(package)};
+                txdownload_impl.RelayPoolRejectedPackage(package);
+                Assert(txdownload_impl.RecentRejectsReconsiderableFilter().contains(package_hash));
+                if (fuzzed_data_provider.ConsumeBool()) {
+                    txdownload_impl.ActiveTipChange();
+                    // A reset filter is empty, so this has no false positive.
+                    Assert(!txdownload_impl.RecentRejectsReconsiderableFilter().contains(package_hash));
                 }
             }
         );

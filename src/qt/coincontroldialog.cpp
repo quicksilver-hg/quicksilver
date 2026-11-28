@@ -81,17 +81,14 @@ CoinControlDialog::CoinControlDialog(CCoinControl& coin_control, VaultModel* _mo
     // clipboard actions
     QAction *clipboardQuantityAction = new QAction(tr("Copy quantity"), this);
     QAction *clipboardAmountAction = new QAction(tr("Copy amount"), this);
-    QAction *clipboardBytesAction = new QAction(tr("Copy bytes"), this);
     QAction *clipboardChangeAction = new QAction(tr("Copy change"), this);
 
     connect(clipboardQuantityAction, &QAction::triggered, this, &CoinControlDialog::clipboardQuantity);
     connect(clipboardAmountAction, &QAction::triggered, this, &CoinControlDialog::clipboardAmount);
-    connect(clipboardBytesAction, &QAction::triggered, this, &CoinControlDialog::clipboardBytes);
     connect(clipboardChangeAction, &QAction::triggered, this, &CoinControlDialog::clipboardChange);
 
     ui->labelCoinControlQuantity->addAction(clipboardQuantityAction);
     ui->labelCoinControlAmount->addAction(clipboardAmountAction);
-    ui->labelCoinControlBytes->addAction(clipboardBytesAction);
     ui->labelCoinControlChange->addAction(clipboardChangeAction);
 
     // toggle tree/list mode
@@ -284,12 +281,6 @@ void CoinControlDialog::clipboardAmount()
     CopyBareAmount(model, amount);
 }
 
-// copy label "Bytes" to clipboard
-void CoinControlDialog::clipboardBytes()
-{
-    GUIUtil::setClipboard(ui->labelCoinControlBytes->text().replace(ASYMP_UTF8, ""));
-}
-
 // copy label "Change" to clipboard
 void CoinControlDialog::clipboardChange()
 {
@@ -388,10 +379,7 @@ void CoinControlDialog::updateLabels(CCoinControl& m_coin_control, VaultModel *m
 
     CAmount nAmount             = 0;
     CAmount nChange             = 0;
-    unsigned int nBytes         = 0;
-    unsigned int nBytesInputs   = 0;
     unsigned int nQuantity      = 0;
-    bool fWitness               = false;
 
     auto vCoinControl{m_coin_control.ListSelected()};
 
@@ -415,62 +403,11 @@ void CoinControlDialog::updateLabels(CCoinControl& m_coin_control, VaultModel *m
 
             // Amount
             nAmount += out.txout.nValue;
-
-            // Bytes
-            CTxDestination address;
-            int witnessversion = 0;
-            std::vector<unsigned char> witnessprogram;
-            if (out.txout.scriptPubKey.IsWitnessProgram(witnessversion, witnessprogram))
-            {
-                // add input skeleton bytes (outpoint, scriptSig size, nSequence)
-                nBytesInputs += (32 + 4 + 1 + 4);
-
-                if (witnessversion == 0) { // P2WPKH
-                    // 1 WU (witness item count) + 72 WU (ECDSA signature with len byte) + 34 WU (pubkey with len byte)
-                    nBytesInputs += 107 / WITNESS_SCALE_FACTOR;
-                } else if (witnessversion == 1) { // P2TR key-path spend
-                    // 1 WU (witness item count) + 65 WU (Schnorr signature with len byte)
-                    nBytesInputs += 66 / WITNESS_SCALE_FACTOR;
-                } else {
-                    // not supported, should be unreachable
-                    throw std::runtime_error("Trying to spend future segwit version script");
-                }
-                fWitness = true;
-            }
-            else if(ExtractDestination(out.txout.scriptPubKey, address))
-            {
-                CPubKey pubkey;
-                PKHash* pkhash = std::get_if<PKHash>(&address);
-                if (pkhash && model->vault().getPubKey(out.txout.scriptPubKey, ToKeyID(*pkhash), pubkey))
-                {
-                    nBytesInputs += (pubkey.IsCompressed() ? 148 : 180);
-                }
-                else
-                    nBytesInputs += 148; // in all error cases, simply assume 148 here
-            }
-            else nBytesInputs += 148;
         }
     }
 
-    // calculation
-    if (nQuantity > 0)
-    {
-        // Bytes
-        nBytes = nBytesInputs + ((CoinControlDialog::payAmounts.size() > 0 ? CoinControlDialog::payAmounts.size() + 1 : 2) * 34) + 10; // always assume +1 output for change here
-        if (fWitness)
-        {
-            // This mirrors the old virtual-size estimate closely enough for the coin-control byte summary.
-            // also, the witness stack size value is a variable sized integer. usually, the number of stack items will be well under the single byte var int limit.
-            nBytes += 2; // account for the serialized marker and flag bytes
-            nBytes += nQuantity; // account for the witness byte that holds the number of stack items for each input.
-        }
-
-        if (nPayAmount > 0)
-        {
-            nChange = nAmount - nPayAmount;
-            if (nChange == 0)
-                nBytes -= 34;
-        }
+    if (nQuantity > 0 && nPayAmount > 0) {
+        nChange = nAmount - nPayAmount;
     }
 
     // actually update labels
@@ -480,7 +417,6 @@ void CoinControlDialog::updateLabels(CCoinControl& m_coin_control, VaultModel *m
 
     QLabel *l1 = dialog->findChild<QLabel *>("labelCoinControlQuantity");
     QLabel *l2 = dialog->findChild<QLabel *>("labelCoinControlAmount");
-    QLabel *l5 = dialog->findChild<QLabel *>("labelCoinControlBytes");
     QLabel *l8 = dialog->findChild<QLabel *>("labelCoinControlChange");
 
     // enable/disable "change"
@@ -491,10 +427,8 @@ void CoinControlDialog::updateLabels(CCoinControl& m_coin_control, VaultModel *m
     l1->setText(QString::number(nQuantity));                                 // Quantity
     l2->setText(QuicksilverUnits::formatWithUnit(nDisplayUnit, nAmount));        // Amount
     StoreRawAmount(l2, nAmount);
-    l5->setText(((nBytes > 0) ? ASYMP_UTF8 : "") + QString::number(nBytes));        // Bytes
     l8->setText(QuicksilverUnits::formatWithUnit(nDisplayUnit, nChange));        // Change
     StoreRawAmount(l8, nChange);
-    dialog->findChild<QLabel *>("labelCoinControlBytesText")    ->setToolTip(l5->toolTip());
     dialog->findChild<QLabel *>("labelCoinControlChangeText")   ->setToolTip(l8->toolTip());
 
     // Insufficient funds

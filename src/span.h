@@ -32,9 +32,8 @@
 
 /** A Span is an object that can refer to a contiguous sequence of objects.
  *
- * This file implements a subset of C++20's std::span.  It can be considered
- * temporary compatibility code until C++20 and is designed to be a
- * self-contained abstraction without depending on other project files. For this
+ * This file implements a self-contained view of a contiguous sequence with
+ * Quicksilver's lifetime annotations and range helpers. For this
  * reason, Clang lifetimebound is defined here instead of including
  * <attributes.h>, which also defines it.
  *
@@ -200,7 +199,7 @@ public:
     }
     CONSTEXPR_IF_NOT_DEBUG Span<C> subspan(std::size_t offset, std::size_t count) const noexcept
     {
-        ASSERT_IF_DEBUG(size() >= offset + count);
+        ASSERT_IF_DEBUG(offset <= size() && count <= size() - offset);
         return Span<C>(m_data + offset, count);
     }
     CONSTEXPR_IF_NOT_DEBUG Span<C> first(std::size_t count) const noexcept

@@ -23,12 +23,7 @@ The data directory is the default location where the Quicksilver files are store
 Platform            | Data directory path
 --------------------|--------------------
 Linux               | `$HOME/.quicksilver/`
-macOS (unsupported) | `$HOME/Library/Application Support/Quicksilver/`
 Windows             | `%LOCALAPPDATA%\Quicksilver\` <sup>[\[1\]](#note1)</sup>
-
-macOS is not a supported platform. The macOS row records the data
-directory an experimental self-built binary uses; no macOS build is
-produced or gated. See the [macOS support status](build-osx.md).
 
 2. A custom data directory path can be specified with the `-datadir` option.
 

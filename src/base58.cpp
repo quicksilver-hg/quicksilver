@@ -6,6 +6,8 @@
 #include <base58.h>
 
 #include <hash.h>
+#include <support/allocators/secure.h>
+#include <support/cleanse.h>
 #include <uint256.h>
 #include <util/strencodings.h>
 #include <util/string.h>
@@ -40,6 +42,7 @@ static const int8_t mapBase58[256] = {
 
 [[nodiscard]] static bool DecodeBase58(const char* psz, std::vector<unsigned char>& vch, int max_ret_len)
 {
+    if (max_ret_len < 0) return false;
     // Skip leading spaces.
     while (*psz && IsSpace(*psz))
         psz++;
@@ -52,8 +55,14 @@ static const int8_t mapBase58[256] = {
         psz++;
     }
     // Allocate enough space in big-endian base256 representation.
-    int size = strlen(psz) * 733 /1000 + 1; // log(58) / log(256), rounded up.
-    std::vector<unsigned char> b256(size);
+    size_t significant = 0;
+    while (psz[significant] && !IsSpace(psz[significant])) {
+        if (++significant > static_cast<size_t>(max_ret_len) * 2) return false;
+    }
+    const size_t alloc_size = significant * 733 / 1000 + 1; // log(58) / log(256), rounded up.
+    if (alloc_size > std::numeric_limits<int>::max()) return false;
+    const int size = static_cast<int>(alloc_size);
+    std::vector<unsigned char, secure_allocator<unsigned char>> b256(size);
     // Process the characters.
     static_assert(std::size(mapBase58) == 256, "mapBase58.size() should be 256"); // guarantee not out of range
     while (*psz && !IsSpace(*psz)) {
@@ -62,7 +71,7 @@ static const int8_t mapBase58[256] = {
         if (carry == -1)  // Invalid b58 character
             return false;
         int i = 0;
-        for (std::vector<unsigned char>::reverse_iterator it = b256.rbegin(); (carry != 0 || i < length) && (it != b256.rend()); ++it, ++i) {
+        for (auto it = b256.rbegin(); (carry != 0 || i < length) && (it != b256.rend()); ++it, ++i) {
             carry += 58 * (*it);
             *it = carry % 256;
             carry /= 256;
@@ -78,7 +87,7 @@ static const int8_t mapBase58[256] = {
     if (*psz != 0)
         return false;
     // Skip leading zeroes in b256.
-    std::vector<unsigned char>::iterator it = b256.begin() + (size - length);
+    auto it = b256.begin() + (size - length);
     // Copy result into output vector.
     vch.reserve(zeroes + (b256.end() - it));
     vch.assign(zeroes, 0x00);
@@ -138,23 +147,31 @@ bool DecodeBase58(const std::string& str, std::vector<unsigned char>& vchRet, in
 std::string EncodeBase58Check(Span<const unsigned char> input)
 {
     // add 4-byte hash check to the end
-    std::vector<unsigned char> vch(input.begin(), input.end());
+    std::vector<unsigned char, secure_allocator<unsigned char>> vch(input.begin(), input.end());
     uint256 hash = Hash(vch);
     vch.insert(vch.end(), hash.data(), hash.data() + 4);
     return EncodeBase58(vch);
+}
+
+static void ClearDecodedBase58(std::vector<unsigned char>& output)
+{
+    // A previous decode may have left bytes beyond size() in this allocation.
+    output.resize(output.capacity());
+    if (!output.empty()) memory_cleanse(output.data(), output.size());
+    output.clear();
 }
 
 [[nodiscard]] static bool DecodeBase58Check(const char* psz, std::vector<unsigned char>& vchRet, int max_ret_len)
 {
     if (!DecodeBase58(psz, vchRet, max_ret_len > std::numeric_limits<int>::max() - 4 ? std::numeric_limits<int>::max() : max_ret_len + 4) ||
         (vchRet.size() < 4)) {
-        vchRet.clear();
+        ClearDecodedBase58(vchRet);
         return false;
     }
     // re-calculate the checksum, ensure it matches the included 4-byte checksum
     uint256 hash = Hash(Span{vchRet}.first(vchRet.size() - 4));
     if (memcmp(&hash, &vchRet[vchRet.size() - 4], 4) != 0) {
-        vchRet.clear();
+        ClearDecodedBase58(vchRet);
         return false;
     }
     vchRet.resize(vchRet.size() - 4);
@@ -164,6 +181,7 @@ std::string EncodeBase58Check(Span<const unsigned char> input)
 bool DecodeBase58Check(const std::string& str, std::vector<unsigned char>& vchRet, int max_ret)
 {
     if (!ContainsNoNUL(str)) {
+        ClearDecodedBase58(vchRet);
         return false;
     }
     return DecodeBase58Check(str.c_str(), vchRet, max_ret);

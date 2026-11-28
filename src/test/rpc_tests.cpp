@@ -14,6 +14,7 @@
 #include <univalue.h>
 #include <util/time.h>
 
+#include <algorithm>
 #include <any>
 
 #include <boost/test/unit_test.hpp>
@@ -562,6 +563,24 @@ BOOST_AUTO_TEST_CASE(rpc_arg_helper)
         };
     CheckRpc(params, UniValue{JSON(R"([5, "hello", null, null, null, null, null])")}, check_positional);
     CheckRpc(params, UniValue{JSON(R"([5, "hello", 4, "test", true, 1.23, "world"])")}, check_positional);
+}
+
+BOOST_AUTO_TEST_CASE(rpc_remove_final_command_handler)
+{
+    CRPCTable table;
+    const auto actor = [](const JSONRPCRequest&, UniValue&, bool) { return false; };
+    const CRPCCommand first{"test", "test_removed_command", actor, {}, /*unique_id=*/1};
+    const CRPCCommand second{"test", "test_removed_command", actor, {}, /*unique_id=*/2};
+    const auto initial_commands = table.listCommands();
+    table.appendCommand(first.name, &first);
+    table.appendCommand(second.name, &second);
+    BOOST_REQUIRE(table.removeCommand(first.name, &first));
+    const auto commands_with_one_handler = table.listCommands();
+    BOOST_CHECK(std::find(commands_with_one_handler.begin(), commands_with_one_handler.end(), first.name) !=
+                commands_with_one_handler.end());
+    BOOST_REQUIRE(table.removeCommand(second.name, &second));
+    BOOST_REQUIRE(table.listCommands() == initial_commands);
+    BOOST_CHECK_EQUAL(table.help(first.name, JSONRPCRequest{}), "help: unknown command: test_removed_command");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

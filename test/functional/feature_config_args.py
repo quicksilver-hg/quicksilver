@@ -105,6 +105,35 @@ class ConfArgsTest(QuicksilverTestFramework):
     def test_config_file_parser(self):
         self.log.info('Test config file parser')
 
+        for argument, message in (
+            ('-checkblockindex=-1', '-checkblockindex must be between 0 and 2147483647'),
+            ('-par=9223372036854775807', '-par is outside the supported range'),
+            ('-maxtipage=-1', '-maxtipage cannot be negative'),
+            ('-maxsigcachesize=9223372036854775807', '-maxsigcachesize is outside the supported range'),
+            ('-dbbatchsize=-1', '-dbbatchsize must be a positive value within the supported range'),
+            ('-dbcrashratio=-1', '-dbcrashratio must be between 0 and 2147483647'),
+            ('-datacarriersize=-1', '-datacarriersize must be between 0 and 4294967295'),
+            ('-bytespersigop=-1', '-bytespersigop is outside the supported range'),
+            ('-maxsendbuffer=-1', '-maxsendbuffer and -maxreceivebuffer must be between 0 and 4294967'),
+            ('-maxreceivebuffer=-1', '-maxsendbuffer and -maxreceivebuffer must be between 0 and 4294967'),
+        ):
+            self.nodes[0].assert_start_raises_init_error(extra_args=argument.split(), expected_msg=f'Error: {message}')
+
+        # The framework normally supplies an explicit bind, which also supplies
+        # the onion target. Remove it to exercise the derived -port+1 path.
+        node_conf = self.nodes[0].quicksilverconf
+        original_conf = node_conf.read_text(encoding='utf-8')
+        node_conf.write_text(original_conf.replace('bind=127.0.0.1\n', ''), encoding='utf-8')
+        try:
+            self.nodes[0].assert_start_raises_init_error(
+                extra_args=['-port=65535', '-listenonion=1'],
+                expected_msg='Error: -port=65535 leaves no port for the onion service',
+            )
+            self.start_node(0, extra_args=['-port=65535', '-listen=0', '-listenonion=0'])
+            self.stop_node(0)
+        finally:
+            node_conf.write_text(original_conf, encoding='utf-8')
+
         # Check that startup fails if conf= is set in quicksilver.conf or in an included conf file
         bad_conf_file_path = self.nodes[0].datadir_path / "quicksilver_bad.conf"
         util.write_config(bad_conf_file_path, n=0, chain='', extra_config='conf=some.conf\n')
@@ -137,6 +166,12 @@ class ConfArgsTest(QuicksilverTestFramework):
             conf.write('reindex=1\n')
 
         with self.nodes[0].assert_debug_log(expected_msgs=['Warning: reindex=1 is set in the configuration file, which will significantly slow down startup. Consider removing or commenting out this option for better performance, unless there is currently a condition which makes rebuilding the indexes necessary']):
+            self.start_node(0)
+        self.stop_node(0)
+
+        with open(inc_conf_file_path, 'w', encoding='utf-8') as conf:
+            conf.write('reindex=0\n')
+        with self.nodes[0].assert_debug_log(expected_msgs=[], unexpected_msgs=['Warning: reindex=1 is set in the configuration file']):
             self.start_node(0)
         self.stop_node(0)
 
@@ -531,7 +566,7 @@ class ConfArgsTest(QuicksilverTestFramework):
         self.ensure_debug_log()
         with self.nodes[0].assert_debug_log([], unexpected_msgs=[removed_network_warning]):
             self.start_node(0)
-        self.stop_node(0)
+        self.stop_node(0, expected_stderr="Warning: Configured -prune target 550 MiB is below the minimum for this chain; using 2956 MiB.")
 
         self.log.debug("Reset to sandbox")
         self.nodes[0].chain = 'sandbox'

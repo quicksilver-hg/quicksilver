@@ -9,7 +9,6 @@
 
 #include <common/bloom.h>
 #include <consensus/validation.h>
-#include <kernel/chain.h>
 #include <net.h>
 #include <primitives/transaction.h>
 #include <policy/packages.h>

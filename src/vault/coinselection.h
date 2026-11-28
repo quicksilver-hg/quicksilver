@@ -46,8 +46,6 @@ struct COutput {
     {
     }
 
-    std::string ToString() const;
-
     bool operator<(const COutput& rhs) const { return outpoint < rhs.outpoint; }
 };
 
@@ -154,7 +152,6 @@ public:
     [[nodiscard]] CAmount GetSelectedValue() const;
     [[nodiscard]] CAmount GetChange() const;
 
-    void Clear();
     void AddInput(const OutputGroup& group);
     void AddInputs(const std::set<std::shared_ptr<COutput>>& inputs);
     void SetAlgoCompleted(bool algo_completed) { m_algo_completed = algo_completed; }

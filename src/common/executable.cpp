@@ -24,11 +24,14 @@ fs::path SelfExecutableDir()
     // path names a different file, or none, so it is a failure, not an answer.
     if (n == 0 || n >= MAX_PATH) return {};
     return fs::path(std::wstring(buf, n)).parent_path();
-#else
+#elif defined(__linux__)
     char buf[4096];
     const ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf));
     if (n <= 0 || static_cast<size_t>(n) >= sizeof(buf)) return {};
     return fs::PathFromString(std::string(buf, static_cast<size_t>(n))).parent_path();
+#else
+    // Bundled helper discovery is supported on Linux and Windows only.
+    return {};
 #endif
 }
 

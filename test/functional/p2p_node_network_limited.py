@@ -7,8 +7,12 @@
 
 Tests that a node configured with -prune=550 signals NODE_NETWORK_LIMITED correctly
 and that it responds to getdata requests for blocks correctly:
-    - send a block within 288 + 2 of the tip
-    - disconnect peers who request blocks older than that."""
+    - send a block within 2016 + 2 of the tip
+    - disconnect peers who request blocks older than that.
+
+F-703 is staged: a limited node serves 2016 blocks deep, but a requester still asks a
+limited peer only for blocks within 288 of its tip, the window a base-version server
+keeps. A later release raises the request window too."""
 from test_framework.messages import (
     CInv,
     MSG_BLOCK,
@@ -25,8 +29,13 @@ from test_framework.util import (
     try_rpc
 )
 
-# Minimum blocks required to signal NODE_NETWORK_LIMITED #
-NODE_NETWORK_LIMITED_MIN_BLOCKS = 288
+# Depth a NODE_NETWORK_LIMITED node serves (net_processing.cpp NODE_NETWORK_LIMITED_SERVE_BLOCKS)
+NODE_NETWORK_LIMITED_SERVE_BLOCKS = 2016
+# Depth within which we request blocks from a limited peer (NODE_NETWORK_LIMITED_REQUEST_BLOCKS).
+# Unchanged at the base value until a later release (F-703).
+NODE_NETWORK_LIMITED_REQUEST_BLOCKS = 288
+# Both sides allow two blocks for races.
+LIMIT_BUFFER = 2
 
 class P2PIgnoreInv(P2PInterface):
     firstAddrnServices = 0
@@ -77,15 +86,18 @@ class NodeNetworkLimitedTest(QuicksilverTestFramework):
         full_node.setnetworkactive(False)
         self.wait_until(lambda: len(full_node.getpeerinfo()) == 0)
 
-        # Mine blocks and sync the pruned node. Surpass the NETWORK_NODE_LIMITED threshold.
-        # Blocks deeper than the threshold are considered "historical blocks"
+        # Mine blocks and sync the pruned node. Surpass the request threshold.
+        # Blocks deeper than the threshold are considered "historical blocks". The pruned
+        # node would serve them (they are within its 2016-block serving depth), so what is
+        # checked here is that the requester does not ask: the request window is unchanged
+        # (F-703, staged).
         num_historial_blocks = 12
-        self.generate(miner, NODE_NETWORK_LIMITED_MIN_BLOCKS + num_historial_blocks, sync_fun=self.no_op)
+        self.generate(miner, NODE_NETWORK_LIMITED_REQUEST_BLOCKS + num_historial_blocks, sync_fun=self.no_op)
         self.sync_blocks([miner, pruned_node])
 
         # Connect full_node to prune_node and check peers don't disconnect right away.
-        # (they will disconnect if full_node, which is chain-wise behind, request blocks
-        # older than NODE_NETWORK_LIMITED_MIN_BLOCKS)
+        # (they would disconnect if full_node, which is chain-wise behind, requested blocks
+        # older than NODE_NETWORK_LIMITED_SERVE_BLOCKS)
         start_height_full_node = full_node.getblockcount()
         full_node.setnetworkactive(True)
         self.connect_nodes(2, 0)
@@ -101,11 +113,10 @@ class NodeNetworkLimitedTest(QuicksilverTestFramework):
         # 2-block buffer). And also, ensure it does not request any
         # historical block.
         tip_height = pruned_node.getblockcount()
-        limit_buffer = 2
         # Prevent races by waiting for the tip to arrive first
         self.wait_until(lambda: not try_rpc(-1, "Block not available (not fully downloaded)", full_node.getblock, pruned_node.getbestblockhash()))
         for height in range(start_height_full_node + 1, tip_height + 1):
-            if height <= tip_height - (NODE_NETWORK_LIMITED_MIN_BLOCKS - limit_buffer):
+            if height <= tip_height - (NODE_NETWORK_LIMITED_REQUEST_BLOCKS - LIMIT_BUFFER):
                 assert_raises_rpc_error(-1, "Block not available (not fully downloaded)", full_node.getblock, pruned_node.getblockhash(height))
             else:
                 full_node.getblock(pruned_node.getblockhash(height))  # just assert it does not throw an exception
@@ -131,14 +142,29 @@ class NodeNetworkLimitedTest(QuicksilverTestFramework):
 
         self.log.info("Mine enough blocks to reach the NODE_NETWORK_LIMITED range.")
         self.connect_nodes(0, 1)
-        blocks = self.generate(self.nodes[1], 292, sync_fun=lambda: self.sync_blocks([self.nodes[0], self.nodes[1]]))
+        # blocks[i] is at height i + 1; the tip is at height len(blocks).
+        num_blocks = NODE_NETWORK_LIMITED_SERVE_BLOCKS + LIMIT_BUFFER + 2
+        blocks = self.generate(self.nodes[1], num_blocks, sync_fun=lambda: self.sync_blocks([self.nodes[0], self.nodes[1]]))
+        tip_height = len(blocks)
 
-        self.log.info("Make sure we can max retrieve block at tip-288.")
+        def block_at_depth(depth):
+            return blocks[tip_height - depth - 1]
+
+        self.log.info("A block 290 deep (the base-version serving limit, 288+2) is served.")
+        node.send_getdata_for_block(block_at_depth(290))
+        node.wait_for_block(int(block_at_depth(290), 16), timeout=3)
+
+        self.log.info("A block 2016 deep is served.")
+        node.send_getdata_for_block(block_at_depth(NODE_NETWORK_LIMITED_SERVE_BLOCKS))
+        node.wait_for_block(int(block_at_depth(NODE_NETWORK_LIMITED_SERVE_BLOCKS), 16), timeout=3)
+
+        self.log.info("Make sure we can max retrieve block at tip-2018 (2016+2).")
         node.send_getdata_for_block(blocks[1])  # last block in valid range
+        assert_equal(blocks[1], block_at_depth(NODE_NETWORK_LIMITED_SERVE_BLOCKS + LIMIT_BUFFER))
         node.wait_for_block(int(blocks[1], 16), timeout=3)
 
-        self.log.info("Requesting block at height 2 (tip-289) must fail (ignored).")
-        node.send_getdata_for_block(blocks[0])  # first block outside of the 288+2 limit
+        self.log.info("Requesting block at height 1 (tip-2019) must fail (ignored).")
+        node.send_getdata_for_block(blocks[0])  # first block outside of the 2016+2 limit
         node.wait_for_disconnect(timeout=5)
         self.nodes[0].disconnect_p2ps()
 

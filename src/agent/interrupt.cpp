@@ -12,6 +12,8 @@ namespace {
 //! its lifetime: the constructor clears it and the destructor restores the
 //! previous disposition, so nothing leaks between runs or between tests.
 std::atomic<bool> g_interrupted{false};
+// The handler's store is async-signal-safe only because this atomic needs no lock.
+static_assert(std::atomic<bool>::is_always_lock_free, "the interrupt flag must be lock-free to be set from a signal handler");
 
 extern "C" void HandleAgentInterrupt(int)
 {
@@ -26,8 +28,10 @@ extern "C" void HandleAgentInterrupt(int)
 struct sigaction g_prev_int{};
 struct sigaction g_prev_term{};
 #else
-void (*g_prev_int)(int) = nullptr;
-void (*g_prev_term)(int) = nullptr;
+// SIG_DFL is a null pointer on the Windows CRT, so null cannot mean "nothing to
+// restore"; SIG_ERR marks a signal() call that failed and left nothing to undo.
+void (*g_prev_int)(int) = SIG_ERR;
+void (*g_prev_term)(int) = SIG_ERR;
 #endif
 } // namespace
 
@@ -40,8 +44,9 @@ InterruptHandler::InterruptHandler()
     struct sigaction sa{};
     sa.sa_handler = HandleAgentInterrupt;
     sigemptyset(&sa.sa_mask);
-    // Deliberately NOT SA_RESTART: a blocked read in the solver bridge must
-    // return EINTR so the cancel poll gets a turn.
+    // No SA_RESTART. The solver bridge does not depend on EINTR -- it polls the
+    // cancel callback every 250 ms -- but an interrupted read returning early
+    // only brings that poll forward.
     sa.sa_flags = 0;
     sigaction(SIGINT, &sa, &g_prev_int);
     sigaction(SIGTERM, &sa, &g_prev_term);
@@ -57,8 +62,10 @@ InterruptHandler::~InterruptHandler()
     sigaction(SIGINT, &g_prev_int, nullptr);
     sigaction(SIGTERM, &g_prev_term, nullptr);
 #else
-    if (g_prev_int) std::signal(SIGINT, g_prev_int);
-    if (g_prev_term) std::signal(SIGTERM, g_prev_term);
+    if (g_prev_int != SIG_ERR) std::signal(SIGINT, g_prev_int);
+    if (g_prev_term != SIG_ERR) std::signal(SIGTERM, g_prev_term);
+    g_prev_int = SIG_ERR;
+    g_prev_term = SIG_ERR;
 #endif
     g_interrupted.store(false, std::memory_order_relaxed);
 }

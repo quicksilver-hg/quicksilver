@@ -36,6 +36,7 @@
 #include <QGuiApplication>
 #include <QScreen>
 #include <QScrollBar>
+#include <QSignalBlocker>
 #include <QShowEvent>
 #include <QSizePolicy>
 #include <QDataWidgetMapper>
@@ -132,25 +133,40 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
     ui->proxyPortTor->setEnabled(false);
     ui->proxyPortTor->setValidator(new QIntValidator(1, 65535, this));
 
-    connect(ui->connectSocks, &QPushButton::toggled, ui->proxyIp, &QWidget::setEnabled);
+    // QValidatedLineEdit::setEnabled hides QWidget::setEnabled without overriding it,
+    // so call it by name: disabling clears a stale invalid mark and enabling rechecks
+    // the text (S0230-B-02, S0239-B-01).
+    connect(ui->connectSocks, &QPushButton::toggled, this, [this](bool on) { ui->proxyIp->setEnabled(on); });
     connect(ui->connectSocks, &QPushButton::toggled, ui->proxyPort, &QWidget::setEnabled);
     connect(ui->connectSocks, &QPushButton::toggled, this, &OptionsDialog::updateProxyValidationState);
 
-    connect(ui->connectSocksTor, &QPushButton::toggled, ui->proxyIpTor, &QWidget::setEnabled);
+    connect(ui->connectSocksTor, &QPushButton::toggled, this, [this](bool on) { ui->proxyIpTor->setEnabled(on); });
     connect(ui->connectSocksTor, &QPushButton::toggled, ui->proxyPortTor, &QWidget::setEnabled);
     connect(ui->connectSocksTor, &QPushButton::toggled, this, &OptionsDialog::updateProxyValidationState);
     connect(ui->gpuSolverBrowseButton, &QPushButton::clicked, this, &OptionsDialog::chooseGpuSolverPath);
     m_gpu_device_list = new GpuDeviceList(this);
     m_gpu_device_list->setObjectName(QStringLiteral("gpuDeviceList"));
     ui->gpuDeviceListLayout->addWidget(m_gpu_device_list);
+    m_gpu_choice_hint = new QLabel(tr("Select a graphics card, or choose Automatic or Processor only."), this);
+    m_gpu_choice_hint->setWordWrap(true);
+    m_gpu_choice_hint->hide();
+    ui->gpuDeviceListLayout->addWidget(m_gpu_choice_hint);
     m_gpu_device_list->setListingState(tr("Looking for graphics cards…"));
     // F-575: the hint asks the reader to deselect a card. populateGpuDevices()
     // shows it once a card is listed.
     ui->gpuCardsHelp->hide();
-    connect(ui->gpuModeAutomatic, &QRadioButton::toggled, this, &OptionsDialog::updateGpuMode);
-    connect(ui->gpuModeChoose, &QRadioButton::toggled, this, &OptionsDialog::updateGpuMode);
-    connect(ui->gpuModeCpu, &QRadioButton::toggled, this, &OptionsDialog::updateGpuMode);
-    connect(m_gpu_device_list, &GpuDeviceList::changed, this, [this] { showRestartWarning(); });
+    // setModel() applies the saved mode with these signals blocked, so only a mode the
+    // user picks warns about a restart (S0230-B-01).
+    for (QRadioButton* radio : {ui->gpuModeAutomatic, ui->gpuModeChoose, ui->gpuModeCpu}) {
+        connect(radio, &QRadioButton::toggled, this, [this](bool checked) {
+            updateGpuMode();
+            if (checked) showRestartWarning();
+        });
+    }
+    connect(m_gpu_device_list, &GpuDeviceList::changed, this, [this] {
+        updateOkButtonState();
+        showRestartWarning();
+    });
     auto* mining_status_timer = new QTimer(this);
     mining_status_timer->setInterval(1000);
     connect(mining_status_timer, &QTimer::timeout, this, [this] {
@@ -181,18 +197,6 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
         gpusituation::RunDiscovery(cuckatoo::kBundledHelperEdgeBits, this, std::move(on_discovery));
     }
 
-    /* Tray and close live on Display. macOS has no tray here, so hide the
-       boxes instead of removing a tab. */
-#ifdef Q_OS_MACOS
-    ui->showTrayIcon->setVisible(false);
-    ui->minimizeToTray->setVisible(false);
-    ui->minimizeOnClose->setVisible(false);
-    /* hide launch at startup option on macOS */
-    ui->quicksilverAtStartup->setVisible(false);
-    ui->verticalLayout_Main->removeWidget(ui->quicksilverAtStartup);
-    ui->verticalLayout_Main->removeItem(ui->horizontalSpacer_0_Main);
-#endif
-
     /* remove Vault tab and 3rd party-URL textbox in case of -disablevault */
     if (!enableVault) {
         ui->tabWidget->removeTab(ui->tabWidget->indexOf(ui->tabVault));
@@ -200,16 +204,6 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableVault)
         ui->thirdPartyTxUrls->setVisible(false);
     }
 
-#ifdef ENABLE_EXTERNAL_SIGNER
-    ui->externalSignerPath->setToolTip(ui->externalSignerPath->toolTip().arg(CLIENT_NAME));
-#else
-    // Hide the whole group box rather than greying the field out. A permanently
-    // disabled control with a "compiled without support" tooltip reads as a
-    // feature that is on its way; external signing is deliberately absent from
-    // v1, not pending. Hiding the box takes its title and the path label with it.
-    ui->groupBoxHww->setVisible(false);
-    ui->externalSignerPath->setEnabled(false);
-#endif
     /* Display elements init */
     ui->quicksilverAtStartup->setToolTip(ui->quicksilverAtStartup->toolTip().arg(CLIENT_NAME));
     ui->quicksilverAtStartup->setText(ui->quicksilverAtStartup->text().arg(CLIENT_NAME));
@@ -316,8 +310,7 @@ void OptionsDialog::setModel(OptionsModel *_model)
             showRestartWarning(true);
 
         // Prune values are in GB to be consistent with intro.cpp
-        static constexpr uint64_t nMinDiskSpace = (MIN_DISK_SPACE_FOR_BLOCK_FILES / GB_BYTES) + (MIN_DISK_SPACE_FOR_BLOCK_FILES % GB_BYTES) ? 1 : 0;
-        ui->pruneSize->setRange(nMinDiskSpace, std::numeric_limits<int>::max());
+        ui->pruneSize->setRange(OptionsModel::MinPruneTargetGB(), std::numeric_limits<int>::max());
 
         QString strLabel = _model->getOverriddenByCommandLine();
         if (strLabel.isEmpty())
@@ -328,6 +321,10 @@ void OptionsDialog::setModel(OptionsModel *_model)
         m_gpu_solver_command_line = _model->node().isSettingIgnored("cuckatoosolver");
         setMapper();
         mapper->toFirst();
+        // The mapper writes the proxy hosts through QLineEdit's text property, which
+        // skips QValidatedLineEdit::setText and its check, so check them here (S0239-B-02).
+        ui->proxyIp->setText(ui->proxyIp->text());
+        ui->proxyIpTor->setText(ui->proxyIpTor->text());
         if (m_gpu_solver_command_line) {
             ui->gpuSolverPath->setText(QString::fromStdString(gArgs.GetArg("-cuckatoosolver", "")));
             ui->gpuSolverPath->setReadOnly(true);
@@ -339,9 +336,14 @@ void OptionsDialog::setModel(OptionsModel *_model)
         // Compare without QList::operator==. MSVC's checked iterator deprecates
         // inside that operator, and WERROR turns it into C4996 (F-490).
         const bool cpu_only{devices.size() == 1 && devices.front() == QStringLiteral("cpu")};
-        ui->gpuModeAutomatic->setChecked(devices.isEmpty());
-        ui->gpuModeCpu->setChecked(cpu_only);
-        ui->gpuModeChoose->setChecked(!devices.isEmpty() && !cpu_only);
+        {
+            const QSignalBlocker block_automatic{ui->gpuModeAutomatic};
+            const QSignalBlocker block_cpu{ui->gpuModeCpu};
+            const QSignalBlocker block_choose{ui->gpuModeChoose};
+            ui->gpuModeAutomatic->setChecked(devices.isEmpty());
+            ui->gpuModeCpu->setChecked(cpu_only);
+            ui->gpuModeChoose->setChecked(!devices.isEmpty() && !cpu_only);
+        }
         populateGpuDevices();
         updateGpuMode();
 
@@ -360,7 +362,6 @@ void OptionsDialog::setModel(OptionsModel *_model)
         showRestartWarning();
         validateGpuSolverPath();
     });
-    connect(ui->externalSignerPath, &QLineEdit::textChanged, [this]{ showRestartWarning(); });
     connect(ui->threadsScriptVerif, qOverload<int>(&QSpinBox::valueChanged), this, &OptionsDialog::showRestartWarning);
     /* Vault */
     connect(ui->spendZeroConfChange, &QCheckBox::clicked, this, &OptionsDialog::showRestartWarning);
@@ -473,8 +474,6 @@ void OptionsDialog::setMapper()
 
     /* Vault */
     mapper->addMapping(ui->spendZeroConfChange, OptionsModel::SpendZeroConfChange);
-    mapper->addMapping(ui->coinControlFeatures, OptionsModel::CoinControlFeatures);
-    mapper->addMapping(ui->externalSignerPath, OptionsModel::ExternalSignerPath);
     mapper->addMapping(ui->m_enable_psqt_controls, OptionsModel::EnablePSQTControls);
 
     /* Network */
@@ -491,13 +490,11 @@ void OptionsDialog::setMapper()
     mapper->addMapping(ui->proxyPortTor, OptionsModel::ProxyPortTor);
 
     /* Window */
-#ifndef Q_OS_MACOS
     if (QSystemTrayIcon::isSystemTrayAvailable()) {
         mapper->addMapping(ui->showTrayIcon, OptionsModel::ShowTrayIcon);
         mapper->addMapping(ui->minimizeToTray, OptionsModel::MinimizeToTray);
     }
     mapper->addMapping(ui->minimizeOnClose, OptionsModel::MinimizeOnClose);
-#endif
 
     /* Display */
     if (!ui->lang->isHidden()) {
@@ -530,7 +527,9 @@ void OptionsDialog::setOkButtonState(bool fState)
 
 void OptionsDialog::updateOkButtonState()
 {
-    setOkButtonState(m_proxy_valid && m_gpu_solver_valid);
+    m_gpu_choice_valid = !ui->gpuModeChoose->isChecked() || !hasListedGpuCards() || !m_gpu_device_list->tickedIds().isEmpty();
+    m_gpu_choice_hint->setVisible(!m_gpu_choice_valid);
+    setOkButtonState(m_proxy_valid && m_gpu_solver_valid && m_gpu_choice_valid);
 }
 
 void OptionsDialog::chooseGpuSolverPath()
@@ -562,7 +561,6 @@ void OptionsDialog::validateGpuSolverPath()
     ui->gpuSolverStatusLabel->setStyleSheet(QString());
 
     if (m_gpu_solver_command_line) {
-        m_gpu_solver_check = HelperCheck::kUnchecked;
         m_gpu_solver_valid = true;
         ui->gpuSolverStatusLabel->setText(tr("Using the graphics helper set on the command line: %1").arg(path));
         updateOkButtonState();
@@ -570,7 +568,6 @@ void OptionsDialog::validateGpuSolverPath()
     }
 
     if (path.isEmpty()) {
-        m_gpu_solver_check = HelperCheck::kUnchecked;
         m_gpu_solver_valid = true;
         if (m_gpu_discovery && m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kNoHelper) {
 #ifdef Q_OS_WIN
@@ -591,7 +588,6 @@ void OptionsDialog::validateGpuSolverPath()
 
     const QFileInfo info(path);
     if (!info.exists() || !info.isFile() || !info.isExecutable()) {
-        m_gpu_solver_check = HelperCheck::kFailed;
         m_gpu_solver_valid = false;
         ui->gpuSolverStatusLabel->setStyleSheet(QStringLiteral("QLabel { color: red; }"));
         ui->gpuSolverStatusLabel->setText(
@@ -602,7 +598,6 @@ void OptionsDialog::validateGpuSolverPath()
         return;
     }
 
-    m_gpu_solver_check = HelperCheck::kChecking;
     m_gpu_solver_valid = false;
     ui->gpuSolverStatusLabel->setText(tr("Checking the selected graphics helper…"));
     updateOkButtonState();
@@ -621,7 +616,6 @@ void OptionsDialog::validateGpuSolverPath()
         }
         m_gpu_solver_probe = nullptr;
         const bool available = exit_status == QProcess::NormalExit && exit_code == 0;
-        m_gpu_solver_check = available ? HelperCheck::kWorks : HelperCheck::kFailed;
         m_gpu_solver_valid = available;
         if (available) {
             ui->gpuSolverStatusLabel->setText(tr("The selected graphics helper loaded successfully."));
@@ -635,7 +629,6 @@ void OptionsDialog::validateGpuSolverPath()
     connect(probe, &QProcess::errorOccurred, this, [this, probe](QProcess::ProcessError error) {
         if (m_gpu_solver_probe != probe || error != QProcess::FailedToStart) return;
         m_gpu_solver_probe = nullptr;
-        m_gpu_solver_check = HelperCheck::kFailed;
         m_gpu_solver_valid = false;
         ui->gpuSolverStatusLabel->setStyleSheet(QStringLiteral("QLabel { color: red; }"));
         ui->gpuSolverStatusLabel->setText(tr("The selected graphics helper was unable to load."));
@@ -645,15 +638,20 @@ void OptionsDialog::validateGpuSolverPath()
     probe->start();
     QTimer::singleShot(cuckatoo::kListingLimit, this, [this, probe] {
         if (m_gpu_solver_probe != probe || probe->state() == QProcess::NotRunning) return;
-        m_gpu_solver_check = HelperCheck::kFailed;
         probe->kill();
     });
+}
+
+bool OptionsDialog::hasListedGpuCards() const
+{
+    return m_gpu_discovery && m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kListed &&
+           !m_gpu_discovery->listing.devices.empty();
 }
 
 void OptionsDialog::populateGpuDevices()
 {
     if (!m_gpu_discovery) return;
-    const bool cards_listed{m_gpu_discovery->listing.outcome == cuckatoo::ListOutcome::kListed && !m_gpu_discovery->listing.devices.empty()};
+    const bool cards_listed{hasListedGpuCards()};
     ui->gpuCardsHelp->setVisible(cards_listed);
     if (cards_listed) {
         const QStringList chosen{model ? model->getOption(OptionsModel::GpuDevices).toStringList() : QStringList{}};
@@ -683,7 +681,7 @@ void OptionsDialog::updateGpuMode()
                     : ui->gpuModeChoose->isChecked() ? GpuDeviceList::Mode::kChoose
                                                      : GpuDeviceList::Mode::kAutomatic;
     m_gpu_device_list->setMode(mode);
-    if (sender()) showRestartWarning();
+    updateOkButtonState();
 }
 
 void OptionsDialog::on_resetButton_clicked()
@@ -746,8 +744,9 @@ void OptionsDialog::on_openQuicksilverConfButton_clicked()
 
 void OptionsDialog::on_okButton_clicked()
 {
+    if (!m_gpu_choice_valid) return;
     mapper->submit();
-    if (model) {
+    if (model && (!ui->gpuModeChoose->isChecked() || hasListedGpuCards())) {
         const QStringList devices = ui->gpuModeAutomatic->isChecked() ? QStringList{}
                                   : ui->gpuModeCpu->isChecked() ? QStringList{QStringLiteral("cpu")}
                                                                : m_gpu_device_list->tickedIds();
@@ -811,11 +810,19 @@ void OptionsDialog::clearStatusLabel()
 
 void OptionsDialog::updateProxyValidationState()
 {
-    QValidatedLineEdit *pUiProxyIp = ui->proxyIp;
-    QValidatedLineEdit *otherProxyWidget = (pUiProxyIp == ui->proxyIpTor) ? ui->proxyIp : ui->proxyIpTor;
-    if (pUiProxyIp->isValid() && (!ui->proxyPort->isEnabled() || ui->proxyPort->text().toInt() > 0) && (!ui->proxyPortTor->isEnabled() || ui->proxyPortTor->text().toInt() > 0))
+    // A proxy that is switched off is not checked. One that is on needs a host the
+    // validator accepts now, not the field's cached mark, which typing resets and an
+    // empty field never clears (S0230-B-02, S0239-B-01, S0239-B-03), and a port.
+    const auto proxy_ok = [](QValidatedLineEdit* host, QLineEdit* port) {
+        if (!host->isEnabled()) return true;
+        QString text{host->text()};
+        int pos{0};
+        return !text.isEmpty() && ProxyAddressValidator{nullptr}.validate(text, pos) == QValidator::Acceptable &&
+               port->text().toInt() > 0;
+    };
+    if (proxy_ok(ui->proxyIp, ui->proxyPort) && proxy_ok(ui->proxyIpTor, ui->proxyPortTor))
     {
-        m_proxy_valid = otherProxyWidget->isValid();
+        m_proxy_valid = true;
         updateOkButtonState();
         clearStatusLabel();
     }
@@ -855,6 +862,34 @@ QValidator(parent)
 {
 }
 
+namespace {
+//! A host name the node can look up for -proxy: dot-separated labels of 1 to 63
+//! letters, digits, underscores or hyphens, no label starting or ending with a
+//! hyphen, 253 characters at most, one trailing dot (fully qualified) allowed.
+//! The node hands names to getaddrinfo, so docker-style "tor_proxy" and
+//! "tor.lan." work there. Nothing is resolved here; the node does that at startup.
+bool IsHostNameSyntax(std::string name)
+{
+    if (!name.empty() && name.back() == '.') name.pop_back();
+    if (name.empty() || name.size() > 253) return false;
+    size_t label_start{0};
+    while (label_start <= name.size()) {
+        const size_t dot{name.find('.', label_start)};
+        const size_t label_end{dot == std::string::npos ? name.size() : dot};
+        const size_t length{label_end - label_start};
+        if (length == 0 || length > 63) return false;
+        if (name[label_start] == '-' || name[label_end - 1] == '-') return false;
+        for (size_t i{label_start}; i < label_end; ++i) {
+            const char c{name[i]};
+            if (!(IsDigit(c) || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-' || c == '_')) return false;
+        }
+        if (dot == std::string::npos) return true;
+        label_start = dot + 1;
+    }
+    return false;
+}
+} // namespace
+
 QValidator::State ProxyAddressValidator::validate(QString &input, int &pos) const
 {
     Q_UNUSED(pos);
@@ -866,6 +901,11 @@ QValidator::State ProxyAddressValidator::validate(QString &input, int &pos) cons
     Proxy addrProxy = Proxy(serv, true);
     if (addrProxy.IsValid())
         return QValidator::Acceptable;
+
+    // The node looks a -proxy host name up at startup (init.cpp, Lookup with name
+    // lookup on by default), so a name such as localhost or a Tor host on the LAN
+    // is a working setting, not an invalid one.
+    if (IsHostNameSyntax(hostname)) return QValidator::Acceptable;
 
     return QValidator::Invalid;
 }

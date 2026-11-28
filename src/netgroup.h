@@ -30,8 +30,7 @@ public:
      * obtain addresses with many different group identifiers, even if it is cheap
      * to obtain addresses with the same identifier.
      *
-     * @note No two connections will be attempted to addresses with the same network
-     *       group.
+     * Automatic outbound peer selection uses these groups to improve diversity.
      */
     std::vector<unsigned char> GetGroup(const CNetAddr& address) const;
 
@@ -59,12 +58,9 @@ private:
      * ensuring we connect to a diverse set of peers in Connman. The map is
      * empty if no file was provided.
      *
-     * If asmap is provided, nodes will be bucketed by AS they belong to, in
-     * order to make impossible for a node to connect to several nodes hosted
-     * in a single AS. This is done in response to Erebus attack, but also to
-     * generally diversify the connections every node creates, especially
-     * useful when a large fraction of nodes operate under a couple of cloud
-     * providers.
+     * If an asmap is provided, addresses with a mapped AS are bucketed by AS.
+     * Automatic outbound selection uses these buckets to diversify peers
+     * across network operators.
      *
      * If a new asmap is provided, the existing addrman records are
      * re-bucketed.

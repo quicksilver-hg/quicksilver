@@ -33,6 +33,7 @@ public:
     ~AskPassphraseDialog();
 
     void accept() override;
+    void reject() override;
 
     void setModel(VaultModel *model);
 

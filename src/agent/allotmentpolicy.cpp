@@ -4,6 +4,8 @@
 
 #include <agent/allotmentpolicy.h>
 
+#include <support/cleanse.h>
+
 #include <consensus/amount.h>
 #include <tinyformat.h>
 #include <uint256.h>
@@ -39,48 +41,50 @@ const char* AllotmentPolicyResultCodeString(AllotmentPolicyResultCode code)
     assert(false);
 }
 
-static util::Result<std::string> ReadPolicyStringField(const UniValue& policy, const std::string& key)
+// `artifact` names what is being read ("policy request", "policy bundle",
+// "payment receipt", ...) so an error points at the right document.
+static util::Result<std::string> ReadPolicyStringField(const UniValue& policy, const char* artifact, const std::string& key)
 {
     const UniValue& field{policy.find_value(key)};
     if (!field.isStr()) {
-        return util::Error{Untranslated(strprintf("Agent allotment policy request field '%s' must be a string.", key))};
+        return util::Error{Untranslated(strprintf("Agent allotment %s field '%s' must be a string.", artifact, key))};
     }
     if (field.get_str().empty()) {
-        return util::Error{Untranslated(strprintf("Agent allotment policy request field '%s' must not be empty.", key))};
+        return util::Error{Untranslated(strprintf("Agent allotment %s field '%s' must not be empty.", artifact, key))};
     }
     return field.get_str();
 }
 
-static util::Result<std::string> ReadOptionalPolicyStringField(const UniValue& policy, const std::string& key)
+static util::Result<std::string> ReadOptionalPolicyStringField(const UniValue& policy, const char* artifact, const std::string& key)
 {
     const UniValue& field{policy.find_value(key)};
     if (field.isNull()) return std::string{};
     if (!field.isStr()) {
-        return util::Error{Untranslated(strprintf("Agent allotment policy request field '%s' must be a string.", key))};
+        return util::Error{Untranslated(strprintf("Agent allotment %s field '%s' must be a string.", artifact, key))};
     }
     return field.get_str();
 }
 
-static util::Result<CAmount> ReadPolicyAmountField(const UniValue& policy, const std::string& key)
+static util::Result<CAmount> ReadPolicyAmountField(const UniValue& policy, const char* artifact, const std::string& key)
 {
-    auto field{ReadPolicyStringField(policy, key)};
+    auto field{ReadPolicyStringField(policy, artifact, key)};
     if (!field) return util::Error{util::ErrorString(field)};
 
     const auto amount{ToIntegral<CAmount>(*field)};
     if (!amount || !MoneyRange(*amount)) {
-        return util::Error{Untranslated(strprintf("Agent allotment policy request field '%s' must be a valid nonnegative cinnabar amount.", key))};
+        return util::Error{Untranslated(strprintf("Agent allotment %s field '%s' must be a valid nonnegative cinnabar amount.", artifact, key))};
     }
     return *amount;
 }
 
-static util::Result<int64_t> ReadPolicyTimeField(const UniValue& policy, const std::string& key)
+static util::Result<int64_t> ReadPolicyTimeField(const UniValue& policy, const char* artifact, const std::string& key)
 {
-    auto field{ReadPolicyStringField(policy, key)};
+    auto field{ReadPolicyStringField(policy, artifact, key)};
     if (!field) return util::Error{util::ErrorString(field)};
 
     const auto time{ToIntegral<int64_t>(*field)};
     if (!time || *time < 0) {
-        return util::Error{Untranslated(strprintf("Agent allotment policy request field '%s' must be a valid nonnegative time.", key))};
+        return util::Error{Untranslated(strprintf("Agent allotment %s field '%s' must be a valid nonnegative time.", artifact, key))};
     }
     return *time;
 }
@@ -103,7 +107,7 @@ static util::Result<std::vector<AllotmentFundingOutputArtifact>> ReadBundleFundi
             return util::Error{Untranslated("Agent allotment policy bundle funding output must be an object.")};
         }
 
-        auto txid{ReadPolicyStringField(output, "txid")};
+        auto txid{ReadPolicyStringField(output, "policy bundle funding output", "txid")};
         if (!txid) return util::Error{util::ErrorString(txid)};
         const auto parsed_txid{uint256::FromHex(*txid)};
         if (!parsed_txid) {
@@ -119,7 +123,7 @@ static util::Result<std::vector<AllotmentFundingOutputArtifact>> ReadBundleFundi
             return util::Error{Untranslated(strprintf("Agent allotment policy bundle funding output %s:%u appears more than once.", *txid, *vout_index))};
         }
 
-        auto amount{ReadPolicyAmountField(output, "amount_cinnabar")};
+        auto amount{ReadPolicyAmountField(output, "policy bundle funding output", "amount_cinnabar")};
         if (!amount) return util::Error{util::ErrorString(amount)};
         if (*amount <= 0) {
             return util::Error{Untranslated("Agent allotment policy bundle funding output amount must be greater than zero.")};
@@ -136,7 +140,7 @@ static util::Result<std::vector<AllotmentFundingOutputArtifact>> ReadBundleFundi
 
 static util::Result<AllotmentFundingOutputArtifact> ReadPaymentReceiptFundingOutput(const UniValue& receipt)
 {
-    auto txid{ReadPolicyStringField(receipt, "txid")};
+    auto txid{ReadPolicyStringField(receipt, "payment receipt", "txid")};
     if (!txid) return util::Error{util::ErrorString(txid)};
     if (!uint256::FromHex(*txid)) {
         return util::Error{Untranslated("Agent allotment payment receipt txid must be a transaction id hex string.")};
@@ -148,7 +152,7 @@ static util::Result<AllotmentFundingOutputArtifact> ReadPaymentReceiptFundingOut
         return util::Error{Untranslated("Agent allotment payment receipt vout must be a uint32 value.")};
     }
 
-    auto amount{ReadPolicyAmountField(receipt, "amount_cinnabar")};
+    auto amount{ReadPolicyAmountField(receipt, "payment receipt", "amount_cinnabar")};
     if (!amount) return util::Error{util::ErrorString(amount)};
     if (*amount <= 0) {
         return util::Error{Untranslated("Agent allotment payment receipt amount must be greater than zero.")};
@@ -170,7 +174,7 @@ util::Result<AllotmentPolicyArtifact> DecodeAllotmentPolicyRequest(std::string_v
         return util::Error{Untranslated("Agent allotment policy request must be a JSON object.")};
     }
 
-    auto type{ReadPolicyStringField(policy, "type")};
+    auto type{ReadPolicyStringField(policy, "policy request", "type")};
     if (!type) return util::Error{util::ErrorString(type)};
     if (*type != "quicksilver.agent_allotment_policy_request") {
         return util::Error{Untranslated("Agent allotment policy request has an unknown type.")};
@@ -183,56 +187,56 @@ util::Result<AllotmentPolicyArtifact> DecodeAllotmentPolicyRequest(std::string_v
     }
 
     AllotmentPolicyArtifact artifact;
-    auto chain{ReadPolicyStringField(policy, "chain")};
+    auto chain{ReadPolicyStringField(policy, "policy request", "chain")};
     if (!chain) return util::Error{util::ErrorString(chain)};
     if (*chain != expected_chain) {
         return util::Error{Untranslated("Agent allotment policy request is for a different chain.")};
     }
     artifact.chain = *chain;
 
-    auto genesis_hash{ReadPolicyStringField(policy, "genesis_hash")};
+    auto genesis_hash{ReadPolicyStringField(policy, "policy request", "genesis_hash")};
     if (!genesis_hash) return util::Error{util::ErrorString(genesis_hash)};
     if (*genesis_hash != expected_genesis_hash) {
         return util::Error{Untranslated("Agent allotment policy request is for a different genesis block.")};
     }
     artifact.genesis_hash = *genesis_hash;
 
-    auto id{ReadPolicyStringField(policy, "id")};
+    auto id{ReadPolicyStringField(policy, "policy request", "id")};
     if (!id) return util::Error{util::ErrorString(id)};
     artifact.id = *id;
 
-    auto label{ReadPolicyStringField(policy, "label")};
+    auto label{ReadPolicyStringField(policy, "policy request", "label")};
     if (!label) return util::Error{util::ErrorString(label)};
     artifact.label = *label;
 
-    auto funding_address{ReadPolicyStringField(policy, "funding_address")};
+    auto funding_address{ReadPolicyStringField(policy, "policy request", "funding_address")};
     if (!funding_address) return util::Error{util::ErrorString(funding_address)};
     artifact.funding_address = *funding_address;
 
-    auto funding_descriptor{ReadPolicyStringField(policy, "funding_descriptor")};
+    auto funding_descriptor{ReadPolicyStringField(policy, "policy request", "funding_descriptor")};
     if (!funding_descriptor) return util::Error{util::ErrorString(funding_descriptor)};
     artifact.funding_descriptor = *funding_descriptor;
 
-    auto funding_limit{ReadPolicyAmountField(policy, "funding_limit_cinnabar")};
+    auto funding_limit{ReadPolicyAmountField(policy, "policy request", "funding_limit_cinnabar")};
     if (!funding_limit) return util::Error{util::ErrorString(funding_limit)};
     if (*funding_limit == 0) {
         return util::Error{Untranslated("Agent allotment policy request funding limit must be greater than zero.")};
     }
     artifact.policy.funding_limit = *funding_limit;
 
-    auto funding_available{ReadPolicyAmountField(policy, "funding_available_cinnabar")};
+    auto funding_available{ReadPolicyAmountField(policy, "policy request", "funding_available_cinnabar")};
     if (!funding_available) return util::Error{util::ErrorString(funding_available)};
     artifact.funding_available = *funding_available;
 
-    auto daily_limit{ReadPolicyAmountField(policy, "daily_limit_cinnabar")};
+    auto daily_limit{ReadPolicyAmountField(policy, "policy request", "daily_limit_cinnabar")};
     if (!daily_limit) return util::Error{util::ErrorString(daily_limit)};
     artifact.policy.daily_limit = *daily_limit;
 
-    auto risk_accepted_time{ReadPolicyTimeField(policy, "risk_accepted_time")};
+    auto risk_accepted_time{ReadPolicyTimeField(policy, "policy request", "risk_accepted_time")};
     if (!risk_accepted_time) return util::Error{util::ErrorString(risk_accepted_time)};
     artifact.risk_accepted_time = *risk_accepted_time;
 
-    auto request_created_time{ReadPolicyTimeField(policy, "request_created_time")};
+    auto request_created_time{ReadPolicyTimeField(policy, "policy request", "request_created_time")};
     if (!request_created_time) return util::Error{util::ErrorString(request_created_time)};
     artifact.request_created_time = *request_created_time;
 
@@ -248,7 +252,7 @@ util::Result<AllotmentPolicyBundleArtifact> DecodeAllotmentPolicyBundle(std::str
         return util::Error{Untranslated("Agent allotment policy bundle must be a JSON object.")};
     }
 
-    auto type{ReadPolicyStringField(bundle, "type")};
+    auto type{ReadPolicyStringField(bundle, "policy bundle", "type")};
     if (!type) return util::Error{util::ErrorString(type)};
     if (*type == "quicksilver.agent_allotment_key_bundle") {
         return util::Error{Untranslated("This bundle was exported before 0.1.2. Its key can spend the funding outputs alone and cannot be revoked; this agent no longer uses that format. See \"Bundles exported before 0.1.2\" in doc/design/agent-client.md.")};
@@ -274,16 +278,23 @@ util::Result<AllotmentPolicyBundleArtifact> DecodeAllotmentPolicyBundle(std::str
         return util::Error{Untranslated("Agent allotment policy bundle funding available is more than its funding limit.")};
     }
 
-    auto funding_address{ReadPolicyStringField(bundle, "funding_address")};
+    auto funding_address{ReadPolicyStringField(bundle, "policy bundle", "funding_address")};
     if (!funding_address) return util::Error{util::ErrorString(funding_address)};
     if (*funding_address != policy_artifact->funding_address) {
         return util::Error{Untranslated("Agent allotment policy bundle funding address does not match the policy request.")};
     }
 
-    auto agent_secret{ReadPolicyStringField(bundle, "agent_secret_wif")};
+    // The key name is part of the bundle format: every bundle a desktop has issued
+    // carries it, so it stays "agent_secret_wif" although it holds key A.
+    auto agent_secret{ReadPolicyStringField(bundle, "policy bundle", "agent_secret_wif")};
     if (!agent_secret) return util::Error{util::ErrorString(agent_secret)};
+    // This parsed copy is wiped on every exit; the artifact keeps its own (c04-21).
+    struct WipeOnExit {
+        std::string& secret;
+        ~WipeOnExit() { memory_cleanse(secret.data(), secret.size()); }
+    } wipe_agent_secret{*agent_secret};
 
-    auto funding_descriptor{ReadPolicyStringField(bundle, "funding_descriptor")};
+    auto funding_descriptor{ReadPolicyStringField(bundle, "policy bundle", "funding_descriptor")};
     if (!funding_descriptor) return util::Error{util::ErrorString(funding_descriptor)};
     if (*funding_descriptor != policy_artifact->funding_descriptor) {
         return util::Error{Untranslated("Agent allotment policy bundle funding descriptor does not match the policy request.")};
@@ -312,7 +323,7 @@ util::Result<AllotmentPaymentReceiptArtifact> DecodeAllotmentPaymentReceipt(std:
         return util::Error{Untranslated("Agent allotment payment receipt must be a JSON object.")};
     }
 
-    auto type{ReadPolicyStringField(receipt, "type")};
+    auto type{ReadPolicyStringField(receipt, "payment receipt", "type")};
     if (!type) return util::Error{util::ErrorString(type)};
     if (*type != "quicksilver.agent_payment_receipt") {
         return util::Error{Untranslated("Agent allotment payment receipt has an unknown type.")};
@@ -325,21 +336,21 @@ util::Result<AllotmentPaymentReceiptArtifact> DecodeAllotmentPaymentReceipt(std:
     }
 
     AllotmentPaymentReceiptArtifact artifact;
-    auto chain{ReadPolicyStringField(receipt, "chain")};
+    auto chain{ReadPolicyStringField(receipt, "payment receipt", "chain")};
     if (!chain) return util::Error{util::ErrorString(chain)};
     if (*chain != expected_chain) {
         return util::Error{Untranslated("Agent allotment payment receipt is for a different chain.")};
     }
     artifact.chain = *chain;
 
-    auto genesis_hash{ReadPolicyStringField(receipt, "genesis_hash")};
+    auto genesis_hash{ReadPolicyStringField(receipt, "payment receipt", "genesis_hash")};
     if (!genesis_hash) return util::Error{util::ErrorString(genesis_hash)};
     if (*genesis_hash != expected_genesis_hash) {
         return util::Error{Untranslated("Agent allotment payment receipt is for a different genesis block.")};
     }
     artifact.genesis_hash = *genesis_hash;
 
-    auto funding_address{ReadPolicyStringField(receipt, "funding_address")};
+    auto funding_address{ReadPolicyStringField(receipt, "payment receipt", "funding_address")};
     if (!funding_address) return util::Error{util::ErrorString(funding_address)};
     if (!expected_funding_address.empty() && *funding_address != expected_funding_address) {
         return util::Error{Untranslated("Agent allotment payment receipt funding address does not match the bundle.")};
@@ -350,23 +361,23 @@ util::Result<AllotmentPaymentReceiptArtifact> DecodeAllotmentPaymentReceipt(std:
     if (!funding_output) return util::Error{util::ErrorString(funding_output)};
     artifact.funding_output = *funding_output;
 
-    auto received_time{ReadPolicyTimeField(receipt, "received_time")};
+    auto received_time{ReadPolicyTimeField(receipt, "payment receipt", "received_time")};
     if (!received_time) return util::Error{util::ErrorString(received_time)};
     artifact.received_time = *received_time;
 
-    auto payment_id{ReadOptionalPolicyStringField(receipt, "payment_id")};
+    auto payment_id{ReadOptionalPolicyStringField(receipt, "payment receipt", "payment_id")};
     if (!payment_id) return util::Error{util::ErrorString(payment_id)};
     artifact.payment_id = *payment_id;
 
-    auto label{ReadOptionalPolicyStringField(receipt, "label")};
+    auto label{ReadOptionalPolicyStringField(receipt, "payment receipt", "label")};
     if (!label) return util::Error{util::ErrorString(label)};
     artifact.label = *label;
 
-    auto memo{ReadOptionalPolicyStringField(receipt, "memo")};
+    auto memo{ReadOptionalPolicyStringField(receipt, "payment receipt", "memo")};
     if (!memo) return util::Error{util::ErrorString(memo)};
     artifact.memo = *memo;
 
-    auto payer{ReadOptionalPolicyStringField(receipt, "payer")};
+    auto payer{ReadOptionalPolicyStringField(receipt, "payment receipt", "payer")};
     if (!payer) return util::Error{util::ErrorString(payer)};
     artifact.payer = *payer;
 

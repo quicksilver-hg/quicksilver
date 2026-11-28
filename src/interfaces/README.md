@@ -10,6 +10,10 @@ The following interfaces are defined here:
 
 * [`Vault`](vault.h) — used by GUI to access vaults.
 
+* [`Mining` and `BlockTemplate`](mining.h) — provide mining state and block templates.
+
+* [`VaultLoader`](vault.h) — manages vault creation, loading and lifecycle.
+
 * [`Handler`](handler.h) — returned by `handleEvent` methods on interfaces above and used to manage lifetimes of event handlers.
 
 * [`Init`](init.h) — created when a process starts, and used to access the interfaces above.

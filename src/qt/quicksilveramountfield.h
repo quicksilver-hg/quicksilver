@@ -23,8 +23,7 @@ class QuicksilverAmountField: public QWidget
 {
     Q_OBJECT
 
-    // ugly hack: for some unknown reason CAmount (instead of qint64) does not work here as expected
-    // discussion: upstream PR 5117
+    // Expose the value using Qt’s registered integer type.
     Q_PROPERTY(qint64 value READ value WRITE setValue NOTIFY valueChanged USER true)
 
 public:
@@ -33,20 +32,8 @@ public:
     CAmount value(bool *value=nullptr) const;
     void setValue(const CAmount& value);
 
-    /** If allow empty is set to false the field will be set to the minimum allowed value if left empty. **/
-    void SetAllowEmpty(bool allow);
-
     /** Set the minimum value in cinnabar **/
     void SetMinValue(const CAmount& value);
-
-    /** Set the maximum value in cinnabar **/
-    void SetMaxValue(const CAmount& value);
-
-    /** Set single step in cinnabar **/
-    void setSingleStep(const CAmount& step);
-
-    /** Make read-only **/
-    void setReadOnly(bool fReadOnly);
 
     /** Mark current value as invalid in UI. */
     void setValid(bool valid);
@@ -62,9 +49,6 @@ public:
 
     /** Make field empty and ready for new input. */
     void clear();
-
-    /** Enable/Disable. */
-    void setEnabled(bool fEnabled);
 
     /** Qt messes up the tab chain by default in some cases (issue https://bugreports.qt-project.org/browse/QTBUG-10907),
         in these cases we have to set it up manually.

@@ -5,10 +5,14 @@
 
 #include <pubkey.h>
 #include <script/interpreter.h>
+#include <script/script.h>
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
+#include <uint256.h>
 
+#include <cstdint>
 #include <limits>
+#include <vector>
 
 FUZZ_TARGET(eval_script)
 {
@@ -28,5 +32,18 @@ FUZZ_TARGET(eval_script)
     for (const auto sig_version : {SigVersion::BASE, SigVersion::WITNESS_V0}) {
         std::vector<std::vector<unsigned char>> stack;
         (void)EvalScript(stack, script, flags, BaseSignatureChecker(), sig_version, nullptr);
+    }
+    {
+        // S0395-A-01: a valid TAPSCRIPT context, set up as VerifyWitnessProgram
+        // does for a script-path spend (interpreter.cpp): the tapleaf hash and the
+        // validation weight budget are initialized. The budget is derived from the
+        // script size (no extra input bytes, so existing seeds keep their layout).
+        ScriptExecutionData execdata;
+        execdata.m_tapleaf_hash_init = true;
+        execdata.m_tapleaf_hash = uint256{};
+        execdata.m_validation_weight_left_init = true;
+        execdata.m_validation_weight_left = static_cast<int64_t>(script.size()) + VALIDATION_WEIGHT_OFFSET;
+        std::vector<std::vector<unsigned char>> stack;
+        (void)EvalScript(stack, script, flags, BaseSignatureChecker(), SigVersion::TAPSCRIPT, execdata, nullptr);
     }
 }

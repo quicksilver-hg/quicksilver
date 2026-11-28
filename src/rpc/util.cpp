@@ -46,7 +46,7 @@ using util::SplitString;
 using util::TrimString;
 
 const std::string UNIX_EPOCH_TIME = "UNIX epoch time";
-const std::string EXAMPLE_ADDRESS[2] = {"hg1q09vm5lfy0j5reeulh4x5752q25uqqvz34hufdl", "hg1q02ad21edsxd23d32dfgqqsz4vv4nmtfzuklhy3"};
+const std::string EXAMPLE_ADDRESS[2] = {"hg1q2czedrf6jcuqzy445y8n5y08prw9gy5rycevh6", "hg1q83r6klpk3gsmnmlpj2fhj0kg088xsvqcrz5xuknvd9mamwsd4jns5ajxf0"};
 
 std::string GetAllOutputTypes()
 {
@@ -96,12 +96,12 @@ int ParseVerbosity(const UniValue& arg, int default_verbosity)
     return default_verbosity;
 }
 
-CAmount AmountFromValue(const UniValue& value, int decimals)
+CAmount AmountFromValue(const UniValue& value)
 {
     if (!value.isNum() && !value.isStr())
         throw JSONRPCError(RPC_TYPE_ERROR, "Amount is not a number or string");
     CAmount amount;
-    if (!ParseFixedPoint(value.getValStr(), decimals, &amount))
+    if (!ParseFixedPoint(value.getValStr(), 8, &amount))
         throw JSONRPCError(RPC_TYPE_ERROR, "Invalid amount");
     if (!MoneyRange(amount))
         throw JSONRPCError(RPC_TYPE_ERROR, "Amount out of range");
@@ -226,27 +226,6 @@ CPubKey HexToPubKey(const std::string& hex_in)
     CPubKey vchPubKey(ParseHex(hex_in));
     if (!vchPubKey.IsFullyValid()) {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Pubkey \"" + hex_in + "\" must be cryptographically valid.");
-    }
-    return vchPubKey;
-}
-
-// Retrieves a public key for an address from the given FillableSigningProvider
-CPubKey AddrToPubKey(const FillableSigningProvider& keystore, const std::string& addr_in)
-{
-    CTxDestination dest = DecodeDestination(addr_in);
-    if (!IsValidDestination(dest)) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address: " + addr_in);
-    }
-    CKeyID key = GetKeyForDestination(keystore, dest);
-    if (key.IsNull()) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("'%s' does not refer to a key", addr_in));
-    }
-    CPubKey vchPubKey;
-    if (!keystore.GetPubKey(key, vchPubKey)) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("no full public key for address %s", addr_in));
-    }
-    if (!vchPubKey.IsFullyValid()) {
-       throw JSONRPCError(RPC_INTERNAL_ERROR, "Vault contains an invalid public key");
     }
     return vchPubKey;
 }

@@ -35,8 +35,9 @@ void CVaultTx::updateState(interfaces::Chain& chain)
     bool active;
     auto lookup_block = [&](const uint256& hash, int& height, TxState& state) {
         // If tx block (or conflicting block) was reorged out of chain
-        // while the vault was shutdown, change tx status to UNCONFIRMED
-        // and reset block height, hash, and index. ABANDONED tx don't have
+        // while the vault was shutdown, change the tx state to Inactive
+        // (TxStateInactive carries no block height, hash or index).
+        // ABANDONED tx don't have
         // associated blocks and don't need to be updated. The case where a
         // transaction was reorged out while online and then reconfirmed
         // while offline is covered by the rescan logic.

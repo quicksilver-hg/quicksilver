@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -84,7 +85,7 @@ static void EraseLastKElements(
     elements.erase(std::remove_if(elements.end() - eraseSize, elements.end(), predicate), elements.end());
 }
 
-void ProtectNoBanConnections(std::vector<NodeEvictionCandidate>& eviction_candidates)
+static void ProtectNoBanConnections(std::vector<NodeEvictionCandidate>& eviction_candidates)
 {
     eviction_candidates.erase(std::remove_if(eviction_candidates.begin(), eviction_candidates.end(),
                                              [](NodeEvictionCandidate const& n) {
@@ -93,7 +94,7 @@ void ProtectNoBanConnections(std::vector<NodeEvictionCandidate>& eviction_candid
                               eviction_candidates.end());
 }
 
-void ProtectOutboundConnections(std::vector<NodeEvictionCandidate>& eviction_candidates)
+static void ProtectOutboundConnections(std::vector<NodeEvictionCandidate>& eviction_candidates)
 {
     eviction_candidates.erase(std::remove_if(eviction_candidates.begin(), eviction_candidates.end(),
                                              [](NodeEvictionCandidate const& n) {

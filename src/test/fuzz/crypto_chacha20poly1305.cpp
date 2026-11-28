@@ -14,9 +14,9 @@
 #include <cstdint>
 #include <vector>
 
-constexpr static inline void crypt_till_rekey(FSChaCha20Poly1305& aead, int rekey_interval, bool encrypt)
+constexpr static inline void crypt_till_rekey(FSChaCha20Poly1305& aead, uint64_t count, bool encrypt)
 {
-    for (int i = 0; i < rekey_interval; ++i) {
+    for (uint64_t i = 0; i < count; ++i) {
         std::byte dummy_tag[FSChaCha20Poly1305::EXPANSION] = {{}};
         if (encrypt) {
             aead.Encrypt(Span{dummy_tag}.first(0), Span{dummy_tag}.first(0), dummy_tag);
@@ -131,6 +131,25 @@ FUZZ_TARGET(crypto_fschacha20poly1305)
     // data).
     InsecureRandomContext rng(provider.ConsumeIntegral<uint64_t>());
 
+    // S0394-A-01: an independent model of the forward-secure schedule (BIP324):
+    // packet i of epoch e is AEAD-encrypted under nonce {i, e}; after
+    // rekey_interval packets the key becomes the first 32 bytes of the keystream
+    // at nonce {0xFFFFFFFF, e}. Packets are checked at varied counter positions
+    // and epochs, not always at counter 0 of a fresh epoch.
+    std::vector<std::byte> model_key = key;
+    uint32_t model_packet{0};
+    uint64_t model_rekey{0};
+    uint64_t total_ops{0};
+    const auto model_next = [&] {
+        if (++model_packet == rekey_interval) {
+            std::byte block[64];
+            AEADChaCha20Poly1305{model_key}.Keystream({0xFFFFFFFF, model_rekey}, block);
+            model_key.assign(block, block + 32);
+            model_packet = 0;
+            ++model_rekey;
+        }
+    };
+
     LIMITED_WHILE(provider.ConsumeBool(), 100)
     {
         // Mode:
@@ -150,12 +169,22 @@ FUZZ_TARGET(crypto_fschacha20poly1305)
         auto plain = rng.randbytes<std::byte>(length);
         std::vector<std::byte> cipher(length + FSChaCha20Poly1305::EXPANSION);
 
-        crypt_till_rekey(enc_aead, rekey_interval, true);
+        // Skip 0 to 2 * rekey_interval empty packets before this one.
+        const uint64_t skip{provider.ConsumeIntegralInRange<uint64_t>(0, 2 * uint64_t{rekey_interval})};
+        crypt_till_rekey(enc_aead, skip, true);
+        for (uint64_t i = 0; i < skip; ++i) model_next();
+        total_ops += skip;
         if (use_splits && length > 0) {
             size_t split_index = provider.ConsumeIntegralInRange<size_t>(1, length);
             enc_aead.Encrypt(Span{plain}.first(split_index), Span{plain}.subspan(split_index), aad, cipher);
         } else {
             enc_aead.Encrypt(plain, aad, cipher);
+        }
+        {
+            std::vector<std::byte> expected(cipher.size());
+            AEADChaCha20Poly1305{model_key}.Encrypt(plain, aad, {model_packet, model_rekey}, expected);
+            assert(cipher == expected);
+            model_next();
         }
 
         std::vector<std::byte> decrypted_contents(length);
@@ -168,7 +197,8 @@ FUZZ_TARGET(crypto_fschacha20poly1305)
         bad_key[key_position] ^= damage_val;
 
         FSChaCha20Poly1305 bad_fs_aead(bad_key, rekey_interval);
-        crypt_till_rekey(bad_fs_aead, rekey_interval, false);
+        // Same position as dec_aead is about to decrypt at: only the key differs.
+        crypt_till_rekey(bad_fs_aead, total_ops, false);
         ok = bad_fs_aead.Decrypt(cipher, aad, decrypted_contents);
         assert(!ok);
 
@@ -185,7 +215,8 @@ FUZZ_TARGET(crypto_fschacha20poly1305)
             }
         }
 
-        crypt_till_rekey(dec_aead, rekey_interval, false);
+        crypt_till_rekey(dec_aead, skip, false);
+        ++total_ops;
         if (use_splits && length > 0) {
             size_t split_index = provider.ConsumeIntegralInRange<size_t>(1, length);
             ok = dec_aead.Decrypt(cipher, aad, Span{decrypted_contents}.first(split_index), Span{decrypted_contents}.subspan(split_index));

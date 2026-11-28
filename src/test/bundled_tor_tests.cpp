@@ -18,6 +18,8 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <future>
+#include <memory>
 #include <set>
 #include <string>
 #include <system_error>
@@ -216,6 +218,35 @@ BOOST_AUTO_TEST_CASE(a_reported_control_port_is_returned_and_the_child_is_superv
     tor::StopBundledTor();
 }
 
+BOOST_AUTO_TEST_CASE(startup_reserves_the_bundled_tor_slot)
+{
+    using namespace std::chrono_literals;
+    const fs::path datadir = m_args.GetDataDirNet();
+    const fs::path spawned = datadir / "tor_spawned";
+    const fs::path stub = arrange_stub(datadir,
+                                       "append " + fs::PathToString(spawned) + "\nsleep 60000\n");
+    // Boxed: MSVC's std::future move-assigns its stored value, and util::Result
+    // deletes move assignment (libstdc++ constructs in place, so only MSVC fails).
+    auto first = std::async(std::launch::async, [&] {
+        return std::make_unique<util::Result<std::string>>(tor::StartBundledTor(datadir, stub));
+    });
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (file_size_or_zero(spawned) == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(10ms);
+    }
+    BOOST_CHECK_NE(file_size_or_zero(spawned), 0U);
+
+    const auto second = tor::StartBundledTor(datadir, datadir / "no-such-tor");
+    BOOST_CHECK(!second);
+    BOOST_CHECK_EQUAL(util::ErrorString(second).original, "A bundled Tor is already running");
+
+    BOOST_CHECK(WriteBinaryFile(datadir / "tor" / "control_port", "PORT=127.0.0.1:41234\n"));
+    const auto result = first.get();
+    tor::StopBundledTor();
+    BOOST_REQUIRE(result);
+    BOOST_CHECK_MESSAGE(*result, util::ErrorString(*result).original);
+}
+
 BOOST_AUTO_TEST_CASE(a_stale_control_port_file_is_never_believed)
 {
     // The failure this rules out: a previous run's file names a port nothing is
@@ -242,6 +273,18 @@ BOOST_AUTO_TEST_CASE(a_tor_that_exits_before_reporting_fails_at_once)
     // at a stopped desktop for a minute is a defect even when the message is
     // eventually right.
     BOOST_CHECK(elapsed < std::chrono::seconds(10));
+    BOOST_CHECK(util::ErrorString(result).original.find("exited") != std::string::npos);
+    tor::StopBundledTor();
+}
+
+BOOST_AUTO_TEST_CASE(a_tor_that_reports_a_port_and_exits_is_not_running)
+{
+    // The port file alone is not proof of a live Tor: one that wrote it and died
+    // must fail the start, not be registered as the supervised bundled Tor.
+    const fs::path stub = arrange_stub(m_args.GetDataDirNet(),
+                                       "port PORT=127.0.0.1:41234\\n\nexit 0\n");
+    const auto result = tor::StartBundledTor(m_args.GetDataDirNet(), stub);
+    BOOST_CHECK_MESSAGE(!result, "a Tor that had already exited was reported as running");
     BOOST_CHECK(util::ErrorString(result).original.find("exited") != std::string::npos);
     tor::StopBundledTor();
 }

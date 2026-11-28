@@ -40,7 +40,8 @@ void MaturityTests::wholeAndPartialHours()
 
 void MaturityTests::fullMaturityAtShippedParameters()
 {
-    // COINBASE_MATURITY is 100 and nPowTargetSpacing is 300: 30000 s = 8.33 h.
+    // The GUI frees a coinbase at depth 101 (COINBASE_MATURITY + 1, F-676), so a
+    // reward in its first block has 100 to go; at 300 s each: 30000 s = 8.33 h.
     QCOMPARE(FormatMaturityCountdown(100, 300), QString("spendable in about 8 hours"));
 }
 
@@ -76,7 +77,7 @@ void MaturityTests::oneHeightKeepsTheSingleText()
     QCOMPARE(s.soonest, 1);
     QCOMPARE(s.latest, 1);
     QCOMPARE(FormatMaturingHint(s.soonest, QString("147.00 Hg"), s.latest, 300), QString("spendable in about 5 minutes"));
-    // The first-run miner: one coinbase, 100 blocks away.
+    // The first-run miner: one coinbase in its first block, 100 blocks from depth 101.
     const MaturingSummary first{SummarizeMaturing({{100, 50 * COIN}})};
     QCOMPARE(FormatMaturingHint(first.soonest, QString("50.00 Hg"), first.latest, 300), QString("spendable in about 8 hours"));
 }

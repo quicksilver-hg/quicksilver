@@ -35,9 +35,6 @@ void QuicksilverStyleTests::paletteTokens()
     QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::Silver), QColor(QStringLiteral("#ccd5dc")));
     QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::SilverHi), QColor(QStringLiteral("#f5f7f9")));
     QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::SilverMuted), QColor(QStringLiteral("#8e9aa3")));
-    QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::Teal), QColor(QStringLiteral("#9bd7c8")));
-    QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::Amber), QColor(QStringLiteral("#f1cf7a")));
-    QCOMPARE(QuicksilverStyle::Color(QuicksilverStyle::Token::Violet), QColor(QStringLiteral("#c3ace8")));
 }
 
 void QuicksilverStyleTests::applySetsGlobalPaletteAndStylesheet()

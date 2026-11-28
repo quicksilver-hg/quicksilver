@@ -272,6 +272,7 @@ bool CKey::SignCompact(const uint256 &hash, std::vector<unsigned char>& vchSig) 
 
 bool CKey::SignSchnorr(const uint256& hash, Span<unsigned char> sig, const uint256* merkle_root, const uint256& aux) const
 {
+    if (!IsValid()) return false;
     KeyPair kp = ComputeKeyPair(merkle_root);
     return kp.SignSchnorr(hash, sig, aux);
 }
@@ -347,6 +348,7 @@ ECDHSecret CKey::ComputeBIP324ECDHSecret(const EllSwiftPubKey& their_ellswift, c
 
 KeyPair CKey::ComputeKeyPair(const uint256* merkle_root) const
 {
+    if (!IsValid()) return {};
     return KeyPair(*this, merkle_root);
 }
 

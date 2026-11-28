@@ -170,8 +170,6 @@ public:
     void requestUnlock(std::function<void(std::shared_ptr<UnlockContext>)> done);
     void notifyUnlockDialogShown();
 
-    void displayAddress(std::string sAddress) const;
-
     static bool isVaultEnabled();
 
     interfaces::Node& node() const { return m_node; }

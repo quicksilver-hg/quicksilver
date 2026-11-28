@@ -112,20 +112,6 @@ int base_uint<BITS>::CompareTo(const base_uint<BITS>& b) const
 }
 
 template <unsigned int BITS>
-bool base_uint<BITS>::EqualTo(uint64_t b) const
-{
-    for (int i = WIDTH - 1; i >= 2; i--) {
-        if (pn[i])
-            return false;
-    }
-    if (pn[1] != (b >> 32))
-        return false;
-    if (pn[0] != (b & 0xfffffffful))
-        return false;
-    return true;
-}
-
-template <unsigned int BITS>
 double base_uint<BITS>::getdouble() const
 {
     double ret = 0.0;

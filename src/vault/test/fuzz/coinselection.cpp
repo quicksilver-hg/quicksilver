@@ -67,7 +67,7 @@ static SelectionResult ManualSelection(const std::vector<COutput>& utxos, CAmoun
     return result;
 }
 
-FUZZ_TARGET(coin_grinder)
+FUZZ_TARGET(exact_or_largest)
 {
     SeedRandomStateForTest(SeedRand::ZEROS);
     FuzzedDataProvider fuzzed_data_provider{buffer.data(), buffer.size()};
@@ -101,7 +101,7 @@ FUZZ_TARGET(coin_grinder)
     (void)result->GetInputSet();
 }
 
-FUZZ_TARGET(coin_grinder_is_optimal)
+FUZZ_TARGET(exact_or_largest_is_optimal)
 {
     FuzzedDataProvider fuzzed_data_provider{buffer.data(), buffer.size()};
     std::vector<COutput> utxo_pool;

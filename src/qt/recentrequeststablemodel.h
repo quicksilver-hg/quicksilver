@@ -80,8 +80,10 @@ public:
     /*@}*/
 
     const RecentRequestEntry &entry(int row) const { return list[row]; }
-    void addNewRequest(const SendCoinsRecipient &recipient);
-    void addNewRequest(const std::string &recipient);
+    //! Stores a new request and lists it. False when the vault refused the write.
+    bool addNewRequest(const SendCoinsRecipient &recipient);
+    //! Loads one stored request. False when the record does not read.
+    bool addNewRequest(const std::string &recipient);
     void addNewRequest(RecentRequestEntry &recipient);
 
 public Q_SLOTS:

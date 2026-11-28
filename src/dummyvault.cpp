@@ -33,7 +33,6 @@ void DummyVaultInit::AddVaultOptions(ArgsManager& argsman) const
         "-changetype",
         "-disablevault",
         "-keypool=<n>",
-        "-signer=<cmd>",
         "-spendzeroconfchange",
         "-vault=<path>",
         "-vaultbroadcast",

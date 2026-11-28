@@ -77,8 +77,6 @@ endfunction()
 
 if(MSVC)
   try_append_linker_flag("/WX" VAR working_linker_werror_flag)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-  try_append_linker_flag("-Wl,-fatal_warnings" VAR working_linker_werror_flag)
 else()
   try_append_linker_flag("-Wl,--fatal-warnings" VAR working_linker_werror_flag)
 endif()

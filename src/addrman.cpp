@@ -101,7 +101,7 @@ double AddrInfo::GetChance(NodeSeconds now) const
         fChance *= 0.01;
     }
 
-    // deprioritize 66% after each failed attempt, but at most 1/28th to avoid the search taking forever or overly penalizing outages.
+    // multiply the chance by 0.66 after each failed attempt, but at most 1/28th to avoid the search taking forever or overly penalizing outages.
     fChance *= pow(0.66, std::min(nAttempts, 8));
 
     return fChance;
@@ -932,7 +932,7 @@ void AddrManImpl::ResolveCollisions_()
                     erase_collision = true;
                 } else if (current_time - info_old.m_last_try < ADDRMAN_REPLACEMENT) { // attempted to connect and failed in last X hours
 
-                    // Give address at least 60 seconds to successfully connect
+                    // Wait until more than 60 seconds have passed before replacing it.
                     if (current_time - info_old.m_last_try > 60s) {
                         LogDebug(HgLog::PEERBOOK, "Replacing %s with %s in tried table\n", info_old.ToStringAddrPort(), info_new.ToStringAddrPort());
 

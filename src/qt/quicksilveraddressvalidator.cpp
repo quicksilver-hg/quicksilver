@@ -7,15 +7,6 @@
 
 #include <key_io.h>
 
-/* Base58 characters are:
-     "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-
-  This is:
-  - All numbers except for '0'
-  - All upper-case letters except for 'I' and 'O'
-  - All lower-case letters except for 'l'
-*/
-
 QuicksilverAddressEntryValidator::QuicksilverAddressEntryValidator(QObject *parent) :
     QValidator(parent)
 {

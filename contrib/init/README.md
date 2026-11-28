@@ -5,7 +5,6 @@ Upstart: quicksilver-daemon.conf
 OpenRC:  quicksilver-daemon.openrc
          quicksilver-daemon.openrcconf
 CentOS:  quicksilver-daemon.init
-macOS:   io.github.quicksilver-hg.quicksilver-daemon.plist
 ```
 have been made available to assist packagers in creating node packages here.
 

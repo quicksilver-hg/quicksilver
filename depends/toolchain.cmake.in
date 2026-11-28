@@ -108,14 +108,6 @@ if(NOT "/" IN_LIST CMAKE_PREFIX_PATH)
   list(APPEND CMAKE_PREFIX_PATH "/")
 endif()
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_HOST_APPLE)
-  # The find_package(Qt ...) function internally uses find_library()
-  # calls for all dependencies to ensure their availability.
-  # In turn, the find_library() inspects the well-known locations
-  # on the file system; therefore, a hint is required.
-  set(CMAKE_FRAMEWORK_PATH "@OSX_SDK@/System/Library/Frameworks")
-endif()
-
 # Set configuration options for the main build system.
 set(qt_packages @qt_packages@)
 set(vault_packages @vault_packages@)

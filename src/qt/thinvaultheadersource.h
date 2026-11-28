@@ -25,10 +25,16 @@ public:
     bool refresh(interfaces::VaultLoader& loader, std::string& error);
 
 private:
+    void rememberFailure(std::optional<fs::file_time_type> write_time, std::optional<uintmax_t> size, const std::string& error);
+
     fs::path m_path;
     std::optional<fs::file_time_type> m_last_write_time;
     std::optional<uintmax_t> m_last_size;
     bool m_loaded_missing{false};
+    //! The last store that failed, and why, so an unchanged one is not reloaded.
+    std::optional<fs::file_time_type> m_failed_write_time;
+    std::optional<uintmax_t> m_failed_size;
+    std::optional<std::string> m_failed_error;
 };
 
 fs::path DefaultThinVaultHeaderStorePath();

@@ -10,6 +10,7 @@
 #include <key_io.h>
 #include <logging.h>
 #include <tinyformat.h>
+#include <util/time.h>
 
 namespace vault {
 fs::path GetVaultDir()
@@ -32,7 +33,7 @@ fs::path GetVaultDir()
 
 VaultDescriptor GenerateVaultDescriptor(const CExtPubKey& master_key, const OutputType& addr_type, bool internal)
 {
-    int64_t creation_time = GetTime();
+    int64_t creation_time = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now());
 
     std::string xpub = EncodeExtPubKey(master_key);
 

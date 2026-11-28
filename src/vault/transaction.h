@@ -339,6 +339,24 @@ public:
     bool isInactive() const { return state<TxStateInactive>(); }
     bool isUnconfirmed() const { return !isAbandoned() && !isBlockConflicted() && !isBlockUnresolved() && !isRelayPoolConflicted() && !isConfirmed(); }
     bool isConfirmed() const { return state<TxStateConfirmed>(); }
+
+    //! mapValue key holding the order in which a block that confirmed this transaction was
+    //! disconnected (F-698). When revived transactions spend the same coins, only the set from
+    //! the most recently disconnected block counts as pending. It is stored so the order holds
+    //! after a restart; base code keeps unknown mapValue keys and ignores them. It is erased
+    //! when the transaction confirms or is abandoned.
+    static constexpr const char* REVIVAL_SEQUENCE_KEY{"revived"};
+
+    //! The stored disconnect order, if any. Only meaningful while inactive and not abandoned.
+    std::optional<int64_t> GetRevivalSequence() const
+    {
+        const auto it{mapValue.find(REVIVAL_SEQUENCE_KEY)};
+        if (it == mapValue.end()) return std::nullopt;
+        return ToIntegral<int64_t>(it->second);
+    }
+    void SetRevivalSequence(int64_t sequence) { mapValue[REVIVAL_SEQUENCE_KEY] = util::ToString(sequence); }
+    //! Returns true if a stored order was erased.
+    bool EraseRevivalSequence() { return mapValue.erase(REVIVAL_SEQUENCE_KEY) > 0; }
     const Txid& GetHash() const LIFETIMEBOUND { return tx->GetHash(); }
     const Wtxid& GetWitnessHash() const LIFETIMEBOUND { return tx->GetWitnessHash(); }
     bool IsCoinBase() const { return tx->IsCoinBase(); }

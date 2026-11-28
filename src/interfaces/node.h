@@ -13,7 +13,6 @@
 #include <net_types.h>                 // For banmap_t
 #include <netaddress.h>                // For Network
 #include <netbase.h>                   // For ConnectionDirection
-#include <support/allocators/secure.h> // For SecureString
 #include <util/result.h>
 #include <util/translation.h>
 
@@ -26,7 +25,6 @@
 #include <tuple>
 #include <vector>
 
-class BanMan;
 class CNodeStats;
 class CScript;
 class Coin;
@@ -40,9 +38,6 @@ namespace node {
 enum class TransactionError;
 struct NodeContext;
 } // namespace node
-namespace vault {
-class CCoinControl;
-} // namespace vault
 
 namespace interfaces {
 class Handler;
@@ -76,7 +71,7 @@ struct MiningStatus {
     //! F-610: armed, but waiting until this node has caught up with the network
     //! before it builds a block.
     bool waiting_for_sync{false};
-    std::string address;                 //!< payout address (empty if never started)
+    std::string address;                 //!< payout address (empty for raw-script payouts or before startup)
     std::string payout_script;           //!< payout script, lowercase hex (empty if never started)
     int64_t blocks_found{0};
     CAmount coins_minted_session{0};
@@ -125,16 +120,6 @@ struct MiningStatus {
     //! currentblocktx, which reports whatever was assembled last by any caller.
     int64_t template_height{0};          //!< 0 when nothing is being ground
     int64_t template_transactions{0};    //!< transfers in it, excluding the coinbase
-};
-
-//! External signer interface used by the GUI.
-class ExternalSigner
-{
-public:
-    virtual ~ExternalSigner() = default;
-
-    //! Get signer display name
-    virtual std::string getName() = 0;
 };
 
 //! Top-level interface for a Quicksilver node (quicksilver-daemon process).
@@ -204,9 +189,6 @@ public:
     using NodesStats = std::vector<std::tuple<CNodeStats, bool, CNodeStateStats>>;
     virtual bool getNodesStats(NodesStats& stats) = 0;
 
-    //! Get known node addresses from addrman, filtered by the node's quality and recency rules.
-    virtual std::vector<CService> getNodeAddresses(size_t count) = 0;
-
     //! Get ban map entries.
     virtual bool getBanned(banmap_t& banmap) = 0;
 
@@ -231,9 +213,6 @@ public:
 
     //! Disconnect node by id.
     virtual bool disconnectById(NodeId id) = 0;
-
-    //! Return list of external signers (attached devices which can sign transactions).
-    virtual std::vector<std::unique_ptr<ExternalSigner>> listExternalSigners() = 0;
 
     //! Get total bytes recv.
     virtual int64_t getTotalBytesRecv() = 0;
@@ -261,9 +240,6 @@ public:
 
     //! Get best block hash.
     virtual uint256 getBestBlockHash() = 0;
-
-    //! Get verification progress.
-    virtual double getVerificationProgress() = 0;
 
     //! Is initial block download.
     virtual bool isInitialBlockDownload() = 0;

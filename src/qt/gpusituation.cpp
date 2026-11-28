@@ -10,6 +10,7 @@
 #include <QMetaObject>
 #include <QObject>
 #include <QPointer>
+#include <QStringList>
 
 #include <thread>
 #include <algorithm>
@@ -159,9 +160,14 @@ QString FaultedCardDetails(const std::optional<cuckatoo::GpuDiscovery>& discover
     for (const auto& card : discovery->selection.use) {
         const auto it = std::find_if(stats.begin(), stats.end(), [&card](const auto& item) { return item.device == card.id; });
         if (it == stats.end() || it->state != cuckatoo::GpuDeviceState::kFaulted) return {};
-        lines.push_back(QObject::tr("%1 (slot %2): %3")
-            .arg(QString::fromStdString(card.name), SlotOf(card.id),
-                 QString::fromStdString(cuckatoo::SolverFault(it->last_status, false).value_or(""))));
+        const QString name{QString::fromStdString(card.name)};
+        const QString fault{QString::fromStdString(cuckatoo::SolverFault(it->last_status, false).value_or(""))};
+        const QString slot{SlotOf(card.id)};
+        // A card whose id is not a PCI address has no slot to name: it is named by
+        // its id, as the node's own fault line does (S0223-A-01).
+        lines.push_back(slot.isEmpty()
+            ? QObject::tr("%1 (%2): %3").arg(name, QString::fromStdString(card.id), fault)
+            : QObject::tr("%1 (slot %2): %3").arg(name, slot, fault));
     }
     return lines.join(QLatin1Char('\n'));
 }

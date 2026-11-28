@@ -11,7 +11,6 @@
 #include <blockencodings.h>
 #include <blockfilter.h>
 #include <chainparams.h>
-#include <consensus/amount.h>
 #include <consensus/validation.h>
 #include <deploymentstatus.h>
 #include <hash.h>
@@ -45,6 +44,7 @@
 #include <util/trace.h>
 #include <validation.h>
 
+#include <chrono>
 #include <algorithm>
 #include <atomic>
 #include <future>
@@ -113,16 +113,25 @@ static_assert(MAX_BLOCKTXN_DEPTH <= MIN_BLOCKS_TO_KEEP, "MAX_BLOCKTXN_DEPTH too 
  *  degree of disordering of blocks on disk (which make reindexing and pruning harder). We'll probably
  *  want to make this a per-peer adaptive value at some point. */
 static const unsigned int BLOCK_DOWNLOAD_WINDOW = 1024;
-/** Block download timeout base, expressed in multiples of the block interval (i.e. 10 min) */
+/** Block download timeout base, expressed in multiples of the target block interval */
 static constexpr double BLOCK_DOWNLOAD_TIMEOUT_BASE = 1;
-/** Additional block download timeout per parallel downloading peer (i.e. 5 min) */
+/** Additional block download timeout per additional downloading peer, in multiples of the target block interval */
 static constexpr double BLOCK_DOWNLOAD_TIMEOUT_PER_PEER = 0.5;
 /** Maximum number of headers to announce when relaying blocks with headers message.*/
 static const unsigned int MAX_BLOCKS_TO_ANNOUNCE = 8;
-/** Minimum blocks required to signal NODE_NETWORK_LIMITED */
-static const unsigned int NODE_NETWORK_LIMITED_MIN_BLOCKS = 288;
-/** Window, in blocks, for connecting to NODE_NETWORK_LIMITED peers */
-static const unsigned int NODE_NETWORK_LIMITED_ALLOW_CONN_BLOCKS = 144;
+/** Depth, in blocks below our tip, that we serve while signalling NODE_NETWORK_LIMITED: the
+ *  blocks a pruned node always keeps (F-703). Requests deeper than this plus a two-block race
+ *  buffer disconnect the peer. */
+static const unsigned int NODE_NETWORK_LIMITED_SERVE_BLOCKS = MIN_BLOCKS_TO_KEEP;
+/** Depth, in blocks below a NODE_NETWORK_LIMITED peer's tip, within which we request blocks
+ *  from it. F-703 is staged: this stays at 288, the depth a base-version limited peer serves,
+ *  until the network has upgraded; a later release raises it to 2016 (that one line also moves
+ *  the allow-connect window below to 1008). */
+static const unsigned int NODE_NETWORK_LIMITED_REQUEST_BLOCKS = 288;
+/** Window, in blocks, for connecting to NODE_NETWORK_LIMITED peers: half the request window. */
+static const unsigned int NODE_NETWORK_LIMITED_ALLOW_CONN_BLOCKS = NODE_NETWORK_LIMITED_REQUEST_BLOCKS / 2;
+static_assert(NODE_NETWORK_LIMITED_REQUEST_BLOCKS <= NODE_NETWORK_LIMITED_SERVE_BLOCKS,
+              "we must never request deeper than we serve");
 /** Average delay between local address broadcasts */
 static constexpr auto AVG_LOCAL_ADDRESS_BROADCAST_INTERVAL{24h};
 /** Average delay between peer address broadcasts */
@@ -1426,7 +1435,7 @@ void PeerManagerImpl::FindNextBlocks(std::vector<const CBlockIndex*>& vBlocks, c
             }
 
             // Don't request blocks that go further than what limited peers can provide
-            if (is_limited_peer && (state->pindexBestKnownBlock->nHeight - pindex->nHeight >= static_cast<int>(NODE_NETWORK_LIMITED_MIN_BLOCKS) - 2 /* two blocks buffer for possible races */)) {
+            if (is_limited_peer && (state->pindexBestKnownBlock->nHeight - pindex->nHeight >= static_cast<int>(NODE_NETWORK_LIMITED_REQUEST_BLOCKS) - 2 /* two blocks buffer for possible races */)) {
                 continue;
             }
 
@@ -1662,6 +1671,8 @@ bool PeerManagerImpl::GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) c
             return false;
         stats.nSyncHeight = state->pindexBestKnownBlock ? state->pindexBestKnownBlock->nHeight : -1;
         stats.nCommonHeight = state->pindexLastCommonBlock ? state->pindexLastCommonBlock->nHeight : -1;
+        // Every field is (re)set here, so a reused stats object never carries a previous peer's values.
+        stats.vHeightInFlight.clear();
         for (const QueuedBlock& queue : state->vBlocksInFlight) {
             if (queue.pindex)
                 stats.vHeightInFlight.push_back(queue.pindex->nHeight);
@@ -1695,9 +1706,7 @@ bool PeerManagerImpl::GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) c
     stats.m_addr_relay_enabled = peer->m_addr_relay_enabled.load();
     {
         LOCK(peer->m_headers_sync_mutex);
-        if (peer->m_headers_sync) {
-            stats.presync_height = peer->m_headers_sync->GetPresyncHeight();
-        }
+        stats.presync_height = peer->m_headers_sync ? peer->m_headers_sync->GetPresyncHeight() : -1;
     }
     stats.time_offset = peer->m_time_offset;
 
@@ -1808,7 +1817,6 @@ void PeerManagerImpl::MaybePunishNodeForTx(NodeId nodeid, const TxValidationStat
     case TxValidationResult::TX_RELAYPOOL_POLICY:
     case TxValidationResult::TX_NO_RELAYPOOL:
     case TxValidationResult::TX_RECONSIDERABLE:
-    case TxValidationResult::TX_UNKNOWN:
         break;
     }
 }
@@ -2217,7 +2225,7 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
         tip = m_chainman.ActiveChain().Tip();
         // Avoid leaking prune-height by never sending blocks below the NODE_NETWORK_LIMITED threshold
         if (!pfrom.HasPermission(NetPermissionFlags::NoBan) && (
-                (((peer.m_our_services & NODE_NETWORK_LIMITED) == NODE_NETWORK_LIMITED) && ((peer.m_our_services & NODE_NETWORK) != NODE_NETWORK) && (tip->nHeight - pindex->nHeight > (int)NODE_NETWORK_LIMITED_MIN_BLOCKS + 2 /* add two blocks buffer extension for possible races */) )
+                (((peer.m_our_services & NODE_NETWORK_LIMITED) == NODE_NETWORK_LIMITED) && ((peer.m_our_services & NODE_NETWORK) != NODE_NETWORK) && (tip->nHeight - pindex->nHeight > (int)NODE_NETWORK_LIMITED_SERVE_BLOCKS + 2 /* add two blocks buffer extension for possible races */) )
            )) {
             LogDebug(HgLog::MESH, "Ignore block request below NODE_NETWORK_LIMITED threshold, %s\n", pfrom.DisconnectMsg(fLogIPs));
             //disconnect node and prevent it from stalling (would otherwise wait for the missing block)
@@ -2718,7 +2726,7 @@ void PeerManagerImpl::UpdatePeerStateForReceivedHeaders(CNode& pfrom, Peer& peer
     // are still present, however, as belt-and-suspenders.
 
     if (received_new_header && last_header.nChainWork > m_chainman.ActiveChain().Tip()->nChainWork) {
-        nodestate->m_last_block_announcement = GetTime();
+        nodestate->m_last_block_announcement = GetTime<std::chrono::seconds>().count();
     }
 
     // If we're in IBD, we want outbound peers that will serve us a useful
@@ -3060,7 +3068,6 @@ bool PeerManagerImpl::ProcessOrphanTx(Peer& peer)
                 state.ToString());
 
             if (Assume(state.IsInvalid() &&
-                       state.GetResult() != TxValidationResult::TX_UNKNOWN &&
                        state.GetResult() != TxValidationResult::TX_NO_RELAYPOOL &&
                        state.GetResult() != TxValidationResult::TX_RESULT_UNSET)) {
                 ProcessInvalidTx(peer.m_id, porphanTx, state, /*first_time_failure=*/false);
@@ -4202,7 +4209,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         // If this was a new header with more work than our tip, update the
         // peer's last block announcement time
         if (received_new_header && pindex->nChainWork > m_chainman.ActiveChain().Tip()->nChainWork) {
-            nodestate->m_last_block_announcement = GetTime();
+            nodestate->m_last_block_announcement = GetTime<std::chrono::seconds>().count();
         }
 
         if (pindex->nStatus & BLOCK_HAVE_DATA) // Nothing to do here
@@ -5484,7 +5491,7 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
         }
 
         // Check that outbound peers have reasonable chains
-        // GetTime() is used by this anti-DoS logic so we can test this using mocktime
+        // Use the mockable clock here so tests can exercise the anti-DoS logic.
         ConsiderEviction(*pto, *peer, GetTime<std::chrono::seconds>());
 
         //

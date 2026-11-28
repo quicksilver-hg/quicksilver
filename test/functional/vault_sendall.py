@@ -490,6 +490,19 @@ class SendallTest(QuicksilverTestFramework):
 
         assert_equal(first_child_amount, second_child_amount)
 
+    @cleanup
+    def sendall_failed_finish_leaves_inputs_unlocked(self):
+        self.log.info("Test that a sendall that fails after locking its inputs unlocks them (S0202-A-03)")
+        self.add_utxos([10])
+        # Earlier cases lock inputs with lock_unspents=True and the cleanup does not unlock
+        # them; start from none locked so the assertions below are about this case only.
+        self.vault.lockunspent(True)
+        assert_equal(self.vault.listlockunspent(), [])
+        far_locktime = self.nodes[0].getblockcount() + 100000
+        assert_raises_rpc_error(-4, "This locktime is too far ahead",
+                                self.vault.sendall, recipients=[self.remainder_target], locktime=far_locktime, lock_unspents=True)
+        assert_equal(self.vault.listlockunspent(), [])
+
     # This tests needs to be the last one otherwise @cleanup will fail with "Transaction too large" error
     def sendall_fails_with_transaction_too_large(self):
         self.log.info("Test that sendall fails if resulting transaction is too large")
@@ -581,6 +594,8 @@ class SendallTest(QuicksilverTestFramework):
         self.sendall_does_ancestor_aware_funding()
 
         # Sendall fails when many inputs result to too large transaction
+        self.sendall_failed_finish_leaves_inputs_unlocked()
+
         self.sendall_fails_with_transaction_too_large()
 
 if __name__ == '__main__':

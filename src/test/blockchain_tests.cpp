@@ -54,7 +54,7 @@ BOOST_AUTO_TEST_CASE(main_prune_after_height_matches_publictest)
 {
     const auto main{CreateChainParams(*m_node.args, ChainType::MAIN)};
     const auto publictest{CreateChainParams(*m_node.args, ChainType::PUBLIC_TEST)};
-    BOOST_CHECK_EQUAL(main->PruneAfterHeight(), 1000U);
+    BOOST_CHECK_EQUAL(main->PruneAfterHeight(), 20000U);
     BOOST_CHECK_EQUAL(main->PruneAfterHeight(), publictest->PruneAfterHeight());
 }
 

@@ -37,7 +37,6 @@
 #include <event2/bufferevent.h>
 #include <event2/http.h>
 #include <event2/http_struct.h>
-#include <event2/keyvalq_struct.h>
 #include <event2/thread.h>
 #include <event2/util.h>
 
@@ -465,7 +464,7 @@ void StartHTTPServer()
         // takes string_view, and the temporary would dangle once
         // emplace_back returns.
         g_thread_http_workers.emplace_back([i, queue = g_work_queue.get()] {
-            util::TraceThread(strprintf("httpworker.%i", i), [queue] { queue->Run(); });
+            util::TraceThread(strprintf("httpw.%i", i), [queue] { queue->Run(); });
         });
     }
 }
@@ -506,9 +505,8 @@ void StopHTTPServer()
         g_requests.WaitUntilEmpty();
     }
     if (eventHTTP) {
-        // Schedule a callback to call evhttp_free in the event base thread, so
-        // that evhttp_free does not need to be called again after the handling
-        // of unfinished request connections that follows.
+        // Free the HTTP server in its event thread. The join below waits
+        // for the callback before freeing the event base.
         event_base_once(eventBase, -1, EV_TIMEOUT, [](evutil_socket_t, short, void*) {
             evhttp_free(eventHTTP);
             eventHTTP = nullptr;
@@ -682,40 +680,6 @@ HTTPRequest::RequestMethod HTTPRequest::GetRequestMethod() const
     default:
         return UNKNOWN;
     }
-}
-
-std::optional<std::string> HTTPRequest::GetQueryParameter(const std::string& key) const
-{
-    const char* uri{evhttp_request_get_uri(req)};
-
-    return GetQueryParameterFromUri(uri, key);
-}
-
-std::optional<std::string> GetQueryParameterFromUri(const char* uri, const std::string& key)
-{
-    evhttp_uri* uri_parsed{evhttp_uri_parse(uri)};
-    if (!uri_parsed) {
-        throw std::runtime_error("URI parsing failed, it likely contained RFC 3986 invalid characters");
-    }
-    const char* query{evhttp_uri_get_query(uri_parsed)};
-    std::optional<std::string> result;
-
-    if (query) {
-        // Parse the query string into a key-value queue and iterate over it
-        struct evkeyvalq params_q;
-        evhttp_parse_query_str(query, &params_q);
-
-        for (struct evkeyval* param{params_q.tqh_first}; param != nullptr; param = param->next.tqe_next) {
-            if (param->key == key) {
-                result = param->value;
-                break;
-            }
-        }
-        evhttp_clear_headers(&params_q);
-    }
-    evhttp_uri_free(uri_parsed);
-
-    return result;
 }
 
 void RegisterHTTPHandler(const std::string &prefix, bool exactMatch, const HTTPRequestHandler &handler)

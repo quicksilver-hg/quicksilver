@@ -39,7 +39,7 @@ void OpenURIDialog::accept()
 {
     SendCoinsRecipient rcp;
     if (GUIUtil::parseQuicksilverURI(getURI(), &rcp)) {
-        /* Only accept value URIs */
+        // PaymentServer handles destination validation.
         QDialog::accept();
     } else {
         ui->uriEdit->setValid(false);

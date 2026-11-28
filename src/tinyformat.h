@@ -144,8 +144,11 @@ namespace tfm = tinyformat;
 #include <algorithm>
 #include <attributes.h>
 #include <iostream>
+#include <cmath>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <type_traits>
 #include <util/string.h>
 
 #ifndef TINYFORMAT_ASSERT
@@ -168,14 +171,6 @@ namespace tfm = tinyformat;
 //  std::showpos is broken on old libstdc++ as provided with macOS.  See
 //  http://gcc.gnu.org/ml/libstdc++/2007-11/msg00075.html
 #   define TINYFORMAT_OLD_LIBSTDCPLUSPLUS_WORKAROUND
-#endif
-
-#ifdef __APPLE__
-// Workaround macOS linker warning: Xcode uses different default symbol
-// visibilities for static libs vs executables (see issue #25)
-#   define TINYFORMAT_HIDDEN __attribute__((visibility("hidden")))
-#else
-#   define TINYFORMAT_HIDDEN
 #endif
 
 namespace tinyformat {
@@ -260,7 +255,15 @@ template<typename T, typename fmtT>
 struct formatValueAsType<T,fmtT,true>
 {
     static void invoke(std::ostream& out, const T& value)
-        { out << static_cast<fmtT>(value); }
+    {
+        if constexpr (std::is_floating_point_v<T> && std::is_integral_v<fmtT>) {
+            if (!std::isfinite(value) || static_cast<long double>(value) < std::numeric_limits<fmtT>::min() ||
+                static_cast<long double>(value) > std::numeric_limits<fmtT>::max()) {
+                TINYFORMAT_ERROR("tinyformat: Numeric conversion out of range");
+            }
+        }
+        out << static_cast<fmtT>(value);
+    }
 };
 
 #ifdef TINYFORMAT_OLD_LIBSTDCPLUSPLUS_WORKAROUND
@@ -299,7 +302,19 @@ struct convertToInt
 template<typename T>
 struct convertToInt<T,true>
 {
-    static int invoke(const T& value) { return static_cast<int>(value); }
+    static int invoke(const T& value)
+    {
+        if constexpr (std::is_arithmetic_v<T>) {
+            if constexpr (std::is_floating_point_v<T>) {
+                if (!std::isfinite(value)) TINYFORMAT_ERROR("tinyformat: Numeric conversion out of range");
+            }
+            if (static_cast<long double>(value) < std::numeric_limits<int>::min() ||
+                static_cast<long double>(value) > std::numeric_limits<int>::max()) {
+                TINYFORMAT_ERROR("tinyformat: Numeric conversion out of range");
+            }
+        }
+        return static_cast<int>(value);
+    }
 };
 
 // Format at most ntrunc characters to the given stream.
@@ -552,14 +567,14 @@ class FormatArg
 
     private:
         template<typename T>
-        TINYFORMAT_HIDDEN static void formatImpl(std::ostream& out, const char* fmtBegin,
+        static void formatImpl(std::ostream& out, const char* fmtBegin,
                         const char* fmtEnd, int ntrunc, const void* value)
         {
             formatValue(out, fmtBegin, fmtEnd, ntrunc, *static_cast<const T*>(value));
         }
 
         template<typename T>
-        TINYFORMAT_HIDDEN static int toIntImpl(const void* value)
+        static int toIntImpl(const void* value)
         {
             return convertToInt<T>::invoke(*static_cast<const T*>(value));
         }
@@ -576,8 +591,13 @@ class FormatArg
 inline int parseIntAndAdvance(const char*& c)
 {
     int i = 0;
-    for (;*c >= '0' && *c <= '9'; ++c)
+    for (;*c >= '0' && *c <= '9'; ++c) {
+        const int digit = *c - '0';
+        if (i > (std::numeric_limits<int>::max() - digit) / 10) {
+            TINYFORMAT_ERROR("tinyformat: Numeric format field out of range");
+        }
         i = 10*i + (*c - '0');
+    }
     return i;
 }
 
@@ -772,6 +792,7 @@ inline const char* streamStateFromFormat(std::ostream& out, bool& positionalMode
                                          args, argIndex, numArgs);
         if (widthSet) {
             if (width < 0) {
+                if (width == std::numeric_limits<int>::min()) TINYFORMAT_ERROR("tinyformat: Numeric format field out of range");
                 // negative widths correspond to '-' flag set
                 out.fill(' ');
                 out.setf(std::ios::left, std::ios::adjustfield);
@@ -888,11 +909,15 @@ inline void formatImpl(std::ostream& out, const char* fmt,
                        const detail::FormatArg* args,
                        int numArgs)
 {
-    // Saved stream state
-    std::streamsize origWidth = out.width();
-    std::streamsize origPrecision = out.precision();
-    std::ios::fmtflags origFlags = out.flags();
-    char origFill = out.fill();
+    struct StreamStateGuard {
+        std::ostream& stream;
+        std::streamsize width;
+        std::streamsize precision;
+        std::ios::fmtflags flags;
+        char fill;
+        explicit StreamStateGuard(std::ostream& s) : stream(s), width(s.width()), precision(s.precision()), flags(s.flags()), fill(s.fill()) {}
+        ~StreamStateGuard() { stream.width(width); stream.precision(precision); stream.flags(flags); stream.fill(fill); }
+    } state_guard{out};
 
     // "Positional mode" means all format specs should be of the form "%n$..."
     // with `n` an integer. We detect this in `streamStateFromFormat`.
@@ -942,11 +967,6 @@ inline void formatImpl(std::ostream& out, const char* fmt,
         fmt = fmtEnd;
     }
 
-    // Restore stream state
-    out.width(origWidth);
-    out.precision(origPrecision);
-    out.flags(origFlags);
-    out.fill(origFill);
 }
 
 } // namespace detail

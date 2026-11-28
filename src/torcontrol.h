@@ -10,6 +10,7 @@
 #define QUICKSILVER_TORCONTROL_H
 
 #include <netaddress.h>
+#include <netbase.h>
 #include <util/fs.h>
 
 #include <event2/util.h>
@@ -18,6 +19,7 @@
 #include <cstddef>
 #include <deque>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -62,6 +64,9 @@ public:
      */
     explicit TorControlConnection(struct event_base *base);
     ~TorControlConnection();
+    // Owns the libevent bufferevent: a copy would free it twice.
+    TorControlConnection(const TorControlConnection&) = delete;
+    TorControlConnection& operator=(const TorControlConnection&) = delete;
 
     /**
      * Connect to a Tor control port.
@@ -120,6 +125,9 @@ public:
         // Used for testing only.
     }
     ~TorController();
+    // Owns the reconnect event and the onion service teardown: never copied.
+    TorController(const TorController&) = delete;
+    TorController& operator=(const TorController&) = delete;
 
     /** Get name of file to store private key in */
     fs::path GetPrivateKeyFile();
@@ -128,6 +136,12 @@ public:
     void Reconnect();
     static int64_t NextReconnectDelayMillis(float& timeout);
     static std::string PasswordAuthCommand(std::string_view password);
+    /**
+     * The onion proxy for a SOCKS listener Tor advertised in net/listeners/socks:
+     * "unix:/path" becomes a Unix-socket proxy, "host:port" a numeric TCP one.
+     * std::nullopt for a listener this node cannot use (never a guessed default).
+     */
+    static std::optional<Proxy> SocksProxyFromListener(const std::string& listener);
 private:
     struct event_base* base;
     const std::string m_tor_control_center;

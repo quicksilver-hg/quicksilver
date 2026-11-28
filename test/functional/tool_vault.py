@@ -23,6 +23,7 @@ from test_framework.util import (
 
 
 class ToolVaultTest(QuicksilverTestFramework):
+    CREATE_WARNING = "Warning: quicksilver-vault create is for testing. It creates an unencrypted vault and cannot create an encrypted vault.\n"
     def add_options(self, parser):
         self.add_vault_options(parser)
 
@@ -151,6 +152,12 @@ class ToolVaultTest(QuicksilverTestFramework):
 
     def test_invalid_tool_commands_and_args(self):
         self.log.info('Testing that various invalid commands raise with specific error messages')
+        help_process = self.quicksilver_vault_process('-help')
+        help_stdout, help_stderr = help_process.communicate()
+        assert_equal(help_process.poll(), 0)
+        assert_equal(help_stderr, '')
+        assert 'create' in help_stdout and 'cannot create an encrypted vault' in ' '.join(help_stdout.split())
+        assert self.CREATE_WARNING not in help_stdout
         self.assert_raises_tool_error("Error parsing command line arguments: Invalid command 'foo'", 'foo')
         # `quicksilver-vault help` raises an error. Use `quicksilver-vault -help`.
         self.assert_raises_tool_error("Error parsing command line arguments: Invalid command 'help'", 'help')
@@ -238,7 +245,11 @@ class ToolVaultTest(QuicksilverTestFramework):
         timestamp_before = self.vault_timestamp()
         self.log.debug('Vault file timestamp before calling create: {}'.format(timestamp_before))
         out = "Topping up keypool...\n" + self.get_expected_info_output(name="foo", keypool=2000)
-        self.assert_tool_output(out, '-vault=foo', 'create')
+        p = self.quicksilver_vault_process('-vault=foo', 'create')
+        stdout, stderr = p.communicate()
+        assert_equal(p.poll(), 0)
+        assert_equal(stdout, out)
+        assert_equal(stderr, self.CREATE_WARNING)
         shasum_after = self.vault_shasum()
         timestamp_after = self.vault_timestamp()
         self.log.debug('Vault file timestamp after calling create: {}'.format(timestamp_after))
@@ -348,6 +359,42 @@ class ToolVaultTest(QuicksilverTestFramework):
         self.assert_raises_tool_error('Error: Checksum is not the correct size', '-vault=badload', '-dumpfile={}'.format(bad_sum_vault_dump), 'createfromdump')
         assert not (self.nodes[0].vaults_path / "badload").is_dir()
 
+    def test_dump_write_failure(self):
+        # F-687 c04-14 (S0188-B-01, S0188-B-05): a dump whose writes fail is an error, and no partial file is left.
+        # A file-size limit stands in for a full disk: past it, writes fail with EFBIG instead of raising SIGXFSZ.
+        if platform.system() != 'Linux':
+            self.log.info('Skipping the dump write-failure check (needs RLIMIT_FSIZE)')
+            return
+        import resource
+        import signal
+        self.log.info('Checking that a failed dump write is reported and leaves no file')
+        dump_path = self.nodes[0].datadir_path / "truncated.dump"
+
+        def limit_file_size():
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (4096, 4096))
+
+        args = [self.options.quicksilvervault, f'-datadir={self.nodes[0].datadir_path}', f'-chain={self.chain}',
+                '-vault=todump', f'-dumpfile={dump_path}', 'dump']
+        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, preexec_fn=limit_file_size)
+        stdout, stderr = p.communicate()
+        assert_equal(p.returncode, 1)
+        assert 'Error writing vault dump file' in stderr, f"unexpected stderr {stderr!r}"
+        assert not dump_path.exists()
+
+    def test_tool_logging(self):
+        # F-686 (S0069-A-01): the tool starts its logger, so records print while the command runs,
+        # before its own output, instead of waiting in the early buffer.
+        self.log.info('Checking that quicksilver-vault logs while a command runs')
+        p = self.quicksilver_vault_process('-vault=todump', '-debug=vault', '-printtoconsole', 'info')
+        stdout, stderr = p.communicate()
+        assert_equal(p.returncode, 0)
+        assert_equal(stderr, '')
+        lines = stdout.splitlines()
+        log_lines = [i for i, line in enumerate(lines) if '[vault' in line]
+        assert log_lines, f"no log line in {stdout!r}"
+        assert_greater_than(lines.index('Vault info'), log_lines[0])
+
     def test_chainless_conflicts(self):
         self.log.info("Test vault tool when vault contains conflicting transactions")
         self.restart_node(0)
@@ -449,6 +496,8 @@ class ToolVaultTest(QuicksilverTestFramework):
         self.test_tool_vault_create_on_existing_vault()
         self.test_getvaultinfo_on_different_vault()
         self.test_dump_createfromdump()
+        self.test_dump_write_failure()
+        self.test_tool_logging()
         self.test_chainless_conflicts()
         self.test_dump_very_large_records()
 

@@ -21,8 +21,9 @@ namespace qsmaturity {
  * `blocks_remaining` blocks at `target_spacing_seconds` per block. Returns an
  * empty QString when nothing is maturing.
  *
- * Coinbase maturity is 100 blocks against a 5-minute target, so a freshly mined
- * coin is spendable roughly 8-9 hours later. Showing only an amount under a
+ * The vault spends a coinbase from depth 101 (COINBASE_MATURITY + 1, one block
+ * past consensus; F-676), against a 5-minute target, so a freshly mined coin is
+ * spendable roughly 8-9 hours later. Showing only an amount under a
  * "Maturing" label leaves a first-run miner with no idea whether that is minutes
  * or days, which is the kind of silence that reads as a broken application.
  */

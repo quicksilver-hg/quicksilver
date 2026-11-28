@@ -30,9 +30,9 @@ Quicksilver requires one of the following compilers.
 | [Fontconfig](../depends/packages/fontconfig.mk) (gui) | [link](https://www.freedesktop.org/wiki/Software/fontconfig/) | [2.12.6] | 2.6 | Yes |
 | [FreeType](../depends/packages/freetype.mk) (gui) | [link](https://freetype.org) | [2.11.0] | 2.3.0 | Yes |
 | [qrencode](../depends/packages/qrencode.mk) (gui) | [link](https://fukuchi.org/works/qrencode/) | [4.1.1] | N/A | No |
-| [Qt](../depends/packages/qt.mk) (gui) | [link](https://download.qt.io/official_releases/qt/) | [5.15.16] | [5.11.3] | No |
+| [Qt](../depends/packages/qt.mk) (gui) | [link](https://download.qt.io/official_releases/qt/) | [5.15.16] | [5.15] | No |
 | [ZeroMQ](../depends/packages/zeromq.mk) (notifications) | [link](https://github.com/zeromq/libzmq/releases) | [4.3.5] | 4.0.0 | No |
-| [SQLite](../depends/packages/sqlite.mk) (vault) | [link](https://sqlite.org) | [3.46.1] | [3.7.17] | No |
+| [SQLite](../depends/packages/sqlite.mk) (vault) | [link](https://sqlite.org) | [3.46.1] | [3.14] | No |
 | Python (scripts, tests) | [link](https://www.python.org) | N/A | [3.10] | No |
 | [systemtap](../depends/packages/systemtap.mk) ([tracing](tracing.md)) | [link](https://sourceware.org/systemtap/) | [4.8]| N/A | No |
 | Tor ([tor.md](tor.md)) (onion) | [link](https://www.torproject.org/download/tor/) | N/A | [0.2.7] | Yes |

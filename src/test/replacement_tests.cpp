@@ -195,14 +195,18 @@ BOOST_FIXTURE_TEST_CASE(pays_more_work_rate, TestChain100Setup)
     const auto entryc = pool.GetIter(txc->GetHash()).value();
     const double rate_c = entryc->GetTxWorkRate();
     BOOST_CHECK_GT(rate_c, 0.0);
+    const int64_t vsize_c{entryc->GetTxSize()};
 
     CTxRelayPool::setEntries conflicts{entryc};
     const auto txid{GetRandHash()};
 
-    // Strictly greater rate passes; equal and lower are rejected.
-    BOOST_CHECK(PaysMoreWorkThanConflicts(conflicts, /*replacement_work_rate=*/rate_c * 1.01, txid) == std::nullopt);
-    BOOST_CHECK(PaysMoreWorkThanConflicts(conflicts, /*replacement_work_rate=*/rate_c, txid).has_value());
-    BOOST_CHECK(PaysMoreWorkThanConflicts(conflicts, /*replacement_work_rate=*/rate_c * 0.99, txid).has_value());
+    // Strictly greater rate passes; equal and lower are rejected. (The replacement is now
+    // given as surplus and vsize, compared exactly, instead of a pre-rounded double rate.)
+    BOOST_CHECK(PaysMoreWorkThanConflicts(conflicts, arith_uint256(1010), vsize_c, txid) == std::nullopt);
+    BOOST_CHECK(PaysMoreWorkThanConflicts(conflicts, arith_uint256(1000), vsize_c, txid).has_value());
+    BOOST_CHECK(PaysMoreWorkThanConflicts(conflicts, arith_uint256(990), vsize_c, txid).has_value());
+    // The same rate at another vsize is still equal, so still rejected.
+    BOOST_CHECK(PaysMoreWorkThanConflicts(conflicts, arith_uint256(2000), 2 * vsize_c, txid).has_value());
 
     // Must beat EVERY conflict: a second, higher-rate conflict raises the bar.
     const auto txc2 = make_tx(/*inputs=*/{m_coinbase_txns[1]}, /*output_values=*/{m_coinbase_txns[1]->vout[0].nValue});
@@ -210,11 +214,33 @@ BOOST_FIXTURE_TEST_CASE(pays_more_work_rate, TestChain100Setup)
     const auto entryc2 = pool.GetIter(txc2->GetHash()).value();
     const double rate_c2 = entryc2->GetTxWorkRate();
     BOOST_CHECK_GT(rate_c2, rate_c);
+    const int64_t vsize_c2{entryc2->GetTxSize()};
     CTxRelayPool::setEntries two_conflicts{entryc, entryc2};
     // Beats the lower but not the higher -> rejected.
-    BOOST_CHECK(PaysMoreWorkThanConflicts(two_conflicts, rate_c * 1.01, txid).has_value());
+    BOOST_CHECK(PaysMoreWorkThanConflicts(two_conflicts, arith_uint256(1010), vsize_c, txid).has_value());
     // Beats both -> passes.
-    BOOST_CHECK(PaysMoreWorkThanConflicts(two_conflicts, rate_c2 * 1.01, txid) == std::nullopt);
+    BOOST_CHECK(PaysMoreWorkThanConflicts(two_conflicts, arith_uint256(2020), vsize_c2, txid) == std::nullopt);
+}
+
+// A replacement whose rate rounds to the conflict's double but is exactly higher passes;
+// one exactly equal is still refused (c01a-29).
+BOOST_FIXTURE_TEST_CASE(pays_more_work_rate_is_exact, TestChain100Setup)
+{
+    CTxRelayPool& pool = *Assert(m_node.relaypool);
+    LOCK2(::cs_main, pool.cs);
+    TestRelayPoolEntryHelper entry;
+
+    const arith_uint256 big{arith_uint256{1} << 200};
+    const auto txc = make_tx(/*inputs=*/{m_coinbase_txns[0]}, /*output_values=*/{m_coinbase_txns[0]->vout[0].nValue});
+    AddToRelayPool(pool, entry.TxWorkSurplus(big).FromTx(txc));
+    const auto entryc = pool.GetIter(txc->GetHash()).value();
+    const int64_t vsize_c{entryc->GetTxSize()};
+    BOOST_REQUIRE_EQUAL((big + 1).getdouble() / vsize_c, entryc->GetTxWorkRate());
+
+    CTxRelayPool::setEntries conflicts{entryc};
+    const auto txid{GetRandHash()};
+    BOOST_CHECK(PaysMoreWorkThanConflicts(conflicts, big + 1, vsize_c, txid) == std::nullopt);
+    BOOST_CHECK(PaysMoreWorkThanConflicts(conflicts, big, vsize_c, txid).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(pays_more_work_abs)

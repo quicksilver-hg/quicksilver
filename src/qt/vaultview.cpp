@@ -28,6 +28,7 @@
 #include <support/allocators/secure.h>
 #include <node/interface_ui.h>
 #include <util/strencodings.h>
+#include <vault/vault.h>
 
 #include <QAction>
 #include <QInputDialog>
@@ -287,6 +288,27 @@ QString BackupCheckFailedMessage(const QString& filename, vault::BackupCheckResu
 {
     return VaultView::tr("The vault data was saved to %1, but checking it failed: %2").arg(filename, BackupCheckFailure(result));
 }
+
+//! F-687: why the copy failed its check, before it was given the chosen name.
+QString BackupCopyCheckFailure(vault::BackupCheckResult result)
+{
+    switch (result) {
+    case vault::BackupCheckResult::UNREADABLE: return VaultView::tr("the copy cannot be read as a vault.");
+    case vault::BackupCheckResult::DIFFERENT_VAULT: return VaultView::tr("the copy is a different vault.");
+    case vault::BackupCheckResult::OLDER_COPY: return VaultView::tr("the copy is missing keys or address sets this vault uses now.");
+    case vault::BackupCheckResult::PROTECTION_DIFFERS: return VaultView::tr("the copy's encryption does not match this vault.");
+    case vault::BackupCheckResult::OK:
+    case vault::BackupCheckResult::WRONG_PASSPHRASE:
+        break;
+    }
+    return QString();
+}
+
+//! F-687: the message for a copy that failed its check and was never given the chosen name.
+QString BackupNotSavedMessage(const QString& filename, vault::BackupCheckResult result)
+{
+    return VaultView::tr("The vault data was not saved to %1, because checking the copy failed: %2 Any earlier file at %1 is unchanged.").arg(filename, BackupCopyCheckFailure(result));
+}
 } // namespace
 
 void VaultView::backupVault(std::function<void(bool)> done)
@@ -305,24 +327,25 @@ void VaultView::backupVault(std::function<void(bool)> done)
             // code page on Windows and lost or mangled any character outside it.
             const std::string path{fs::PathToString(GUIUtil::QStringToPath(filename))};
             interfaces::Vault& vault{self->vaultModel->vault()};
-            if (!vault.backupVault(path)) {
-                Q_EMIT self->message(self->tr("Backup Failed"), self->tr("There was an error trying to save the vault data to %1.").arg(filename),
-                    CClientUIInterface::MSG_ERROR);
-                if (done) done(false);
-                return;
-            }
-            // F-567: reopen the saved file before saying anything about it.
-            const vault::BackupCheck check{vault.verifyBackup(path, /*passphrase=*/nullptr)};
-            if (!check.StepsPassed()) {
-                vault.recordBackupCheck(check);
+            // F-687: the save dialog has already asked before replacing an existing file, so a Yes there is the
+            // overwrite. The vault writes a temporary copy, checks it and only then renames it onto the file, and
+            // records the check (F-567) itself.
+            const vault::SavedBackup saved{vault.backupVault(path, /*overwrite=*/true)};
+            if (saved.step == vault::BackupStep::CHECK) {
                 Q_EMIT self->message(self->tr("Backup Check Failed"),
-                    BackupCheckFailedMessage(filename, check.result),
+                    BackupNotSavedMessage(filename, saved.check.result),
                     CClientUIInterface::MSG_ERROR);
                 if (done) done(true);
                 return;
             }
+            if (!saved.ok()) {
+                Q_EMIT self->message(self->tr("Backup Failed"), self->tr("There was an error trying to save the vault data to %1. Any earlier file at %1 is unchanged.").arg(filename),
+                    CClientUIInterface::MSG_ERROR);
+                if (done) done(false);
+                return;
+            }
+            const vault::BackupCheck& check{saved.check};
             if (!check.encrypted) {
-                vault.recordBackupCheck(check);
                 Q_EMIT self->message(self->tr("Backup Successful"), self->tr("The vault data was saved to %1 and checked.").arg(filename),
                     CClientUIInterface::MSG_INFORMATION);
                 if (done) done(true);
@@ -357,7 +380,7 @@ void VaultView::askBackupPassphrase(const QString& filename, const std::string& 
         }
         interfaces::Vault& vault{self->vaultModel->vault()};
         if (result != QDialog::Accepted) {
-            vault.recordBackupCheck(check);
+            // The untested check was recorded when the file was saved (F-687).
             Q_EMIT self->message(self->tr("Backup Successful"), self->tr("The vault data was saved to %1 and checked. The passphrase was not tested.").arg(filename),
                 CClientUIInterface::MSG_INFORMATION);
             if (done) done(true);

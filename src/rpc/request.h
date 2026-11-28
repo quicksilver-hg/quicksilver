@@ -10,13 +10,16 @@
 #include <any>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <univalue.h>
 #include <util/fs.h>
 
-/** JSON-RPC 2.0 request, only used in quicksilver-cli **/
+/** Build a JSON-RPC 2.0 request for the CLI. */
 UniValue JSONRPCRequestObj(const std::string& strMethod, const UniValue& params, const UniValue& id);
+/** Build a JSON-RPC 2.0 reply. */
 UniValue JSONRPCReplyObj(UniValue result, UniValue error, std::optional<UniValue> id);
+/** Build an RPC error object. */
 UniValue JSONRPCError(int code, const std::string& message);
 
 /** Generate a new RPC authentication cookie and write it to disk */

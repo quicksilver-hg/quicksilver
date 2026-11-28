@@ -8,6 +8,9 @@
 
 #include <hash.h>
 #include <consensus/consensus.h>
+#include <util/check.h>
+
+#include <utility>
 
 
 std::vector<unsigned char> BitsToBytes(const std::vector<bool>& bits)
@@ -127,9 +130,7 @@ uint256 CPartialMerkleTree::TraverseAndExtract(int height, unsigned int pos, uns
 }
 
 CPartialMerkleTree::CPartialMerkleTree(const std::vector<uint256> &vTxid, const std::vector<bool> &vMatch) : nTransactions(vTxid.size()), fBad(false) {
-    // reset state
-    vBits.clear();
-    vHash.clear();
+    CHECK_NONFATAL(!vTxid.empty() && vTxid.size() == vMatch.size());
 
     // calculate height of tree
     int nHeight = 0;
@@ -144,6 +145,7 @@ CPartialMerkleTree::CPartialMerkleTree() : nTransactions(0), fBad(true) {}
 
 uint256 CPartialMerkleTree::ExtractMatches(std::vector<uint256> &vMatch, std::vector<unsigned int> &vnIndex) {
     vMatch.clear();
+    vnIndex.clear();
     // An empty set will not work
     if (nTransactions == 0)
         return uint256();
@@ -162,7 +164,9 @@ uint256 CPartialMerkleTree::ExtractMatches(std::vector<uint256> &vMatch, std::ve
         nHeight++;
     // traverse the partial tree
     unsigned int nBitsUsed = 0, nHashUsed = 0;
-    uint256 hashMerkleRoot = TraverseAndExtract(nHeight, 0, nBitsUsed, nHashUsed, vMatch, vnIndex);
+    std::vector<uint256> matches;
+    std::vector<unsigned int> indices;
+    uint256 hashMerkleRoot = TraverseAndExtract(nHeight, 0, nBitsUsed, nHashUsed, matches, indices);
     // verify that no problems occurred during the tree traversal
     if (fBad)
         return uint256();
@@ -172,5 +176,7 @@ uint256 CPartialMerkleTree::ExtractMatches(std::vector<uint256> &vMatch, std::ve
     // verify that all hashes were consumed
     if (nHashUsed != vHash.size())
         return uint256();
+    vMatch = std::move(matches);
+    vnIndex = std::move(indices);
     return hashMerkleRoot;
 }

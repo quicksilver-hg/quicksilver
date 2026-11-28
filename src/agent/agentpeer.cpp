@@ -74,7 +74,8 @@ AgentPeerAction AgentPeer::ProcessMessage(const CSerializedNetMsg& message)
         return HeaderResult(AgentPeerActionCode::HEADER_MESSAGE, m_header_peer.ProcessMessage(message));
     }
 
-    if (message.m_type == NetMsgType::INV || message.m_type == NetMsgType::GETDATA || message.m_type == NetMsgType::TX) {
+    if (message.m_type == NetMsgType::INV || message.m_type == NetMsgType::GETDATA || message.m_type == NetMsgType::TX ||
+        message.m_type == NetMsgType::NOTFOUND) {
         return TxResult(AgentPeerActionCode::TX_MESSAGE, m_tx_peer.ProcessMessage(message));
     }
 

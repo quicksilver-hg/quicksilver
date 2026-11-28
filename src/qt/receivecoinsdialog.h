@@ -10,6 +10,7 @@
 #include <qt/guiutil.h>
 
 #include <QDialog>
+#include <QPersistentModelIndex>
 #include <QHeaderView>
 #include <QItemSelection>
 #include <QKeyEvent>
@@ -53,7 +54,9 @@ private:
     QAction* copyAmountAction;
     const PlatformStyle *platformStyle;
 
-    QModelIndex selectedRow();
+    //! The row the context menu was opened on.
+    QPersistentModelIndex m_menu_row;
+    QModelIndex menuRow() const;
     void copyColumnToClipboard(int column);
     void finishReceiveRequest(const QString& address, const QString& label, OutputType address_type);
 

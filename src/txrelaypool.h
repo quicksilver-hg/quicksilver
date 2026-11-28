@@ -45,7 +45,7 @@ namespace Consensus { struct Params; }
 
 struct bilingual_str;
 
-/** Fake height value used in Coin to signify they are only in the memory pool (since 0.8) */
+/** Sentinel coin height for outputs that exist only in the relay pool. */
 static const uint32_t RELAYPOOL_HEIGHT = 0x7FFFFFFF;
 
 /**
@@ -118,12 +118,12 @@ class CompareTxRelayPoolEntryByTxWorkRate
 public:
     bool operator()(const CTxRelayPoolEntry& a, const CTxRelayPoolEntry& b) const
     {
-        const double ra = a.GetTxWorkRate();
-        const double rb = b.GetTxWorkRate();
-        if (ra == rb) {
-            return a.GetTime() < b.GetTime(); // oldest first among equals (see class comment)
-        }
-        return ra > rb; // higher rate first
+        const int cmp{a.CompareTxWorkRateTo(b.GetTxWorkSurplusValue(), static_cast<uint32_t>(b.GetTxSize()))};
+        if (cmp != 0) return cmp > 0; // higher rate first, compared exactly
+        // Oldest first among equals (see class comment); the entry sequence settles
+        // entries from the same second, so the order never depends on insertion order.
+        if (a.GetTime() != b.GetTime()) return a.GetTime() < b.GetTime();
+        return a.GetSequence() < b.GetSequence();
     }
 };
 
@@ -437,7 +437,7 @@ public:
      * @return a setEntries corresponding to the result of CalculateRelayPoolAncestors or an empty
      *         setEntries if it failed
      *
-     * @see CTXRelayPool::CalculateRelayPoolAncestors()
+     * @see CTxRelayPool::CalculateRelayPoolAncestors()
      */
     setEntries AssumeCalculateRelayPoolAncestors(
         std::string_view calling_fn_name,
@@ -762,7 +762,7 @@ private:
 
 /**
  * CCoinsView that brings transactions from a relaypool into view.
- * It does not check for spendings by memory pool transactions.
+ * It does not check for spends by relay pool transactions.
  * Instead, it provides access to all Coins which are either unspent in the
  * base CCoinsView, are outputs from any relaypool transaction, or are
  * tracked temporarily to allow transaction dependencies in package validation.

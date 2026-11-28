@@ -14,13 +14,11 @@
 
 #include <memory>
 #include <optional>
+#include <unordered_set>
+#include <vector>
 #include <stdint.h>
+#include <util/hasher.h>
 
-#include <boost/multi_index/identity.hpp>
-#include <boost/multi_index/indexed_by.hpp>
-#include <boost/multi_index/ordered_index.hpp>
-#include <boost/multi_index/tag.hpp>
-#include <boost/multi_index_container.hpp>
 
 class ArgsManager;
 class CBlockIndex;
@@ -115,10 +113,7 @@ private:
     void onlyUnconfirmed(CTxRelayPool::setEntries& testSet);
     /** Test if a new package would "fit" in the block */
     bool TestPackage(uint64_t packageSize, int64_t packageSigOpsCost) const;
-    /** Perform checks on each transaction in a package:
-      * locktime, premature-witness, serialized size (if necessary)
-      * These checks should always succeed, and they're here
-      * only as an extra check in case of suboptimal node configuration */
+    /** Check that every transaction in the package meets the block's locktime constraints. */
     bool TestPackageTransactions(const CTxRelayPool::setEntries& package) const;
     /** Return false if any tx in the package has a stale per-tx anchor at the candidate
      *  block height (parent = active tip), i.e. CheckTxAnchor(tx, tip, params) == nullptr.

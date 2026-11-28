@@ -11,10 +11,8 @@
 #include <qt/guiconstants.h>
 
 #include <QAbstractListModel>
-#include <QFont>
 #include <QMap>
 
-#include <assert.h>
 
 struct bilingual_str;
 namespace interfaces {
@@ -62,7 +60,6 @@ public:
         DisplayUnit,            // QuicksilverUnit
         ThirdPartyTxUrls,       // QString
         Language,               // QString
-        CoinControlFeatures,    // bool
         ThreadsScriptVerif,     // int
         Prune,                  // bool
         PruneSize,              // int
@@ -71,7 +68,6 @@ public:
         GpuDevices,             // QStringList
         AllowCpuBlockMining,    // bool
         ShowCpuFallbackWarning, // bool
-        ExternalSignerPath,     // QString
         SpendZeroConfChange,    // bool
         Listen,                 // bool
         Server,                 // bool
@@ -97,17 +93,17 @@ public:
     bool getMinimizeOnClose() const { return fMinimizeOnClose; }
     QuicksilverUnit getDisplayUnit() const { return m_display_quicksilver_unit; }
     QString getThirdPartyTxUrls() const { return strThirdPartyTxUrls; }
-    bool getCoinControlFeatures() const { return fCoinControlFeatures; }
     bool getEnablePSQTControls() const { return m_enable_psqt_controls; }
     const QString& getOverriddenByCommandLine() { return strOverriddenByCommandLine; }
     QMap<QString, QString> getGpuDeviceNames() const;
     void setGpuDeviceNames(const QMap<QString, QString>& names);
 
-    /** Whether -signer was set or not */
-    bool hasSigner();
-
     /* Explicit setters */
     void SetPruneTargetGB(int prune_target_gb);
+
+    /** Smallest prune target Settings offers, in GB: the block-file floor
+     *  (MIN_DISK_SPACE_FOR_BLOCK_FILES) rounded up to whole GB. */
+    static int MinPruneTargetGB();
 
     /* Restart flag helper */
     void setRestartRequired(bool fRequired);
@@ -121,10 +117,8 @@ private:
     bool m_show_tray_icon;
     bool fMinimizeToTray;
     bool fMinimizeOnClose;
-    QString language;
     QuicksilverUnit m_display_quicksilver_unit;
     QString strThirdPartyTxUrls;
-    bool fCoinControlFeatures;
     bool m_enable_psqt_controls;
     bool m_mask_values;
 
@@ -137,7 +131,6 @@ private:
 
 Q_SIGNALS:
     void displayUnitChanged(QuicksilverUnit unit);
-    void coinControlFeaturesChanged(bool);
     void showTrayIconChanged(bool);
 };
 

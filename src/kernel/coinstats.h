@@ -8,7 +8,6 @@
 
 #include <consensus/amount.h>
 #include <crypto/muhash.h>
-#include <streams.h>
 #include <uint256.h>
 
 #include <cstdint>
@@ -50,6 +49,7 @@ struct CCoinsStats {
 
     //! Total cumulative amount of block subsidies up to and including this block
     CAmount total_subsidy{0};
+    CAmount total_mint_allowance{0};
     //! Total cumulative amount of unspendable coins up to and including this block
     CAmount total_unspendable_amount{0};
     //! Total cumulative amount of prevouts spent up to and including this block

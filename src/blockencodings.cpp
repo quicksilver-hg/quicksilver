@@ -106,6 +106,8 @@ ReadStatus PartiallyDownloadedBlock::InitData(const CBlockHeaderAndShortTxIDs& c
         return READ_STATUS_FAILED; // Short ID collision
 
     std::vector<bool> have_txn(txn_available.size());
+    // Which slots the extra pool filled, so a collision only takes back what it counted.
+    std::vector<bool> from_extra(txn_available.size());
     {
     LOCK(pool->cs);
     for (const auto& tx : pool->txns_randomized) {
@@ -144,6 +146,7 @@ ReadStatus PartiallyDownloadedBlock::InitData(const CBlockHeaderAndShortTxIDs& c
             if (!have_txn[idit->second]) {
                 txn_available[idit->second] = extra_txn[i];
                 have_txn[idit->second]  = true;
+                from_extra[idit->second] = true;
                 relaypool_count++;
                 extra_count++;
             } else {
@@ -157,7 +160,9 @@ ReadStatus PartiallyDownloadedBlock::InitData(const CBlockHeaderAndShortTxIDs& c
                         txn_available[idit->second]->GetWitnessHash() != extra_txn[i]->GetWitnessHash()) {
                     txn_available[idit->second].reset();
                     relaypool_count--;
-                    extra_count--;
+                    // A slot the relay pool filled was never counted as extra: without
+                    // this check the size_t counter wrapped on such a collision.
+                    if (from_extra[idit->second]) extra_count--;
                 }
             }
         }

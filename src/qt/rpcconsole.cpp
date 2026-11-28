@@ -6,16 +6,19 @@
 #include <quicksilver-build-config.h> // IWYU pragma: keep
 
 #include <qt/rpcconsole.h>
+
 #include <qt/benchpanel.h>
 #include <qt/forms/ui_debugwindow.h>
 
 #include <chainparams.h>
 #include <common/system.h>
 #include <interfaces/node.h>
+#include <net.h>
 #include <node/connection_types.h>
 #include <qt/bantablemodel.h>
 #include <qt/clientmodel.h>
 #include <qt/guiutil.h>
+#include <qt/peertablemodel.h>
 #include <qt/peertablesortproxy.h>
 #include <qt/platformstyle.h>
 #ifdef ENABLE_VAULT
@@ -36,6 +39,7 @@
 #include <QFont>
 #include <QFrame>
 #include <QGridLayout>
+#include <QHeaderView>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
@@ -51,6 +55,7 @@
 #include <QStyledItemDelegate>
 #include <QTime>
 #include <QTimer>
+#include <QUrl>
 #include <QVariant>
 #include <QVBoxLayout>
 
@@ -494,6 +499,7 @@ RPCConsole::RPCConsole(interfaces::Node& node, const PlatformStyle *_platformSty
     platformStyle(_platformStyle)
 {
     ui->setupUi(this);
+    ui->peerWidget->setItemDelegateForColumn(PeerTableModel::NetNodeId, new PeerIdViewDelegate(this));
     setProperty("class", QStringLiteral("quicksilverWindow"));
     ui->verticalLayout_2->setContentsMargins(18, 16, 18, 18);
     ui->verticalLayout_2->setSpacing(12);
@@ -643,6 +649,7 @@ RPCConsole::RPCConsole(interfaces::Node& node, const PlatformStyle *_platformSty
 
 RPCConsole::~RPCConsole()
 {
+    stopExecutor();
     QSettings settings;
 #ifdef ENABLE_VAULT
     if (VaultModel::isVaultEnabled()) {
@@ -710,6 +717,25 @@ bool RPCConsole::eventFilter(QObject* obj, QEvent *event)
 
 void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_t bestblock_date, double verification_progress)
 {
+    if (clientModel == model) return;
+    if (clientModel) {
+        disconnect(clientModel, nullptr, this, nullptr);
+        disconnect(clientModel->getPeerTableModel(), nullptr, this, nullptr);
+        disconnect(clientModel->getBanTableModel(), nullptr, this, nullptr);
+        disconnect(ui->peerWidget, &QTableView::customContextMenuRequested, this, &RPCConsole::showPeersTableContextMenu);
+        disconnect(ui->banlistWidget, &QTableView::customContextMenuRequested, this, &RPCConsole::showBanTableContextMenu);
+        disconnect(ui->banlistWidget, &QTableView::clicked, this, &RPCConsole::clearSelectedNode);
+        ui->peerWidget->setModel(nullptr);
+        ui->banlistWidget->setModel(nullptr);
+        delete peersTableContextMenu;
+        peersTableContextMenu = nullptr;
+        delete banTableContextMenu;
+        banTableContextMenu = nullptr;
+        ui->lineEdit->setCompleter(nullptr);
+        delete autoCompleter;
+        autoCompleter = nullptr;
+        stopExecutor();
+    }
     clientModel = model;
 
     bool vault_enabled{false};
@@ -755,7 +781,6 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
         ui->peerWidget->horizontalHeader()->setSectionResizeMode(PeerTableModel::Age, QHeaderView::ResizeToContents);
         ui->peerWidget->horizontalHeader()->setSectionResizeMode(PeerTableModel::ConnectionType, QHeaderView::ResizeToContents);
         ui->peerWidget->horizontalHeader()->setStretchLastSection(true);
-        ui->peerWidget->setItemDelegateForColumn(PeerTableModel::NetNodeId, new PeerIdViewDelegate(this));
 
         // create peer table context menu
         peersTableContextMenu = new QMenu(this);
@@ -773,7 +798,7 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
 
         // peer table signal handling - update peer details when selecting new node
         connect(ui->peerWidget->selectionModel(), &QItemSelectionModel::selectionChanged, this, &RPCConsole::updateDetailWidget);
-        connect(model->getPeerTableModel(), &QAbstractItemModel::dataChanged, [this] { updateDetailWidget(); });
+        connect(model->getPeerTableModel(), &QAbstractItemModel::dataChanged, this, [this] { updateDetailWidget(); });
 
         // set up ban table
         ui->banlistWidget->setModel(model->getBanTableModel());
@@ -839,11 +864,6 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
         autoCompleter->popup()->installEventFilter(this);
         // Start thread to execute RPC commands.
         startExecutor();
-    }
-    if (!model) {
-        // Client model is being set to 0, this means shutdown() is about to be called.
-        thread.quit();
-        thread.wait();
     }
 }
 
@@ -941,11 +961,7 @@ void RPCConsole::clear(bool keep_prompt)
     }
 
     // Set default style sheet
-#ifdef Q_OS_MACOS
-    QFontInfo fixedFontInfo(GUIUtil::fixedPitchFont(/*use_embedded_font=*/true));
-#else
     QFontInfo fixedFontInfo(GUIUtil::fixedPitchFont());
-#endif
     ui->messagesWidget->document()->setDefaultStyleSheet(
         QString(
                 "table { }"
@@ -1084,6 +1100,7 @@ void RPCConsole::setRelayPoolSize(long numberOfTxs, size_t dynUsage, size_t maxU
 
 void RPCConsole::on_lineEdit_returnPressed()
 {
+    if (!m_executor) return;
     QString cmd = ui->lineEdit->text().trimmed();
 
     if (cmd.isEmpty()) {
@@ -1137,8 +1154,8 @@ void RPCConsole::on_lineEdit_returnPressed()
     message(CMD_REPLY, tr("Executing…"));
     m_is_executing = true;
 
-    QMetaObject::invokeMethod(m_executor, [this, cmd, vault_model] {
-        m_executor->request(cmd, vault_model);
+    QMetaObject::invokeMethod(m_executor, [executor = m_executor, cmd, vault_model] {
+        executor->request(cmd, vault_model);
     });
 
     cmd = QString::fromStdString(strFilteredCmd);
@@ -1185,7 +1202,8 @@ void RPCConsole::startExecutor()
     m_executor->moveToThread(&thread);
 
     // Replies from executor object must go to this object
-    connect(m_executor, &RPCExecutor::reply, this, [this](int category, const QString& command) {
+    connect(m_executor, &RPCExecutor::reply, this, [this, generation = m_executor_generation](int category, const QString& command) {
+        if (generation != m_executor_generation) return;
         // Remove "Executing…" message.
         ui->messagesWidget->undo();
         message(category, command);
@@ -1202,6 +1220,20 @@ void RPCConsole::startExecutor()
     QTimer::singleShot(0, m_executor, []() {
         util::ThreadRename("qt-rpcconsole");
     });
+}
+
+void RPCConsole::stopExecutor()
+{
+    if (!m_executor) return;
+    ui->lineEdit->setEnabled(false);
+    ++m_executor_generation;
+    thread.quit();
+    thread.wait();
+    m_executor = nullptr;
+    if (m_is_executing) {
+        ui->messagesWidget->undo();
+        m_is_executing = false;
+    }
 }
 
 void RPCConsole::on_tabWidget_currentChanged(int index)
@@ -1261,7 +1293,7 @@ void RPCConsole::updateDetailWidget()
     if (stats->nodeStats.m_bip152_highbandwidth_from) bip152_hb_settings += (bip152_hb_settings.isEmpty() ? ts.from : QLatin1Char('/') + ts.from);
     if (bip152_hb_settings.isEmpty()) bip152_hb_settings = ts.no;
     ui->peerHighBandwidth->setText(bip152_hb_settings);
-    const auto time_now{GetTime<std::chrono::seconds>()};
+    const auto time_now{Now<NodeSeconds>().time_since_epoch()};
     ui->peerConnTime->setText(GUIUtil::formatDurationStr(time_now - stats->nodeStats.m_connected));
     ui->peerLastBlock->setText(TimeDurationField(time_now, stats->nodeStats.m_last_block_time));
     ui->peerLastTx->setText(TimeDurationField(time_now, stats->nodeStats.m_last_tx_time));

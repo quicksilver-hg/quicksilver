@@ -174,7 +174,8 @@ class TxWorkPricingTest(QuicksilverTestFramework):
         block = self.node.getblock(blockhash, 2)
         assert_equal(len(block["tx"]) - 1, n_txs)  # all five were mined
         coinbase_out = sum(int(round(o["value"] * COIN)) for o in block["tx"][0]["vout"])
-        subsidy = self.node.getblockstats(blockhash)["subsidy"]
+        subsidy = template["subsidy"]
+        assert_equal(self.node.getblockstats(blockhash)["subsidy"], subsidy + MAX_BLOCK_MINT)
         self.log.info(f"  {n_txs} txs would mint {uncapped}, coinbase minted "
                       f"{coinbase_out - subsidy}, cap {MAX_BLOCK_MINT}")
         assert_equal(coinbase_out - subsidy, MAX_BLOCK_MINT)

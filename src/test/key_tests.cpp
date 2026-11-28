@@ -16,6 +16,7 @@
 #include <util/strencodings.h>
 #include <util/string.h>
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,28 @@ static const std::string strAddressBad = "Qd68SuLaYkSnNs9bARyfAQfsGSoh5gWVrH";
 
 
 BOOST_FIXTURE_TEST_SUITE(key_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(invalid_key_schnorr)
+{
+    CKey invalid;
+    std::array<unsigned char, 64> sig{};
+    BOOST_CHECK(!invalid.SignSchnorr(uint256{}, sig, nullptr, uint256{}));
+    BOOST_CHECK(!invalid.ComputeKeyPair(nullptr).IsValid());
+}
+
+BOOST_AUTO_TEST_CASE(extpubkey_identity_order)
+{
+    CExtPubKey a;
+    CExtPubKey b = a;
+    b.version[3] = 1;
+    BOOST_CHECK(a != b);
+    BOOST_CHECK(a < b);
+    BOOST_CHECK(!(b < a));
+    b = a;
+    b.nDepth = 1;
+    BOOST_CHECK(a != b);
+    BOOST_CHECK(a < b);
+}
 
 BOOST_AUTO_TEST_CASE(key_test1)
 {
@@ -127,6 +150,9 @@ BOOST_AUTO_TEST_CASE(key_test1)
         CPubKey rkey1, rkey2, rkey1C, rkey2C;
 
         BOOST_CHECK(rkey1.RecoverCompact (hashMsg, csign1));
+        auto bad_header = csign1;
+        bad_header[0] = 35;
+        BOOST_CHECK(!rkey1.RecoverCompact(hashMsg, bad_header));
         BOOST_CHECK(rkey2.RecoverCompact (hashMsg, csign2));
         BOOST_CHECK(rkey1C.RecoverCompact(hashMsg, csign1C));
         BOOST_CHECK(rkey2C.RecoverCompact(hashMsg, csign2C));

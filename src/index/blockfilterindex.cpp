@@ -5,7 +5,6 @@
 
 #include <map>
 
-#include <clientversion.h>
 #include <common/args.h>
 #include <dbwrapper.h>
 #include <hash.h>
@@ -40,9 +39,8 @@ constexpr unsigned int MAX_FLTR_FILE_SIZE = 0x1000000; // 16 MiB
 constexpr unsigned int FLTR_FILE_CHUNK_SIZE = 0x100000; // 1 MiB
 /** Maximum size of the cfheaders cache
  *  We have a limit to prevent a bug in filling this cache
- *  potentially turning into an OOM. At 2000 entries, this cache
- *  is big enough for a 2,000,000 length block chain, which
- *  we should be enough until ~2047. */
+ *  potentially exhausting memory. At 2000 entries spaced by the checkpoint
+ *  interval, this covers about 2,000,000 blocks. */
 constexpr size_t CF_HEADERS_CACHE_MAX_SZ{2000};
 
 namespace {
@@ -161,7 +159,7 @@ bool BlockFilterIndex::CustomCommit(CDBBatch& batch)
     return true;
 }
 
-bool BlockFilterIndex::ReadFilterFromDisk(const FlatFilePos& pos, const uint256& hash, BlockFilter& filter) const
+bool BlockFilterIndex::ReadFilterFromDisk(const FlatFilePos& pos, const uint256& expected_block_hash, const uint256& filter_hash, BlockFilter& filter) const
 {
     AutoFile filein{m_filter_fileseq->Open(pos, true)};
     if (filein.IsNull()) {
@@ -173,7 +171,11 @@ bool BlockFilterIndex::ReadFilterFromDisk(const FlatFilePos& pos, const uint256&
     std::vector<uint8_t> encoded_filter;
     try {
         filein >> block_hash >> encoded_filter;
-        if (Hash(encoded_filter) != hash) {
+        if (block_hash != expected_block_hash) {
+            LogError(HgLog::SCAN, "Block hash mismatch in filter decode.\n");
+            return false;
+        }
+        if (Hash(encoded_filter) != filter_hash) {
             LogError(HgLog::SCAN, "Checksum mismatch in filter decode.\n");
             return false;
         }
@@ -257,7 +259,7 @@ bool BlockFilterIndex::CustomAppend(const interfaces::BlockInfo& block)
         // Undo data is stored separately from the block and is required to
         // reconstruct the compact filter for spent outputs.
         const CBlockIndex* pindex = WITH_LOCK(cs_main, return m_chainstate->m_blockman.LookupBlockIndex(block.hash));
-        if (!m_chainstate->m_blockman.ReadBlockUndo(block_undo, *pindex)) {
+        if (!pindex || !m_chainstate->m_blockman.ReadBlockUndo(block_undo, *pindex)) {
             return false;
         }
     }
@@ -297,7 +299,10 @@ bool BlockFilterIndex::Write(const BlockFilter& filter, uint32_t block_height, c
     db_it.Seek(key);
 
     for (int height = start_height; height <= stop_height; ++height) {
-        if (!db_it.GetKey(key) || key.height != height) {
+        // An iterator that stopped on an I/O or corruption error is not "no more keys":
+        // CheckStatus() throws for it, as the chainstate scans do (F-634).
+        if (!db_it.Valid()) db_it.CheckStatus();
+        if (!db_it.Valid() || !db_it.GetKey(key) || key.height != height) {
             LogError(HgLog::SCAN, "%s: unexpected key in %s: expected (%c, %d)\n",
                          __func__, index_name, DB_BLOCK_HEIGHT, height);
             return false;
@@ -329,6 +334,9 @@ bool BlockFilterIndex::CustomRewind(const interfaces::BlockRef& current_tip, con
         return false;
     }
 
+    const auto new_header = ReadFilterHeader(new_tip.height, new_tip.hash);
+    if (!new_header) return false;
+
     // The latest filter position gets written in Commit by the call to the BaseIndex::Rewind.
     // But since this creates new references to the filter, the position should get updated here
     // atomically as well in case Commit fails.
@@ -336,7 +344,7 @@ bool BlockFilterIndex::CustomRewind(const interfaces::BlockRef& current_tip, con
     if (!m_db->WriteBatch(batch)) return false;
 
     // Update cached header
-    m_last_header = *Assert(ReadFilterHeader(new_tip.height, new_tip.hash));
+    m_last_header = *new_header;
     return true;
 }
 
@@ -378,6 +386,8 @@ static bool LookupRange(CDBWrapper& db, const std::string& index_name, int start
     std::unique_ptr<CDBIterator> db_it(db.NewIterator());
     db_it->Seek(DBHeightKey(start_height));
     for (int height = start_height; height <= stop_index->nHeight; ++height) {
+        // Same as above: a scan error throws instead of reading as a missing filter.
+        if (!db_it->Valid()) db_it->CheckStatus();
         if (!db_it->Valid() || !db_it->GetKey(key) || key.height != height) {
             return false;
         }
@@ -424,7 +434,7 @@ bool BlockFilterIndex::LookupFilter(const CBlockIndex* block_index, BlockFilter&
         return false;
     }
 
-    return ReadFilterFromDisk(entry.pos, entry.hash, filter_out);
+    return ReadFilterFromDisk(entry.pos, block_index->GetBlockHash(), entry.hash, filter_out);
 }
 
 bool BlockFilterIndex::LookupFilterHeader(const CBlockIndex* block_index, uint256& header_out)
@@ -466,12 +476,12 @@ bool BlockFilterIndex::LookupFilterRange(int start_height, const CBlockIndex* st
     }
 
     filters_out.resize(entries.size());
-    auto filter_pos_it = filters_out.begin();
-    for (const auto& entry : entries) {
-        if (!ReadFilterFromDisk(entry.pos, entry.hash, *filter_pos_it)) {
+    const CBlockIndex* block = stop_index;
+    for (size_t i = entries.size(); i > 0; --i, block = block->pprev) {
+        const auto& entry = entries[i - 1];
+        if (!ReadFilterFromDisk(entry.pos, block->GetBlockHash(), entry.hash, filters_out[i - 1])) {
             return false;
         }
-        ++filter_pos_it;
     }
 
     return true;

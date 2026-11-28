@@ -19,16 +19,11 @@
 #include <QElapsedTimer>
 #include <QLabel>
 #include <QMainWindow>
-#include <QMap>
 #include <QMenu>
 #include <QPoint>
 #include <QPointer>
 #include <QSystemTrayIcon>
 #include <QTimer>
-
-#ifdef Q_OS_MACOS
-#include <qt/macos_appnap.h>
-#endif
 
 #include <functional>
 #include <memory>
@@ -107,9 +102,8 @@ public:
     */
     void addVault(VaultModel* vaultModel);
     void removeVault(VaultModel* vaultModel);
-    void removeAllVaults();
 #endif // ENABLE_VAULT
-    bool enableVault = false;
+    bool isVaultEnabled() const { return enableVault; }
 
     /** Get the tray icon status.
         Some systems have not "system tray" or "notification area" available.
@@ -148,7 +142,6 @@ private:
 
     UnitDisplayStatusBarControl* unitDisplayControl = nullptr;
     GUIUtil::ThemedLabel* labelVaultEncryptionIcon = nullptr;
-    GUIUtil::ThemedLabel* labelVaultHDStatusIcon = nullptr;
     GUIUtil::ClickableLabel* labelProxyIcon = nullptr;
     GUIUtil::ClickableLabel* connectionsControl = nullptr;
     QProgressDialog* progressDialog = nullptr;
@@ -221,6 +214,9 @@ private:
     bool m_have_mining_status{false};
     QString m_mining_status_word;
     QMetaObject::Connection m_ticker_balance_connection{};
+    //! The tracked model's display-unit connection. Qt::UniqueConnection cannot de-duplicate a lambda, so it is
+    //! held and dropped with the model, like the balance connection.
+    QMetaObject::Connection m_ticker_unit_connection{};
     VaultModel* m_ticker_model{nullptr};
 
     QSystemTrayIcon* trayIcon = nullptr;
@@ -235,10 +231,6 @@ private:
     HelpMessageDialog* helpMessageDialog = nullptr;
 
     QMenu* m_network_context_menu = new QMenu(this);
-
-#ifdef Q_OS_MACOS
-    CAppNapInhibitor* m_app_nap_inhibitor = nullptr;
-#endif
 
     const PlatformStyle *platformStyle;
     const NetworkStyle* const m_network_style;
@@ -261,7 +253,7 @@ private:
     void applyMiningStatus(const interfaces::MiningStatus& status);
     /** Create system tray icon and notification */
     void createTrayIcon();
-    /** Create system tray menu (or setup the dock menu) */
+    /** Create the system tray menu */
     void createTrayIconMenu();
 #ifdef ENABLE_VAULT
     /** Text for a coalesced transaction-notification summary. */
@@ -270,6 +262,7 @@ private:
 #endif
 
     /** Enable or disable all vault-related actions */
+    bool enableVault{false};
     void setVaultActionsEnabled(bool enabled);
     void setConsensusEnabled(bool enabled);
 
@@ -335,12 +328,6 @@ private:
        @see VaultModel::EncryptionStatus
     */
     void setEncryptionStatus(int status);
-
-    /** Set the hd-enabled status as shown in the UI.
-     @param[in] hdEnabled         current hd enabled status
-     @see VaultModel::EncryptionStatus
-     */
-    void setHDStatus(bool privkeyDisabled, int hdEnabled);
 
 public Q_SLOTS:
     bool handlePaymentRequest(const SendCoinsRecipient& recipient);

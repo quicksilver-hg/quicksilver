@@ -19,6 +19,7 @@ add_executable(bench_quicksilver
   checkblockindex.cpp
   checkqueue.cpp
   crypto_hash.cpp
+  cuckatoo_verify.cpp
   descriptors.cpp
   disconnected_transactions.cpp
   duplicate_inputs.cpp

@@ -26,8 +26,6 @@ bilingual_str PSQTErrorString(PSQTError error);
 bilingual_str TransactionErrorString(const node::TransactionError error);
 bilingual_str ResolveErrMsg(const std::string& optname, const std::string& strBind);
 bilingual_str InvalidPortErrMsg(const std::string& optname, const std::string& strPort);
-bilingual_str AmountHighWarn(const std::string& optname);
-bilingual_str AmountErrMsg(const std::string& optname, const std::string& strValue);
 } // namespace common
 
 #endif // QUICKSILVER_COMMON_MESSAGES_H

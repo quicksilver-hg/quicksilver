@@ -6,7 +6,6 @@
 #define QUICKSILVER_AGENT_AGENTCLIENT_H
 
 #include <agent/agentpeer.h>
-#include <agent/agentpeerset.h>
 #include <agent/headerchain.h>
 #include <agent/headerstore.h>
 #include <agent/headersync.h>
@@ -58,69 +57,33 @@ public:
     int HeaderHeight() const { return m_chain->Height(); }
     const CBlockIndex& HeaderTip() const { return m_chain->Tip(); }
 
+    //! Returns FILE_NOT_FOUND when the client was built without a header store path
+    //! (the command-line agent always gives one).
     HeaderStoreResult SaveHeaders() const;
-
-    AgentPeerSetAction AddPeer(AgentPeerId peer_id) { return m_peers.AddPeer(peer_id); }
-    size_t PeerCount() const { return m_peers.PeerCount(); }
-    bool HasPeer(AgentPeerId peer_id) const { return m_peers.HasPeer(peer_id); }
 
     AgentPeerAction StartHeaders();
     AgentPeerAction StartHeaders(const uint256& stop_hash);
-    AgentPeerSetAction StartHeaders(AgentPeerId peer_id) { return m_peers.StartHeaders(peer_id); }
-    AgentPeerSetAction StartHeaders(AgentPeerId peer_id, const uint256& stop_hash)
-    {
-        return m_peers.StartHeaders(peer_id, stop_hash);
-    }
     AgentPeerAction AnnounceTransaction(const CTransaction& transaction, bool prefer_wtxid = true);
-    AgentPeerSetAction AnnounceTransaction(AgentPeerId peer_id,
-                                           const CTransaction& transaction,
-                                           bool prefer_wtxid = true)
-    {
-        return m_peers.AnnounceTransaction(peer_id, transaction, prefer_wtxid);
-    }
     AgentPeerAction SendTransaction(const CTransaction& transaction);
-    AgentPeerSetAction SendTransaction(AgentPeerId peer_id, const CTransaction& transaction)
-    {
-        return m_peers.SendTransaction(peer_id, transaction);
-    }
     AgentPeerAction ProcessMessage(const CSerializedNetMsg& message);
-    AgentPeerSetAction ProcessMessage(AgentPeerId peer_id, const CSerializedNetMsg& message)
-    {
-        return m_peers.ProcessMessage(peer_id, message);
-    }
 
-    bool HasOutboundMessages() const { return m_peers.HasOutboundMessages(DEFAULT_AGENT_PEER_ID); }
-    bool HasOutboundMessages(AgentPeerId peer_id) const { return m_peers.HasOutboundMessages(peer_id); }
-    size_t OutboundMessageCount() const { return m_peers.OutboundMessageCount(DEFAULT_AGENT_PEER_ID); }
-    size_t OutboundMessageCount(AgentPeerId peer_id) const { return m_peers.OutboundMessageCount(peer_id); }
+    bool HasOutboundMessages() const { return m_peer.HasOutboundMessages(); }
+    size_t OutboundMessageCount() const { return m_peer.OutboundMessageCount(); }
     std::optional<CSerializedNetMsg> PopOutboundMessage()
     {
-        return m_peers.PopOutboundMessage(DEFAULT_AGENT_PEER_ID);
-    }
-    std::optional<CSerializedNetMsg> PopOutboundMessage(AgentPeerId peer_id)
-    {
-        return m_peers.PopOutboundMessage(peer_id);
+        return m_peer.PopOutboundMessage();
     }
     std::vector<CSerializedNetMsg> DrainOutboundMessages()
     {
-        return m_peers.DrainOutboundMessages(DEFAULT_AGENT_PEER_ID);
-    }
-    std::vector<CSerializedNetMsg> DrainOutboundMessages(AgentPeerId peer_id)
-    {
-        return m_peers.DrainOutboundMessages(peer_id);
+        return m_peer.DrainOutboundMessages();
     }
 
-    bool WaitingForHeaders() const { return m_peers.WaitingForHeaders(DEFAULT_AGENT_PEER_ID); }
-    bool WaitingForHeaders(AgentPeerId peer_id) const { return m_peers.WaitingForHeaders(peer_id); }
-    bool HeaderPeerSynced() const { return m_peers.HeaderPeerSynced(DEFAULT_AGENT_PEER_ID); }
-    bool HeaderPeerSynced(AgentPeerId peer_id) const { return m_peers.HeaderPeerSynced(peer_id); }
-    const uint256& HeaderStopHash() const { return m_peers.HeaderStopHash(DEFAULT_AGENT_PEER_ID); }
-    const uint256& HeaderStopHash(AgentPeerId peer_id) const { return m_peers.HeaderStopHash(peer_id); }
+    bool WaitingForHeaders() const { return m_peer.WaitingForHeaders(); }
+    bool HeaderPeerSynced() const { return m_peer.HeaderPeerSynced(); }
+    const uint256& HeaderStopHash() const { return m_peer.HeaderStopHash(); }
 
-    size_t PendingTxRequestCount() const { return m_peers.PendingTxRequestCount(DEFAULT_AGENT_PEER_ID); }
-    size_t PendingTxRequestCount(AgentPeerId peer_id) const { return m_peers.PendingTxRequestCount(peer_id); }
-    size_t KnownTxInventoryCount() const { return m_peers.KnownTxInventoryCount(DEFAULT_AGENT_PEER_ID); }
-    size_t KnownTxInventoryCount(AgentPeerId peer_id) const { return m_peers.KnownTxInventoryCount(peer_id); }
+    size_t PendingTxRequestCount() const { return m_peer.PendingTxRequestCount(); }
+    size_t KnownTxInventoryCount() const { return m_peer.KnownTxInventoryCount(); }
 
 private:
     struct LoadedHeaders {
@@ -133,12 +96,12 @@ private:
                                      const CBlockHeader& genesis,
                                      const std::optional<fs::path>& header_store_path);
     static AgentClientLoadResult FreshLoadResult(const CBlockHeader& genesis);
-    static AgentPeerAction DefaultPeerAction(AgentPeerSetAction action);
 
     AgentClientOptions m_options;
     AgentClientLoadResult m_last_load_result;
     std::unique_ptr<HeaderChain> m_chain;
-    AgentPeerSet m_peers;
+    //! The one peer the command-line agent talks to.
+    AgentPeer m_peer;
 };
 
 } // namespace agent

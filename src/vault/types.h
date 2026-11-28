@@ -5,7 +5,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 //! @file vault/types.h is a home for public enum and struct type definitions
-//! that are used by internally by vault code, but also used externally by node
+//! that are used internally by vault code, but also used externally by node
 //! or GUI code.
 //!
 //! This file is intended to define only simple types that do not have external
@@ -47,11 +47,11 @@ enum isminetype : unsigned int {
 using isminefilter = std::underlying_type<isminetype>::type;
 
 /**
- * Address purpose field that has been been stored with vault sending and
- * receiving addresses. This field is not currently
- * used for any logic inside the vault, but it is still shown in RPC and GUI
- * interfaces and saved for new addresses. It is basically redundant with an
- * address's IsMine() result.
+ * Address purpose field that has been stored with vault sending and
+ * receiving addresses. It is shown in RPC and GUI interfaces and saved for
+ * new addresses. The vault derives it from IsMine() on load, and the Qt
+ * address book uses it to classify entries and to refuse to add a receiving
+ * address as a sending address (qt/editaddressdialog.cpp).
  */
 enum class AddressPurpose {
     RECEIVE,

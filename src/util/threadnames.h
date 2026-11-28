@@ -7,8 +7,12 @@
 #define QUICKSILVER_UTIL_THREADNAMES_H
 
 #include <string>
+#include <string_view>
 
 namespace util {
+//! Format an OS thread name within the 15-byte limit.
+std::string OsThreadName(std::string_view name);
+
 //! Rename a thread both in terms of an internal (in-memory) name as well
 //! as its system thread name.
 //! @note Do not call this for the main thread, as this will interfere with

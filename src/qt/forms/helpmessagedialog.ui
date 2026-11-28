@@ -27,7 +27,7 @@
     <number>12</number>
    </property>
    <item>
-    <layout class="QVBoxLayout" name="verticalLayoutLogo" stretch="0,0">
+    <layout class="QVBoxLayout" name="verticalLayoutLogo">
      <property name="leftMargin">
       <number>0</number>
      </property>
@@ -59,16 +59,6 @@
        </property>
        <property name="alignment">
         <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignTop</set>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QFrame" name="frame">
-       <property name="frameShape">
-        <enum>QFrame::NoFrame</enum>
-       </property>
-       <property name="frameShadow">
-        <enum>QFrame::Raised</enum>
        </property>
       </widget>
      </item>
@@ -128,22 +118,6 @@
    <signal>accepted()</signal>
    <receiver>HelpMessageDialog</receiver>
    <slot>accept()</slot>
-   <hints>
-    <hint type="sourcelabel">
-     <x>20</x>
-     <y>20</y>
-    </hint>
-    <hint type="destinationlabel">
-     <x>20</x>
-     <y>20</y>
-    </hint>
-   </hints>
-  </connection>
-  <connection>
-   <sender>okButton</sender>
-   <signal>rejected()</signal>
-   <receiver>HelpMessageDialog</receiver>
-   <slot>reject()</slot>
    <hints>
     <hint type="sourcelabel">
      <x>20</x>

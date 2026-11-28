@@ -83,11 +83,18 @@ fs::path AgentPaymentReceiptInboxDirectory()
     return fsbridge::AbsPathJoin(gArgs.GetDataDirNet(), configured_path);
 }
 
+QString CommandDataDirArgument()
+{
+    const fs::path data_dir = gArgs.GetDataDirBase().lexically_normal();
+    if (data_dir.empty() || data_dir == GetDefaultDataDir().lexically_normal()) return {};
+    return QStringLiteral(" -datadir=%1").arg(ShellQuote(GUIUtil::PathToQString(data_dir)));
+}
+
 QString AgentPaymentReceiptScanCommand(const fs::path& receipt_dir)
 {
-    return QStringLiteral("quicksilver-agent -chain=%1 -paymentreceiptdir=%2 scanreceipts")
+    return QStringLiteral("quicksilver-agent -chain=%1%2 -paymentreceiptdir=%3 scanreceipts")
         .arg(QString::fromStdString(Params().GetChainTypeString()),
-             ShellQuote(QString::fromStdString(fs::PathToString(receipt_dir))));
+             CommandDataDirArgument(), ShellQuote(GUIUtil::PathToQString(receipt_dir)));
 }
 
 fs::path AgentPaymentReceiptInboxPath(const agent::AllotmentPaymentReceiptArtifact& receipt)
@@ -157,9 +164,9 @@ QString ScantxoutsetRecoveryCommand(const QString& address)
 {
     const QString descriptor = QStringLiteral("addr(%1)").arg(address);
     const QString scan_objects = QStringLiteral("[\"%1\"]").arg(descriptor);
-    return QStringLiteral("quicksilver-cli -chain=%1 scantxoutset start %2 | quicksilver-agent -chain=%1 -fundingaddress=%3 -scantxoutset=- importrecovery")
+    return QStringLiteral("quicksilver-cli -chain=%1%2 scantxoutset start %3 | quicksilver-agent -chain=%1%2 -fundingaddress=%4 -scantxoutset=- importrecovery")
         .arg(QString::fromStdString(Params().GetChainTypeString()),
-             ShellQuote(scan_objects),
+             CommandDataDirArgument(), ShellQuote(scan_objects),
              ShellQuote(address));
 }
 
@@ -228,7 +235,7 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent)
     compromised_host->setObjectName(QStringLiteral("agentAllotmentCompromisedHostRisk"));
     risk_layout->addWidget(compromised_host);
 
-    auto* guarantee = MakeMutedLabel(tr("Spending limits are the agent's own check. This vault does not enforce them, and limits are not guaranteed."), risk_panel);
+    auto* guarantee = MakeMutedLabel(tr("The agent checks its spending limits, and this vault also refuses a spend over the daily limit. Limits are not guaranteed."), risk_panel);
     guarantee->setObjectName(QStringLiteral("agentAllotmentGuaranteeRisk"));
     risk_layout->addWidget(guarantee);
 
@@ -263,13 +270,11 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent)
     m_funding_limit = new QuicksilverAmountField(setup_group);
     m_funding_limit->setObjectName(QStringLiteral("agentAllotmentFundingLimit"));
     m_funding_limit->SetMinValue(0);
-    m_funding_limit->SetAllowEmpty(true);
     add_row(tr("Funding amount"), m_funding_limit);
 
     m_daily_limit = new QuicksilverAmountField(setup_group);
     m_daily_limit->setObjectName(QStringLiteral("agentAllotmentDailyLimit"));
     m_daily_limit->SetMinValue(0);
-    m_daily_limit->SetAllowEmpty(true);
     add_row(tr("Daily guardrail"), m_daily_limit);
 
     auto* acceptance_panel = new QFrame(setup_group);
@@ -294,6 +299,7 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent)
     action_row->addWidget(m_create_button);
 
     m_state_label = new QLabel(acceptance_panel);
+    m_state_label->setTextFormat(Qt::PlainText);
     m_state_label->setObjectName(QStringLiteral("agentAllotmentBackendState"));
     m_state_label->setProperty("class", QStringLiteral("muted"));
     m_state_label->setWordWrap(true);
@@ -308,6 +314,7 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent)
     records_layout->setSpacing(8);
 
     m_records_label = MakeMutedLabel(QString(), records_panel);
+    m_records_label->setTextFormat(Qt::PlainText);
     m_records_label->setObjectName(QStringLiteral("agentAllotmentRecordedSetups"));
     records_layout->addWidget(m_records_label);
 
@@ -340,6 +347,7 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent)
     review_action_row->addWidget(m_policy_review_button);
 
     m_policy_review_state = new QLabel(review_panel);
+    m_policy_review_state->setTextFormat(Qt::PlainText);
     m_policy_review_state->setObjectName(QStringLiteral("agentAllotmentPolicyReviewState"));
     m_policy_review_state->setProperty("class", QStringLiteral("muted"));
     m_policy_review_state->setWordWrap(true);
@@ -376,6 +384,7 @@ AgentAllotmentPage::AgentAllotmentPage(QWidget* parent)
     receipt_action_row->addWidget(m_payment_receipt_save_button);
 
     m_payment_receipt_state = new QLabel(receipt_panel);
+    m_payment_receipt_state->setTextFormat(Qt::PlainText);
     m_payment_receipt_state->setObjectName(QStringLiteral("agentAllotmentPaymentReceiptState"));
     m_payment_receipt_state->setProperty("class", QStringLiteral("muted"));
     m_payment_receipt_state->setWordWrap(true);
@@ -539,14 +548,18 @@ void AgentAllotmentPage::reviewAgentAllotmentPolicyRequest()
     const QString funding_limit = QuicksilverUnits::formatWithUnit(m_display_unit, request->funding_limit, false, QuicksilverUnits::SeparatorStyle::ALWAYS);
     const QString funding_available = QuicksilverUnits::formatWithUnit(m_display_unit, request->funding_available, false, QuicksilverUnits::SeparatorStyle::ALWAYS);
     const QString daily_limit = request->daily_limit > 0 ? QuicksilverUnits::formatWithUnit(m_display_unit, request->daily_limit, false, QuicksilverUnits::SeparatorStyle::ALWAYS) : tr("none");
+    const auto records = m_model->listAgentAllotmentRecords();
+    const bool stopped = std::any_of(records.begin(), records.end(), [&](const auto& record) {
+        return record.id == request->id && record.stopped_time != 0;
+    });
     SetLabelClass(m_policy_review_state, QStringLiteral("policyReviewValid"));
-    m_policy_review_state->setText(tr("Valid request for %1 at %2. Funding %3 of %4; daily guardrail %5; status %6. Spending limits are checked by the agent.")
+    m_policy_review_state->setText(tr("Valid request for %1 at %2. Funding %3 of %4; daily guardrail %5; status %6. The agent checks the spending limits, and this vault also refuses to co-sign a spend over the daily limit.")
                                        .arg(QString::fromStdString(request->label),
                                             QString::fromStdString(request->funding_address),
                                             funding_available,
                                             funding_limit,
                                             daily_limit,
-                                            tr("Co-signed by this vault")));
+                                            stopped ? tr("Stopped") : tr("Co-signed by this vault")));
 }
 
 void AgentAllotmentPage::reviewPaymentReceipt()
@@ -690,6 +703,7 @@ void AgentAllotmentPage::updateRecordedSetups()
                                                              tr("%1 has %2 of %3 at its reserved address; %4 remains.")
                                                                  .arg(QString::fromStdString(record.label), formatted_available, formatted_limit, formatted_remaining);
             auto* row_label = MakeMutedLabel(funding_text, row);
+            row_label->setTextFormat(Qt::PlainText);
             row_label->setObjectName(QStringLiteral("agentAllotmentFundingRowLabel"));
             row_layout->addWidget(row_label, 1);
 
@@ -979,9 +993,14 @@ void AgentAllotmentPage::reviewAgentSpendRequest()
     }
     details << tr("Change back to the allotment: %1").arg(format(change));
     const auto* context = m_model->node().context();
-    const QString age = context && context->chainman ?
-        QString::number(int64_t{m_model->node().getNumBlocks()} - request.tx->nAnchorHeight) : tr("unavailable");
+    const bool have_chain{context && context->chainman};
+    const int64_t anchor_age = have_chain ? int64_t{m_model->node().getNumBlocks()} - request.tx->nAnchorHeight : 0;
+    const QString age = have_chain ? QString::number(anchor_age) : tr("unavailable");
     details << tr("Anchor age: %1 blocks out of %2 maximum").arg(age, QString::number(Params().GetConsensus().nMaxAnchorAge));
+    if (allotment->stopped_time != 0) details << tr("This allotment is stopped.");
+    if (have_chain && anchor_age > Params().GetConsensus().nMaxAnchorAge) {
+        details << tr("The anchor has expired.");
+    }
     SetLabelClass(m_cosign_state, QStringLiteral("policyReviewValid"));
     m_cosign_state->setText(details.join(QLatin1Char('\n')));
     m_reviewed_request = pasted;

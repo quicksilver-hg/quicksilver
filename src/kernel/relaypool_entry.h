@@ -7,14 +7,12 @@
 #define QUICKSILVER_KERNEL_RELAYPOOL_ENTRY_H
 
 #include <arith_uint256.h>
-#include <consensus/amount.h>
 #include <consensus/validation.h>
 #include <core_memusage.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <primitives/transaction.h>
 #include <util/epochguard.h>
-#include <util/overflow.h>
 
 #include <chrono>
 #include <functional>
@@ -22,6 +20,7 @@
 #include <set>
 #include <stddef.h>
 #include <stdint.h>
+#include <cassert>
 
 class CBlockIndex;
 
@@ -51,6 +50,32 @@ struct CompareIteratorByHash {
         return a->GetTx().GetHash() < b->GetTx().GetHash();
     }
 };
+
+/**
+ * Exact three-way comparison of two surplus-work rates, surplus_a/vsize_a against
+ * surplus_b/vsize_b: negative, zero or positive. The surplus-work ranking key used for
+ * eviction, mining, relay and replacement. Rounding the rates to double would make
+ * distinct rates compare equal and fall through to time order.
+ * Cross-multiplies when both products fit in 256 bits (any surplus below 2^224);
+ * otherwise compares quotients, then remainders, which stays exact without overflow.
+ */
+inline int CompareTxWorkRate(const arith_uint256& surplus_a, uint32_t vsize_a,
+                             const arith_uint256& surplus_b, uint32_t vsize_b)
+{
+    assert(vsize_a > 0 && vsize_b > 0);
+    if (surplus_a.bits() <= 224 && surplus_b.bits() <= 224) {
+        const arith_uint256 lhs{surplus_a * vsize_b};
+        const arith_uint256 rhs{surplus_b * vsize_a};
+        return lhs < rhs ? -1 : (rhs < lhs ? 1 : 0);
+    }
+    const arith_uint256 quot_a{surplus_a / arith_uint256{vsize_a}};
+    const arith_uint256 quot_b{surplus_b / arith_uint256{vsize_b}};
+    if (quot_a != quot_b) return quot_a < quot_b ? -1 : 1;
+    // Remainders are below their vsize (< 2^32), so these products fit in 64 bits.
+    const uint64_t lhs{(surplus_a - quot_a * vsize_a).GetLow64() * uint64_t{vsize_b}};
+    const uint64_t rhs{(surplus_b - quot_b * vsize_b).GetLow64() * uint64_t{vsize_a}};
+    return lhs < rhs ? -1 : (rhs < lhs ? 1 : 0);
+}
 
 /** \class CTxRelayPoolEntry
  *
@@ -97,7 +122,6 @@ private:
     int64_t m_count_with_ancestors{1};
     // Using int64_t instead of int32_t to avoid signed integer overflow issues.
     int64_t nSizeWithAncestors;
-    int64_t nSigOpCostWithAncestors;
 
 public:
     CTxRelayPoolEntry(const CTransactionRef& tx,
@@ -116,8 +140,7 @@ public:
           lockPoints{lp},
           m_txwork_surplus{txwork_surplus},
           nSizeWithDescendants{GetTxSize()},
-          nSizeWithAncestors{GetTxSize()},
-          nSigOpCostWithAncestors{sigOpCost} {}
+          nSizeWithAncestors{GetTxSize()} {}
 
     CTxRelayPoolEntry(const CTxRelayPoolEntry&) = delete;
     CTxRelayPoolEntry& operator=(const CTxRelayPoolEntry&) = delete;
@@ -135,16 +158,22 @@ public:
     unsigned int GetHeight() const { return entryHeight; }
     uint64_t GetSequence() const { return entry_sequence; }
     int64_t GetSigOpCost() const { return sigOpCost; }
-    //! surplus-work ranking key: surplus per-tx work per vsize byte. Higher = included first.
+    //! Surplus per-tx work per vsize byte, rounded to a double: for display only (RPC).
+    //! Ordering never uses it; it compares exactly with CompareTxWorkRate().
     double GetTxWorkRate() const { return m_txwork_surplus.getdouble() / GetTxSize(); }
     const arith_uint256& GetTxWorkSurplusValue() const { return m_txwork_surplus; }
+    //! Exact comparison of this entry's surplus-work rate with another rate (see CompareTxWorkRate).
+    int CompareTxWorkRateTo(const arith_uint256& surplus, uint32_t vsize) const
+    {
+        return CompareTxWorkRate(m_txwork_surplus, static_cast<uint32_t>(GetTxSize()), surplus, vsize);
+    }
     size_t DynamicMemoryUsage() const { return nUsageSize; }
     const LockPoints& GetLockPoints() const { return lockPoints; }
 
     // Adjusts the descendant state.
     void UpdateDescendantState(int32_t modifySize, int64_t modifyCount);
     // Adjusts the ancestor state
-    void UpdateAncestorState(int32_t modifySize, int64_t modifyCount, int64_t modifySigOps);
+    void UpdateAncestorState(int32_t modifySize, int64_t modifyCount);
 
     // Update the LockPoints after a reorg
     void UpdateLockPoints(const LockPoints& lp) const
@@ -159,7 +188,6 @@ public:
 
     uint64_t GetCountWithAncestors() const { return m_count_with_ancestors; }
     int64_t GetSizeWithAncestors() const { return nSizeWithAncestors; }
-    int64_t GetSigOpCostWithAncestors() const { return nSigOpCostWithAncestors; }
 
     const Parents& GetRelayPoolParentsConst() const { return m_parents; }
     const Children& GetRelayPoolChildrenConst() const { return m_children; }

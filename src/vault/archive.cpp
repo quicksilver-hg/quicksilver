@@ -14,6 +14,7 @@
 #include <support/cleanse.h>
 #include <util/check.h>
 #include <util/fs_helpers.h>
+#include <util/time.h>
 #include <util/translation.h>
 #include <vault/crypter.h>
 #include <vault/scriptpubkeyman.h>
@@ -38,6 +39,7 @@ constexpr uint32_t VAULT_ARCHIVE_CONTAINER_VERSION{1};
 //! Deliberately above the 25,000 used for vault key encryption. An archive is decrypted
 //! once by hand, never on a hot path, so a slower derivation costs the user nothing.
 constexpr unsigned int VAULT_ARCHIVE_DERIVE_ROUNDS{200'000};
+constexpr uint32_t MAX_ARCHIVE_DERIVE_ROUNDS{1'000'000};
 //! Refuse absurd inputs rather than allocating from a hostile file.
 constexpr uint64_t MAX_ARCHIVE_TRANSACTIONS{5'000'000};
 constexpr uint64_t MAX_ARCHIVE_DESCRIPTORS{10'000};
@@ -51,22 +53,30 @@ struct CleansePlaintext {
     ~CleansePlaintext() { memory_cleanse(bytes.data(), bytes.size()); }
 };
 
-void SerializeArchiveTx(DataStream& s, const VaultArchiveTx& tx)
+void SerializeArchiveTx(DataStream& s, const VaultArchiveTx& tx, uint32_t version)
 {
     s << TX_WITH_WITNESS(tx.tx);
     s << tx.time_received << tx.time_smart << tx.from_me << tx.order_pos;
     s << tx.confirmed << tx.block_hash << tx.block_height << tx.block_index;
+    if (version >= 2) s << static_cast<uint8_t>(tx.state);
     s << tx.value_map;
 }
 
-void UnserializeArchiveTx(DataStream& s, VaultArchiveTx& tx)
+bool UnserializeArchiveTx(DataStream& s, VaultArchiveTx& tx, uint32_t version)
 {
     CMutableTransaction mtx;
     s >> TX_WITH_WITNESS(mtx);
     tx.tx = MakeTransactionRef(std::move(mtx));
     s >> tx.time_received >> tx.time_smart >> tx.from_me >> tx.order_pos;
     s >> tx.confirmed >> tx.block_hash >> tx.block_height >> tx.block_index;
+    if (version >= 2) {
+        uint8_t state;
+        s >> state;
+        if (state > static_cast<uint8_t>(VaultArchiveTxState::CONFLICTED)) return false;
+        tx.state = static_cast<VaultArchiveTxState>(state);
+    }
     s >> tx.value_map;
+    return true;
 }
 
 void SerializeArchiveDescriptor(DataStream& s, const VaultArchiveDescriptor& desc)
@@ -106,7 +116,7 @@ DataStream SerializeArchiveBody(const VaultArchive& archive)
     }
     body << static_cast<uint64_t>(archive.transactions.size());
     for (const VaultArchiveTx& tx : archive.transactions) {
-        SerializeArchiveTx(body, tx);
+        SerializeArchiveTx(body, tx, archive.version);
     }
     return body;
 }
@@ -123,7 +133,8 @@ util::Result<VaultArchive> UnserializeArchiveBody(DataStream& body)
 
     uint64_t descriptor_count{0};
     body >> descriptor_count;
-    if (descriptor_count > MAX_ARCHIVE_DESCRIPTORS) {
+    // Each descriptor occupies at least 36 bytes in the serialized body.
+    if (descriptor_count > MAX_ARCHIVE_DESCRIPTORS || descriptor_count > body.size() / 36) {
         return util::Error{_("Vault archive declares more descriptors than this build will read.")};
     }
     archive.descriptors.resize(descriptor_count);
@@ -133,7 +144,8 @@ util::Result<VaultArchive> UnserializeArchiveBody(DataStream& body)
 
     uint64_t address_count{0};
     body >> address_count;
-    if (address_count > MAX_ARCHIVE_ADDRESSES) {
+    // Even empty strings need their length bytes, plus the label and purpose flags.
+    if (address_count > MAX_ARCHIVE_ADDRESSES || address_count > body.size() / 4) {
         return util::Error{_("Vault archive declares more addresses than this build will read.")};
     }
     archive.addresses.resize(address_count);
@@ -143,12 +155,15 @@ util::Result<VaultArchive> UnserializeArchiveBody(DataStream& body)
 
     uint64_t transaction_count{0};
     body >> transaction_count;
-    if (transaction_count > MAX_ARCHIVE_TRANSACTIONS) {
+    // A serialized transaction and its metadata take much more than 32 bytes.
+    if (transaction_count > MAX_ARCHIVE_TRANSACTIONS || transaction_count > body.size() / 32) {
         return util::Error{_("Vault archive declares more transactions than this build will read.")};
     }
     archive.transactions.resize(transaction_count);
     for (VaultArchiveTx& tx : archive.transactions) {
-        UnserializeArchiveTx(body, tx);
+        if (!UnserializeArchiveTx(body, tx, archive.version)) {
+            return util::Error{_("Vault archive contains an unknown transaction state.")};
+        }
     }
     return archive;
 }
@@ -165,7 +180,7 @@ util::Result<VaultArchive> BuildVaultArchive(const CVault& vault)
     archive.genesis_hash = Params().GenesisBlock().GetHash();
     archive.vault_name = vault.GetName();
     archive.birth_time = vault.GetBirthTime();
-    archive.created_time = GetTime();
+    archive.created_time = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now());
 
     LOCK(vault.cs_vault);
 
@@ -223,6 +238,12 @@ util::Result<VaultArchive> BuildVaultArchive(const CVault& vault)
             tx.block_hash = confirmed->confirmed_block_hash;
             tx.block_height = confirmed->confirmed_block_height;
             tx.block_index = confirmed->position_in_block;
+        } else if (const auto* conflicted = std::get_if<TxStateBlockConflicted>(&wtx.m_state)) {
+            tx.state = VaultArchiveTxState::CONFLICTED;
+            tx.block_hash = conflicted->conflicting_block_hash;
+            tx.block_height = conflicted->conflicting_block_height;
+        } else if (const auto* inactive = std::get_if<TxStateInactive>(&wtx.m_state); inactive && inactive->abandoned) {
+            tx.state = VaultArchiveTxState::ABANDONED;
         } else if (std::holds_alternative<TxStateBlockUnresolved>(wtx.m_state)) {
             // The archive format records a confirmation height. Inventing one
             // would recreate the poisoned -1 state this path is designed to
@@ -340,7 +361,7 @@ util::Result<VaultArchive> ReadVaultArchive(const fs::path& path, const SecureSt
             return util::Error{strprintf(_("Vault archive %s is corrupt or truncated."), fs::PathToString(path))};
         }
     }
-    if (salt.size() != VAULT_CRYPTO_SALT_SIZE || rounds == 0 || ciphertext.empty()) {
+    if (salt.size() != VAULT_CRYPTO_SALT_SIZE || rounds == 0 || rounds > MAX_ARCHIVE_DERIVE_ROUNDS || ciphertext.empty()) {
         return util::Error{strprintf(_("Vault archive %s is corrupt."), fs::PathToString(path))};
     }
 
@@ -407,6 +428,12 @@ util::Result<VaultArchiveImportResult> ImportVaultArchive(CVault& vault, const V
     for (const VaultArchiveTx& archived : archive.transactions) {
         if (archived.tx == nullptr) {
             return util::Error{_("Vault archive transaction could not be restored into this vault.")};
+        }
+        if (archived.confirmed && (archived.block_height < 0 || archived.block_index < 0)) {
+            return util::Error{_("Vault archive has an invalid confirmed transaction position.")};
+        }
+        if (archive.version >= 2 && archived.state == VaultArchiveTxState::CONFLICTED && archived.block_height < 0) {
+            return util::Error{_("Vault archive has an invalid conflicted transaction height.")};
         }
     }
 
@@ -477,9 +504,14 @@ util::Result<VaultArchiveImportResult> ImportVaultArchive(CVault& vault, const V
             ++result.transactions_skipped;
             continue;
         }
-        const TxState state = archived.confirmed
-            ? TxState{TxStateConfirmed{archived.block_hash, archived.block_height, archived.block_index}}
-            : TxState{TxStateInactive{}};
+        TxState state{TxStateInactive{}};
+        if (archived.confirmed) {
+            state = TxStateConfirmed{archived.block_hash, archived.block_height, archived.block_index};
+        } else if (archive.version >= 2 && archived.state == VaultArchiveTxState::ABANDONED) {
+            state = TxStateInactive{/*abandoned=*/true};
+        } else if (archive.version >= 2 && archived.state == VaultArchiveTxState::CONFLICTED) {
+            state = TxStateBlockConflicted{archived.block_hash, archived.block_height};
+        }
         CVaultTx* wtx = vault.AddToVault(archived.tx, state, [&](CVaultTx& new_tx, bool /*new_entry*/) {
             new_tx.fFromMe = archived.from_me;
             for (const auto& [key, value] : archived.value_map) {

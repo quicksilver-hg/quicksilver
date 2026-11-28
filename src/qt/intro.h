@@ -6,6 +6,7 @@
 #ifndef QUICKSILVER_QT_INTRO_H
 #define QUICKSILVER_QT_INTRO_H
 
+#include <util/chaintype.h>
 #include <util/fs.h>
 
 #include <QDialog>
@@ -14,14 +15,12 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 
 static const bool DEFAULT_CHOOSE_DATADIR = false;
 
+class ArgsManager;
 class FreespaceChecker;
-
-namespace interfaces {
-    class Node;
-}
 
 namespace Ui {
     class Intro;
@@ -46,7 +45,8 @@ public:
 
     /**
      * The pruning choice the user made, or std::nullopt when they were not offered one
-     * because the selected data directory already holds a chain. Nullopt means "leave
+     * because the selected data directory already holds a chain, or because -prune given
+     * to this run locked the box (S0225-C-06). Nullopt means "leave
      * this node's storage policy alone": writing either value over an existing chain is
      * harmful, since pruning deletes history the operator already paid for and
      * unpruning leaves the node unable to start without -reindex.
@@ -81,6 +81,16 @@ public:
     static bool DataDirHasChainData(const fs::path& datadir, const std::string& net_subdir);
 
     /**
+     * The network this run will use, taking a chain= (or sandbox=, publictest=) set only
+     * in <datadir>'s config file into account. The dialog runs before InitConfig reads
+     * that file, and the existing-chain probe needs the network's subdirectory.
+     * Command-line values win over the file, as they will in InitConfig; a file that does
+     * not parse, or a conflicting combination, falls back to the command line alone and
+     * is left for InitConfig to report. Files named by includeconf are not followed.
+     */
+    static ChainType ChainTypeForDataDir(const ArgsManager& args, const fs::path& datadir);
+
+    /**
      * Determine data directory. Let the user choose if the current one doesn't exist.
      * Let the user configure additional preferences such as pruning.
      *
@@ -110,6 +120,8 @@ private:
     QMutex mutex;
     bool signalled{false};
     QString pathToCheck;
+    quint64 m_check_generation{0};
+    bool m_check_pending{true};
     const int64_t m_blockchain_size_gb;
     const int64_t m_chain_state_size_gb;
     //! Where the selected network keeps its chain, relative to the data directory.
@@ -118,14 +130,16 @@ private:
     bool m_datadir_has_chain{false};
     //! Total required space (in GB) depending on user choice (prune or not prune).
     int64_t m_required_space_gb{0};
+    //! Whether m_required_space_gb is the pruned figure rather than the full chain.
+    bool m_required_is_pruned{false};
     uint64_t m_bytes_available{0};
     int64_t m_prune_target_gb;
 
     void startThread();
     void checkPath(const QString &dataDir);
-    QString getPathToCheck();
+    std::pair<QString, quint64> getPathToCheck();
     void UpdatePruneLabels(bool prune_checked);
-    void UpdatePruneVisibility(const QString& data_dir);
+    void UpdatePruneVisibility();
     void UpdateFreeSpaceLabel();
 
     friend class FreespaceChecker;

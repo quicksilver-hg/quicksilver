@@ -76,11 +76,11 @@ struct NodeContext {
     std::unique_ptr<interfaces::Chain> chain;
     //! List of all chain clients (vault processes or other client) connected to node.
     std::vector<std::unique_ptr<interfaces::ChainClient>> chain_clients;
-    //! Reference to chain client that should used to load or create vaults
-    //! opened by the gui.
+    //! Node mining interface.
     std::unique_ptr<interfaces::Mining> mining;
     //! Opt-in background block-mining role (off by default).
     std::unique_ptr<MiningService> mining_service;
+    //! Chain client that loads or creates vaults opened by the GUI.
     interfaces::VaultLoader* vault_loader{nullptr};
     std::unique_ptr<CScheduler> scheduler;
     std::function<void()> rpc_interruption_point = [] {};

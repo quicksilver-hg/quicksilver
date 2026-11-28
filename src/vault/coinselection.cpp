@@ -188,12 +188,6 @@ CAmount SelectionResult::GetChange() const
     return selected_value - m_target;
 }
 
-void SelectionResult::Clear()
-{
-    m_selected_inputs.clear();
-    m_weight = 0;
-}
-
 void SelectionResult::AddInput(const OutputGroup& group)
 {
     InsertInputs(group.m_outputs);
@@ -223,11 +217,6 @@ std::vector<std::shared_ptr<COutput>> SelectionResult::GetShuffledInputVector() 
     std::vector<std::shared_ptr<COutput>> coins(m_selected_inputs.begin(), m_selected_inputs.end());
     std::shuffle(coins.begin(), coins.end(), FastRandomContext());
     return coins;
-}
-
-std::string COutput::ToString() const
-{
-    return strprintf("COutput(%s, %d, %d) [%s]", outpoint.hash.ToString(), outpoint.n, depth, FormatMoney(txout.nValue));
 }
 
 std::string GetAlgorithmName(const SelectionAlgorithm algo)

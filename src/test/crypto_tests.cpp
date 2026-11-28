@@ -16,6 +16,7 @@
 #include <crypto/sha3.h>
 #include <crypto/sha512.h>
 #include <crypto/muhash.h>
+#include <hash.h>
 #include <random.h>
 #include <streams.h>
 #include <test/util/random.h>
@@ -23,6 +24,10 @@
 #include <util/strencodings.h>
 
 #include <algorithm>
+#include <array>
+#include <string>
+#include <utility>
+#include <new>
 #include <vector>
 
 #include <boost/test/unit_test.hpp>
@@ -971,6 +976,16 @@ BOOST_AUTO_TEST_CASE(poly1305_testvector)
                  "0e410fa9d7a40ac582e77546be9a72bb");
 }
 
+BOOST_AUTO_TEST_CASE(poly1305_destructor_cleanses_context)
+{
+    alignas(Poly1305) std::array<std::byte, sizeof(Poly1305)> storage;
+    std::array<std::byte, Poly1305::KEYLEN> key;
+    key.fill(std::byte{0x5a});
+    auto* context = ::new (storage.data()) Poly1305(key);
+    context->~Poly1305();
+    BOOST_CHECK(std::all_of(storage.begin(), storage.end(), [](std::byte b) { return b == std::byte{}; }));
+}
+
 BOOST_AUTO_TEST_CASE(chacha20poly1305_testvectors)
 {
     // Note that in our implementation, the authentication is suffixed to the ciphertext.
@@ -1070,6 +1085,96 @@ BOOST_AUTO_TEST_CASE(hkdf_hmac_sha256_l32_tests)
                 "",
                 "",
                 "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d");
+}
+
+// S0111-A, S0112-A, S0113-A, S0113-B (c0203-23): every SHA-256 implementation
+// flag, the same known answers. Digests from Python hashlib, not from this code:
+//   hashlib.sha256(b'').hexdigest(), hashlib.sha256(b'abc'), hashlib.sha256(b'a'*1000),
+//   hashlib.sha256(hashlib.sha256(b'abc').digest()) and, for SHA256D64, block j of
+//   bytes(((j*64+k)*7+j*13+3)%256 for k in range(64)) double-hashed.
+// A flag whose kernel the host lacks falls back, so the digests hold everywhere;
+// the implementation actually chosen is logged per flag.
+BOOST_AUTO_TEST_CASE(sha256_every_implementation)
+{
+    struct RestoreAutoDetect {
+        ~RestoreAutoDetect() { SHA256AutoDetect(); }
+    } restore;
+
+    const auto hex_sha256 = [](Span<const unsigned char> data) {
+        unsigned char out[CSHA256::OUTPUT_SIZE];
+        CSHA256().Write(data.data(), data.size()).Finalize(out);
+        return HexStr(out);
+    };
+    const std::string a1000(1000, 'a');
+    const std::string abc{"abc"};
+    static const std::array<const char*, 9> D64_EXPECTED{
+        "083d6e6e2184d63a0876508b85a3c61a41c49989c894d3a51804b23ff14f012a",
+        "a633770ea3f15c809208716c923a68ef0506daf6a1c3b5b42a9e347cee744ebc",
+        "425dd3e8bb20304b2d8b536ac049bc0f1b8c184928dbbc5da276746e42772cd6",
+        "cf2619642a6f34cc12f23ee2a5cf3de6bf7162e68bfa65cd9eaa8275b95f1d5b",
+        "61a863d4551cd85c3af6a88d2529ef66d215111bf204be1340d672463b084120",
+        "7177f7455bdf3bb54641b9e4e6479e51c6d6a1314f77a40029ed961d9b7d218e",
+        "8a5a7e41425f88d65c8cee5228228a5552aaba154844ee70ad54280c6212aa3d",
+        "977d9ed1f7378ca52dd8803e5cf6314ded5e10d33a2511119ee083215207c51f",
+        "7be944896043897bfabff88cce258a352a5e406ba74b79403b530426668e52e1",
+    };
+    std::array<unsigned char, 64 * D64_EXPECTED.size()> d64_in;
+    for (size_t j = 0; j < D64_EXPECTED.size(); ++j) {
+        for (size_t k = 0; k < 64; ++k) d64_in[64 * j + k] = static_cast<unsigned char>(((j * 64 + k) * 7 + j * 13 + 3) % 256);
+    }
+
+    using namespace sha256_implementation;
+    for (const UseImplementation flag : {STANDARD, USE_SSE4, USE_AVX2, USE_SHANI, USE_SSE4_AND_AVX2, USE_SSE4_AND_SHANI, USE_ALL}) {
+        const std::string chosen{SHA256AutoDetect(flag)};
+        BOOST_TEST_MESSAGE("SHA256AutoDetect(" << int{flag} << ") -> " << chosen);
+        BOOST_CHECK_EQUAL(hex_sha256({}), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        BOOST_CHECK_EQUAL(hex_sha256(MakeUCharSpan(abc)), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        BOOST_CHECK_EQUAL(hex_sha256(MakeUCharSpan(a1000)), "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3");
+        unsigned char dbl[CHash256::OUTPUT_SIZE];
+        CHash256().Write(MakeUCharSpan(abc)).Finalize(dbl);
+        BOOST_CHECK_EQUAL(HexStr(dbl), "4f8b42c22dd3729b519ba6f68d2da7cc5b2d606d05daed5ad5128cc03e6c6358");
+        // 1..9 blocks, so the 2-, 4- and 8-way kernels and their remainders all run.
+        for (size_t blocks = 1; blocks <= D64_EXPECTED.size(); ++blocks) {
+            std::array<unsigned char, 32 * D64_EXPECTED.size()> out{};
+            SHA256D64(out.data(), d64_in.data(), blocks);
+            for (size_t j = 0; j < blocks; ++j) {
+                BOOST_CHECK_MESSAGE(HexStr(Span{out}.subspan(32 * j, 32)) == D64_EXPECTED[j],
+                                    "flag " << int{flag} << " (" << chosen << ") blocks " << blocks << " block " << j);
+            }
+        }
+    }
+}
+
+// S0114-A-05: SHA-512 padding boundaries ('a' * n around the 112/128-byte block
+// edges), one-shot and in uneven chunks. Digests: hashlib.sha512(b'a'*n).hexdigest().
+BOOST_AUTO_TEST_CASE(sha512_padding_sweep)
+{
+    static const std::array<std::pair<size_t, const char*>, 12> VECTORS{{
+        {0, "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"},
+        {1, "1f40fc92da241694750979ee6cf582f2d5d7d28e18335de05abc54d0560e0f5302860c652bf08d560252aa5e74210546f369fbbbce8c12cfc7957b2652fe9a75"},
+        {111, "fa9121c7b32b9e01733d034cfc78cbf67f926c7ed83e82200ef86818196921760b4beff48404df811b953828274461673c68d04e297b0eb7b2b4d60fc6b566a2"},
+        {112, "c01d080efd492776a1c43bd23dd99d0a2e626d481e16782e75d54c2503b5dc32bd05f0f1ba33e568b88fd2d970929b719ecbb152f58f130a407c8830604b70ca"},
+        {113, "55ddd8ac210a6e18ba1ee055af84c966e0dbff091c43580ae1be703bdb85da31acf6948cf5bd90c55a20e5450f22fb89bd8d0085e39f85a86cc46abbca75e24d"},
+        {127, "828613968b501dc00a97e08c73b118aa8876c26b8aac93df128502ab360f91bab50a51e088769a5c1eff4782ace147dce3642554199876374291f5d921629502"},
+        {128, "b73d1929aa615934e61a871596b3f3b33359f42b8175602e89f7e06e5f658a243667807ed300314b95cacdd579f3e33abdfbe351909519a846d465c59582f321"},
+        {129, "4f681e0bd53cda4b5a2041cc8a06f2eabde44fb16c951fbd5b87702f07aeab611565b19c47fde30587177ebb852e3971bbd8d3fd30da18d71037dfbd98420429"},
+        {239, "52c853cb8d907f3d4d6b889beb027985d7c273486d75f8baf26f80d24e90c74c6c3de3e22131582380a7d14d43f2941a31385439cd6ddc469f628015e50bf286"},
+        {240, "4c296d90c61052a62ffb1dd196f1b7b09373b1f93e71836baebf89690546b7595684dbe9467a8e484fa0d1094272b4344a7c24f5fee8daedeb0bf549c985ab5f"},
+        {255, "d8b5a659e365f704ab114ae7079a8da24fb9997b3052a4a63b37d654652bad6fbdd2b52d737e20a9d5ac3c5831d6afdd32ff737a3dd95269d2793bc2aa850aab"},
+        {256, "6a9169eb662f136d87374070e8828b3e615a7eca32a89446e9225b02832709be095e635c824a2bb70213ba2ea0ababac0809827843992c851903b7ac0c136699"},
+    }};
+    for (const auto& [n, expected] : VECTORS) {
+        const std::string input(n, 'a');
+        const auto* data = reinterpret_cast<const unsigned char*>(input.data());
+        unsigned char out[CSHA512::OUTPUT_SIZE];
+        CSHA512().Write(data, n).Finalize(out);
+        BOOST_CHECK_MESSAGE(HexStr(out) == expected, "one-shot n=" << n);
+        // Uneven chunks: 1, 2, 3, ... bytes.
+        CSHA512 chunked;
+        for (size_t pos = 0, step = 1; pos < n; pos += step, ++step) chunked.Write(data + pos, std::min(step, n - pos));
+        chunked.Finalize(out);
+        BOOST_CHECK_MESSAGE(HexStr(out) == expected, "chunked n=" << n);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(sha256d64)

@@ -257,18 +257,22 @@ class RPCPackagesTest(QuicksilverTestFramework):
         ])
 
         submitres = node.submitpackage([tx1["hex"], tx2["hex"], tx_child["hex"]])
-        assert_equal(submitres, {'package_msg': 'conflict-in-package', 'tx-results': {}, 'replaced-transactions': []})
+        unevaluated = {tx["wtxid"]: {"txid": tx["txid"], "error": "unevaluated"}
+                       for tx in (tx1, tx2, tx_child)}
+        assert_equal(submitres, {'package_msg': 'conflict-in-package', 'tx-results': unevaluated, 'replaced-transactions': []})
 
         # Submit tx1 to relaypool, then try the same package again
         node.sendrawtransaction(tx1["hex"])
 
         submitres = node.submitpackage([tx1["hex"], tx2["hex"], tx_child["hex"]])
-        assert_equal(submitres, {'package_msg': 'conflict-in-package', 'tx-results': {}, 'replaced-transactions': []})
+        assert_equal(submitres, {'package_msg': 'conflict-in-package', 'tx-results': unevaluated, 'replaced-transactions': []})
         assert tx_child["txid"] not in node.getrawrelaypool()
 
         # ... and without the in-relaypool ancestor tx1 included in the call
         submitres = node.submitpackage([tx2["hex"], tx_child["hex"]])
-        assert_equal(submitres, {'package_msg': 'package-not-child-with-unconfirmed-parents', 'tx-results': {}, 'replaced-transactions': []})
+        assert_equal(submitres, {'package_msg': 'package-not-child-with-unconfirmed-parents',
+                                 'tx-results': {tx["wtxid"]: unevaluated[tx["wtxid"]] for tx in (tx2, tx_child)},
+                                 'replaced-transactions': []})
 
         # Regardless of error type, the child can never enter the relaypool
         assert tx_child["txid"] not in node.getrawrelaypool()

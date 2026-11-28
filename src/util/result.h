@@ -9,6 +9,9 @@
 #include <attributes.h>
 #include <util/translation.h>
 
+#include <cassert>
+#include <type_traits>
+#include <utility>
 #include <variant>
 
 namespace util {

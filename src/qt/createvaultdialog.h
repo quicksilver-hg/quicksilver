@@ -8,13 +8,6 @@
 
 #include <QDialog>
 
-#include <memory>
-
-namespace interfaces {
-class ExternalSigner;
-} // namespace interfaces
-
-class VaultModel;
 
 namespace Ui {
     class CreateVaultDialog;
@@ -30,17 +23,11 @@ public:
     explicit CreateVaultDialog(QWidget* parent);
     virtual ~CreateVaultDialog();
 
-    void setSigners(const std::vector<std::unique_ptr<interfaces::ExternalSigner>>& signers);
-
     QString vaultName() const;
     bool isEncryptVaultChecked() const;
-    bool isDisablePrivateKeysChecked() const;
-    bool isMakeBlankVaultChecked() const;
-    bool isExternalSignerChecked() const;
 
 private:
     Ui::CreateVaultDialog *ui;
-    bool m_has_signers = false;
 };
 
 #endif // QUICKSILVER_QT_CREATEVAULTDIALOG_H

@@ -6,18 +6,16 @@
 #ifndef QUICKSILVER_POLICY_TRUC_POLICY_H
 #define QUICKSILVER_POLICY_TRUC_POLICY_H
 
-#include <consensus/amount.h>
 #include <policy/packages.h>
 #include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <txrelaypool.h>
-#include <util/result.h>
 
 #include <set>
 #include <string>
 
-// This module enforces rules for BIP 431 TRUC transactions which help make
-// replacement abilities more robust. A transaction with version=3 is treated as TRUC.
+// Version-3 transactions follow the TRUC relaypool topology restrictions,
+// which keep their unconfirmed replacement sets bounded.
 static constexpr decltype(CTransaction::version) TRUC_VERSION{3};
 
 // TRUC only allows 1 parent and 1 child when unconfirmed. This translates to a descendant set size

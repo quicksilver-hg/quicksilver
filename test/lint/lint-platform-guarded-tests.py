@@ -77,9 +77,8 @@ CASE_END = re.compile(r"^\}")
 # BENIGN = the platforms genuinely promise different things here. Correct as is.
 #
 # Adding a line here is a deliberate act: you are recording that one platform
-# will not run this code. Prefer a platform-neutral fixture -- system_tests.cpp
-# `run_command` pairs every case with a platform-appropriate command, and
-# gpu_solver_tests.cpp does the same with stub scripts: `write_scripted_stub`
+# will not run this code. Prefer a platform-neutral fixture -- gpu_solver_tests.cpp
+# pairs every case with a platform-appropriate stub script: `write_scripted_stub`
 # for anything a solver expresses by printing lines and exiting with a code,
 # `write_dripping_stub` when the gaps between lines are the point, and the
 # `*_both_platforms` stubs for the liveness cases. Between them those cover
@@ -123,9 +122,9 @@ ALLOWED_PARTIAL = {
     # -- BENIGN below: the platforms promise different things.
     ("src/test/fs_tests.cpp", "fsbridge_pathtostring"): "BENIGN: invalid UTF-8 round trip is undefined on Windows, where paths are Unicode",
     ("src/test/getarg_tests.cpp", "patharg"): "BENIGN: drive-letter paths have no POSIX counterpart",
-    ("src/test/system_tests.cpp", "run_command"): "BENIGN: every case paired with a platform-appropriate command",
     ("src/test/gpu_solver_tests.cpp", "solver_fault_hardware_and_process_failures"): "BENIGN: asserts each platform's own remedy text (TdrDelay vs dmesg)",
     ("src/test/net_peer_connection_tests.cpp", "test_addnode_getaddednodeinfo_and_connection_detection"): "BENIGN: OpenBSD does not support the IPv4 shorthand notation with omitted zero-bytes",
+    ("src/test/util_tests.cpp", "util_WriteBinaryFile_failure_keeps_old_content"): "BENIGN: the part-way write failure is injected with RLIMIT_FSIZE/SIGXFSZ, which Windows lacks; the blocked-temp-path failure and the replace run on both",
 }
 
 
@@ -210,9 +209,8 @@ def main() -> int:
         print("New platform-guarded test case(s). One platform will not run this code,")
         print("and nothing at runtime will say so -- no skip is reported and the ctest")
         print("count does not move.\n")
-        print("Prefer a platform-neutral fixture: system_tests.cpp `run_command` pairs")
-        print("each case with a platform-appropriate command, and gpu_solver_tests.cpp")
-        print("`*_both_platforms` does the same with stub scripts. If the contract")
+        print("Prefer a platform-neutral fixture: gpu_solver_tests.cpp `*_both_platforms`")
+        print("pairs each case with a platform-appropriate stub script. If the contract")
         print("genuinely differs by platform, add it to this lint's list with a reason.\n")
         for path, name in new_whole:
             print(f"  WHOLE   {path}: {name} (entire case skipped on one platform)")

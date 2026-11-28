@@ -42,6 +42,8 @@ private:
     QLabel* m_advisory{nullptr};
     cuckatoo::KernelPaths m_kernel_paths;
     QList<Row> m_rows;
+    //! The cards Automatic mode mines on, as cuckatoo::SelectDevices picks them.
+    QStringList m_automatic_ids;
     Mode m_mode{Mode::kAutomatic};
     bool m_mining_active{false};
 };

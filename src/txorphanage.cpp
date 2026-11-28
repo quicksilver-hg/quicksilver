@@ -28,12 +28,12 @@ bool TxOrphanage::AddTx(const CTransactionRef& tx, NodeId peer)
     // large transaction with a missing parent then we assume
     // it will rebroadcast it later, after the parent transaction(s)
     // have been mined or received.
-    // 100 orphans, each of which is at most 100,000 bytes big is
-    // at most 10 megabytes of orphans and somewhat more byprev index (in the worst case):
+    // Bound each orphan by standard transaction weight. The orphanage
+    // applies its own memory and per-peer limits separately.
     unsigned int sz = GetTransactionWeight(*tx);
     if (sz > MAX_STANDARD_TX_WEIGHT)
     {
-        LogDebug(HgLog::TXPACKAGES, "ignoring large orphan tx (size: %u, txid: %s, wtxid: %s)\n", sz, hash.ToString(), wtxid.ToString());
+        LogDebug(HgLog::TXPACKAGES, "ignoring large orphan tx (weight: %u, txid: %s, wtxid: %s)\n", sz, hash.ToString(), wtxid.ToString());
         return false;
     }
 

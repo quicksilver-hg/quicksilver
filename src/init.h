@@ -62,7 +62,8 @@ bool AppInitSanityChecks(const kernel::Context& kernel);
  */
 bool AppInitLockDirectories();
 /**
- * Initialize node and vault interface pointers. Has no prerequisites or side effects besides allocating memory.
+ * Create chain and mining interfaces through node.init and construct the vault runtime.
+ * @pre node.init must be initialized.
  */
 bool AppInitInterfaces(node::NodeContext& node);
 /**

@@ -158,4 +158,25 @@ BOOST_FIXTURE_TEST_CASE(coinstatsindex_requires_current_database_version, TestCh
     rebuilt_index.Stop();
 }
 
+BOOST_FIXTURE_TEST_CASE(coinstatsindex_reports_mint_allowance, TestChain100Setup)
+{
+    CoinStatsIndex index{interfaces::MakeChain(m_node), 1 << 20, true};
+    BOOST_REQUIRE(index.Init());
+    BOOST_REQUIRE(index.StartBackgroundSync());
+    IndexWaitSynced(index, *Assert(m_node.shutdown_signal));
+
+    const auto& coinbase = m_coinbase_txns.front();
+    const auto& output = coinbase->vout.front();
+    const auto tx = CreateValidRelayPoolTransaction(
+        coinbase, 0, 1, coinbaseKey, output.scriptPubKey, output.nValue, /*submit=*/true);
+    CreateAndProcessBlock({tx}, output.scriptPubKey);
+    m_node.validation_signals->SyncWithValidationInterfaceQueue();
+
+    const auto* tip = WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Tip());
+    const auto stats = index.LookUpStats(*tip);
+    BOOST_REQUIRE(stats);
+    BOOST_CHECK_EQUAL(stats->total_mint_allowance, Params().GetConsensus().nTxPowMint);
+    index.Stop();
+}
+
 BOOST_AUTO_TEST_SUITE_END()

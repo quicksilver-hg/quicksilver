@@ -10,18 +10,14 @@
 
 #include <common/args.h>
 #include <common/messages.h>
-#include <consensus/amount.h>
 #include <kernel/chainparams.h>
-#include <logging.h>
 #include <policy/policy.h>
 #include <tinyformat.h>
-#include <util/moneystr.h>
 #include <util/translation.h>
 
 #include <chrono>
-#include <memory>
+#include <limits>
 
-using common::AmountErrMsg;
 using kernel::RelayPoolLimits;
 using kernel::RelayPoolOptions;
 
@@ -58,7 +54,11 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& argsman, const CChainP
     relaypool_opts.permit_bare_multisig = argsman.GetBoolArg("-permitbaremultisig", DEFAULT_PERMIT_BAREMULTISIG);
 
     if (argsman.GetBoolArg("-datacarrier", DEFAULT_ACCEPT_DATACARRIER)) {
-        relaypool_opts.max_datacarrier_bytes = argsman.GetIntArg("-datacarriersize", MAX_OP_RETURN_RELAY);
+        const int64_t size{argsman.GetIntArg("-datacarriersize", MAX_OP_RETURN_RELAY)};
+        if (size < 0 || size > std::numeric_limits<unsigned>::max()) {
+            return util::Error{Untranslated("-datacarriersize must be between 0 and 4294967295")};
+        }
+        relaypool_opts.max_datacarrier_bytes = static_cast<unsigned>(size);
     } else {
         relaypool_opts.max_datacarrier_bytes = std::nullopt;
     }

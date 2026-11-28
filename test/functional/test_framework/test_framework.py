@@ -938,11 +938,6 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
         if not self.is_agent_compiled():
             raise SkipTest("quicksilver-agent has not been compiled.")
 
-    def skip_if_no_external_signer(self):
-        """Skip the running test if external signer support has not been compiled."""
-        if not self.is_external_signer_compiled():
-            raise SkipTest("external signer support has not been compiled.")
-
     def is_cli_compiled(self):
         """Checks whether quicksilver-cli was compiled."""
         return self.config["components"].getboolean("ENABLE_CLI")
@@ -950,10 +945,6 @@ class QuicksilverTestFramework(metaclass=QuicksilverTestMetaClass):
     def is_agent_compiled(self):
         """Checks whether quicksilver-agent was compiled."""
         return self.config["components"].getboolean("ENABLE_AGENT")
-
-    def is_external_signer_compiled(self):
-        """Checks whether external signer support was compiled."""
-        return self.config["components"].getboolean("ENABLE_EXTERNAL_SIGNER")
 
     def is_vault_compiled(self):
         """Checks whether the vault module was compiled."""

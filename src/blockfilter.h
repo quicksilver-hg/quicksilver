@@ -111,7 +111,7 @@ const std::string& ListBlockFilterTypes();
 /**
  * Select the elements of a BIP 158 basic filter for a block: every output script the
  * block creates, plus every output script it spends -- the latter recoverable only from
- * the block's undo data. Empty scripts and scripts starting with OP_RETURN are omitted.
+ * the block's undo data. Empty scripts are omitted. Newly created OP_RETURN outputs are also omitted.
  *
  * Exposed so the BIP 158 conformance vectors can drive element selection directly,
  * without going through Quicksilver's block deserializer, whose format has diverged from

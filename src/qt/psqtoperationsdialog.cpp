@@ -284,7 +284,7 @@ void PSQTOperationsDialog::showStatus(const QString &msg, StatusLevel level) {
     m_ui->statusBar->show();
 }
 
-size_t PSQTOperationsDialog::couldSignInputs(const PartiallySignedQuicksilverTransaction &psqtx) {
+size_t PSQTOperationsDialog::couldSignInputs() {
     if (!m_vault_model) {
         return 0;
     }
@@ -301,7 +301,7 @@ size_t PSQTOperationsDialog::couldSignInputs(const PartiallySignedQuicksilverTra
 
 void PSQTOperationsDialog::showTransactionStatus(const PartiallySignedQuicksilverTransaction &psqtx) {
     PSQTAnalysis analysis = AnalyzePSQT(psqtx);
-    size_t n_could_sign = couldSignInputs(psqtx);
+    size_t n_could_sign = couldSignInputs();
 
     switch (analysis.next) {
         case PSQTRole::UPDATER: {

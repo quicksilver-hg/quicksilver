@@ -4,6 +4,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+from test_framework.blocktools import PRUNE_FLOOR_MIB
 from test_framework.test_framework import QuicksilverTestFramework
 from test_framework.util import assert_raises_rpc_error
 
@@ -23,7 +24,7 @@ class VaultCrossChain(QuicksilverTestFramework):
 
         # Switch node 1 to publictest before starting it.
         self.nodes[1].chain = 'publictest'
-        self.nodes[1].extra_args = ['-maxconnections=0', '-prune=550'] # disable publictest sync
+        self.nodes[1].extra_args = ['-maxconnections=0', f'-prune={PRUNE_FLOOR_MIB}'] # disable publictest sync
         self.nodes[1].replace_in_config([('sandbox=', 'publictest='), ('[sandbox]', '[publictest]')])
 
         self.start_nodes()

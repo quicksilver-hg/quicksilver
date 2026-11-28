@@ -14,6 +14,7 @@
 #include <util/check.h>
 #include <util/overflow.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -29,6 +30,51 @@ FUZZ_TARGET(pow, .init = initialize_pow)
     FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());
     const Consensus::Params& consensus_params = Params().GetConsensus();
     std::vector<std::unique_ptr<CBlockIndex>> blocks;
+    {
+        // S0400-A-02: a valid retarget chain, built deliberately. Heights and
+        // links are consecutive, times are monotone, and the chain ends one
+        // block before a retarget boundary, so GetNextWorkRequired retargets.
+        // The result is checked against an independent computation that anchors
+        // on the previous period's last block (F-147), or genesis at the first.
+        const int64_t interval{consensus_params.DifficultyAdjustmentInterval()};
+        const int periods{fuzzed_data_provider.ConsumeIntegralInRange<int>(1, 3)};
+        const int last_height{static_cast<int>(periods * interval - 1)};
+        const arith_uint256 pow_limit{UintToArith256(consensus_params.powLimit)};
+        arith_uint256 start_target;
+        start_target.SetCompact(fuzzed_data_provider.ConsumeIntegral<uint32_t>());
+        if (start_target == 0 || start_target > pow_limit) start_target = pow_limit;
+        const uint32_t nbits{start_target.GetCompact()};
+        std::vector<std::unique_ptr<CBlockIndex>> chain;
+        uint32_t time{fuzzed_data_provider.ConsumeIntegralInRange<uint32_t>(0, 1U << 30)};
+        for (int height = 0; height <= last_height; ++height) {
+            CBlockHeader header;
+            header.nBits = nbits;
+            header.nTime = time;
+            auto index{std::make_unique<CBlockIndex>(header)};
+            index->pprev = chain.empty() ? nullptr : chain.back().get();
+            index->nHeight = height;
+            index->BuildSkip();
+            chain.push_back(std::move(index));
+            time += fuzzed_data_provider.ConsumeIntegralInRange<uint32_t>(0, 4 * consensus_params.nPowTargetSpacing);
+        }
+        const CBlockIndex* tip{chain.back().get()};
+        const unsigned int next{GetNextWorkRequired(tip, nullptr, consensus_params)};
+
+        const int anchor_height{std::max<int>(last_height - static_cast<int>(interval), 0)};
+        int64_t span{static_cast<int64_t>(tip->nTime) - static_cast<int64_t>(chain[anchor_height]->nTime)};
+        span = std::clamp<int64_t>(span, consensus_params.nPowTargetTimespan / 4, consensus_params.nPowTargetTimespan * 4);
+        arith_uint256 expected;
+        expected.SetCompact(nbits);
+        if (consensus_params.fPowNoRetargeting) {
+            Assert(next == nbits);
+        } else if (expected <= ~arith_uint256{} / arith_uint256{static_cast<uint64_t>(span)}) {
+            expected *= static_cast<uint32_t>(span);
+            expected /= arith_uint256{static_cast<uint64_t>(consensus_params.nPowTargetTimespan)};
+            if (expected > pow_limit) expected = pow_limit;
+            Assert(next == expected.GetCompact());
+        }
+        Assert(PermittedDifficultyTransition(consensus_params, last_height + 1, nbits, next));
+    }
     const uint32_t fixed_time = fuzzed_data_provider.ConsumeIntegral<uint32_t>();
     const uint32_t fixed_bits = fuzzed_data_provider.ConsumeIntegral<uint32_t>();
     LIMITED_WHILE(fuzzed_data_provider.remaining_bytes() > 0, 10000) {

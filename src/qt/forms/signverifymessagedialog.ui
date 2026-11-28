@@ -124,11 +124,6 @@
            <property name="placeholderText">
             <string>Click "Sign Message" to generate signature</string>
            </property>
-           <property name="font">
-            <font>
-             <italic>true</italic>
-            </font>
-           </property>
            <property name="readOnly">
             <bool>true</bool>
            </property>

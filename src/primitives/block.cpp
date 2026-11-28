@@ -12,6 +12,7 @@
 
 #include <cassert>
 #include <cstring>
+#include <sstream>
 
 uint256 CBlockHeader::GetHash() const
 {
@@ -26,8 +27,8 @@ std::array<unsigned char, CBlockHeader::PREPOW_SIZE> CBlockHeader::PrePowBytes()
     // nCongestion is placed BEFORE nNonce so that nNonce remains the trailing 4
     // bytes. Every solver entry point grinds the tail of this buffer in place
     // (solve_19/solve_28 via mutate_nonce, Solve28Bytes, dispatch.cpp's key
-    // reconstruction, the bench KeyedPrepow helpers, and the external CUDA solver
-    // in gpu/qsgpusolve-cuda.cu). Moving nNonce off the tail would silently make every
+    // reconstruction, the bench KeyedPrepow helpers, and the external graphics
+    // helper in gpu/qsgpusolve-opencl.cpp). Moving nNonce off the tail would silently make every
     // one of them grind the congestion field instead.
     DataStream ds;
     ds << nVersion << hashPrevBlock << hashMerkleRoot << nTime << nBits << nCongestion << nNonce;

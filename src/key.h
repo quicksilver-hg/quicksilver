@@ -130,7 +130,7 @@ public:
     void MakeNewKey(bool fCompressed);
 
     /**
-     * Convert the private key to a CPrivKey (serialized OpenSSL private key data).
+     * Convert the private key to a CPrivKey (SEC1-style DER private key data).
      * This is expensive.
      */
     CPrivKey GetPrivKey() const;
@@ -226,9 +226,9 @@ public:
 CKey GenerateRandomKey(bool compressed = true) noexcept;
 
 struct CExtKey {
-    unsigned char nDepth;
-    unsigned char vchFingerprint[4];
-    unsigned int nChild;
+    unsigned char nDepth{};
+    unsigned char vchFingerprint[4]{};
+    unsigned int nChild{};
     ChainCode chaincode;
     CKey key;
 
@@ -262,7 +262,7 @@ struct CExtKey {
  *  secret keys to libsecp256k1 functions expecting a `secp256k1_keypair`. For all other cases,
  *  CKey should be preferred.
  *
- *  A KeyPair can be created from a CKey with an optional merkle_root tweak (per BIP342). See
+ *  A KeyPair can be created from a CKey with an optional merkle_root tweak (per BIP341). See
  *  CKey::ComputeKeyPair for more details.
  */
 class KeyPair

@@ -3,6 +3,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <quicksilver-build-config.h> // IWYU pragma: keep
+
 #include <net_permissions.h>
 #include <netaddress.h>
 #include <netbase.h>
@@ -619,5 +621,62 @@ BOOST_AUTO_TEST_CASE(isbadport)
     std::iota(ports.begin(), ports.end(), 1);
     BOOST_CHECK_EQUAL(std::ranges::count_if(ports, IsBadPort), 85);
 }
+
+BOOST_AUTO_TEST_CASE(rfc9637_documentation_range)
+{
+    // 3fff::/20 (RFC 9637) is documentation space, like 2001:db8::/32: never valid, never routable.
+    for (const char* addr : {"3fff::", "3fff::1", "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff"}) {
+        const CNetAddr net{ResolveIP(addr)};
+        BOOST_CHECK_MESSAGE(net.IsRFC9637(), addr);
+        BOOST_CHECK_MESSAGE(!net.IsValid(), addr);
+        BOOST_CHECK_MESSAGE(!net.IsRoutable(), addr);
+    }
+    // Just outside the /20 on either side.
+    for (const char* addr : {"3ffe:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "3fff:1000::", "3fff:1000::1"}) {
+        const CNetAddr net{ResolveIP(addr)};
+        BOOST_CHECK_MESSAGE(!net.IsRFC9637(), addr);
+        BOOST_CHECK_MESSAGE(net.IsRoutable(), addr);
+    }
+    BOOST_CHECK(!ResolveIP("2001:0DB8::").IsRFC9637());
+}
+
+BOOST_AUTO_TEST_CASE(scope_id_follows_the_address)
+{
+    in6_addr link_local{};
+    link_local.s6_addr[0] = 0xfe;
+    link_local.s6_addr[1] = 0x80;
+    link_local.s6_addr[15] = 0x01;
+    const CNetAddr scoped{link_local, /*scope=*/7};
+    BOOST_CHECK_EQUAL(scoped.ToStringAddr(), "fe80::1%7");
+
+    // SetIP() takes the scope with the address, and clears it for an unscoped one.
+    CNetAddr target{ResolveIP("2001::2")};
+    target.SetIP(scoped);
+    BOOST_CHECK_EQUAL(target.ToStringAddr(), "fe80::1%7");
+    target.SetIP(ResolveIP("fe80::1"));
+    BOOST_CHECK_EQUAL(target.ToStringAddr(), "fe80::1");
+
+    // Neither encoding carries a scope: decoding into a scoped object leaves none behind.
+    for (const auto& params : {CNetAddr::V1, CNetAddr::V2}) {
+        DataStream stream{};
+        stream << params(ResolveIP("fe80::1"));
+        CNetAddr reused{scoped};
+        stream >> params(reused);
+        BOOST_CHECK_EQUAL(reused.ToStringAddr(), "fe80::1");
+    }
+
+    // The scope is not part of the address identity.
+    BOOST_CHECK(scoped == ResolveIP("fe80::1"));
+}
+
+#ifdef HAVE_SOCKADDR_UN
+BOOST_AUTO_TEST_CASE(unix_socket_path_needs_a_path)
+{
+    BOOST_CHECK(!IsUnixSocketPath("unix:"));
+    BOOST_CHECK(IsUnixSocketPath("unix:/tmp/tor.sock"));
+    BOOST_CHECK(IsUnixSocketPath("unix:x"));
+    BOOST_CHECK(!IsUnixSocketPath("/tmp/tor.sock"));
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()

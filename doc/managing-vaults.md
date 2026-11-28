@@ -21,11 +21,6 @@ By default, vaults are created in the `vaults` folder of the data directory, whi
 | --------------------|:------------------------------------------------------------|
 | Linux               | `/home/<user>/.quicksilver/vaults`                         |
 | Windows             | `C:\Users\<user>\AppData\Local\Quicksilver\vaults`         |
-| macOS (unsupported) | `/Users/<user>/Library/Application Support/Quicksilver/vaults` |
-
-macOS is not a supported platform. The macOS row records the vault
-directory an experimental self-built binary uses; no macOS build is
-produced or gated. See the [macOS support status](build-osx.md).
 
 ### 1.2 Encrypting the Vault
 
@@ -88,13 +83,16 @@ In the GUI, there is no specific menu item to unlock the vault. When the user se
 
 To backup the vault, the `backupvault` RPC or the `Backup Vault…` GUI menu item must be used to ensure the file is in a safe state when the copy is made.
 
-In the RPC, the destination parameter must include the name of the file. Otherwise, the command will return an error message like "Error: Vault backup failed!".
+In the RPC, the destination parameter must include the name of the file. If a file already exists at that path, the command returns an error unless the second parameter, `overwrite`, is `true`. On success, it returns the absolute path of the saved file.
 
-After copying, `backupvault` reopens the saved file and checks that it is a readable copy of this vault. If the check fails, it returns an error naming the cause; the file may still have been written, so make a new backup.
+`backupvault` writes the copy under a temporary name beside the destination, reopens it and checks that it is a readable copy of this vault. Only a copy that passes takes the destination's name, replacing the earlier file there when `overwrite` is `true`. If the check fails, it returns an error naming the cause, and any earlier file at the destination is unchanged; make a new backup.
 
 ```
 $ quicksilver-cli -rpcvault="vault-01" backupvault /home/node01/Backups/backup-01.dat
+$ quicksilver-cli -rpcvault="vault-01" backupvault /home/node01/Backups/daily.dat true
 ```
+
+The GUI backup runs the same steps, so a failed check leaves any earlier file at the chosen path unchanged.
 
 In the GUI, the vault is selected in the `Vault:` drop-down list on the application toolbar down the left-hand side. If this list is not present, the vault can be loaded with `Vault` -> `Open Vault` if necessary. Then, the backup can be done in `Vault` -> `Backup Vault…`.
 

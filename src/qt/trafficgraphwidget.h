@@ -39,7 +39,6 @@ private:
 
     QTimer* timer{nullptr};
     float fMax{0.0f};
-    std::chrono::minutes m_range{0};
     QQueue<float> vSamplesIn;
     QQueue<float> vSamplesOut;
     quint64 nLastBytesIn{0};

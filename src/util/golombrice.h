@@ -6,7 +6,6 @@
 #ifndef QUICKSILVER_UTIL_GOLOMBRICE_H
 #define QUICKSILVER_UTIL_GOLOMBRICE_H
 
-#include <util/fastrange.h>
 
 #include <streams.h>
 

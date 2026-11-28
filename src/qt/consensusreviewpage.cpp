@@ -57,8 +57,8 @@ ConsensusReviewPage::ConsensusReviewPage(uint64_t blockchain_size_gb, uint64_t c
         label->setWordWrap(true);
     };
     add_cost("consensusStorageCost", tr("Storage"), m_blockchain_size_gb == 0
-        ? tr("Transfers require proof-of-work. Enabling consensus records up to %1 GB of blockchain data. %2").arg(DEFAULT_PRUNE_TARGET_GB).arg(vaultWithoutConsensusSentence())
-        : tr("Storage is estimated at up to about %3 GB a year: %1 GB of block data and %2 GB of chain state. Default pruning caps the block data at %4 GB.")
+        ? tr("Transfers require proof-of-work. Enabling consensus keeps the full chain by default. Pruning is an option that caps the block data at %1 GB. %2").arg(DEFAULT_PRUNE_TARGET_GB).arg(vaultWithoutConsensusSentence())
+        : tr("Storage is estimated at up to about %3 GB a year: %1 GB of block data and %2 GB of chain state. The full chain is kept by default. Pruning is an option that caps the block data at %4 GB.")
               .arg(m_blockchain_size_gb)
               .arg(m_chain_state_size_gb)
               .arg(m_blockchain_size_gb + m_chain_state_size_gb)

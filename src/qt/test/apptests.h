@@ -29,6 +29,10 @@ private Q_SLOTS:
     void daemonIsFoundBesideTheBinaryThenOnPath();
 #endif
     void consensusTorPreflight();
+    void modalMessageReleasesAnUnansweredCaller();
+    void modalMessageRaisesWindowWithoutConsensus();
+    void vaultNameMustBeASingleDirectoryName();
+    void rpcConsoleAttachmentIsIdempotent();
     // This block runs before appTests. appTests starts the shared node and then
     // shuts it down; a slot after that cannot open Options with no client model
     // or prove a restart before the node thread exists. Sibling slices append

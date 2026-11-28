@@ -75,7 +75,7 @@
  *
  *     Rationale: random assignments are hard to influence for attackers.
  *
- * Together these rules strike a balance between being fast in non-adverserial conditions and minimizing
+ * Together these rules strike a balance between being fast in non-adversarial conditions and minimizing
  * susceptibility to censorship attacks. An attacker that races the network:
  * - Will be unsuccessful if all preferred connections are honest (and there is at least one preferred connection).
  * - If there are P preferred connections of which Ph>=1 are honest, the attacker can delay us from learning
@@ -145,7 +145,7 @@ public:
      */
     void ForgetTxHash(const uint256& txhash);
 
-    /** Find the txids to request now from peer.
+    /** Find the txids or wtxids to request now from the peer.
      *
      * It does the following:
      *  - Convert all REQUESTED announcements (for all txhashes/peers) with (expiry <= now) to COMPLETED ones.
@@ -178,7 +178,7 @@ public:
      *  provided peer and txhash, nothing happens.
      *
      * It should be called whenever a transaction or NOTFOUND was received from a peer. When the transaction is
-     * not needed entirely anymore, ForgetTxhash should be called instead of, or in addition to, this call.
+     * not needed entirely anymore, ForgetTxHash should be called instead of, or in addition to, this call.
      */
     void ReceivedResponse(NodeId peer, const uint256& txhash);
 

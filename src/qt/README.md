@@ -1,26 +1,20 @@
 This directory contains the source code for the Quicksilver graphical user interface (GUI). It uses the [Qt](https://www1.qt.io/developers/) cross-platform framework.
 
-The current precise version for Qt 5 is specified in [qt.mk](../../depends/packages/qt.mk).
+The GUI requires Qt 5.15. The version used by depends is pinned in [qt.mk](../../depends/packages/qt.mk).
 
 ## Compile and run
 
-See build instructions: [Unix](../../doc/build-unix.md), [macOS support status (unsupported)](../../doc/build-osx.md), [Windows](../../doc/build-windows-msvc.md), [FreeBSD](../../doc/build-freebsd.md), [NetBSD](../../doc/build-netbsd.md), [OpenBSD](../../doc/build-openbsd.md)
+See build instructions: [Unix](../../doc/build-unix.md), [Windows](../../doc/build-windows-msvc.md), [FreeBSD](../../doc/build-freebsd.md), [NetBSD](../../doc/build-netbsd.md), [OpenBSD](../../doc/build-openbsd.md)
 
 When following your systems build instructions, make sure to install the `Qt` dependencies.
 
-To run:
-
-```sh
-./build/bin/quicksilver
-```
+Configure with `-DBUILD_GUI=ON`. The desktop executable is `build/bin/quicksilver` on Unix and `build\bin\quicksilver.exe` on Windows.
 
 ## Files and Directories
 
 #### forms/
 
 - A directory that contains [Designer UI](https://doc.qt.io/qt-5.9/designer-using-a-ui-file.html) files. These files specify the characteristics of form elements in XML. Qt UI files can be edited with [Qt Creator](#using-qt-creator-as-an-ide) or using any text editor.
-
-#### locale/
 
 #### res/
 
@@ -37,11 +31,11 @@ To run:
 #### \*model.(h/cpp)
 
 - The model. When it has a corresponding controller, it generally inherits from  [QAbstractTableModel](https://doc.qt.io/qt-5/qabstracttablemodel.html). Models that are used by controllers as helpers inherit from other Qt classes like [QValidator](https://doc.qt.io/qt-5/qvalidator.html).
-- ClientModel is used by the main application `quicksilvergui` and several models like `peertablemodel`.
+- `ClientModel` connects the node to the main window and owns the peer and ban table models.
 
 #### \*page.(h/cpp)
 
-- A controller. `:NAMEpage.cpp` generally includes `:NAMEmodel.h` and `forms/:NAME.page.ui` with a similar `:NAME`.
+- Pages such as `DesktopLaunchPage`, `MineMintPage` and `NetworkPage` compose the widgets for each desktop destination.
 
 #### \*dialog.(h/cpp)
 
@@ -59,11 +53,8 @@ To run:
 
 * UI elements like QuicksilverAmountField, which inherit from QWidget.
 * `quicksilverunits.(h/cpp)`: Quicksilver / cinnabar display and amount handling
-* `callback.h`
 * `guiconstants.h`: UI colors, app name, etc.
 * `guiutil.h`: several helper functions
-* `macdockiconhandler.(h/mm)`: macOS dock icon handler
-* `macnotificationhandler.(h/mm)`: display notifications in macOS
 
 ## Contribute
 
@@ -72,11 +63,6 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for general guidelines.
 ## Using Qt Creator as an IDE
 
 [Qt Creator](https://www.qt.io/product/development-tools) is a powerful tool which packages a UI designer tool (Qt Designer) and a C++ IDE into one application. This is especially useful if you want to change the UI layout.
-
-The macOS notes in this section describe Qt Creator itself, not a supported
-Quicksilver build. Quicksilver 0.1.x has never been built, run, or gated on
-macOS, and its GUI has never been launched there; see the
-[macOS support status](../../doc/build-osx.md).
 
 #### Download Qt Creator
 

@@ -10,35 +10,19 @@
 #include <consensus/amount.h>
 #include <consensus/merkle.h>
 #include <consensus/params.h>
-#include <hash.h>
 #include <kernel/messagestartchars.h>
-#include <logging.h>
 #include <pow.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
-#include <script/interpreter.h>
 #include <script/script.h>
 #include <uint256.h>
+#include <util/check.h>
 #include <util/chaintype.h>
-#include <util/strencodings.h>
 
-#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
-#include <type_traits>
-
-using namespace util::hex_literals;
-
-// Workaround MSVC bug triggering C7595 when calling consteval constructors in
-// initializer lists.
-// A fix may be on the way:
-// https://developercommunity.visualstudio.com/t/consteval-conversion-function-fails/1579014
-#if defined(_MSC_VER)
-auto consteval_ctor(auto&& input) { return input; }
-#else
-#define consteval_ctor(input) (input)
-#endif
+#include <utility>
 
 static CBlock CreateGenesisBlock(const char* pszTimestamp, const CScript& genesisOutputScript, uint32_t nTime, uint32_t nNonce, uint32_t nBits, int32_t nVersion, const CAmount& genesisReward)
 {
@@ -80,7 +64,6 @@ public:
         // Quicksilver mainnet opens with every buried deployment already active:
         // pow_tests/mainnet_has_no_inherited_activation_heights.
         consensus.BIP34Height = 1;
-        consensus.BIP34Hash = uint256{};
         consensus.BIP65Height = 1;
         consensus.BIP66Height = 1;
         consensus.CSVHeight = 1;
@@ -101,7 +84,7 @@ public:
         consensus.powLimit = uint256{"3fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nEdgeBits = 28; // Quicksilver block PoW (Cuckatoo); unified with the per-tx PoW graph size so one E28 solver serves both. Block difficulty comes from the target (cycles-per-block), not a larger graph.
         consensus.nTxEdgeBits = 28; // Quicksilver per-tx PoW (Cuckatoo); MUST equal nEdgeBits — r = 1 depends on it
-        consensus.txPowLimit = uint256{"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}; // permissive until calibration tightens it
+        consensus.txPowLimit = uint256{"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}; // Maximum target before the congestion adjustment.
         consensus.nMaxAnchorAge = 100; // anchor-recency window W: ~8h @ 5-min blocks
         consensus.nCongestionTargetPermille = 500;   // calibrated per-transaction PoW: T=0.5
         consensus.nCongestionStepDenom      = 4;      // calibrated per-transaction PoW: s=0.25 (faster response @ 5-min blocks)
@@ -157,18 +140,14 @@ public:
             {17000, anchor_17000_hash, anchor_17000_work},
         });
 
-        /**
-         * The message start string is designed to be unlikely to occur in normal data.
-         * The characters are rarely used upper ASCII, not valid as UTF-8, and produce
-         * a large 32-bit integer with any alignment.
-         */
+        // The mainnet message prefix is the ASCII sequence HGQS.
         pchMessageStart[0] = 0x48; // 'H'
         pchMessageStart[1] = 0x47; // 'G'
         pchMessageStart[2] = 0x51; // 'Q'
         pchMessageStart[3] = 0x53; // Quicksilver mainnet
         nDefaultPort = 9555;
         m_onion_service_port = 9556;  // RPC is 9554, so P2P+1 is free here
-        nPruneAfterHeight = 1000;
+        nPruneAfterHeight = 20000;
         // Quicksilver: these are FIRST-YEAR growth figures, not a snapshot of a chain
         // that already exists — this chain starts at height 0, so a snapshot would be
         // zero and would tell a prospective operator nothing about the commitment they
@@ -204,6 +183,7 @@ public:
         base58Prefixes[EXT_SECRET_KEY] = {0x03, 0xF7, 0x23, 0xD8}; // Quicksilver "qprv"
 
         bech32_hrp = "hg";
+        Assert(consensus.nTxEdgeBits == consensus.nEdgeBits);
 
         // Peer discovery of last resort. The onion seed runs on maintainer hardware;
         // doc/bootstrapping.md documents -addnode for anyone who prefers not to rely
@@ -233,7 +213,6 @@ public:
         m_chain_type = ChainType::PUBLIC_TEST;
         m_slip44_coin_type = 1; // SLIP-44 testnet (all coins)
         consensus.BIP34Height = 1;
-        consensus.BIP34Hash = uint256{};
         consensus.BIP65Height = 1;
         consensus.BIP66Height = 1;
         consensus.CSVHeight = 1;
@@ -256,7 +235,7 @@ public:
         consensus.powLimit = uint256{"3fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
         consensus.nEdgeBits = 28; // Quicksilver block PoW (Cuckatoo); unified with the per-tx PoW graph size so one E28 solver serves both. Block difficulty comes from the target (cycles-per-block), not a larger graph.
         consensus.nTxEdgeBits = 28; // Quicksilver per-tx PoW (Cuckatoo); MUST equal nEdgeBits — r = 1 depends on it
-        consensus.txPowLimit = uint256{"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}; // permissive until calibration tightens it
+        consensus.txPowLimit = uint256{"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}; // Maximum target before the congestion adjustment.
         consensus.nMaxAnchorAge = 100; // anchor-recency window W: ~8h @ 5-min blocks
         consensus.nCongestionTargetPermille = 500;   // calibrated per-transaction PoW: T=0.5
         consensus.nCongestionStepDenom      = 4;      // calibrated per-transaction PoW: s=0.25 (faster response @ 5-min blocks)
@@ -301,7 +280,7 @@ public:
         pchMessageStart[3] = 0x56; // Quicksilver publictest (bumped at the F-147 re-mint; 0x55 was the pre-F-147 chain)
         nDefaultPort = 19557;
         m_onion_service_port = 19559;  // NOT P2P+1: 19558 is this network's RPC port
-        nPruneAfterHeight = 1000;
+        nPruneAfterHeight = 20000;
         // Same consensus parameters as main, so the same first-year growth applies.
         m_assumed_blockchain_size = 1;
         m_assumed_chain_state_size = 1;
@@ -336,6 +315,7 @@ public:
         base58Prefixes[EXT_SECRET_KEY] = {0x03, 0xE2, 0xB5, 0x09}; // Quicksilver publictest "pqrv"
 
         bech32_hrp = "phg";
+        Assert(consensus.nTxEdgeBits == consensus.nEdgeBits);
 
         fDefaultConsistencyChecks = false;
         m_is_mockable_chain = false;
@@ -361,7 +341,6 @@ public:
         m_chain_type = ChainType::SANDBOX;
         m_slip44_coin_type = 1; // SLIP-44 testnet (all coins)
         consensus.BIP34Height = 1; // Always active unless overridden
-        consensus.BIP34Hash = uint256();
         consensus.BIP65Height = 1;  // Always active unless overridden
         consensus.BIP66Height = 1;  // Always active unless overridden
         consensus.CSVHeight = 1;    // Always active unless overridden
@@ -475,7 +454,7 @@ public:
         m_is_mockable_chain = true;
 
         chainTxData = ChainTxData{
-            // Local and mockable, like upstream regtest; left at zero, so verification progress stays 1.0 (F-425).
+            // Sandbox has no transaction-rate estimate, so verification progress stays 1.0 (F-425).
             0,
             0,
             0
@@ -488,6 +467,7 @@ public:
         base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x21, 0x14, 0xC4}; // Quicksilver sandbox "sqrv"
 
         bech32_hrp = "shg";
+        Assert(consensus.nTxEdgeBits == consensus.nEdgeBits);
     }
 };
 

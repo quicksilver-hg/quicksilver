@@ -5,16 +5,15 @@
 
 #include <util/asmap.h>
 
-#include <clientversion.h>
 #include <logging.h>
 #include <serialize.h>
 #include <streams.h>
 #include <util/fs.h>
 
-#include <algorithm>
 #include <bit>
 #include <cassert>
 #include <cstdio>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -90,7 +89,7 @@ uint32_t Interpret(const std::vector<bool> &asmap, const std::vector<bool> &ip)
 {
     std::vector<bool>::const_iterator pos = asmap.begin();
     const std::vector<bool>::const_iterator endpos = asmap.end();
-    uint8_t bits = ip.size();
+    size_t bits = ip.size();
     uint32_t default_asn = 0;
     uint32_t jump, match, matchlen;
     Instruction opcode;
@@ -127,12 +126,13 @@ uint32_t Interpret(const std::vector<bool> &asmap, const std::vector<bool> &ip)
             break; // Instruction straddles EOF
         }
     }
-    assert(false); // Reached EOF without RETURN, or aborted (see any of the breaks above) - should have been caught by SanityCheckASMap below
+    // Malformed caller-supplied maps may reach here without a prior sanity check.
     return 0; // 0 is not a valid ASN
 }
 
 bool SanityCheckASMap(const std::vector<bool>& asmap, int bits)
 {
+    if (asmap.size() > std::numeric_limits<uint32_t>::max() || bits < 0) return false;
     const std::vector<bool>::const_iterator begin = asmap.begin(), endpos = asmap.end();
     std::vector<bool>::const_iterator pos = begin;
     std::vector<std::pair<uint32_t, int>> jumps; // All future positions we may jump to (bit offset in asmap -> bits to consume left)
@@ -205,11 +205,12 @@ std::vector<bool> DecodeAsmap(fs::path path)
         return bits;
     }
     file.seek(0, SEEK_END);
-    int length = file.tell();
+    const int64_t length = file.tell();
+    if (length < 0 || length > std::numeric_limits<uint32_t>::max() / 8) return {};
     LogInfo(HgLog::INIT, "Opened asmap file %s (%d bytes) from disk\n", fs::quoted(fs::PathToString(path)), length);
     file.seek(0, SEEK_SET);
     uint8_t cur_byte;
-    for (int i = 0; i < length; ++i) {
+    for (int64_t i = 0; i < length; ++i) {
         file >> cur_byte;
         for (int bit = 0; bit < 8; ++bit) {
             bits.push_back((cur_byte >> bit) & 1);

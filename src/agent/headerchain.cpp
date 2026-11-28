@@ -6,12 +6,12 @@
 
 #include <consensus/consensus.h>
 #include <pow.h>
-#include <util/check.h>
 #include <util/time.h>
 
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <stdexcept>
 
 namespace agent {
 
@@ -49,7 +49,9 @@ HeaderChain::HeaderEntry::HeaderEntry(const CBlockHeader& header)
 HeaderChain::HeaderChain(const Consensus::Params& params, const CBlockHeader& genesis)
     : m_params{params}
 {
-    Assume(genesis.GetHash() == m_params.hashGenesisBlock);
+    if (genesis.GetHash() != m_params.hashGenesisBlock) {
+        throw std::invalid_argument("agent header chain: genesis does not match the chain parameters");
+    }
     HeaderEntry& entry{Append(genesis, nullptr)};
     m_tip = entry.index.get();
     // m_congestion is no longer seeded here: it is a header field, so CBlockIndex's

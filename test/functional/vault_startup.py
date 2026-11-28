@@ -59,7 +59,8 @@ class VaultStartupTest(QuicksilverTestFramework):
         self.nodes[0].unloadvault(vault_name='w4', load_on_startup=False)
         self.nodes[0].loadvault(filename='w3', load_on_startup=True)
         self.nodes[0].loadvault(filename='')
-        self.restart_node(0)
+        # Older configurations may still set this now-ignored hidden option.
+        self.restart_node(0, extra_args=['-flushvault=1'])
         assert_equal(set(self.nodes[0].listvaults()), set(('w2', 'w3')))
 
 if __name__ == '__main__':

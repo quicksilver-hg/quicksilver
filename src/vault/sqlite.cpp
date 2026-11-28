@@ -112,15 +112,19 @@ static void SetPragma(sqlite3* db, const std::string& key, const std::string& va
 Mutex SQLiteDatabase::g_sqlite_mutex;
 int SQLiteDatabase::g_sqlite_count = 0;
 
-SQLiteDatabase::SQLiteDatabase(const fs::path& dir_path, const fs::path& file_path, const DatabaseOptions& options, bool mock)
-    : VaultDatabase(), m_mock(mock), m_dir_path(fs::PathToString(dir_path)), m_file_path(fs::PathToString(file_path)), m_write_semaphore(1), m_use_unsafe_sync(options.use_unsafe_sync), m_read_only(options.read_only)
+SQLiteDatabase::SQLiteDatabase(const fs::path& dir_path, const fs::path& file_path, const DatabaseOptions& options)
+    : VaultDatabase(), m_dir_path(fs::PathToString(dir_path)), m_file_path(fs::PathToString(file_path)), m_write_semaphore(1), m_use_unsafe_sync(options.use_unsafe_sync), m_read_only(options.read_only)
 {
+    bool registered{false};
+    try {
     {
         LOCK(g_sqlite_mutex);
         LogInfo(HgLog::VAULTDB, "ready sqlite_version=%s\n", SQLiteDatabaseVersion());
         LogInfo(HgLog::VAULTDB, "loading dir=%s\n", m_dir_path);
 
-        if (++g_sqlite_count == 1) {
+        ++g_sqlite_count;
+        registered = true;
+        if (g_sqlite_count == 1) {
             // Setup logging
             int ret = sqlite3_config(SQLITE_CONFIG_LOG, ErrorLogCallback, nullptr);
             if (ret != SQLITE_OK) {
@@ -138,11 +142,10 @@ SQLiteDatabase::SQLiteDatabase(const fs::path& dir_path, const fs::path& file_pa
         }
     }
 
-    try {
         Open();
-    } catch (const std::runtime_error&) {
-        // If open fails, cleanup this object and rethrow the exception
-        Cleanup();
+    } catch (...) {
+        // Balance the global SQLite reference even if configuration or open throws.
+        if (registered) Cleanup();
         throw;
     }
 }
@@ -177,7 +180,14 @@ void SQLiteDatabase::Cleanup() noexcept
 {
     AssertLockNotHeld(g_sqlite_mutex);
 
-    Close();
+    if (m_db) {
+        const int close_result{sqlite3_close_v2(m_db)};
+        if (close_result != SQLITE_OK) {
+            LogInfo(HgLog::VAULTDB, "SQLiteDatabase: Failed to close during cleanup: %s\n", sqlite3_errstr(close_result));
+        } else {
+            m_db = nullptr;
+        }
+    }
 
     LOCK(g_sqlite_mutex);
     if (--g_sqlite_count == 0) {
@@ -248,12 +258,8 @@ bool SQLiteDatabase::Verify(bilingual_str& error)
 void SQLiteDatabase::Open()
 {
     int flags = SQLITE_OPEN_FULLMUTEX | (m_read_only ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
-    if (m_mock) {
-        flags |= SQLITE_OPEN_MEMORY; // In memory database for mock db
-    }
-
     if (m_db == nullptr) {
-        if (!m_mock && !m_read_only) {
+        if (!m_read_only) {
             TryCreateDirectories(fs::PathFromString(m_dir_path));
         }
         int ret = sqlite3_open_v2(m_file_path.c_str(), &m_db, flags, nullptr);
@@ -324,19 +330,35 @@ void SQLiteDatabase::Open()
 
     // Do the db setup things because the table doesn't exist only when we are creating a new vault
     if (!table_exists) {
-        ret = sqlite3_exec(m_db, "CREATE TABLE main(key BLOB PRIMARY KEY NOT NULL, value BLOB NOT NULL)", nullptr, nullptr, nullptr);
+        // S0193-B-03: one transaction, so a crash or error part way cannot leave a table
+        // without the application id or schema version (a file no build recognises).
+        ret = sqlite3_exec(m_db, "BEGIN TRANSACTION", nullptr, nullptr, nullptr);
         if (ret != SQLITE_OK) {
-            throw std::runtime_error(strprintf("SQLiteDatabase: Failed to create new database: %s\n", sqlite3_errstr(ret)));
+            throw std::runtime_error(strprintf("SQLiteDatabase: Failed to begin creating a new database: %s\n", sqlite3_errstr(ret)));
         }
+        try {
+            ret = sqlite3_exec(m_db, "CREATE TABLE main(key BLOB PRIMARY KEY NOT NULL, value BLOB NOT NULL)", nullptr, nullptr, nullptr);
+            if (ret != SQLITE_OK) {
+                throw std::runtime_error(strprintf("SQLiteDatabase: Failed to create new database: %s\n", sqlite3_errstr(ret)));
+            }
 
-        // Set the application id
-        uint32_t app_id = ReadBE32(Params().MessageStart().data());
-        SetPragma(m_db, "application_id", strprintf("%d", static_cast<int32_t>(app_id)),
-                  "Failed to set the application id");
+            // Set the application id
+            uint32_t app_id = ReadBE32(Params().MessageStart().data());
+            SetPragma(m_db, "application_id", strprintf("%d", static_cast<int32_t>(app_id)),
+                      "Failed to set the application id");
 
-        // Set the user version
-        SetPragma(m_db, "user_version", strprintf("%d", VAULT_SCHEMA_VERSION),
-                  "Failed to set the vault schema version");
+            // Set the user version
+            SetPragma(m_db, "user_version", strprintf("%d", VAULT_SCHEMA_VERSION),
+                      "Failed to set the vault schema version");
+
+            ret = sqlite3_exec(m_db, "COMMIT TRANSACTION", nullptr, nullptr, nullptr);
+            if (ret != SQLITE_OK) {
+                throw std::runtime_error(strprintf("SQLiteDatabase: Failed to finish creating a new database: %s\n", sqlite3_errstr(ret)));
+            }
+        } catch (...) {
+            sqlite3_exec(m_db, "ROLLBACK TRANSACTION", nullptr, nullptr, nullptr);
+            throw;
+        }
     }
 }
 
@@ -406,7 +428,27 @@ SQLiteBatch::SQLiteBatch(SQLiteDatabase& database)
     // Make sure we have a db handle
     assert(m_database.m_db);
 
-    SetupSQLStatements();
+    try {
+        SetupSQLStatements();
+    } catch (...) {
+        sqlite3_finalize(m_read_stmt);
+        sqlite3_finalize(m_insert_stmt);
+        sqlite3_finalize(m_overwrite_stmt);
+        sqlite3_finalize(m_delete_stmt);
+        sqlite3_finalize(m_delete_prefix_stmt);
+        throw;
+    }
+}
+
+SQLiteBatch::~SQLiteBatch()
+{
+    try {
+        Close();
+    } catch (const std::exception& e) {
+        LogInfo(HgLog::VAULTDB, "SQLiteBatch: Failed to close batch: %s\n", e.what());
+    } catch (...) {
+        LogInfo(HgLog::VAULTDB, "SQLiteBatch: Failed to close batch\n");
+    }
 }
 
 void SQLiteBatch::Close()
@@ -445,16 +487,16 @@ void SQLiteBatch::Close()
     }
 
     if (force_conn_refresh) {
-        m_database.Close();
         try {
-            m_database.Open();
-            // If TxnAbort failed and we refreshed the connection, the semaphore was not released, so release it here to avoid deadlocks on future writes.
-            m_database.m_write_semaphore.post();
-        } catch (const std::runtime_error&) {
-            // If open fails, cleanup this object and rethrow the exception
             m_database.Close();
+            m_database.Open();
+        } catch (...) {
+            try { m_database.Close(); } catch (const std::exception&) {}
+            m_database.m_write_semaphore.post();
             throw;
         }
+        // TxnAbort failed, so it could not release the semaphore itself.
+        m_database.m_write_semaphore.post();
     }
 }
 

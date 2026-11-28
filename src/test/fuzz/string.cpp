@@ -35,8 +35,6 @@
 #include <string>
 #include <vector>
 
-using common::AmountErrMsg;
-using common::AmountHighWarn;
 using common::ResolveErrMsg;
 using util::ContainsNoNUL;
 using util::Join;
@@ -51,8 +49,6 @@ FUZZ_TARGET(string)
     const std::string random_string_2 = fuzzed_data_provider.ConsumeRandomLengthString(32);
     const std::vector<std::string> random_string_vector = ConsumeRandomLengthStringVector(fuzzed_data_provider);
 
-    (void)AmountErrMsg(random_string_1, random_string_2);
-    (void)AmountHighWarn(random_string_1);
     BlockFilterType block_filter_type;
     (void)BlockFilterTypeByName(random_string_1, block_filter_type);
     (void)Capitalize(random_string_1);
@@ -82,7 +78,7 @@ FUZZ_TARGET(string)
     } catch (const std::runtime_error&) {
     }
     (void)SanitizeString(random_string_1);
-    (void)SanitizeString(random_string_1, fuzzed_data_provider.ConsumeIntegralInRange<int>(0, 3));
+    (void)SanitizeString(random_string_1, fuzzed_data_provider.ConsumeIntegralInRange<int>(SAFE_CHARS_DEFAULT, SAFE_CHARS_URI));
 #ifndef WIN32
     (void)ShellEscape(random_string_1);
 #endif // WIN32

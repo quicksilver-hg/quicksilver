@@ -6,6 +6,8 @@
 #include <node/blockmanager_args.h>
 
 #include <common/args.h>
+#include <node/interface_ui.h>
+#include <node/prune_args.h>
 #include <node/blockstorage.h>
 #include <node/database_args.h>
 #include <tinyformat.h>
@@ -14,9 +16,18 @@
 #include <validation.h>
 
 #include <cstdint>
+#include <limits>
 
 namespace node {
-util::Result<void> ApplyArgsManOptions(const ArgsManager& args, BlockManager::Options& opts)
+static constexpr uint64_t MIN_DISK_SPACE_FOR_SANDBOX_BLOCK_FILES{550ULL * 1024 * 1024};
+
+uint64_t PruneTargetFloor(const CChainParams& chainparams)
+{
+    return chainparams.GetChainType() == ChainType::SANDBOX
+        ? MIN_DISK_SPACE_FOR_SANDBOX_BLOCK_FILES : MIN_DISK_SPACE_FOR_BLOCK_FILES;
+}
+
+util::Result<void> ApplyArgsManOptions(const ArgsManager& args, BlockManager::Options& opts, bool warn_on_adjustment)
 {
     if (auto value{args.GetBoolArg("-blocksxor")}) opts.use_xor = *value;
     // block pruning; get the amount of disk space (in MiB) to allot for block & undo files
@@ -24,12 +35,20 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& args, BlockManager::Op
     if (nPruneArg < 0) {
         return util::Error{_("Prune cannot be configured with a negative value.")};
     }
+    if (static_cast<uint64_t>(nPruneArg) > std::numeric_limits<uint64_t>::max() / (1024 * 1024)) {
+        return util::Error{_("Prune target is too large.")};
+    }
     uint64_t nPruneTarget{uint64_t(nPruneArg) * 1024 * 1024};
     if (nPruneArg == 1) { // manual pruning: -prune=1
         nPruneTarget = BlockManager::PRUNE_TARGET_MANUAL;
     } else if (nPruneTarget) {
-        if (nPruneTarget < MIN_DISK_SPACE_FOR_BLOCK_FILES) {
-            return util::Error{strprintf(_("Prune configured below the minimum of %d MiB.  Please use a higher number."), MIN_DISK_SPACE_FOR_BLOCK_FILES / 1024 / 1024)};
+        const uint64_t floor{PruneTargetFloor(opts.chainparams)};
+        if (nPruneTarget < floor) {
+            if (warn_on_adjustment) {
+                InitWarning(strprintf(_("Configured -prune target %u MiB is below the minimum for this chain; using %u MiB."),
+                                      nPruneArg, floor / 1024 / 1024));
+            }
+            nPruneTarget = floor;
         }
     }
     opts.prune_target = nPruneTarget;

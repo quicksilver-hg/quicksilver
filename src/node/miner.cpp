@@ -8,19 +8,15 @@
 
 #include <chain.h>
 #include <chainparams.h>
-#include <coins.h>
 #include <common/args.h>
-#include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
 #include <consensus/tx_verify.h>
 #include <consensus/validation.h>
-#include <deploymentstatus.h>
 #include <logging.h>
 #include <policy/policy.h>
 #include <pow.h>
 #include <primitives/transaction.h>
-#include <util/moneystr.h>
 #include <util/time.h>
 #include <validation.h>
 
@@ -59,7 +55,9 @@ int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParam
 void RegenerateCommitments(CBlock& block, ChainstateManager& chainman)
 {
     CMutableTransaction tx{*block.vtx.at(0)};
-    tx.vout.erase(tx.vout.begin() + GetWitnessCommitmentIndex(block));
+    const int commitment_index = GetWitnessCommitmentIndex(block);
+    if (commitment_index < 0) return;
+    tx.vout.erase(tx.vout.begin() + commitment_index);
     block.vtx.at(0) = MakeTransactionRef(tx);
 
     const CBlockIndex* prev_block = WITH_LOCK(::cs_main, return chainman.m_blockman.LookupBlockIndex(block.hashPrevBlock));

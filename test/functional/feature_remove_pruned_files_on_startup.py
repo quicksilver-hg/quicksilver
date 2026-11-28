@@ -6,6 +6,7 @@
 """Tests around pruning rev and blk files on startup."""
 
 import platform
+from test_framework.blocktools import KEEP_WINDOW_GROWTH
 from test_framework.test_framework import QuicksilverTestFramework
 from test_framework.util import assert_equal
 
@@ -26,7 +27,9 @@ class FeatureRemovePrunedFilesOnStartupTest(QuicksilverTestFramework):
         rev0 = self.nodes[0].blocks_path / "rev00000.dat"
         blk1 = self.nodes[0].blocks_path / "blk00001.dat"
         rev1 = self.nodes[0].blocks_path / "rev00001.dat"
-        self.mine_batches(800)
+        # pruneblockchain(600) keeps MIN_BLOCKS_TO_KEEP below the tip: grow the chain by the
+        # difference from upstream's 288 so the request is clamped to the same height (512).
+        self.mine_batches(800 + KEEP_WINDOW_GROWTH)
 
         self.log.info("Open some files to check that this may delay deletion")
         fd1 = open(blk0, "rb")

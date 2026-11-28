@@ -14,6 +14,8 @@
 #include <map>
 #include <stdint.h>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <univalue.h>
 

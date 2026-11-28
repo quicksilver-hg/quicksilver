@@ -11,7 +11,6 @@
 #include <condition_variable>
 #include <sync.h>
 #include <unordered_map>
-#include <optional>
 #include <span>
 #include <string>
 
@@ -111,7 +110,7 @@ void StopHTTPServer();
 void UpdateHTTPServerLogging(bool enable);
 
 /** Handler for requests to a certain HTTP path */
-typedef std::function<bool(HTTPRequest* req, const std::string &)> HTTPRequestHandler;
+typedef std::function<void(HTTPRequest* req, const std::string &)> HTTPRequestHandler;
 /** Register handler for prefix.
  * If multiple handlers match a prefix, the first-registered one will
  * be invoked.
@@ -138,6 +137,9 @@ private:
 public:
     explicit HTTPRequest(struct evhttp_request* req, const util::SignalInterrupt& interrupt, bool replySent = false);
     ~HTTPRequest();
+    // Owns the libevent request and its single reply: a copy would reply twice.
+    HTTPRequest(const HTTPRequest&) = delete;
+    HTTPRequest& operator=(const HTTPRequest&) = delete;
 
     enum RequestMethod {
         UNKNOWN,
@@ -151,24 +153,13 @@ public:
      */
     std::string GetURI() const;
 
-    /** Get CService (address:ip) for the origin of the http request.
+    /** Get CService (address:port) for the origin of the http request.
      */
     CService GetPeer() const;
 
     /** Get request method.
      */
     RequestMethod GetRequestMethod() const;
-
-    /** Get the query parameter value from request uri for a specified key, or std::nullopt if the
-     * key is not found.
-     *
-     * If the query string contains duplicate keys, the first value is returned. Many web frameworks
-     * would instead parse this as an array of values, but this is not (yet) implemented as it is
-     * currently not needed in any of the endpoints.
-     *
-     * @param[in] key represents the query parameter of which the value is returned
-     */
-    std::optional<std::string> GetQueryParameter(const std::string& key) const;
 
     /**
      * Get the request header specified by hdr, or an empty string.
@@ -187,7 +178,7 @@ public:
     /**
      * Write output header.
      *
-     * @note call this before calling WriteErrorReply or Reply.
+     * @note call this before calling WriteReply.
      */
     void WriteHeader(const std::string& hdr, const std::string& value);
 
@@ -205,20 +196,6 @@ public:
     }
     void WriteReply(int nStatus, std::span<const std::byte> reply);
 };
-
-/** Get the query parameter value from request uri for a specified key, or std::nullopt if the key
- * is not found.
- *
- * If the query string contains duplicate keys, the first value is returned. Many web frameworks
- * would instead parse this as an array of values, but this is not (yet) implemented as it is
- * currently not needed in any of the endpoints.
- *
- * Helper function for HTTPRequest::GetQueryParameter.
- *
- * @param[in] uri is the entire request uri
- * @param[in] key represents the query parameter of which the value is returned
- */
-std::optional<std::string> GetQueryParameterFromUri(const char* uri, const std::string& key);
 
 /** Event handler closure.
  */
@@ -240,6 +217,9 @@ public:
      */
     HTTPEvent(struct event_base* base, bool deleteWhenTriggered, const std::function<void()>& handler);
     ~HTTPEvent();
+    // Owns the libevent event: a copy would free it twice.
+    HTTPEvent(const HTTPEvent&) = delete;
+    HTTPEvent& operator=(const HTTPEvent&) = delete;
 
     /** Trigger the event. If tv is 0, trigger it immediately. Otherwise trigger it after
      * the given time has elapsed.
@@ -249,7 +229,7 @@ public:
     bool deleteWhenTriggered;
     std::function<void()> handler;
 private:
-    struct event* ev;
+    struct event* ev{nullptr};
 };
 
 #endif // QUICKSILVER_HTTPSERVER_H

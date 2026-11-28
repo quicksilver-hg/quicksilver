@@ -55,7 +55,7 @@ public:
     base_uint(uint64_t b)
     {
         pn[0] = (unsigned int)b;
-        pn[1] = (unsigned int)(b >> 32);
+        if constexpr (WIDTH > 1) pn[1] = (unsigned int)(b >> 32);
         for (int i = 2; i < WIDTH; i++)
             pn[i] = 0;
     }
@@ -82,7 +82,7 @@ public:
     base_uint& operator=(uint64_t b)
     {
         pn[0] = (unsigned int)b;
-        pn[1] = (unsigned int)(b >> 32);
+        if constexpr (WIDTH > 1) pn[1] = (unsigned int)(b >> 32);
         for (int i = 2; i < WIDTH; i++)
             pn[i] = 0;
         return *this;
@@ -112,14 +112,14 @@ public:
     base_uint& operator^=(uint64_t b)
     {
         pn[0] ^= (unsigned int)b;
-        pn[1] ^= (unsigned int)(b >> 32);
+        if constexpr (WIDTH > 1) pn[1] ^= (unsigned int)(b >> 32);
         return *this;
     }
 
     base_uint& operator|=(uint64_t b)
     {
         pn[0] |= (unsigned int)b;
-        pn[1] |= (unsigned int)(b >> 32);
+        if constexpr (WIDTH > 1) pn[1] |= (unsigned int)(b >> 32);
         return *this;
     }
 
@@ -200,7 +200,19 @@ public:
 
     /** Numeric ordering (unlike \ref base_blob::Compare) */
     int CompareTo(const base_uint& b) const;
-    bool EqualTo(uint64_t b) const;
+    bool EqualTo(uint64_t b) const
+    {
+        if constexpr (WIDTH > 1) {
+            if (pn[1] != (b >> 32)) return false;
+        } else if (b >> 32) {
+            return false;
+        }
+        if (pn[0] != (b & 0xfffffffful)) return false;
+        for (int i = 2; i < WIDTH; ++i) {
+            if (pn[i]) return false;
+        }
+        return true;
+    }
 
     friend inline base_uint operator+(const base_uint& a, const base_uint& b) { return base_uint(a) += b; }
     friend inline base_uint operator-(const base_uint& a, const base_uint& b) { return base_uint(a) -= b; }
@@ -238,8 +250,8 @@ public:
 
     uint64_t GetLow64() const
     {
-        static_assert(WIDTH >= 2, "Assertion WIDTH >= 2 failed (WIDTH = BITS / 32). BITS is a template parameter.");
-        return pn[0] | (uint64_t)pn[1] << 32;
+        if constexpr (WIDTH > 1) return pn[0] | (uint64_t)pn[1] << 32;
+        return pn[0];
     }
 };
 
@@ -258,7 +270,7 @@ public:
      * This exponent can be thought of as "number of bytes of N".
      * The lower 23 bits are the mantissa.
      * Bit number 24 (0x800000) represents the sign of N.
-     * N = (-1^sign) * mantissa * 256^(exponent-3)
+     * N = (-1)^sign * mantissa * 256^(exponent-3)
      *
      * Satoshi's original implementation used BN_bn2mpi() and BN_mpi2bn().
      * MPI uses the most significant bit of the first byte as sign.

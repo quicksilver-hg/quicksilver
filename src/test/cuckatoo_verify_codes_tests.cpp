@@ -22,12 +22,15 @@
 // only under the fake table (and POW_NON_MATCHING under real GOLDEN19 keys)
 // is the check that the fake, not SipHash, is what ran.
 
+#include <crypto/cuckatoo/cuckatoo.h>
 #include <crypto/cuckatoo/vendor_prelude.h>
 
 #include <boost/test/unit_test.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <utility>
 
 // Duplicated from src/test/cuckatoo_tests.cpp (GOLDEN19_KEYS / GOLDEN19_CYCLE).
 // A shared header would be a third tracked file; this slice may only add this
@@ -64,6 +67,7 @@ struct siphash_keys {
 #undef EDGEBITS
 #undef PROOFSIZE
 #undef SQUASH_OUTPUT
+#undef SIZEMASK
 
 #define EDGEBITS 19
 #define PROOFSIZE 42
@@ -82,8 +86,6 @@ namespace verify_codes_real {
 #undef NEDGES
 #undef MAX_SOLS
 #undef MAX_NAME_LEN
-#undef C_CALL_CONVENTION
-#undef CALL_CONVENTION
 
 BOOST_AUTO_TEST_SUITE(cuckatoo_verify_codes_tests)
 
@@ -141,6 +143,32 @@ int RealVerify(const uint32_t* cycle)
 }
 
 } // namespace
+
+// S0131-A-04, S0134-A-02: the vendor setheader() derives the same keys as
+// production CuckatooSetHeader, on the golden E28 pre-image (its keys are
+// pinned in cuckatoo_tests.cpp) and on bytes 0..83.
+BOOST_AUTO_TEST_CASE(vendor_setheader_matches_production)
+{
+    std::array<char, 84> pre_a{};
+    const char tag[]{"QUICKSILVER-E28-GOLDEN-91"};
+    std::copy(tag, tag + sizeof(tag) - 1, pre_a.begin());
+    std::array<char, 84> pre_b{};
+    for (size_t i = 0; i < pre_b.size(); ++i) pre_b[i] = static_cast<char>(i);
+    for (const auto& [pre, len] : {std::pair{&pre_a, uint32_t{80}}, std::pair{&pre_b, uint32_t{84}}}) {
+        ::siphash_keys vendor;
+        verify_codes_real::setheader(pre->data(), len, &vendor);
+        const cuckatoo::Keys production{cuckatoo::CuckatooSetHeader(reinterpret_cast<const unsigned char*>(pre->data()), len)};
+        BOOST_CHECK_EQUAL(vendor.k0, production.k0);
+        BOOST_CHECK_EQUAL(vendor.k1, production.k1);
+        BOOST_CHECK_EQUAL(vendor.k2, production.k2);
+        BOOST_CHECK_EQUAL(vendor.k3, production.k3);
+    }
+    // The golden pre-image's keys, as pinned in cuckatoo_tests.cpp (GOLDEN28_KEYS).
+    ::siphash_keys golden;
+    verify_codes_real::setheader(pre_a.data(), 80, &golden);
+    BOOST_CHECK_EQUAL(golden.k0, 0xd26332bd402ad5cdULL);
+    BOOST_CHECK_EQUAL(golden.k3, 0x7515fc615c6d123dULL);
+}
 
 BOOST_AUTO_TEST_CASE(real_golden19_is_pow_ok)
 {

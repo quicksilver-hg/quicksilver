@@ -142,10 +142,6 @@ are lost), `<datadir>/tor/data` (Tor's own state), `<datadir>/tor/tor.log`
 (Tor's log, and the first place to look when startup fails),
 `<datadir>/tor/control_port` (the port Tor chose this run).
 
-**macOS** keeps the operator-installed-Tor path: there is no Mac in the project's
-test fleet, and shipping untested process supervision for a platform that cannot
-be gated is worse than shipping none.
-
 **Running the bundled Tor does not make the desktop Tor-only.** It changes how
 the desktop *reaches* peers; it does not change what the desktop *offers*. With
 `-listen` at its default the node still binds the network's P2P port on all

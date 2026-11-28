@@ -29,7 +29,6 @@
 #include <util/tokenpipe.h>
 #include <util/translation.h>
 
-#include <any>
 #include <functional>
 #include <optional>
 
@@ -141,7 +140,7 @@ static bool ProcessInitCommands(ArgsManager& args)
         } else {
             strUsage += "\n"
                 "The " CLIENT_NAME " daemon (quicksilver-daemon) is a headless program that connects to the Quicksilver network to validate and relay transactions and blocks, as well as relaying addresses.\n\n"
-                "It provides the backbone of the Quicksilver network and its RPC, REST and ZMQ services can provide various transaction, block and address-related services.\n\n"
+                "It provides the backbone of the Quicksilver network and its RPC and ZMQ services can provide various transaction, block and address-related services.\n\n"
                 "There is an optional vault component which provides transaction services.\n\n"
                 "It can be used in a headless environment or as part of a server setup.\n"
                 "\n"
@@ -170,7 +169,6 @@ static bool AppInit(NodeContext& node)
     // end, which is interpreted as failure to start.
     TokenPipeEnd daemon_ep;
 #endif
-    std::any context{&node};
     try
     {
         // -server defaults to true for quicksilver-daemon but not for the GUI so do this here

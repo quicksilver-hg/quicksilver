@@ -14,6 +14,7 @@ rejected up front as an unsupported encoding, so it can only ever exercise that
 one path.
 """
 
+from test_framework.blocktools import PRUNE_FLOOR_MIB
 from test_framework.test_framework import QuicksilverTestFramework
 
 from test_framework.util import assert_equal
@@ -99,7 +100,7 @@ class ValidateAddressMainTest(QuicksilverTestFramework):
         self.setup_clean_chain = True
         self.chain = ""  # main
         self.num_nodes = 1
-        self.extra_args = [["-prune=899"]] * self.num_nodes
+        self.extra_args = [[f"-prune={PRUNE_FLOOR_MIB}"]] * self.num_nodes
 
     def check_valid(self, addr, spk):
         info = self.nodes[0].validateaddress(addr)

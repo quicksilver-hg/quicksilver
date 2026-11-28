@@ -120,10 +120,6 @@
             <property name="text">
              <string>&amp;Generate receiving address</string>
             </property>
-            <property name="icon">
-             <iconset resource="../quicksilver.qrc">
-              <normaloff>:/icons/receiving_addresses</normaloff>:/icons/receiving_addresses</iconset>
-            </property>
             <property name="autoDefault">
              <bool>false</bool>
             </property>
@@ -146,10 +142,6 @@
             <property name="text">
              <string>Clear</string>
             </property>
-            <property name="icon">
-             <iconset resource="../quicksilver.qrc">
-              <normaloff>:/icons/remove</normaloff>:/icons/remove</iconset>
-            </property>
             <property name="autoDefault">
              <bool>false</bool>
             </property>
@@ -169,13 +161,6 @@
            </spacer>
           </item>
          </layout>
-        </item>
-        <item row="7" column="0">
-         <widget class="QLabel" name="label_7">
-          <property name="text">
-           <string/>
-          </property>
-         </widget>
         </item>
         <item row="7" column="0">
          <widget class="QLabel" name="addressFormatLabel">
@@ -292,10 +277,6 @@
           <property name="text">
            <string>Show</string>
           </property>
-          <property name="icon">
-           <iconset resource="../quicksilver.qrc">
-            <normaloff>:/icons/eye</normaloff>:/icons/eye</iconset>
-          </property>
           <property name="autoDefault">
            <bool>false</bool>
           </property>
@@ -311,10 +292,6 @@
           </property>
           <property name="text">
            <string>Remove</string>
-          </property>
-          <property name="icon">
-           <iconset resource="../quicksilver.qrc">
-            <normaloff>:/icons/remove</normaloff>:/icons/remove</iconset>
           </property>
           <property name="autoDefault">
            <bool>false</bool>
@@ -360,8 +337,6 @@
   <tabstop>showRequestButton</tabstop>
   <tabstop>removeRequestButton</tabstop>
  </tabstops>
- <resources>
-  <include location="../quicksilver.qrc"/>
- </resources>
+ <resources/>
  <connections/>
 </ui>

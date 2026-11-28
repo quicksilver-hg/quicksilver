@@ -14,7 +14,10 @@
 #include <interfaces/vault.h>
 #include <key_io.h>
 #include <streams.h>
+#include <logging.h>
 #include <util/string.h>
+
+#include <exception>
 
 #include <utility>
 
@@ -26,9 +29,14 @@ using util::ToString;
 RecentRequestsTableModel::RecentRequestsTableModel(VaultModel *parent) :
     QAbstractTableModel(parent), vaultModel(parent)
 {
-    // Load entries from vault
+    // Load entries from vault. A record that does not read is skipped and
+    // left in the vault, so one corrupt `rr*` value cannot end the app (S0240-C-01).
+    int skipped{0};
     for (const std::string& request : parent->vault().getAddressReceiveRequests()) {
-        addNewRequest(request);
+        if (!addNewRequest(request)) ++skipped;
+    }
+    if (skipped > 0) {
+        LogWarning(HgLog::QT, "Receive requests: skipped %d stored request(s) that could not be read; they are kept in the vault\n", skipped);
     }
 
     /* These columns must match the indices in the ColumnIndex enumeration */
@@ -145,24 +153,21 @@ QModelIndex RecentRequestsTableModel::index(int row, int column, const QModelInd
 
 bool RecentRequestsTableModel::removeRows(int row, int count, const QModelIndex &parent)
 {
-    Q_UNUSED(parent);
-
-    if(count > 0 && row >= 0 && (row+count) <= list.size())
-    {
-        for (int i = 0; i < count; ++i)
-        {
-            const RecentRequestEntry* rec = &list[row+i];
-            if (!vaultModel->vault().setAddressReceiveRequest(DecodeDestination(rec->recipient.address.toStdString()), ToString(rec->id), ""))
-                return false;
-        }
-
-        beginRemoveRows(parent, row, row + count - 1);
-        list.erase(list.begin() + row, list.begin() + row + count);
-        endRemoveRows();
-        return true;
-    } else {
+    if (parent.isValid() || count <= 0 || row < 0 || (row + count) > list.size()) {
         return false;
     }
+    // Row by row, so a failed delete leaves listed exactly the requests the
+    // vault still holds (S0240-C-02).
+    for (int i = 0; i < count; ++i) {
+        const RecentRequestEntry& rec = list[row];
+        if (!vaultModel->vault().setAddressReceiveRequest(DecodeDestination(rec.recipient.address.toStdString()), ToString(rec.id), "")) {
+            return false;
+        }
+        beginRemoveRows(parent, row, row);
+        list.removeAt(row);
+        endRemoveRows();
+    }
+    return true;
 }
 
 Qt::ItemFlags RecentRequestsTableModel::flags(const QModelIndex &index) const
@@ -171,7 +176,7 @@ Qt::ItemFlags RecentRequestsTableModel::flags(const QModelIndex &index) const
 }
 
 // called when adding a request from the GUI
-void RecentRequestsTableModel::addNewRequest(const SendCoinsRecipient &recipient)
+bool RecentRequestsTableModel::addNewRequest(const SendCoinsRecipient &recipient)
 {
     RecentRequestEntry newEntry;
     newEntry.id = ++nReceiveRequestsMaxId;
@@ -182,27 +187,33 @@ void RecentRequestsTableModel::addNewRequest(const SendCoinsRecipient &recipient
     ss << newEntry;
 
     if (!vaultModel->vault().setAddressReceiveRequest(DecodeDestination(recipient.address.toStdString()), ToString(newEntry.id), ss.str()))
-        return;
+        return false;
 
     addNewRequest(newEntry);
+    return true;
 }
 
 // called from ctor when loading from vault
-void RecentRequestsTableModel::addNewRequest(const std::string &recipient)
+bool RecentRequestsTableModel::addNewRequest(const std::string &recipient)
 {
     std::vector<uint8_t> data(recipient.begin(), recipient.end());
     DataStream ss{data};
 
     RecentRequestEntry entry;
-    ss >> entry;
+    try {
+        ss >> entry;
+    } catch (const std::exception&) {
+        return false;
+    }
 
-    if (entry.id == 0) // should not happen
-        return;
+    if (entry.id <= 0) // should not happen
+        return false;
 
     if (entry.id > nReceiveRequestsMaxId)
         nReceiveRequestsMaxId = entry.id;
 
     addNewRequest(entry);
+    return true;
 }
 
 // actually add to table in GUI
@@ -215,6 +226,8 @@ void RecentRequestsTableModel::addNewRequest(RecentRequestEntry &recipient)
 
 void RecentRequestsTableModel::sort(int column, Qt::SortOrder order)
 {
+    // An empty list has no row to report changed (S0240-C-06).
+    if (list.isEmpty()) return;
     std::sort(list.begin(), list.end(), RecentRequestEntryLessThan(column, order));
     Q_EMIT dataChanged(index(0, 0, QModelIndex()), index(list.size() - 1, NUMBER_OF_COLUMNS - 1, QModelIndex()));
 }

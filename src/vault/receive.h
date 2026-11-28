@@ -25,8 +25,11 @@ CAmount TxGetChange(const CVault& vault, const CTransaction& tx);
 CAmount CachedTxGetCredit(const CVault& vault, const CVaultTx& wtx, const isminefilter& filter)
     EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault);
 //! filter decides which addresses will count towards the debit
-CAmount CachedTxGetDebit(const CVault& vault, const CVaultTx& wtx, const isminefilter& filter);
-CAmount CachedTxGetChange(const CVault& vault, const CVaultTx& wtx);
+//! The CachedTx* functions below write the transaction's cached amounts, so
+//! they need cs_vault like the credit functions above (S0190-A-02).
+CAmount CachedTxGetDebit(const CVault& vault, const CVaultTx& wtx, const isminefilter& filter)
+    EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault);
+CAmount CachedTxGetChange(const CVault& vault, const CVaultTx& wtx) EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault);
 CAmount CachedTxGetImmatureCredit(const CVault& vault, const CVaultTx& wtx, const isminefilter& filter)
     EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault);
 CAmount CachedTxGetAvailableCredit(const CVault& vault, const CVaultTx& wtx, const isminefilter& filter = ISMINE_SPENDABLE)
@@ -41,8 +44,8 @@ void CachedTxGetAmounts(const CVault& vault, const CVaultTx& wtx,
                         std::list<COutputEntry>& listReceived,
                         std::list<COutputEntry>& listSent,
                         const isminefilter& filter,
-                        bool include_change);
-bool CachedTxIsFromMe(const CVault& vault, const CVaultTx& wtx, const isminefilter& filter);
+                        bool include_change) EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault);
+bool CachedTxIsFromMe(const CVault& vault, const CVaultTx& wtx, const isminefilter& filter) EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault);
 bool CachedTxIsTrusted(const CVault& vault, const CVaultTx& wtx, std::set<uint256>& trusted_parents) EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault);
 bool CachedTxIsTrusted(const CVault& vault, const CVaultTx& wtx);
 

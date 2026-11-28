@@ -14,6 +14,7 @@
 #include <iosfwd>
 #include <limits>
 #include <optional>
+#include <string>
 
 /**
  * Ensure file contents are fully committed to disk, using a platform-specific

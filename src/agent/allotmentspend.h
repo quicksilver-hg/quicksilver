@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 class CBlockIndex;
@@ -39,10 +40,11 @@ namespace agent {
 //! unless the operator has opted in (-allowcputxpow).
 //! The refusal is not about capability -- the CPU can solve the graph -- it is about
 //! consent to spend someone's machine while they are using it.
-constexpr bool AllowsAllotmentCpuFallback(uint8_t edgebits, bool allow_cpu_txpow)
-{
-    return edgebits == 19 || (edgebits == 28 && allow_cpu_txpow);
-}
+//!
+//! Both graph sizes come from the chain parameters (the sandbox chain's and mainnet's
+//! nTxEdgeBits; publictest uses mainnet's), so a parameter change cannot leave this
+//! gate behind. Any other size is refused, opt-in or not.
+bool AllowsAllotmentCpuFallback(uint8_t edgebits, bool allow_cpu_txpow);
 
 struct AllotmentSpendContext {
     AllotmentPolicyBundleArtifact bundle;

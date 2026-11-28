@@ -171,7 +171,6 @@ TransactionView::TransactionView(const PlatformStyle *platformStyle, QWidget *pa
     contextMenu->addAction(tr("Copy full transaction &details"), this, &TransactionView::copyTxPlainText);
     contextMenu->addAction(tr("&Show transaction details"), this, &TransactionView::showDetails);
     contextMenu->addSeparator();
-    abandonAction = contextMenu->addAction(tr("A&bandon transaction"), this, &TransactionView::abandonTx);
     contextMenu->addAction(tr("&Edit address label"), this, &TransactionView::editLabel);
 
     connect(dateWidget, qOverload<int>(&QComboBox::activated), this, &TransactionView::chooseDate);
@@ -420,31 +419,12 @@ void TransactionView::contextualMenu(const QPoint &point)
     if (selection.empty())
         return;
 
-    // check if transaction can be abandoned, disable context menu action in case it doesn't
-    uint256 hash;
-    hash.SetHexDeprecated(selection.at(0).data(TransactionTableModel::TxHashRole).toString().toStdString());
-    abandonAction->setEnabled(model->vault().transactionCanBeAbandoned(hash));
     copyAddressAction->setEnabled(GUIUtil::hasEntryData(transactionView, 0, TransactionTableModel::AddressRole));
     copyLabelAction->setEnabled(GUIUtil::hasEntryData(transactionView, 0, TransactionTableModel::LabelRole));
 
     if (index.isValid()) {
         GUIUtil::PopupMenu(contextMenu, transactionView->viewport()->mapToGlobal(point));
     }
-}
-
-void TransactionView::abandonTx()
-{
-    if(!transactionView || !transactionView->selectionModel())
-        return;
-    QModelIndexList selection = transactionView->selectionModel()->selectedRows(0);
-
-    // get the hash from the TxHashRole (QVariant / QString)
-    uint256 hash;
-    QString hashQStr = selection.at(0).data(TransactionTableModel::TxHashRole).toString();
-    hash.SetHexDeprecated(hashQStr.toStdString());
-
-    // Abandon the vault transaction over the vaultModel
-    model->vault().abandonTransaction(hash);
 }
 
 void TransactionView::copyAddress()

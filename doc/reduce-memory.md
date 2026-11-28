@@ -12,7 +12,7 @@ The size of some in-memory caches can be reduced. As caches trade off memory usa
 
 ## Relay pool
 
-- In Quicksilver there is a memory pool limiter which can be configured with `-maxrelaypool=<n>`, where `<n>` is the size in MB (1000). The default value is `300`.
+- Set the maximum relay-pool size with `-maxrelaypool=<n>`, where `<n>` is the size in megabytes. The default value is `300`.
   - The minimum value for `-maxrelaypool` is 5.
   - A lower maximum relay pool size means that transactions will be evicted sooner. This will affect any uses of `quicksilver-daemon` that process unconfirmed transactions.
 

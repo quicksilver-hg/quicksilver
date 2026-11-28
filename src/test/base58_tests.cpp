@@ -79,8 +79,18 @@ BOOST_AUTO_TEST_CASE(base58_DecodeBase58)
 
     BOOST_CHECK( DecodeBase58Check("3vQB7B6MrGQZaxCuFg4oh"s, result, 100));
     BOOST_CHECK(!DecodeBase58Check("3vQB7B6MrGQZaxCuFg4oi"s, result, 100));
+    BOOST_CHECK(result.empty());
     BOOST_CHECK(!DecodeBase58Check("3vQB7B6MrGQZaxCuFg4oh0IOl"s, result, 100));
+    result.assign(32, 0x5a);
+    const auto* retained_storage = result.data();
+    const size_t retained_capacity = result.capacity();
     BOOST_CHECK(!DecodeBase58Check("3vQB7B6MrGQZaxCuFg4oh\0" "0IOl"s, result, 100));
+    BOOST_CHECK(result.empty());
+    BOOST_CHECK_EQUAL(result.capacity(), retained_capacity);
+    // Observe the still-allocated byte storage after clear(), including spare capacity.
+    for (size_t i = 0; i < retained_capacity; ++i) {
+        BOOST_CHECK_EQUAL(retained_storage[i], 0U);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

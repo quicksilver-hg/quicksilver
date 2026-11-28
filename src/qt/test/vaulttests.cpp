@@ -343,6 +343,11 @@ public:
     bool unlock_ok{true};
     bool unlock_throws{false};
     bool transaction_creation_available{false};
+    //! Stored receive requests, as the vault returns them, and the writes the model made.
+    std::vector<std::string> receive_requests;
+    std::vector<std::pair<std::string, std::string>> receive_request_writes;
+    //! How many receive-request writes succeed before the rest fail.
+    int receive_request_writes_ok{0};
     bool coin_listing_available{false};
     CoinsList coin_list;
     std::vector<interfaces::VaultTxOut> selected_coins;
@@ -351,6 +356,8 @@ public:
     int auto_selection_bound_calls{0};
     bool auto_selection_bound_busy{false};
     bool auto_selection_bound_uninitialized{false};
+    //! The avoid_reuse vault flag; the transfer dialog reads it for each send (F-696).
+    bool avoid_reuse{true};
     int selected_balance_calls{0};
     int try_list_coin_calls{0};
     int try_get_coin_calls{0};
@@ -396,7 +403,7 @@ public:
     bool isLocked() override { return locked; }
     bool changeVaultPassphrase(const SecureString&, const SecureString&) override { return false; }
     void abortRescan() override {}
-    bool backupVault(const std::string&) override { return false; }
+    vault::SavedBackup backupVault(const std::string&, bool) override { return {}; }
     vault::BackupCheck verifyBackup(const std::string&, const SecureString*) override { return {}; }
     bool recordBackupCheck(const vault::BackupCheck&) override { return false; }
     vault::BackupState getBackupState() override { return vault::BackupState::NEEDED; }
@@ -423,7 +430,6 @@ public:
         if (label == "mining") ++new_mining_destination_calls;
         return CTxDestination{};
     }
-    bool getPubKey(const CScript&, const CKeyID&, CPubKey&) override { return false; }
     SigningResult signMessage(const std::string&, const PKHash&, std::string&) override { return SigningResult::PRIVATE_KEY_NOT_AVAILABLE; }
     bool isSpendable(const CTxDestination&) override { return false; }
     bool setAddressBook(const CTxDestination&, const std::string&, const std::optional<vault::AddressPurpose>&) override
@@ -434,9 +440,12 @@ public:
     bool delAddressBook(const CTxDestination&) override { return false; }
     bool getAddress(const CTxDestination&, std::string*, vault::isminetype*, vault::AddressPurpose*) override { return false; }
     std::vector<interfaces::VaultAddress> getAddresses() override { return {}; }
-    std::vector<std::string> getAddressReceiveRequests() override { return {}; }
-    bool setAddressReceiveRequest(const CTxDestination&, const std::string&, const std::string&) override { return false; }
-    util::Result<void> displayAddress(const CTxDestination&) override { return {}; }
+    std::vector<std::string> getAddressReceiveRequests() override { return receive_requests; }
+    bool setAddressReceiveRequest(const CTxDestination&, const std::string& id, const std::string& value) override
+    {
+        receive_request_writes.emplace_back(id, value);
+        return receive_request_writes_ok > 0 ? (--receive_request_writes_ok, true) : false;
+    }
     bool lockCoin(const COutPoint&, const bool) override { return false; }
     bool unlockCoin(const COutPoint&) override { return false; }
     bool isLockedCoin(const COutPoint&) override { return false; }
@@ -465,8 +474,6 @@ public:
         committed_order_forms.push_back(std::move(order_form));
         return interfaces::CommitOutcome{commit_not_accepted_reason};
     }
-    bool transactionCanBeAbandoned(const uint256&) override { return false; }
-    bool abandonTransaction(const uint256&) override { return false; }
     CTransactionRef getTx(const uint256&) override { return {}; }
     interfaces::VaultTx getVaultTx(const uint256&) override { return {}; }
     std::set<interfaces::VaultTx> getVaultTxs() override { return {}; }
@@ -541,11 +548,10 @@ public:
         coins = selected_coins;
         return true;
     }
-    bool hdEnabled() override { return true; }
     bool canGetAddresses() override { return true; }
     bool privateKeysDisabled() override { return false; }
+    bool avoidAddressReuse() override { return avoid_reuse; }
     bool taprootEnabled() override { return true; }
-    bool hasExternalSigner() override { return false; }
     OutputType getDefaultAddressType() override { return OutputType::BECH32M; }
     bool remove(std::optional<bool> load_on_start = false) override { remove_load_on_start = load_on_start; return remove_result; }
 
@@ -858,6 +864,35 @@ bool SaveBackupThroughFrame(VaultFrame& frame, VaultView& view, const QString& f
     return true;
 }
 
+//! F-687: as SaveBackupThroughFrame, onto a file that already exists: answer the save dialog's own "replace it?"
+//! question with Yes. False if the dialog did not ask.
+bool SaveBackupOverExistingThroughFrame(VaultFrame& frame, VaultView& view, const QString& file)
+{
+    frame.backupVault();
+    QFileDialog* save{VisibleChild<QFileDialog>(&view, QStringLiteral("saveFileDialog"))};
+    if (!save) return false;
+    save->selectFile(file);
+    bool asked{false};
+    QTimer::singleShot(0, save, [&asked]() {
+        auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+        if (!box) return;
+        if (QAbstractButton* yes = box->button(QMessageBox::Yes)) {
+            asked = true;
+            yes->click();
+        }
+    });
+    static_cast<QDialog*>(save)->accept();
+    return asked;
+}
+
+//! The bytes of a file, empty if it cannot be read.
+QByteArray FileBytes(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    return file.readAll();
+}
+
 //! Simple qt vault tests.
 //
 // Test widgets can be debugged interactively calling show() on them and
@@ -870,7 +905,6 @@ bool SaveBackupThroughFrame(VaultFrame& frame, VaultView& view, const QString& f
 //
 //     QT_QPA_PLATFORM=xcb     build/bin/test_quicksilver-qt  # Linux
 //     QT_QPA_PLATFORM=windows build/bin/test_quicksilver-qt  # Windows
-//     QT_QPA_PLATFORM=cocoa   build/bin/test_quicksilver-qt  # macOS
 void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
 {
     // Create widgets for transfers and listing transactions.
@@ -1163,6 +1197,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
 
     // F-567: a copy is not a backup until the saved file is reopened. This vault's database is in memory,
     // so the copy reports success but leaves no file behind: the check fails and Home stays Needed.
+    // F-687: the check now runs before the copy takes the chosen name, so nothing is saved there.
     QTemporaryDir backup_dir;
     QVERIFY(backup_dir.isValid());
     {
@@ -1170,7 +1205,9 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
         QVERIFY(SaveBackupThroughFrame(vaultFrame, *routedVaultView, backup_dir.filePath(QStringLiteral("vault-backup.dat"))));
         QTRY_COMPARE(backup_messages.count(), 1);
         QCOMPARE(backup_messages.at(0).at(0).toString(), QStringLiteral("Backup Check Failed"));
-        QVERIFY(backup_messages.at(0).at(1).toString().contains(QStringLiteral("but checking it failed: the saved file cannot be read as a vault.")));
+        QVERIFY(backup_messages.at(0).at(1).toString().contains(QStringLiteral("was not saved to")));
+        QVERIFY(backup_messages.at(0).at(1).toString().contains(QStringLiteral("because checking the copy failed: the copy cannot be read as a vault.")));
+        QVERIFY(!QFileInfo::exists(backup_dir.filePath(QStringLiteral("vault-backup.dat"))));
         QCOMPARE(backup_messages.at(0).at(2).toUInt(), static_cast<unsigned int>(CClientUIInterface::MSG_ERROR));
     }
     QVERIFY(!VisibleChild<QInputDialog>(routedVaultView, QStringLiteral("backupPassphraseDialog")));
@@ -1191,7 +1228,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QVERIFY(agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentCompromisedHostRisk"))->text().contains(QStringLiteral("refuses every later request")));
     QLabel* guarantee_risk = agent_allotment_page->findChild<QLabel*>(QStringLiteral("agentAllotmentGuaranteeRisk"));
     QVERIFY(guarantee_risk);
-    QVERIFY(guarantee_risk->text().contains(QStringLiteral("limits are not guaranteed")));
+    QVERIFY(guarantee_risk->text().contains(QStringLiteral("Limits are not guaranteed")));
     QLineEdit* agent_name = agent_allotment_page->findChild<QLineEdit*>(QStringLiteral("agentAllotmentNameEdit"));
     QVERIFY(agent_name);
     QuicksilverAmountField* agent_funding = agent_allotment_page->findChild<QuicksilverAmountField*>(QStringLiteral("agentAllotmentFundingLimit"));
@@ -1339,9 +1376,10 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QVERIFY(backend_state->text().contains(QStringLiteral("Agent bundle copied")));
     agent_recovery_scan_button->click();
     const QString recovery_scan_command = QApplication::clipboard()->text();
-    QVERIFY(recovery_scan_command.startsWith(QStringLiteral("quicksilver-cli -chain=%1 scantxoutset start ").arg(QString::fromStdString(Params().GetChainTypeString()))));
+    const QString data_dir = GUIUtil::PathToQString(gArgs.GetDataDirBase());
+    QVERIFY(recovery_scan_command.startsWith(QStringLiteral("quicksilver-cli -chain=%1 -datadir='%2' scantxoutset start ").arg(QString::fromStdString(Params().GetChainTypeString()), data_dir)));
     QVERIFY(recovery_scan_command.contains(QStringLiteral("[\"addr(%1)\"]").arg(QString::fromStdString(agent_records[0].funding_address))));
-    QVERIFY(recovery_scan_command.contains(QStringLiteral("| quicksilver-agent -chain=%1 ").arg(QString::fromStdString(Params().GetChainTypeString()))));
+    QVERIFY(recovery_scan_command.contains(QStringLiteral("| quicksilver-agent -chain=%1 -datadir='%2' ").arg(QString::fromStdString(Params().GetChainTypeString()), data_dir)));
     QVERIFY(recovery_scan_command.contains(QStringLiteral("-fundingaddress='%1'").arg(QString::fromStdString(agent_records[0].funding_address))));
     QVERIFY(recovery_scan_command.endsWith(QStringLiteral("-scantxoutset=- importrecovery")));
     QVERIFY(backend_state->text().contains(QStringLiteral("Recovery import command copied")));
@@ -1351,9 +1389,9 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     QVERIFY(!exported_bundle->funding_outputs.empty());
     agent_save_receipts_button->click();
     const fs::path funding_receipt_inbox = gArgs.GetDataDirNet() / "agent" / "payment-receipts.d";
-    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("quicksilver-agent -chain=%1 -paymentreceiptdir='%2' scanreceipts")
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("quicksilver-agent -chain=%1 -datadir='%2' -paymentreceiptdir='%3' scanreceipts")
                                                  .arg(QString::fromStdString(Params().GetChainTypeString()),
-                                                      QString::fromStdString(fs::PathToString(funding_receipt_inbox))));
+                                                      data_dir, QString::fromStdString(fs::PathToString(funding_receipt_inbox))));
     QVERIFY(backend_state->text().contains(QStringLiteral("Agent funding receipts saved")));
     QVERIFY(backend_state->text().contains(QString::number(exported_bundle->funding_outputs.size())));
     for (const vault::AgentAllotmentFundingOutput& output : exported_bundle->funding_outputs) {
@@ -1398,7 +1436,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     agent_policy_review_button->click();
     QVERIFY(agent_policy_review_state->text().contains(QStringLiteral("Valid request for test-agent")));
     QVERIFY(agent_policy_review_state->text().contains(QString::fromStdString(agent_records[0].funding_address)));
-    QVERIFY(agent_policy_review_state->text().contains(QStringLiteral("Spending limits are checked by the agent")));
+    QVERIFY(agent_policy_review_state->text().contains(QStringLiteral("this vault also refuses to co-sign a spend over the daily limit")));
     QCOMPARE(agent_policy_review_state->property("class").toString(), QStringLiteral("policyReviewValid"));
     agent_policy_review_edit->setPlainText(QStringLiteral("[]"));
     QVERIFY(agent_policy_review_button->isEnabled());
@@ -1452,9 +1490,9 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CVault>& vault)
     const auto saved_receipt = ReadBinaryFile(receipt_path);
     QVERIFY(saved_receipt.first);
     QCOMPARE(QString::fromStdString(saved_receipt.second), payment_receipt + QStringLiteral("\n"));
-    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("quicksilver-agent -chain=%1 -paymentreceiptdir='%2' scanreceipts")
+    QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("quicksilver-agent -chain=%1 -datadir='%2' -paymentreceiptdir='%3' scanreceipts")
                                                  .arg(QString::fromStdString(Params().GetChainTypeString()),
-                                                      QString::fromStdString(fs::PathToString(receipt_inbox))));
+                                                      GUIUtil::PathToQString(gArgs.GetDataDirBase()), QString::fromStdString(fs::PathToString(receipt_inbox))));
     QVERIFY(agent_payment_receipt_state->text().contains(QStringLiteral("Payment receipt saved")));
     QVERIFY(agent_payment_receipt_state->text().contains(QStringLiteral("External-agent scan command copied")));
     QVERIFY(agent_payment_receipt_state->text().contains(QStringLiteral("External-agent scan command copied")));
@@ -1682,7 +1720,7 @@ void VaultTests::agentAllotmentRiskTextNamesTheCosigner()
     AgentAllotmentPage page;
     QCOMPARE(page.findChild<QLabel*>("agentAllotmentDishonestAgentRisk")->text(), QStringLiteral("The agent holds one key and this vault holds the other. The agent cannot spend without this vault's signature."));
     QCOMPARE(page.findChild<QLabel*>("agentAllotmentCompromisedHostRisk")->text(), QStringLiteral("Stop an allotment and this vault refuses every later request. A request the vault has already signed and broadcast still confirms."));
-    QCOMPARE(page.findChild<QLabel*>("agentAllotmentGuaranteeRisk")->text(), QStringLiteral("Spending limits are the agent's own check. This vault does not enforce them, and limits are not guaranteed."));
+    QCOMPARE(page.findChild<QLabel*>("agentAllotmentGuaranteeRisk")->text(), QStringLiteral("The agent checks its spending limits, and this vault also refuses a spend over the daily limit. Limits are not guaranteed."));
     for (QLabel* label : page.findChildren<QLabel*>()) {
         QVERIFY(!label->text().contains("dishonest agent"));
         QVERIFY(!label->text().contains("compromised host"));
@@ -2090,17 +2128,6 @@ void VaultTests::receivePageSaysTheLedgerIsPublic()
 
 void VaultTests::vaultTests()
 {
-#ifdef Q_OS_MACOS
-    if (QApplication::platformName() == "minimal") {
-        // Disable for mac on "minimal" platform to avoid crashes inside the Qt
-        // framework when it tries to look up unimplemented cocoa functions,
-        // and fails to handle returned nulls
-        // (https://bugreports.qt.io/browse/QTBUG-49686).
-        qWarning() << "Skipping VaultTests on mac build with 'minimal' platform set due to Qt bugs. To run AppTests, invoke "
-                      "with 'QT_QPA_PLATFORM=cocoa test_quicksilver-qt' on mac, or else use a linux or windows build.";
-        return;
-    }
-#endif
     TestGUI(m_node);
 }
 
@@ -2477,6 +2504,91 @@ void VaultTests::backupToANonAsciiFolder()
     // Written under the name chosen, and nothing else beside it.
     QVERIFY(QFileInfo::exists(file));
     QCOMPARE(QDir(folder).entryList(QDir::Files), QStringList{QStringLiteral("vault-\u263f.dat")});
+    QCOMPARE(row->text(), QStringLiteral("Done"));
+}
+
+// F-687: after the save dialog's own "replace it?" Yes, the GUI backup goes through the same temporary copy, check
+// and rename as backupvault. A copy that fails its check never touches the file already there; one that passes
+// replaces it.
+void VaultTests::backupOverAnExistingFile()
+{
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    TestChain100Setup test;
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+
+    vault::DatabaseOptions db_options;
+    db_options.require_create = true;
+    db_options.require_format = vault::DatabaseFormat::SQLITE;
+    vault::DatabaseStatus db_status;
+    bilingual_str db_error;
+    auto database{vault::MakeDatabase(test.m_path_root / "backup-overwrite", db_options, db_status, db_error)};
+    QVERIFY2(database, db_error.original.c_str());
+    auto vault{std::make_shared<CVault>(m_node.context()->chain.get(), "", std::move(database))};
+    QVERIFY(vault->LoadVault() == vault::DBErrors::LOAD_OK);
+    {
+        LOCK(vault->cs_vault);
+        vault->SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
+        vault->SetupDescriptorScriptPubKeyMans();
+    }
+
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    OptionsModel options_model(m_node);
+    bilingual_str error;
+    QVERIFY(options_model.Init(error));
+    VaultContext& vault_context = *m_node.vaultLoader().context();
+    AddVault(vault_context, vault);
+    VaultModel model(interfaces::MakeVault(vault_context, vault), m_node, &options_model, platform_style.get());
+    RemoveVault(vault_context, vault, /*load_on_start=*/std::nullopt);
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(&model, platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(&model);
+    frame->gotoLaunchPage();
+
+    QLabel* row = frame->findChild<QLabel*>(QStringLiteral("desktopLaunchBackupState"));
+    QVERIFY(row);
+    QTemporaryDir backup_dir;
+    QVERIFY(backup_dir.isValid());
+    const QString file{backup_dir.filePath(QStringLiteral("vault-backup.dat"))};
+    QSignalSpy messages(view, &VaultView::message);
+    QVERIFY(messages.isValid());
+
+    // A good earlier backup at the path.
+    QVERIFY(SaveBackupThroughFrame(*frame, *view, file));
+    QTRY_COMPARE(messages.count(), 1);
+    QCOMPARE(messages.at(0).at(0).toString(), QStringLiteral("Backup Successful"));
+    const QByteArray old_bytes{FileBytes(file)};
+    QVERIFY(!old_bytes.isEmpty());
+
+    // The new copy fails its check (-test=corruptbackup damages it first): the earlier backup is untouched and
+    // still opens as this vault, nothing is left beside it, and the message does not say the data was saved.
+    test.m_node.args->ForceSetArg("-test", "corruptbackup");
+    QVERIFY(SaveBackupOverExistingThroughFrame(*frame, *view, file));
+    QTRY_COMPARE(messages.count(), 2);
+    test.m_node.args->ForceSetArg("-test", "");
+    QCOMPARE(messages.at(1).at(0).toString(), QStringLiteral("Backup Check Failed"));
+    QCOMPARE(messages.at(1).at(1).toString(),
+        QStringLiteral("The vault data was not saved to %1, because checking the copy failed: the copy cannot be read as a vault. Any earlier file at %1 is unchanged.").arg(QDir::toNativeSeparators(file)));
+    QCOMPARE(messages.at(1).at(2).toUInt(), static_cast<unsigned int>(CClientUIInterface::MSG_ERROR));
+    QCOMPARE(FileBytes(file), old_bytes);
+    QVERIFY(vault->VerifyBackup(GUIUtil::QStringToPath(file), /*passphrase=*/nullptr).result == vault::BackupCheckResult::OK);
+    QCOMPARE(QDir(backup_dir.path()).entryList(QDir::Files), QStringList{QStringLiteral("vault-backup.dat")});
+
+    // The new copy passes: it replaces the earlier backup (the live vault has changed since, by recording the
+    // failed check), and the file opens and checks as this vault.
+    QVERIFY(SaveBackupOverExistingThroughFrame(*frame, *view, file));
+    QTRY_COMPARE(messages.count(), 3);
+    QCOMPARE(messages.at(2).at(0).toString(), QStringLiteral("Backup Successful"));
+    QCOMPARE(messages.at(2).at(1).toString(), QStringLiteral("The vault data was saved to %1 and checked.").arg(QDir::toNativeSeparators(file)));
+    QVERIFY(FileBytes(file) != old_bytes);
+    QVERIFY(vault->VerifyBackup(GUIUtil::QStringToPath(file), /*passphrase=*/nullptr).result == vault::BackupCheckResult::OK);
+    QCOMPARE(QDir(backup_dir.path()).entryList(QDir::Files), QStringList{QStringLiteral("vault-backup.dat")});
     QCOMPARE(row->text(), QStringLiteral("Done"));
 }
 
@@ -3645,6 +3757,148 @@ void VaultTests::coinControlMarksUnconfirmedChange()
     }
 }
 
+void VaultTests::transferFollowsTheAvoidReuseFlag()
+{
+    // F-696: on a vault with the avoid_reuse flag, automatic selection in the GUI
+    // leaves dirty coins alone, as the spend RPCs do; a coin picked by hand in
+    // Coin Control is still spent. The send-flow chain: five mature coinbases, all
+    // paid to one address, and the sandbox no-cycle proof.
+    TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
+    for (int i = 0; i < 5; ++i) {
+        test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
+    }
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
+    CTxDestination reused_dest;
+    std::vector<COutPoint> held;
+    COutPoint first_coin;
+    {
+        LOCK(vault->cs_vault);
+        vault->SetVaultFlag(vault::VAULT_FLAG_AVOID_REUSE);
+        auto dest = vault->GetNewDestination(OutputType::BECH32, "");
+        QVERIFY(dest);
+        reused_dest = *dest;
+        const std::vector<vault::COutput> coins{vault::AvailableCoins(*vault).All()};
+        QVERIFY(coins.size() >= 3);
+        first_coin = coins[0].outpoint;
+        for (size_t i = 1; i < coins.size(); ++i) {
+            QVERIFY(vault->LockCoin(coins[i].outpoint));
+            held.push_back(coins[i].outpoint);
+        }
+    }
+    const CScript reused_script{GetScriptForDestination(reused_dest)};
+    std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
+    MiniGUI mini_gui(m_node, platformStyle.get());
+    mini_gui.initModelForVault(m_node, vault, platformStyle.get());
+    SendCoinsDialog& dialog = mini_gui.sendCoinsDialog;
+
+    // The output of `txid` paying `to_reused` (or the other one, its change).
+    const auto output_of = [&](const uint256& txid, bool to_reused) {
+        LOCK(vault->cs_vault);
+        const vault::CVaultTx* wtx = vault->GetVaultTx(txid);
+        if (!wtx) return COutPoint{};
+        for (uint32_t n = 0; n < wtx->tx->vout.size(); ++n) {
+            if ((wtx->tx->vout[n].scriptPubKey == reused_script) == to_reused) return COutPoint{wtx->tx->GetHash(), n};
+        }
+        return COutPoint{};
+    };
+    const auto send_picked = [&](const COutPoint& coin, const CTxDestination& to, CAmount amount) {
+        dialog.getCoinControl()->UnSelectAll();
+        dialog.getCoinControl()->Select(coin);
+        const uint256 txid = SendCoins(*vault, dialog, to, amount);
+        dialog.getCoinControl()->UnSelectAll();
+        return txid;
+    };
+
+    // Two coins on one address, then spend one of them: the address is used and
+    // the other coin on it is dirty. Each step picks its input, so this setup
+    // does not depend on the selection under test.
+    const uint256 tx1 = send_picked(first_coin, reused_dest, 2 * COIN);
+    if (QTest::currentTestFailed()) return;
+    const uint256 tx2 = send_picked(output_of(tx1, false), reused_dest, 2 * COIN);
+    if (QTest::currentTestFailed()) return;
+    const COutPoint dirty_coin{output_of(tx2, true)};
+    QVERIFY(!dirty_coin.IsNull());
+    send_picked(output_of(tx1, true), PKHash(), COIN);
+    if (QTest::currentTestFailed()) return;
+
+    CAmount clean_total{0};
+    {
+        LOCK(vault->cs_vault);
+        for (const COutPoint& outpoint : held) QVERIFY(vault->UnlockCoin(outpoint));
+        for (const vault::COutput& coin : vault::AvailableCoins(*vault).All()) {
+            if (vault->IsSpentKey(coin.txout.scriptPubKey)) {
+                QCOMPARE(coin.outpoint, dirty_coin);
+            } else {
+                clean_total += coin.txout.nValue;
+            }
+        }
+        QVERIFY(vault->IsSpentKey(reused_script));
+    }
+    QVERIFY(clean_total > COIN);
+
+    // "Use available balance" offers only the clean coins (it reads the cached
+    // balance, which already leaves dirty coins out: a pin, not the fix).
+    QVBoxLayout* entries = dialog.findChild<QVBoxLayout*>("entries");
+    QVERIFY(entries && entries->itemAt(0));
+    SendCoinsEntry* entry = qobject_cast<SendCoinsEntry*>(entries->itemAt(0)->widget());
+    QVERIFY(entry);
+    Q_EMIT entry->useAvailableBalance(entry);
+    QCOMPARE(entry->getValue().amount, clean_total);
+
+    // An amount only the dirty coins could cover is refused before any work.
+    {
+        QSignalSpy messages(&dialog, &SendCoinsDialog::message);
+        QSignalSpy confirmation(&dialog, &SendCoinsDialog::prepareSendConfirmationReadyForTesting);
+        QObject scope;
+        QObject::connect(&dialog, &SendCoinsDialog::prepareSendConfirmationReadyForTesting, &scope, [&]() {
+            QTimer::singleShot(0, &scope, [] { ConfirmOpenSendDialog(nullptr, QMessageBox::Cancel); });
+        });
+        entry->findChild<QValidatedLineEdit*>("payTo")->setText(QString::fromStdString(EncodeDestination(PKHash())));
+        entry->findChild<QuicksilverAmountField*>("payAmount")->setValue(clean_total + COIN);
+        QSignalSpy finished(&dialog, &SendCoinsDialog::sendPreparationFinishedForTesting);
+        QVERIFY(QMetaObject::invokeMethod(&dialog, "sendButtonClicked", Q_ARG(bool, false)));
+        // Refused, it finishes at once; at fault, the worker spends the dirty coins.
+        if (messages.isEmpty() && finished.isEmpty()) finished.wait(30000);
+        QTest::qWait(50);
+        QCOMPARE(confirmation.size(), 0);
+        QCOMPARE(messages.size(), 1);
+        QCOMPARE(messages.at(0).at(1).toString(), QStringLiteral("The amount exceeds your balance."));
+    }
+
+    // A transfer the clean coins can cover spends no dirty coin.
+    const uint256 auto_txid = SendCoins(*vault, dialog, PKHash(), COIN);
+    if (QTest::currentTestFailed()) return;
+    QVERIFY(!auto_txid.IsNull());
+    {
+        LOCK(vault->cs_vault);
+        const vault::CVaultTx* wtx = vault->GetVaultTx(auto_txid);
+        QVERIFY(wtx);
+        for (const CTxIn& txin : wtx->tx->vin) {
+            const vault::CVaultTx* prev = vault->GetVaultTx(txin.prevout.hash);
+            QVERIFY(prev);
+            QVERIFY(!vault->IsSpentKey(prev->tx->vout[txin.prevout.n].scriptPubKey));
+        }
+    }
+
+    // A dirty coin picked by hand is spent as picked.
+    dialog.getCoinControl()->Select(dirty_coin);
+    const uint256 picked_txid = SendCoins(*vault, dialog, PKHash(), COIN);
+    if (QTest::currentTestFailed()) return;
+    QVERIFY(!picked_txid.IsNull());
+    {
+        LOCK(vault->cs_vault);
+        const vault::CVaultTx* wtx = vault->GetVaultTx(picked_txid);
+        QVERIFY(wtx);
+        QCOMPARE(wtx->tx->vin.size(), size_t{1});
+        QCOMPARE(wtx->tx->vin[0].prevout, dirty_coin);
+    }
+}
+
 void VaultTests::minePageSeparatesDraftPayoutAndHealthNote()
 {
     const RestoreApplicationStyle restore;
@@ -4038,7 +4292,7 @@ void VaultTests::mineMintPageNamesAnArmedMinerWithNoPermittedSolver()
         st.graphs_attempted = graphs;
         st.attempts_per_second = rate;
         if (error) st.last_solver_error = error;
-        return MineMintPage::statusTextForTesting(st);
+        return MineMintPage::statusText(st);
     };
 
     const auto idle = rows(false, false, true, true, false, 0, std::nullopt, nullptr);
@@ -4293,7 +4547,7 @@ void VaultTests::mineMintPageSaysWhenTheMinerIsWaitingToCatchUp()
     st.gpu_solver = true;
     st.block_solving_possible = true;
     st.waiting_for_sync = true;
-    auto rows = MineMintPage::statusTextForTesting(st);
+    auto rows = MineMintPage::statusText(st);
     QCOMPARE(rows.block_mining, QStringLiteral("Waiting"));
     QCOMPARE(rows.attempts, QStringLiteral("Waiting"));
     QVERIFY(rows.health.contains(QStringLiteral("synchronized with the network")));
@@ -4301,12 +4555,12 @@ void VaultTests::mineMintPageSaysWhenTheMinerIsWaitingToCatchUp()
     // Halted is the more specific truth: nothing could solve even once synced.
     st.gpu_solver = false;
     st.block_solving_possible = false;
-    rows = MineMintPage::statusTextForTesting(st);
+    rows = MineMintPage::statusText(st);
     QCOMPARE(rows.block_mining, QStringLiteral("Halted"));
 
     // Stopped is Idle, whatever the last worker was doing.
     st.active = false;
-    rows = MineMintPage::statusTextForTesting(st);
+    rows = MineMintPage::statusText(st);
     QCOMPARE(rows.block_mining, QStringLiteral("Idle"));
 }
 
@@ -4317,7 +4571,7 @@ void VaultTests::mineMintPageShowsARawScriptPayout()
     QVERIFY(payout);
 
     interfaces::MiningStatus st;
-    auto rows = MineMintPage::statusTextForTesting(st);
+    auto rows = MineMintPage::statusText(st);
     QCOMPARE(rows.payout, QStringLiteral("Not set"));
     page.setStatus(st);
     QCOMPARE(payout->text(), rows.payout);
@@ -4326,13 +4580,13 @@ void VaultTests::mineMintPageShowsARawScriptPayout()
     // script is one Start will not use, so G1 5c marks it (signed spec change).
     st.active = true;
     st.payout_script = "6a";
-    rows = MineMintPage::statusTextForTesting(st);
+    rows = MineMintPage::statusText(st);
     QCOMPARE(rows.payout, QStringLiteral("Raw script (provably unspendable)"));
     page.setStatus(st);
     QCOMPARE(payout->text(), rows.payout);
 
     st.payout_script = "51";
-    rows = MineMintPage::statusTextForTesting(st);
+    rows = MineMintPage::statusText(st);
     QCOMPARE(rows.payout, QStringLiteral("Raw script 51"));
     page.setStatus(st);
     QCOMPARE(payout->text(), rows.payout);
@@ -4353,7 +4607,7 @@ void VaultTests::mineMintPageNamesAnIdleNodeWithNothingPermitted()
         st.active = false;
         st.gpu_solver = gpu;
         st.block_solving_possible = possible;
-        return MineMintPage::statusTextForTesting(st);
+        return MineMintPage::statusText(st);
     };
     const QString sentence = QStringLiteral("No graphics card is in use, and processor block mining is off. Choose a card, or allow processor block mining, in Settings > Options > Hardware.");
 
@@ -5303,6 +5557,63 @@ void VaultTests::thinHeaderSourceRefreshesDetachedVault()
     WaitForDeleteVault(std::move(raw_vault));
 }
 
+namespace {
+//! Counts the tips a header source hands over, and refuses them until told not to.
+class TipCountingVaultLoader : public interfaces::VaultLoader
+{
+public:
+    int tips_offered{0};
+    bool accept{false};
+
+    bool setHeaderTip(int, const uint256&, int64_t) override { ++tips_offered; return accept; }
+    void registerRpcs() override {}
+    bool verify() override { return true; }
+    bool load() override { return true; }
+    void start(CScheduler&) override {}
+    void flush() override {}
+    void stop() override {}
+    void setMockTime(int64_t) override {}
+    void schedulerMockForward(std::chrono::seconds) override {}
+    util::Result<std::unique_ptr<interfaces::Vault>> createVault(const std::string&, const SecureString&, uint64_t, std::vector<bilingual_str>&) override { return util::Error{Untranslated("unused")}; }
+    util::Result<std::unique_ptr<interfaces::Vault>> loadVault(const std::string&, std::vector<bilingual_str>&) override { return util::Error{Untranslated("unused")}; }
+    util::Result<std::unique_ptr<interfaces::Vault>> restoreVault(const fs::path&, const std::string&, std::vector<bilingual_str>&) override { return util::Error{Untranslated("unused")}; }
+    std::vector<std::pair<std::string, std::string>> listVaultDir() override { return {}; }
+    std::vector<std::unique_ptr<interfaces::Vault>> getVaults() override { return {}; }
+    std::unique_ptr<interfaces::Handler> handleLoadVault(LoadVaultFn) override { return interfaces::MakeCleanupHandler([] {}); }
+};
+} // namespace
+
+void VaultTests::thinHeaderSourceDoesNotReloadAnUnchangedFailedStore()
+{
+    // A refused store fails the same way until it changes, so the 2-second timer
+    // must not revalidate the whole store on the GUI thread each tick (S0245-C-02).
+    BasicTestingSetup test{ChainType::SANDBOX};
+    const fs::path store{test.m_args.GetDataDirNet() / "agent" / "refused-header-test.dat"};
+    fs::create_directories(store.parent_path());
+    const agent::HeaderChain headers{Params().GetConsensus(), Params().GenesisBlock()};
+    QCOMPARE(agent::SaveHeaderChain(headers, store), agent::HeaderStoreResult::OK);
+
+    TipCountingVaultLoader loader;
+    ThinVaultHeaderSource source{store};
+    std::string first_error;
+    QVERIFY(!source.refresh(loader, first_error));
+    QCOMPARE(loader.tips_offered, 1);
+    std::string second_error;
+    QVERIFY(!source.refresh(loader, second_error));
+    QCOMPARE(loader.tips_offered, 1);
+    QCOMPARE(second_error, first_error);
+
+    // A changed store is read again.
+    loader.accept = true;
+    QCOMPARE(agent::SaveHeaderChain(headers, store), agent::HeaderStoreResult::OK);
+    fs::last_write_time(store, fs::last_write_time(store) + std::chrono::seconds{2});
+    std::string error;
+    QVERIFY2(source.refresh(loader, error), error.c_str());
+    QCOMPARE(loader.tips_offered, 2);
+    QVERIFY2(source.refresh(loader, error), error.c_str());
+    QCOMPARE(loader.tips_offered, 2);
+}
+
 void VaultTests::vaultModelSkipsCoinControlOutputsBeforeConsensusClientModel()
 {
     TestChain100Setup test;
@@ -5358,6 +5669,100 @@ void VaultTests::vaultViewMasksValuesWithoutClientModel()
 
     Q_EMIT vault_view.setPrivacy(false);
     QVERIFY(!options_model.getOption(OptionsModel::OptionID::MaskValues).toBool());
+}
+
+//! F-689 (c05b-11, c05a-22): the main window keeps the saved Mask values and the vault's own rules.
+//! - Mask values is restored with the options model. A consensus-off launch has no client model, and addVault hands
+//!   the action's state to the vault, which saves it: the unrestored "off" replaced the user's mask_values=true.
+//! - Enabling the vault actions from one flag no longer re-enables Encrypt Vault on an encrypted vault, or the
+//!   Ledger while values are masked.
+void VaultTests::mainWindowKeepsMaskValuesAndVaultRules()
+{
+    QSettings().setValue(QStringLiteral("Desktop/ConsensusEnabled"), false);
+    TestChain100Setup test;
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+
+    std::unique_ptr<const PlatformStyle> platform_style(PlatformStyle::instantiate("other"));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    OptionsModel options_model(m_node);
+    bilingual_str error;
+    QVERIFY(options_model.Init(error));
+    options_model.setOption(OptionsModel::OptionID::MaskValues, true);
+    struct ClearMask {
+        OptionsModel& options;
+        ~ClearMask() { options.setOption(OptionsModel::OptionID::MaskValues, false); }
+    } clear_mask{options_model};
+
+    QuicksilverGUI window(m_node, platform_style.get(), network_style.data());
+    window.setOptionsModel(&options_model);
+    QVERIFY(window.isPrivacyModeActivated());
+    QVERIFY(options_model.getOption(OptionsModel::OptionID::MaskValues).toBool());
+
+    auto vault = std::make_unique<PollMarkerVault>();
+    vault->crypted = true;
+    vault->locked = true;
+    VaultModel model(std::move(vault), m_node, &options_model, platform_style.get());
+    QCOMPARE(model.getEncryptionStatus(), VaultModel::Locked);
+    VaultFrame* frame = window.findChild<VaultFrame*>(QStringLiteral("vaultFrame"));
+    QVERIFY(frame);
+    auto* view = new VaultView(&model, platform_style.get(), frame);
+    QVERIFY(frame->addView(view));
+    frame->setCurrentVault(&model);
+
+    const auto action = [&](const QString& text) -> QAction* {
+        for (QAction* candidate : window.findChildren<QAction*>()) {
+            if (candidate->text() == text) return candidate;
+        }
+        return nullptr;
+    };
+    QAction* encrypt{action(QStringLiteral("&Encrypt Vault…"))};
+    QAction* change{action(QStringLiteral("&Change Passphrase…"))};
+    QAction* ledger{window.findChild<QAction*>(QStringLiteral("historyAction"))};
+    QVERIFY(encrypt && change && ledger);
+
+    window.markConsensusInitializationFailed();
+    QVERIFY(!encrypt->isEnabled());
+    QVERIFY(change->isEnabled());
+    QVERIFY(!ledger->isEnabled());
+}
+
+//! F-689 (c05a-26): Start uses the payout shown when it was pressed. With no peers the press opens a warning and the
+//! answer comes later; the address used to be read when the warning closed, so a change made meanwhile was mined to.
+void VaultTests::mineMintStartUsesThePayoutShownAtThePress()
+{
+    MineMintPage page;
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+    interfaces::MiningStatus st;
+    st.active = false;
+    st.gpu_solver = true;
+    page.setStatus(st);
+    page.setPeerCount(0);
+    page.setPayoutAddress(QStringLiteral("hg1qpressed"));
+    QSignalSpy start_spy(&page, &MineMintPage::startRequested);
+    QVERIFY(start_spy.isValid());
+    QPushButton* start = page.findChild<QPushButton*>(QStringLiteral("startMiningButton"));
+    QVERIFY(start);
+    QVERIFY(start->isEnabled());
+
+    bool clicked_proceed{false};
+    QTimer::singleShot(0, [&] {
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            auto* proceed = widget->findChild<QPushButton*>(QStringLiteral("isolatedMiningProceedButton"));
+            if (proceed && widget->isVisible()) {
+                page.setPayoutAddress(QStringLiteral("hg1qchanged"));
+                clicked_proceed = true;
+                proceed->click();
+                return;
+            }
+        }
+    });
+    start->click();
+    QTRY_VERIFY_WITH_TIMEOUT(clicked_proceed, 2000);
+    QTRY_COMPARE_WITH_TIMEOUT(start_spy.count(), 1, 2000);
+    QCOMPARE(start_spy.takeFirst().at(0).toString(), QStringLiteral("hg1qpressed"));
 }
 
 //! A transfer's proof-of-work runs on a worker thread inside the vault, so any path
@@ -6254,10 +6659,6 @@ struct CoinControlFormSetup {
             QTest::qFail(error.original.c_str(), __FILE__, __LINE__);
             return;
         }
-        if (!options.setOption(OptionsModel::CoinControlFeatures, true)) {
-            QTest::qFail("could not enable coin control features", __FILE__, __LINE__);
-            return;
-        }
         model = std::make_unique<VaultModel>(std::make_unique<PollMarkerVault>(), node, &options, style.get());
         ok = true;
     }
@@ -6288,32 +6689,48 @@ bool cellIs(QFormLayout* layout, QWidget* widget, int expected_row, QFormLayout:
     return row == expected_row && role == expected_role;
 }
 
-//! Quantity on row 0 and Bytes on row 1, labels in LabelRole and fields in
-//! FieldRole. A widget the layout refused is row -1.
-bool quantityAndBytesUseSeparateRows(QWidget* root, const QStringList& messages)
+//! F-678: the coin-control summary has no Bytes row. It was a size estimate built
+//! from legacy byte constants and had no fee meaning in a feeless coin. Quantity
+//! stays on row 0 and Amount beside it; no "Copy bytes" action remains.
+bool coinControlSummaryHasNoBytesRow(QWidget* root, const QStringList& messages)
 {
     auto* layout = root->findChild<QFormLayout*>(QStringLiteral("formLayoutCoinControl1"));
+    auto* amount_layout = root->findChild<QFormLayout*>(QStringLiteral("formLayoutCoinControl2"));
     auto* quantity_text = root->findChild<QLabel*>(QStringLiteral("labelCoinControlQuantityText"));
     auto* quantity = root->findChild<QLabel*>(QStringLiteral("labelCoinControlQuantity"));
-    auto* bytes_text = root->findChild<QLabel*>(QStringLiteral("labelCoinControlBytesText"));
-    auto* bytes = root->findChild<QLabel*>(QStringLiteral("labelCoinControlBytes"));
+    auto* amount_text = root->findChild<QLabel*>(QStringLiteral("labelCoinControlAmountText"));
+    auto* amount = root->findChild<QLabel*>(QStringLiteral("labelCoinControlAmount"));
 
     const QString detail = QStringLiteral("formLayoutCoinControl1 rowCount=%1\n%2\n%3\n%4\n%5\ncaptured:\n%6")
                                .arg(layout ? layout->rowCount() : -1)
                                .arg(describeFormCell("Quantity label", layout, quantity_text))
                                .arg(describeFormCell("Quantity field", layout, quantity))
-                               .arg(describeFormCell("Bytes label", layout, bytes_text))
-                               .arg(describeFormCell("Bytes field", layout, bytes))
+                               .arg(describeFormCell("Amount label", amount_layout, amount_text))
+                               .arg(describeFormCell("Amount field", amount_layout, amount))
                                .arg(messages.join(QLatin1Char('\n')));
     const QByteArray detail_bytes = detail.toUtf8();
 
-    const bool positions_ok = cellIs(layout, quantity_text, 0, QFormLayout::LabelRole) &&
+    const bool positions_ok = layout && layout->rowCount() == 1 &&
+                              cellIs(layout, quantity_text, 0, QFormLayout::LabelRole) &&
                               cellIs(layout, quantity, 0, QFormLayout::FieldRole) &&
-                              cellIs(layout, bytes_text, 1, QFormLayout::LabelRole) &&
-                              cellIs(layout, bytes, 1, QFormLayout::FieldRole);
+                              cellIs(amount_layout, amount_text, 0, QFormLayout::LabelRole) &&
+                              cellIs(amount_layout, amount, 0, QFormLayout::FieldRole);
     const bool positions_pass = QTest::qVerify(positions_ok,
-                                               "Quantity row 0 and Bytes row 1 in formLayoutCoinControl1",
+                                               "Quantity alone in formLayoutCoinControl1, Amount in formLayoutCoinControl2",
                                                detail_bytes.constData(), __FILE__, __LINE__);
+
+    QStringList bytes_left;
+    for (QLabel* label : root->findChildren<QLabel*>()) {
+        if (label->objectName().contains(QStringLiteral("Bytes")) || label->text() == QStringLiteral("Bytes:")) {
+            bytes_left << label->objectName();
+        }
+        for (QAction* action : label->actions()) {
+            if (action->text().contains(QStringLiteral("bytes"), Qt::CaseInsensitive)) bytes_left << action->text();
+        }
+    }
+    const QByteArray bytes_detail = bytes_left.join(QLatin1Char('\n')).toUtf8();
+    const bool bytes_pass = QTest::qVerify(bytes_left.isEmpty(), "no Bytes label or Copy bytes action",
+                                           bytes_detail.constData(), __FILE__, __LINE__);
 
     QStringList occupied;
     for (const QString& line : messages) {
@@ -6323,14 +6740,13 @@ bool quantityAndBytesUseSeparateRows(QWidget* root, const QStringList& messages)
     const bool messages_pass = QTest::qVerify(occupied.isEmpty(),
                                               "no QFormLayout cell already occupied",
                                               occupied_bytes.constData(), __FILE__, __LINE__);
-    return positions_pass && messages_pass;
+    return positions_pass && bytes_pass && messages_pass;
 }
 
 } // namespace
 
-//! Quantity and Bytes were both declared at form row 0. QFormLayout keeps the
-//! first pair and refuses the second, so Bytes is not in the layout at all.
-void VaultTests::transferCoinControlQuantityAndBytesUseSeparateRows()
+//! F-678: the Transfer page's coin-control frame shows Quantity and Amount and no Bytes row.
+void VaultTests::transferCoinControlHasNoBytesRow()
 {
     CoinControlFormSetup setup(m_node);
     if (!setup.ok) return;
@@ -6348,10 +6764,11 @@ void VaultTests::transferCoinControlQuantityAndBytesUseSeparateRows()
     QWidget* frame = dialog->findChild<QWidget*>(QStringLiteral("frameCoinControl"));
     QVERIFY(frame);
     QVERIFY(!frame->isHidden());
-    if (!quantityAndBytesUseSeparateRows(dialog.get(), messages)) return;
+    if (!coinControlSummaryHasNoBytesRow(dialog.get(), messages)) return;
 }
 
-void VaultTests::coinControlDialogQuantityAndBytesUseSeparateRows()
+//! F-678: the Coin Control dialog shows Quantity and Amount and no Bytes row.
+void VaultTests::coinControlDialogHasNoBytesRow()
 {
     CoinControlFormSetup setup(m_node);
     if (!setup.ok) return;
@@ -6365,7 +6782,7 @@ void VaultTests::coinControlDialogQuantityAndBytesUseSeparateRows()
         messages = capture.messages;
     }
 
-    if (!quantityAndBytesUseSeparateRows(dialog.get(), messages)) return;
+    if (!coinControlSummaryHasNoBytesRow(dialog.get(), messages)) return;
 }
 
 //! F-486: coin control paints its item-view checks with the same visible
@@ -7017,11 +7434,11 @@ void VaultTests::transferSolverTextNamesRealMenuAndSetting()
     interfaces::MiningStatus mining;
     mining.active = true;
     mining.block_solving_possible = false;
-    texts << MineMintPage::statusTextForTesting(mining).health;
+    texts << MineMintPage::statusText(mining).health;
     mining.block_solving_possible = true;
     mining.solver_missing = true;
     mining.solver_ok = false;
-    texts << MineMintPage::statusTextForTesting(mining).health;
+    texts << MineMintPage::statusText(mining).health;
     texts << QString::fromStdString(vault::TxProofNeedsGraphicsCardError().original);
 
     const QRegularExpression path(QStringLiteral("([A-Za-z]+) (?:>|→) [A-Za-z]+ (?:>|→) [A-Za-z]+"));
@@ -7070,7 +7487,6 @@ public:
         model = std::make_unique<VaultModel>(std::move(mock), node, &options, style.get());
         dialog = std::make_unique<SendCoinsDialog>(style.get());
         dialog->setModel(model.get());
-        dialog->getCoinControl()->m_avoid_address_reuse = true;
         address = QString::fromStdString(EncodeDestination(PKHash(chain.coinbaseKey.GetPubKey().GetID())));
     }
 
@@ -7413,7 +7829,7 @@ void VaultTests::transferPrecheckDefersUncertainBalance()
     QFETCH(int, uncertainty);
     TransferPrecheckFixture fixture(m_node);
     fixture.recipient(COIN);
-    if (uncertainty == 0) fixture.dialog->getCoinControl()->m_avoid_address_reuse = false;
+    if (uncertainty == 0) fixture.vault->avoid_reuse = false;
     if (uncertainty == 1) fixture.dialog->getCoinControl()->Select(COutPoint{Txid::FromUint256(uint256::ONE), 0});
     if (uncertainty == 2) fixture.dialog->getCoinControl()->m_include_unsafe_inputs = true;
     if (uncertainty == 3) fixture.vault->auto_selection_bound_busy = true;
@@ -7732,7 +8148,6 @@ void VaultTests::customChangeAddressConfirmDoesNotNestEventLoop()
     const std::shared_ptr<CVault> setup_vault = SetupDescriptorsVault(m_node, test);
     QVERIFY(setup_vault);
     mini_gui.initModelForVault(m_node, setup_vault, platformStyle.get());
-    QVERIFY(mini_gui.optionsModel.setOption(OptionsModel::CoinControlFeatures, true));
 
     QCheckBox* check = mini_gui.sendCoinsDialog.findChild<QCheckBox*>(QStringLiteral("checkBoxCoinControlChange"));
     QVERIFY(check);
@@ -7844,6 +8259,129 @@ void VaultTests::changePassMismatchDoesNotNestEventLoop()
     ExpectModalWithoutNestedEventLoop("QMessageBox", [&] {
         dialog.accept();
     });
+}
+
+//! F-682 (S0217-A-04, S0250-A-13): in the create flow the caller gets the new
+//! passphrase only once the user confirms the reminder, and Cancel leaves none.
+void VaultTests::passphraseReachesTheCallerOnlyOnConfirm()
+{
+    const auto run = [](QMessageBox::StandardButton answer, SecureString& out) -> int {
+        AskPassphraseDialog dialog(AskPassphraseDialog::Encrypt, nullptr, &out);
+        dialog.findChild<QLineEdit*>(QStringLiteral("passEdit2"))->setText(QStringLiteral("abcdefghij"));
+        dialog.findChild<QLineEdit*>(QStringLiteral("passEdit3"))->setText(QStringLiteral("abcdefghij"));
+        QSignalSpy finished(&dialog, &QDialog::finished);
+        dialog.accept();
+        QMessageBox* confirm{nullptr};
+        for (int i = 0; i < 100 && !(confirm = VisibleChild<QMessageBox>(&dialog, QStringLiteral("encryptVaultConfirm"))); ++i) QTest::qWait(10);
+        if (!confirm) return -1;
+        confirm->button(QMessageBox::Yes)->click();
+        QMessageBox* reminder{nullptr};
+        for (int i = 0; i < 100 && !(reminder = VisibleChild<QMessageBox>(&dialog, QStringLiteral("encryptVaultReminder"))); ++i) QTest::qWait(10);
+        if (!reminder) return -2;
+        // Asked, not yet answered: the caller holds nothing.
+        if (!out.empty()) return -3;
+        reminder->button(answer)->click();
+        if (finished.isEmpty() && !finished.wait(2000)) return -4;
+        return finished.first().first().toInt();
+    };
+
+    SecureString cancelled;
+    QCOMPARE(run(QMessageBox::Cancel, cancelled), int{QDialog::Rejected});
+    QVERIFY(cancelled.empty());
+
+    SecureString confirmed;
+    QCOMPARE(run(QMessageBox::Yes, confirmed), int{QDialog::Accepted});
+    QCOMPARE(std::string(confirmed.begin(), confirmed.end()), std::string("abcdefghij"));
+
+    // Cancelling the passphrase dialog itself clears what the caller held.
+    SecureString held{"stale"};
+    {
+        AskPassphraseDialog dialog(AskPassphraseDialog::Unlock, nullptr, &held);
+        dialog.findChild<QLineEdit*>(QStringLiteral("passEdit1"))->setText(QStringLiteral("typed"));
+        dialog.reject();
+        QVERIFY(dialog.findChild<QLineEdit*>(QStringLiteral("passEdit1"))->text().isEmpty());
+    }
+    QVERIFY(held.empty());
+}
+
+//! F-682 (S0254-B-04): "Show passphrase" keeps the input-method hints that keep
+//! a passphrase out of predictive keyboards and IME history.
+void VaultTests::showPassphraseKeepsSensitiveInputHints()
+{
+    AskPassphraseDialog dialog(AskPassphraseDialog::ChangePass, nullptr);
+    auto* toggle = dialog.findChild<QAbstractButton*>(QStringLiteral("toggleShowPasswordButton"));
+    QVERIFY(toggle);
+    for (bool show : {true, false}) {
+        toggle->setChecked(show);
+        for (const char* name : {"passEdit1", "passEdit2", "passEdit3"}) {
+            auto* edit = dialog.findChild<QLineEdit*>(QLatin1String(name));
+            QVERIFY(edit);
+            QCOMPARE(edit->echoMode(), show ? QLineEdit::Normal : QLineEdit::Password);
+            QVERIFY2(edit->inputMethodHints() & Qt::ImhSensitiveData, name);
+            QVERIFY2(edit->inputMethodHints() & Qt::ImhNoPredictiveText, name);
+        }
+    }
+}
+
+//! F-682 (S0217-A-07): a mistyped old passphrase leaves an unlocked vault unlocked.
+void VaultTests::failedPassphraseChangeLeavesVaultUnlocked()
+{
+    std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
+    auto mock = std::make_unique<PollMarkerVault>();
+    PollMarkerVault* vault = mock.get();
+    vault->crypted = true;
+    vault->locked = false;
+    vault->unlock_ok = false; // the old passphrase is wrong
+    OptionsModel options_model(m_node);
+    bilingual_str error;
+    QVERIFY(options_model.Init(error));
+    VaultModel vault_model(std::move(mock), m_node, &options_model, platformStyle.get());
+    QVERIFY(!vault_model.changePassphrase(SecureString{"wrong"}, SecureString{"new"}));
+    QVERIFY(!vault->locked);
+}
+
+//! F-682 (S0250-A-19): a vault name in an error box is text, not markup.
+void VaultTests::vaultErrorBoxShowsANameAsPlainText()
+{
+    TestChain100Setup test;
+    auto loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = loader.get();
+    ScopedNodeContext context(m_node, test.m_node);
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    VaultController controller(m_node, &options, style.get(), nullptr);
+    QWidget parent;
+    auto* activity = new OpenVaultActivity(&controller, &parent);
+    activity->open("<b>x</b>");
+    QMessageBox* box{nullptr};
+    for (int i = 0; i < 500 && !(box = VisibleChild<QMessageBox>(&parent, QStringLiteral("openVaultFailed"))); ++i) QTest::qWait(10);
+    QVERIFY(box);
+    QCOMPARE(box->textFormat(), Qt::PlainText);
+    QVERIFY2(box->text().contains(QStringLiteral("<b>x</b>")), qPrintable(box->text()));
+    box->close();
+    // The controller owns the activity, and it deletes itself when it finishes.
+}
+
+//! F-682 (S0260-C-05): a reopened request comes from the vault database; its
+//! address is escaped inside the link's href as well as in the link text.
+void VaultTests::requestLinkEscapesItsStoredAddress()
+{
+    std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
+    OptionsModel options_model(m_node);
+    bilingual_str error;
+    QVERIFY(options_model.Init(error));
+    VaultModel vault_model(std::make_unique<PollMarkerVault>(), m_node, &options_model, platformStyle.get());
+    ReceiveRequestDialog dialog;
+    dialog.setModel(&vault_model);
+    SendCoinsRecipient info;
+    info.address = QStringLiteral("x\" onclick=\"y");
+    dialog.setInfo(info);
+    auto* link = dialog.findChild<QLabel*>(QStringLiteral("uri_content"));
+    QVERIFY(link);
+    QVERIFY2(!link->text().contains(QStringLiteral("\" onclick")), qPrintable(link->text()));
+    QVERIFY2(link->text().contains(QStringLiteral("x&quot; onclick=&quot;y")), qPrintable(link->text()));
 }
 
 void VaultTests::unloadWithUnrelatedModalDoesNotDefer()
@@ -8183,6 +8721,109 @@ void VaultTests::transactionDescriptionCountsConfirmationsFromFirstBlock()
 
     QVERIFY(!description.contains(QStringLiteral("broadcast to the network")));
     QVERIFY(description.contains(QStringLiteral("If the block fails to get into the chain")));
+}
+
+//! F-676: the vault and the GUI wait 101 blocks for a coinbase, one more than
+//! consensus requires (owner ruling: keep 101). At depth 100 the Ledger shows one
+//! block to go, at 101 the reward is mature, and the details page says 101.
+void VaultTests::ledgerCoinbaseMaturesAfter101Blocks()
+{
+    TestChain100Setup test;
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    vault::VaultContext context;
+    context.args = &test.m_args;
+    context.chain = test.m_node.chain.get();
+    std::shared_ptr<vault::CVault> raw_vault = vault::TestLoadVault(context);
+    std::unique_ptr<interfaces::Vault> vault;
+    // Release order as in transactionDescriptionCountsConfirmationsFromFirstBlock.
+    struct VaultRelease {
+        std::shared_ptr<vault::CVault>& raw;
+        std::unique_ptr<interfaces::Vault>& wrapped;
+        ~VaultRelease()
+        {
+            wrapped.reset();
+            vault::TestUnloadVault(std::move(raw));
+        }
+    } release{raw_vault, vault};
+
+    CMutableTransaction coinbase;
+    coinbase.vin.resize(1);
+    coinbase.vin[0].prevout.SetNull();
+    coinbase.vout.emplace_back(COIN, CScript() << OP_TRUE);
+    const CTransactionRef transaction = MakeTransactionRef(coinbase);
+    raw_vault->AddToVault(transaction, vault::TxStateConfirmed{
+        Params().GenesisBlock().GetHash(), /*height=*/0, /*index=*/0});
+    vault = interfaces::MakeVault(context, raw_vault);
+
+    const auto status_at = [&](int depth) {
+        {
+            LOCK(raw_vault->cs_vault);
+            raw_vault->SetLastBlockProcessed(depth - 1, Params().GenesisBlock().GetHash());
+        }
+        TransactionRecord record{transaction->GetHash(), /*time=*/0, TransactionRecord::Generated, "", /*debit=*/0, /*credit=*/COIN};
+        interfaces::VaultTxStatus wtx;
+        int num_blocks{0};
+        int64_t block_time{0};
+        if (!vault->tryGetTxStatus(transaction->GetHash(), wtx, num_blocks, block_time)) return TransactionStatus{};
+        record.updateStatus(wtx, uint256::ONE, num_blocks, block_time);
+        return record.status;
+    };
+
+    const TransactionStatus at_100{status_at(100)};
+    QCOMPARE(at_100.depth, 100);
+    QCOMPARE(at_100.status, TransactionStatus::Immature);
+    QCOMPARE(at_100.matures_in, 1);
+    QVERIFY(!at_100.countsForBalance);
+
+    const TransactionStatus at_101{status_at(101)};
+    QCOMPARE(at_101.depth, 101);
+    QCOMPARE(at_101.status, TransactionStatus::Confirmed);
+    QCOMPARE(at_101.matures_in, 0);
+
+    TransactionRecord record{transaction->GetHash(), /*time=*/0, TransactionRecord::Generated, "", /*debit=*/0, /*credit=*/COIN};
+    const QString description{TransactionDesc::toHTML(m_node, *vault, &record, QuicksilverUnit::HG)};
+    QVERIFY(description.contains(QStringLiteral("Generated coins must mature 101 blocks before they can be spent.")));
+    QVERIFY(!description.contains(QStringLiteral("100 blocks")));
+}
+
+//! F-678: the Ledger's context menu has no "Abandon transaction" action, a
+//! legacy-wallet manual action. A transfer the vault abandoned itself (its anchor
+//! expired, F-582) still shows as "Abandoned".
+void VaultTests::ledgerOffersNoAbandonButStillShowsAbandoned()
+{
+    TestChain100Setup test;
+    auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.vault_loader = vault_loader.get();
+    ScopedNodeContext scoped_context(m_node, test.m_node);
+    std::shared_ptr<CVault> vault = SetupDescriptorsVault(m_node, test);
+    QVERIFY(vault);
+
+    CMutableTransaction mtx;
+    mtx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+    mtx.vout.emplace_back(COIN, GetScriptForDestination(WitnessV0KeyHash(test.coinbaseKey.GetPubKey())));
+    const CTransactionRef abandoned = MakeTransactionRef(mtx);
+    {
+        LOCK(vault->cs_vault);
+        QVERIFY(vault->AddToVault(abandoned, vault::TxStateInactive{/*abandoned=*/true}));
+    }
+
+    std::unique_ptr<const PlatformStyle> platformStyle(PlatformStyle::instantiate("other"));
+    MiniGUI mini_gui(m_node, platformStyle.get());
+    mini_gui.initModelForVault(m_node, vault, platformStyle.get());
+
+    QMenu* menu = mini_gui.transactionView.findChild<QMenu*>(QStringLiteral("contextMenu"));
+    QVERIFY(menu);
+    QVERIFY(!menu->actions().isEmpty());
+    for (const QAction* action : menu->actions()) {
+        QVERIFY2(!action->text().contains(QStringLiteral("bandon"), Qt::CaseInsensitive), qPrintable(action->text()));
+    }
+
+    TransactionTableModel* table = mini_gui.vaultModel->getTransactionTableModel();
+    QVERIFY(table);
+    QModelIndex row = FindTx(*table, abandoned->GetHash());
+    QVERIFY(row.isValid());
+    QCOMPARE(table->index(row.row(), TransactionTableModel::Status).data(Qt::DisplayRole).toString(), QStringLiteral("Abandoned"));
+    QCOMPARE(row.data(TransactionTableModel::StatusRole).toInt(), static_cast<int>(TransactionStatus::Abandoned));
 }
 
 namespace {
@@ -8631,7 +9272,7 @@ void VaultTests::transactionBurstPostsOneImmediateNotification()
     TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
     for (int i = 0; i < 5; ++i) {
         test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
-        SetMockTime(GetTime() + 1);
+        SetMockTime(Now<NodeSeconds>().time_since_epoch() + std::chrono::seconds{1});
     }
     auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
     test.m_node.vault_loader = vault_loader.get();
@@ -8677,7 +9318,7 @@ void VaultTests::transactionBurstPostsOneImmediateNotification()
         block_info.chain_time_max = block.GetBlockTime();
         vault->blockConnected(block_info);
         QCoreApplication::processEvents();
-        SetMockTime(GetTime() + 1);
+        SetMockTime(Now<NodeSeconds>().time_since_epoch() + std::chrono::seconds{1});
     };
     constexpr int BLOCKS{20};
     constexpr int64_t STEP_MILLIS{100};
@@ -8705,7 +9346,7 @@ void VaultTests::homeLedgerBurstCoalescesColumnFits()
     TestChain100Setup test{ChainType::SANDBOX, {.extra_args = {"-txpownocycle=1"}}};
     for (int i = 0; i < 5; ++i) {
         test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
-        SetMockTime(GetTime() + 1);
+        SetMockTime(Now<NodeSeconds>().time_since_epoch() + std::chrono::seconds{1});
     }
     auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
     test.m_node.vault_loader = vault_loader.get();
@@ -8780,7 +9421,7 @@ void VaultTests::homeLedgerBurstCoalescesColumnFits()
     };
     for (int i = 0; i < BLOCKS; ++i) {
         blocks.push_back(test.CreateAndProcessBlock({}, GetScriptForDestination(WitnessV0KeyHash(test.coinbaseKey.GetPubKey()))));
-        SetMockTime(GetTime() + 1);
+        SetMockTime(Now<NodeSeconds>().time_since_epoch() + std::chrono::seconds{1});
         feed(vault_settled, i);
         settled_now += 1;
         QTRY_COMPARE_WITH_TIMEOUT(settled_tx->rowCount({}), settled_before + i + 1, 30000);
@@ -10084,4 +10725,260 @@ void VaultTests::networkPageAddPeerRejectsAnyWhitespace()
         button->click();
         QCOMPARE(added.count(), 0);
     }
+}
+
+namespace {
+std::string StoredRequest(int64_t id, const QString& label)
+{
+    RecentRequestEntry entry;
+    entry.id = id;
+    entry.date = QDateTime::fromSecsSinceEpoch(1'700'000'000 + id);
+    entry.recipient.label = label;
+    DataStream ss{};
+    ss << entry;
+    return ss.str();
+}
+} // namespace
+
+void VaultTests::recentRequestsSkipACorruptRecord()
+{
+    // S0240-C-01: a corrupt `rr*` record threw out of the loader and ended the
+    // app each time the vault opened. The record is skipped, and kept.
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    auto vault = std::make_unique<PollMarkerVault>();
+    PollMarkerVault* vault_ptr = vault.get();
+    const std::string good = StoredRequest(7, QStringLiteral("good"));
+    vault_ptr->receive_requests = {good.substr(0, good.size() / 2), std::string{"\x01"}, good};
+    VaultModel model(std::move(vault), m_node, &options, style.get());
+    RecentRequestsTableModel* requests = model.getRecentRequestsTableModel();
+    QVERIFY(requests);
+    QCOMPARE(requests->rowCount({}), 1);
+    QCOMPARE(requests->entry(0).id, int64_t{7});
+    QCOMPARE(requests->entry(0).recipient.label, QStringLiteral("good"));
+    QVERIFY(vault_ptr->receive_request_writes.empty());
+}
+
+void VaultTests::recentRequestsRemoveListsOnlyWhatWasDeleted()
+{
+    // S0240-C-02: a failed delete midway returned false with the earlier rows
+    // already deleted in the vault but still listed.
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    auto vault = std::make_unique<PollMarkerVault>();
+    PollMarkerVault* vault_ptr = vault.get();
+    vault_ptr->receive_requests = {StoredRequest(1, QStringLiteral("one")), StoredRequest(2, QStringLiteral("two")),
+                                   StoredRequest(3, QStringLiteral("three"))};
+    VaultModel model(std::move(vault), m_node, &options, style.get());
+    RecentRequestsTableModel* requests = model.getRecentRequestsTableModel();
+    QCOMPARE(requests->rowCount({}), 3);
+    vault_ptr->receive_request_writes_ok = 1;
+    QSignalSpy removed(requests, &QAbstractItemModel::rowsRemoved);
+    QVERIFY(!requests->removeRows(0, 3));
+    QCOMPARE(vault_ptr->receive_request_writes.size(), size_t{2});
+    QCOMPARE(requests->rowCount({}), 2);
+    QCOMPARE(removed.count(), 1);
+    // The row the vault deleted is gone; the rest are still listed.
+    const QString deleted = QString::fromStdString(vault_ptr->receive_request_writes.front().first);
+    for (int row = 0; row < requests->rowCount({}); ++row) {
+        QVERIFY(QString::number(requests->entry(row).id) != deleted);
+    }
+    vault_ptr->receive_request_writes_ok = 2;
+    QVERIFY(requests->removeRows(0, 2));
+    QCOMPARE(requests->rowCount({}), 0);
+
+    // S0240-C-06: sorting the empty list reports no change at row -1.
+    QSignalSpy changed(requests, &QAbstractItemModel::dataChanged);
+    requests->sort(RecentRequestsTableModel::Date, Qt::DescendingOrder);
+    QCOMPARE(changed.count(), 0);
+
+    // S0240-A-07: a refused write is reported, and nothing is listed.
+    vault_ptr->receive_request_writes_ok = 0;
+    SendCoinsRecipient refused;
+    refused.label = QStringLiteral("refused");
+    QVERIFY(!requests->addNewRequest(refused));
+    QCOMPARE(requests->rowCount({}), 0);
+    vault_ptr->receive_request_writes_ok = 1;
+    QVERIFY(requests->addNewRequest(refused));
+    QCOMPARE(requests->rowCount({}), 1);
+}
+
+void VaultTests::receiveRequestMenuActsOnTheRowUnderTheCursor()
+{
+    // S0240-C-06, -A-06: the context menu acted on the first selected row, not
+    // the row that was right-clicked, and opened on empty space.
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    auto vault = std::make_unique<PollMarkerVault>();
+    vault->receive_requests = {StoredRequest(1, QStringLiteral("one")), StoredRequest(2, QStringLiteral("two")),
+                               StoredRequest(3, QStringLiteral("three"))};
+    VaultModel model(std::move(vault), m_node, &options, style.get());
+    ReceiveCoinsDialog page(style.get());
+    page.setModel(&model);
+    page.resize(900, 700);
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+    auto* view = page.findChild<QTableView*>(QStringLiteral("recentRequestsView"));
+    QVERIFY(view);
+    QCOMPARE(view->model()->rowCount(), 3);
+    view->selectRow(0);
+    const int clicked_row = 2;
+    const QString clicked_label = view->model()->index(clicked_row, RecentRequestsTableModel::Label).data(Qt::EditRole).toString();
+    const QString selected_label = view->model()->index(0, RecentRequestsTableModel::Label).data(Qt::EditRole).toString();
+    QVERIFY(clicked_label != selected_label);
+
+    GUIUtil::setClipboard(QString());
+    bool menu_seen{false};
+    const auto pick = [&] {
+        auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+        if (!menu) return;
+        menu_seen = true;
+        for (QAction* action : menu->actions()) {
+            if (action->text() == QStringLiteral("Copy &label")) action->trigger();
+        }
+        menu->close();
+    };
+    QTimer::singleShot(0, &page, pick);
+    const QPoint on_row = view->visualRect(view->model()->index(clicked_row, 0)).center();
+    QVERIFY(QMetaObject::invokeMethod(&page, "showMenu", Qt::DirectConnection, Q_ARG(QPoint, on_row)));
+    QVERIFY(menu_seen);
+    QCOMPARE(QApplication::clipboard()->text(), clicked_label);
+
+    menu_seen = false;
+    QTimer::singleShot(0, &page, pick);
+    const QPoint below_rows{5, view->viewport()->height() - 2};
+    QVERIFY(!view->indexAt(below_rows).isValid());
+    QVERIFY(QMetaObject::invokeMethod(&page, "showMenu", Qt::DirectConnection, Q_ARG(QPoint, below_rows)));
+    QCoreApplication::processEvents();
+    QVERIFY(!menu_seen);
+}
+
+void VaultTests::thinHeaderSourceIgnoresARemovedStoreOnceATipIsApplied()
+{
+    // S0245-C-01 (a): a store removed after it loaded read as a genesis-only
+    // chain, which the loader refuses as older, every tick, forever.
+    BasicTestingSetup test{ChainType::SANDBOX};
+    const fs::path store{test.m_args.GetDataDirNet() / "agent" / "removed-header-test.dat"};
+    fs::create_directories(store.parent_path());
+    const agent::HeaderChain headers{Params().GetConsensus(), Params().GenesisBlock()};
+    QCOMPARE(agent::SaveHeaderChain(headers, store), agent::HeaderStoreResult::OK);
+
+    TipCountingVaultLoader loader;
+    loader.accept = true;
+    ThinVaultHeaderSource source{store};
+    std::string error;
+    QVERIFY2(source.refresh(loader, error), error.c_str());
+    QCOMPARE(loader.tips_offered, 1);
+
+    // The loader now holds a newer tip, so anything older is refused.
+    loader.accept = false;
+    QVERIFY(fs::remove(store));
+    QVERIFY2(source.refresh(loader, error), error.c_str());
+    QVERIFY(error.empty());
+    QCOMPARE(loader.tips_offered, 1);
+
+    // A store written again is read again.
+    loader.accept = true;
+    QCOMPARE(agent::SaveHeaderChain(headers, store), agent::HeaderStoreResult::OK);
+    fs::last_write_time(store, fs::last_write_time(store) + std::chrono::seconds{5});
+    QVERIFY2(source.refresh(loader, error), error.c_str());
+    QCOMPARE(loader.tips_offered, 2);
+}
+
+void VaultTests::vaultControllerNoticesAThinHeaderRefusalOncePerChange()
+{
+    // S0245-C-01 (b): a refused store was only a log line. The controller keeps
+    // the notice, signals it once per change, and clears it on recovery.
+    BasicTestingSetup test{ChainType::SANDBOX};
+    TipCountingVaultLoader loader;
+    test.m_node.vault_loader = &loader;
+    ScopedNodeContext context(m_node, test.m_node);
+    const fs::path store{DefaultThinVaultHeaderStorePath()};
+    fs::create_directories(store.parent_path());
+    const agent::HeaderChain headers{Params().GetConsensus(), Params().GenesisBlock()};
+    QCOMPARE(agent::SaveHeaderChain(headers, store), agent::HeaderStoreResult::OK);
+
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    VaultController controller(m_node, &options, style.get(), nullptr);
+    // The first refresh runs in the constructor.
+    const QString notice = controller.thinHeaderNotice();
+    QVERIFY(!notice.isEmpty());
+    QVERIFY2(notice.contains(QString::fromStdString(fs::PathToString(store))), qPrintable(notice));
+
+    // A window connected after construction still hears the startup refusal, once,
+    // and an unchanged refusal on the next ticks is not signalled again.
+    QSignalSpy changes(&controller, &VaultController::thinHeaderNoticeChanged);
+    QTest::qWait(2300);
+    QCOMPARE(changes.count(), 1);
+    QCOMPARE(changes.at(0).at(0).toString(), notice);
+
+    loader.accept = true;
+    QCOMPARE(agent::SaveHeaderChain(headers, store), agent::HeaderStoreResult::OK);
+    fs::last_write_time(store, fs::last_write_time(store) + std::chrono::seconds{5});
+    QVERIFY(changes.wait(3000));
+    QCOMPARE(changes.count(), 2);
+    QCOMPARE(changes.at(1).at(0).toString(), QString());
+    QVERIFY(controller.thinHeaderNotice().isEmpty());
+    fs::remove(store);
+}
+
+namespace {
+//! Opens a stand-in for every startup vault except `refused`, which fails with its own error.
+class StartupVaultLoader final : public TipCountingVaultLoader
+{
+public:
+    std::string refused;
+    std::vector<std::string> loaded;
+    util::Result<std::unique_ptr<interfaces::Vault>> loadVault(const std::string& name, std::vector<bilingual_str>&) override
+    {
+        if (name == refused) return util::Error{Untranslated("the database is locked by another process")};
+        loaded.push_back(name);
+        auto vault = std::make_unique<PollMarkerVault>();
+        vault->name = name;
+        return {std::move(vault)};
+    }
+};
+} // namespace
+
+void VaultTests::startupVaultThatFailsToLoadIsReported()
+{
+    // S0250-A-11, -B-09: a startup vault that failed to load was dropped with its
+    // error. The failures are collected for one notice; the others still open.
+    BasicTestingSetup test{ChainType::SANDBOX};
+    StartupVaultLoader loader;
+    loader.accept = true;
+    loader.refused = "broken";
+    test.m_node.vault_loader = &loader;
+    ScopedNodeContext context(m_node, test.m_node);
+    common::SettingsValue names{common::SettingsValue::VARR};
+    names.push_back("first");
+    names.push_back("broken");
+    names.push_back("second");
+    m_node.updateRwSetting("vault", names);
+
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    OptionsModel options(m_node);
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    VaultController controller(m_node, &options, style.get(), nullptr);
+    const std::vector<bilingual_str> failures = controller.openVaultsRecordedForStartup();
+    QCOMPARE(loader.loaded, (std::vector<std::string>{"first", "second"}));
+    QCOMPARE(failures.size(), size_t{1});
+    QVERIFY2(failures.front().original.find("broken") != std::string::npos, failures.front().original.c_str());
+    QVERIFY2(failures.front().original.find("the database is locked by another process") != std::string::npos,
+             failures.front().original.c_str());
+    const QString notice = VaultController::startupLoadNotice(failures);
+    QVERIFY(notice.contains(QStringLiteral("broken")));
+    QVERIFY(!notice.contains(QStringLiteral("first")));
+    QVERIFY(VaultController::startupLoadNotice({}).isEmpty());
+    m_node.updateRwSetting("vault", {});
 }

@@ -49,7 +49,7 @@ void SetupChainParamsBaseOptions(ArgsManager& argsman);
  */
 const CBaseChainParams& BaseParams();
 
-/** Sets the params returned by Params() to those for the given chain. */
+/** Sets the params returned by BaseParams() to those for the given chain. */
 void SelectBaseParams(const ChainType chain);
 
 /** List of possible chain / network names  */

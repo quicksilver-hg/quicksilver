@@ -118,11 +118,6 @@ bool FileCommit(FILE* file)
         LogInfo(HgLog::INIT, "FlushFileBuffers failed: %s\n", Win32ErrorString(GetLastError()));
         return false;
     }
-#elif defined(__APPLE__) && defined(F_FULLFSYNC)
-    if (fcntl(fileno(file), F_FULLFSYNC, 0) == -1) { // Manpage says "value other than -1" is returned on success
-        LogInfo(HgLog::INIT, "fcntl F_FULLFSYNC failed: %s\n", SysErrorString(errno));
-        return false;
-    }
 #elif HAVE_FDATASYNC
     if (fdatasync(fileno(file)) != 0 && errno != EINVAL) { // Ignore EINVAL for filesystems that don't support sync
         LogInfo(HgLog::INIT, "fdatasync failed: %s\n", SysErrorString(errno));
@@ -196,21 +191,6 @@ void AllocateFileRange(FILE* file, unsigned int offset, unsigned int length)
     nFileSize.u.HighPart = nEndPos >> 32;
     SetFilePointerEx(hFile, nFileSize, 0, FILE_BEGIN);
     SetEndOfFile(hFile);
-#elif defined(__APPLE__)
-    // OSX specific version
-    // NOTE: Contrary to other OS versions, the OSX version assumes that
-    // NOTE: offset is the size of the file.
-    fstore_t fst;
-    fst.fst_flags = F_ALLOCATECONTIG;
-    fst.fst_posmode = F_PEOFPOSMODE;
-    fst.fst_offset = 0;
-    fst.fst_length = length; // mac os fst_length takes the # of free bytes to allocate, not desired file size
-    fst.fst_bytesalloc = 0;
-    if (fcntl(fileno(file), F_PREALLOCATE, &fst) == -1) {
-        fst.fst_flags = F_ALLOCATEALL;
-        fcntl(fileno(file), F_PREALLOCATE, &fst);
-    }
-    ftruncate(fileno(file), static_cast<off_t>(offset) + length);
 #else
 #if defined(HAVE_POSIX_FALLOCATE)
     // Version using posix_fallocate

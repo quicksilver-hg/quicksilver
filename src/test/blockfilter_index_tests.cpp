@@ -9,6 +9,7 @@
 #include <test/util/mining.h>
 #include <consensus/merkle.h>
 #include <consensus/validation.h>
+#include <dbwrapper.h>
 #include <index/blockfilterindex.h>
 #include <interfaces/chain.h>
 #include <node/miner.h>
@@ -17,6 +18,10 @@
 #include <test/util/index.h>
 #include <test/util/setup_common.h>
 #include <validation.h>
+
+#include <fstream>
+#include <string>
+#include <vector>
 
 #include <boost/test/unit_test.hpp>
 
@@ -279,6 +284,47 @@ BOOST_FIXTURE_TEST_CASE(blockfilter_index_initial_sync, BuildChainTestingSetup)
 
     filter_index.Interrupt();
     filter_index.Stop();
+}
+
+// F-634 (S0080): a filter range read that hits a damaged table must throw, not report
+// "no such filter". The scan stops with an iterator error; CheckStatus() turns it into one.
+BOOST_FIXTURE_TEST_CASE(blockfilter_index_scan_error_throws, BuildChainTestingSetup)
+{
+    const CBlockIndex* tip{WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Tip())};
+    {
+        BlockFilterIndex filter_index(interfaces::MakeChain(m_node), BlockFilterType::BASIC, 1 << 20,
+                                      /*f_memory=*/false, /*f_wipe=*/true);
+        BOOST_REQUIRE(filter_index.Init());
+        BOOST_REQUIRE(filter_index.StartBackgroundSync());
+        IndexWaitSynced(filter_index, *Assert(m_node.shutdown_signal));
+        std::vector<BlockFilter> filters;
+        BOOST_REQUIRE(filter_index.LookupFilterRange(0, tip, filters));
+        filter_index.Interrupt();
+        filter_index.Stop();
+    }
+    // Reopen once so LevelDB moves the recovered log into a table file.
+    { BlockFilterIndex reopened(interfaces::MakeChain(m_node), BlockFilterType::BASIC, 1 << 20, false, false); }
+
+    const fs::path db_dir{m_args.GetDataDirNet() / "indexes" / "blockfilter" / "basic" / "db"};
+    int damaged{0};
+    for (const auto& entry : fs::directory_iterator(db_dir)) {
+        if (entry.path().extension() != ".ldb") continue;
+        const auto size{fs::file_size(entry.path())};
+        BOOST_REQUIRE(size > 64);
+        std::fstream file{entry.path(), std::ios::in | std::ios::out | std::ios::binary};
+        // Overwrite the data blocks, keep the footer: reads fail their checksum.
+        const std::string garbage(size - 48, '\xA5');
+        file.seekp(0);
+        file.write(garbage.data(), garbage.size());
+        ++damaged;
+    }
+    BOOST_REQUIRE(damaged > 0);
+
+    BlockFilterIndex damaged_index(interfaces::MakeChain(m_node), BlockFilterType::BASIC, 1 << 20, false, false);
+    std::vector<BlockFilter> filters;
+    std::vector<uint256> hashes;
+    BOOST_CHECK_THROW(damaged_index.LookupFilterRange(0, tip, filters), dbwrapper_error);
+    BOOST_CHECK_THROW(damaged_index.LookupFilterHashRange(0, tip, hashes), dbwrapper_error);
 }
 
 BOOST_FIXTURE_TEST_CASE(blockfilter_index_init_destroy, BasicTestingSetup)

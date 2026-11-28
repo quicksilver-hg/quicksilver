@@ -88,8 +88,7 @@ private:
     enum Mode {
         None,                       /**< Ignore informational notifications, and show a modal pop-up dialog for Critical notifications. */
         Freedesktop,                /**< Use DBus org.freedesktop.Notifications */
-        QSystemTray,                /**< Use QSystemTrayIcon::showMessage() */
-        UserNotificationCenter      /**< Use the 10.8+ User Notification Center (Mac only) */
+        QSystemTray                 /**< Use QSystemTrayIcon::showMessage() */
     };
     QString programName;
     Mode mode{None};
@@ -100,9 +99,6 @@ private:
     void notifyDBus(Class cls, const QString &title, const QString &text, const QIcon &icon, int millisTimeout);
 #endif
     void notifySystray(Class cls, const QString &title, const QString &text, int millisTimeout);
-#ifdef Q_OS_MACOS
-    void notifyMacUserNotificationCenter(const QString &title, const QString &text);
-#endif
 };
 
 #ifdef USE_DBUS

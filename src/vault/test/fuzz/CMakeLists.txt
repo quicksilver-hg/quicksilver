@@ -8,8 +8,8 @@ target_sources(fuzz
     coincontrol.cpp
     coinselection.cpp
     crypter.cpp
-    $<$<BOOL:${USE_SQLITE}>:${CMAKE_CURRENT_LIST_DIR}/notifications.cpp>
-    $<$<BOOL:${USE_SQLITE}>:${CMAKE_CURRENT_LIST_DIR}/scriptpubkeyman.cpp>
+    notifications.cpp
+    scriptpubkeyman.cpp
     spend.cpp
 )
 target_link_libraries(fuzz quicksilver_vault)

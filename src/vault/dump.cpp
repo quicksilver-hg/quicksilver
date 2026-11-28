@@ -13,14 +13,28 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
 namespace vault {
 static const std::string DUMP_MAGIC = "QUICKSILVER_VAULT_DUMP";
 uint32_t DUMP_VERSION = 1;
+
+struct PartialDumpCleanup {
+    const fs::path& path;
+    bool complete{false};
+    ~PartialDumpCleanup() { if (!complete) fs::remove_quiet(path); }
+};
+
+struct PartialVaultCleanup {
+    const fs::path& path;
+    bool complete{false};
+    ~PartialVaultCleanup() { if (!complete) { std::error_code ec; fs::remove_all(path, ec); } }
+};
 
 bool DumpVault(const ArgsManager& args, VaultDatabase& db, bilingual_str& error)
 {
@@ -37,12 +51,14 @@ bool DumpVault(const ArgsManager& args, VaultDatabase& db, bilingual_str& error)
         error = strprintf(_("File %s already exists. If you are sure this is what you want, move it out of the way first."), fs::PathToString(path));
         return false;
     }
+    PartialDumpCleanup cleanup{path};
     std::ofstream dump_file;
     dump_file.open(path);
     if (dump_file.fail()) {
         error = strprintf(_("Unable to open %s for writing"), fs::PathToString(path));
         return false;
     }
+    tfm::format(std::cout, "The dumpfile may contain private keys. To ensure the safety of your coins, do not share the dumpfile.\n");
 
     HashWriter hasher{};
 
@@ -58,11 +74,13 @@ bool DumpVault(const ArgsManager& args, VaultDatabase& db, bilingual_str& error)
     // Write out a magic string with version
     std::string line = strprintf("%s,%u\n", DUMP_MAGIC, DUMP_VERSION);
     dump_file.write(line.data(), line.size());
+    if (!dump_file.good()) ret = false;
     hasher << Span{line};
 
     // Write out the file format.
     line = strprintf("%s,%s\n", "format", db.Format());
     dump_file.write(line.data(), line.size());
+    if (!dump_file.good()) ret = false;
     hasher << Span{line};
 
     if (ret) {
@@ -84,6 +102,11 @@ bool DumpVault(const ArgsManager& args, VaultDatabase& db, bilingual_str& error)
             std::string value_str = HexStr(ss_value);
             line = strprintf("%s,%s\n", key_str, value_str);
             dump_file.write(line.data(), line.size());
+            if (!dump_file.good()) {
+                error = _("Error writing vault dump file");
+                ret = false;
+                break;
+            }
             hasher << Span{line};
         }
     }
@@ -94,12 +117,17 @@ bool DumpVault(const ArgsManager& args, VaultDatabase& db, bilingual_str& error)
     if (ret) {
         // Write the hash
         tfm::format(dump_file, "checksum,%s\n", HexStr(hasher.GetHash()));
+        if (!dump_file.good()) ret = false;
         dump_file.close();
+        if (dump_file.fail()) ret = false;
     } else {
-        // Remove the dumpfile on failure
         dump_file.close();
-        fs::remove_quiet(path);
     }
+    if (!ret) {
+        if (error.empty()) error = _("Error writing vault dump file");
+    }
+
+    cleanup.complete = ret;
 
     return ret;
 }
@@ -196,6 +224,7 @@ bool CreateFromDump(const ArgsManager& args, const std::string& name, const fs::
 
     // dummy chain interface
     bool ret = true;
+    PartialVaultCleanup cleanup{vault_path};
     std::shared_ptr<CVault> vault(new CVault(/*chain=*/nullptr, name, std::move(database)), VaultToolReleaseVault);
     {
         LOCK(vault->cs_vault);
@@ -208,10 +237,13 @@ bool CreateFromDump(const ArgsManager& args, const std::string& name, const fs::
         // Get the database handle
         VaultDatabase& db = vault->GetDatabase();
         std::unique_ptr<DatabaseBatch> batch = db.MakeBatch();
-        batch->TxnBegin();
+        if (!batch->TxnBegin()) {
+            error = _("Error: Unable to begin transaction for new vault");
+            ret = false;
+        }
 
         // Read the records from the dump file and write them to the database
-        while (dump_file.good()) {
+        while (ret && dump_file.good()) {
             std::string key;
             std::getline(dump_file, key, ',');
             std::string value;
@@ -266,10 +298,12 @@ bool CreateFromDump(const ArgsManager& args, const std::string& name, const fs::
             }
         }
 
-        if (ret) {
-            batch->TxnCommit();
-        } else {
-            batch->TxnAbort();
+        if (ret && !batch->TxnCommit()) {
+            error = _("Error: Unable to commit new vault");
+            ret = false;
+        }
+        if (!ret && batch->HasActiveTxn() && !batch->TxnAbort() && error.empty()) {
+            error = _("Error: Unable to abort new vault transaction");
         }
 
         batch.reset();
@@ -278,10 +312,7 @@ bool CreateFromDump(const ArgsManager& args, const std::string& name, const fs::
     }
     vault.reset(); // The pointer deleter will close the vault for us.
 
-    // Remove the vault dir if we have a failure
-    if (!ret) {
-        fs::remove_all(vault_path);
-    }
+    cleanup.complete = ret;
 
     return ret;
 }

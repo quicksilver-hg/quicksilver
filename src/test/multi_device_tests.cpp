@@ -2,6 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <quicksilver-build-config.h> // IWYU pragma: keep
+
 #include <crypto/cuckatoo/cuckatoo.h>
 #include <crypto/cuckatoo/gpu_devices.h>
 #include <crypto/cuckatoo/multi_device.h>
@@ -13,8 +15,10 @@
 #include <test/util/gpucardtables.h>
 #include <test/util/setup_common.h>
 #include <validation.h>
+#ifdef ENABLE_VAULT
 #include <vault/spend.h>
 #include <vault/test/util.h>
+#endif
 
 #include <boost/test/unit_test.hpp>
 
@@ -653,6 +657,30 @@ BOOST_AUTO_TEST_CASE(proof_outside_the_given_block_is_never_accepted)
     BOOST_CHECK(row->last_status == cuckatoo::GpuSolveStatus::kSolverError);
 }
 
+// S0119-B-02: a card whose only cycle in its block the caller rejected has found
+// nothing the caller can use. It used to be booked idle with last_status kSolved.
+BOOST_AUTO_TEST_CASE(rejected_cycle_is_not_booked_as_solved)
+{
+    Fixture f;
+    const std::vector<unsigned char> pre(64, 0xCD);
+    const Proof proof = CpuProofs(pre, 1).front();
+    SetEnv("CUCKATOO_GPU_DEVICES", DEVICE_A);
+    f.Configure(FoundScript({proof}), "exit 0\n");
+    bool offered{false};
+    cuckatoo::Cycle cycle{}; uint32_t nonce{0}; cuckatoo::GpuSolveStatus status{};
+    // One attempt, the proof's own nonce: the rejection uses up the whole block.
+    BOOST_CHECK(!Solve(pre, proof.nonce, 1, cycle, nonce,
+                       [&](const cuckatoo::Cycle&, uint32_t) { offered = true; return false; },
+                       {}, {}, false, &status));
+    BOOST_CHECK(offered);
+    BOOST_CHECK(status == cuckatoo::GpuSolveStatus::kNoCycle);
+    const auto stats = cuckatoo::GetGpuDeviceStats();
+    const auto row = std::find_if(stats.begin(), stats.end(), [](const auto& value) { return value.device == DEVICE_A; });
+    BOOST_REQUIRE(row != stats.end());
+    BOOST_CHECK(row->state == cuckatoo::GpuDeviceState::kIdle);
+    BOOST_CHECK(row->last_status == cuckatoo::GpuSolveStatus::kNoCycle);
+}
+
 BOOST_AUTO_TEST_CASE(faulted_card_is_benched_and_the_other_continues)
 {
     Fixture f;
@@ -847,6 +875,8 @@ BOOST_FIXTURE_TEST_CASE(block_mining_passes_the_target_as_the_accept_predicate, 
     }));
 }
 
+// Needs the vault, so a node-only build (-DENABLE_VAULT=OFF) leaves it out (F-711).
+#ifdef ENABLE_VAULT
 BOOST_FIXTURE_TEST_CASE(vault_transfer_passes_the_target_as_the_accept_predicate, TestChain100Setup)
 {
     Consensus::Params& params = const_cast<Consensus::Params&>(Params().GetConsensus());
@@ -904,6 +934,7 @@ BOOST_FIXTURE_TEST_CASE(vault_transfer_passes_the_target_as_the_accept_predicate
         return launch.device == DEVICE_B;
     }));
 }
+#endif // ENABLE_VAULT
 
 // F-555: the two card tables are process-global, so what one case leaves in them
 // the next case reads. These two cases are the proof that the suite fixture clears

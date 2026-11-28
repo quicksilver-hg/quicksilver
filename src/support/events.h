@@ -6,8 +6,11 @@
 #ifndef QUICKSILVER_SUPPORT_EVENTS_H
 #define QUICKSILVER_SUPPORT_EVENTS_H
 
+#include <cstdint>
 #include <ios>
 #include <memory>
+#include <stdexcept>
+#include <string>
 
 #include <event2/event.h>
 #include <event2/http.h>
@@ -23,7 +26,6 @@ struct type##_deleter {\
 typedef std::unique_ptr<struct type, type##_deleter> raii_##type
 
 MAKE_RAII(event_base);
-MAKE_RAII(event);
 MAKE_RAII(evhttp);
 MAKE_RAII(evhttp_request);
 MAKE_RAII(evhttp_connection);
@@ -33,10 +35,6 @@ inline raii_event_base obtain_event_base() {
     if (!result.get())
         throw std::runtime_error("cannot create event_base");
     return result;
-}
-
-inline raii_event obtain_event(struct event_base* base, evutil_socket_t s, short events, event_callback_fn cb, void* arg) {
-    return raii_event(event_new(base, s, events, cb, arg));
 }
 
 inline raii_evhttp obtain_evhttp(struct event_base* base) {

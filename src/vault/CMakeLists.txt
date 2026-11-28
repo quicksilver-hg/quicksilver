@@ -3,7 +3,8 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or https://opensource.org/license/mit/.
 
-# Vault functionality used by quicksilver-daemon and quicksilver-vault executables.
+# Vault functionality, linked by the node (quicksilver-daemon and quicksilver-vault),
+# the Qt GUI, the agent, and the unit, fuzz and bench targets.
 add_library(quicksilver_vault STATIC EXCLUDE_FROM_ALL
   coincontrol.cpp
   coinselection.cpp
@@ -12,7 +13,6 @@ add_library(quicksilver_vault STATIC EXCLUDE_FROM_ALL
   crypter.cpp
   db.cpp
   dump.cpp
-  external_signer_scriptpubkeyman.cpp
   interfaces.cpp
   load.cpp
   receive.cpp
@@ -45,11 +45,9 @@ target_link_libraries(quicksilver_vault
 if(NOT USE_SQLITE)
   message(FATAL_ERROR "Vault functionality requested but no SQLite support available.")
 endif()
-if(USE_SQLITE)
-  target_sources(quicksilver_vault PRIVATE sqlite.cpp)
-  target_link_libraries(quicksilver_vault
-    PRIVATE
-      $<TARGET_NAME_IF_EXISTS:unofficial::sqlite3::sqlite3>
-      $<TARGET_NAME_IF_EXISTS:SQLite::SQLite3>
-  )
-endif()
+target_sources(quicksilver_vault PRIVATE sqlite.cpp)
+target_link_libraries(quicksilver_vault
+  PRIVATE
+    $<TARGET_NAME_IF_EXISTS:unofficial::sqlite3::sqlite3>
+    $<TARGET_NAME_IF_EXISTS:SQLite::SQLite3>
+)

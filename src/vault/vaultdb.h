@@ -8,6 +8,7 @@
 #define QUICKSILVER_VAULT_VAULTDB_H
 
 #include <script/sign.h>
+#include <support/cleanse.h>
 #include <vault/db.h>
 #include <vault/types.h>
 #include <vault/vaultutil.h>
@@ -46,6 +47,15 @@ struct BackupIdentity {
     //! One VAULTDESCRIPTORCKEY record (public key, encrypted secret), for the passphrase test.
     std::optional<std::pair<CPubKey, std::vector<unsigned char>>> crypted_key;
 
+    void ClearSensitive()
+    {
+        for (auto& entry : master_keys) memory_cleanse(entry.second.data(), entry.second.size());
+        if (crypted_key) memory_cleanse(crypted_key->second.data(), crypted_key->second.size());
+        master_keys.clear();
+        crypted_key.reset();
+    }
+    ~BackupIdentity() { ClearSensitive(); }
+
     bool HasMasterKeys() const { return !master_keys.empty(); }
     //! SHA256 over the descriptor ids, the active set and the master-key records, in that order.
     uint256 Fingerprint() const;
@@ -65,7 +75,6 @@ bool ReadBackupIdentity(DatabaseBatch& batch, BackupIdentity& identity);
  * - SQLiteBatch is a low-level database batch update.
  */
 
-static const bool DEFAULT_FLUSHVAULT = true;
 
 /** Error statuses for the vault database.
  * Values are in order of severity. When multiple errors occur, the most severe (highest value) will be returned.
@@ -136,7 +145,6 @@ struct DbTxnListener
  * Multiple operation transactions can be started using TxnBegin() and committed using TxnCommit()
  * Otherwise the transaction will be committed when the object goes out of scope.
  * Optionally (on by default) it will flush to disk on close.
- * Every 1000 writes will automatically trigger a flush to disk.
  */
 class VaultBatch
 {
@@ -147,10 +155,6 @@ private:
         if (!m_batch->Write(key, value, fOverwrite)) {
             return false;
         }
-        m_database.IncrementUpdateCounter();
-        if (m_database.nUpdateCounter % 1000 == 0) {
-            m_batch->Flush();
-        }
         return true;
     }
 
@@ -160,17 +164,12 @@ private:
         if (!m_batch->Erase(key)) {
             return false;
         }
-        m_database.IncrementUpdateCounter();
-        if (m_database.nUpdateCounter % 1000 == 0) {
-            m_batch->Flush();
-        }
         return true;
     }
 
 public:
     explicit VaultBatch(VaultDatabase &database, bool _fFlushOnClose = true) :
-        m_batch(database.MakeBatch(_fFlushOnClose)),
-        m_database(database)
+        m_batch(database.MakeBatch(_fFlushOnClose))
     {
     }
     VaultBatch(const VaultBatch&) = delete;
@@ -245,7 +244,6 @@ public:
 
 private:
     std::unique_ptr<DatabaseBatch> m_batch;
-    VaultDatabase& m_database;
 
     // External functions listening to the current db txn outcome.
     // Listeners are cleared at the end of the transaction.
@@ -267,7 +265,6 @@ private:
 bool RunWithinTxn(VaultDatabase& database, std::string_view process_desc, const std::function<bool(VaultBatch&)>& func);
 
 //! Compacts vault database state if there are changes.
-void MaybeCompactVaultDB(VaultContext& context);
 
 bool LoadEncryptionKey(CVault* pvault, DataStream& ssKey, DataStream& ssValue, std::string& strErr);
 } // namespace vault

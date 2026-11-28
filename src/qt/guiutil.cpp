@@ -42,7 +42,6 @@
 #include <QDoubleValidator>
 #include <QDir>
 #include <QFileDialog>
-#include <QFileInfo>
 #include <QFont>
 #include <QFontDatabase>
 #include <QFontInfo>
@@ -60,6 +59,7 @@
 #include <QMouseEvent>
 #include <QPluginLoader>
 #include <QProgressDialog>
+#include <QPointer>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScreen>
@@ -81,12 +81,6 @@
 #include <string>
 #include <vector>
 
-#if defined(Q_OS_MACOS)
-
-#include <QProcess>
-
-void ForceActivation();
-#endif
 
 using namespace std::chrono_literals;
 
@@ -102,9 +96,9 @@ QString dateTimeStr(qint64 nTime)
     return dateTimeStr(QDateTime::fromSecsSinceEpoch(nTime));
 }
 
-QFont fixedPitchFont(bool use_embedded_font)
+QFont fixedPitchFont()
 {
-    const QFont font = use_embedded_font ? QFont(QStringLiteral("Roboto Mono")) : QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    const QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
     return WithUnitGlyph(font);
 }
 
@@ -364,21 +358,13 @@ QString FileDialogStartDir(const QString& dir)
     return dir;
 }
 
-void PresentFileDialog(QFileDialog* dialog, bool append_suffix, std::function<void(const QString& filename)> done)
+void PresentFileDialog(QFileDialog* dialog, std::function<void(const QString& filename)> done)
 {
     dialog->setOption(QFileDialog::DontUseNativeDialog);
-    QObject::connect(dialog, &QFileDialog::finished, dialog, [dialog, append_suffix, done = std::move(done)](int result) {
+    QObject::connect(dialog, &QFileDialog::finished, dialog, [dialog, done = std::move(done)](int result) {
         QString filename;
         if (result == QDialog::Accepted && !dialog->selectedFiles().isEmpty()) {
             filename = QDir::toNativeSeparators(dialog->selectedFiles().front());
-            if (append_suffix) {
-                const QString selectedSuffix = ExtractFirstSuffixFromFilter(dialog->selectedNameFilter());
-                QFileInfo info(filename);
-                if (info.suffix().isEmpty() && !selectedSuffix.isEmpty()) {
-                    if (!filename.endsWith(".")) filename.append(".");
-                    filename.append(selectedSuffix);
-                }
-            }
         }
         QTimer::singleShot(0, [done, filename]() {
             if (done) done(filename);
@@ -395,7 +381,14 @@ void getSaveFileName(QWidget *parent, const QString &caption, const QString &dir
     auto* dialog = new QFileDialog(parent, caption, FileDialogStartDir(dir), filter);
     dialog->setAcceptMode(QFileDialog::AcceptSave);
     dialog->setObjectName(QStringLiteral("saveFileDialog"));
-    PresentFileDialog(dialog, /*append_suffix=*/true, std::move(done));
+    // The dialog adds the suffix itself, before it checks whether the file exists, so it asks about the name that
+    // will be written. Appending it after the dialog had accepted skipped that question (typing "name" replaced
+    // "name.dat" without asking).
+    dialog->setDefaultSuffix(ExtractFirstSuffixFromFilter(dialog->selectedNameFilter()));
+    QObject::connect(dialog, &QFileDialog::filterSelected, dialog, [dialog](const QString& selected) {
+        dialog->setDefaultSuffix(ExtractFirstSuffixFromFilter(selected));
+    });
+    PresentFileDialog(dialog, std::move(done));
 }
 
 void getOpenFileName(QWidget *parent, const QString &caption, const QString &dir,
@@ -406,7 +399,7 @@ void getOpenFileName(QWidget *parent, const QString &caption, const QString &dir
     dialog->setAcceptMode(QFileDialog::AcceptOpen);
     dialog->setFileMode(QFileDialog::ExistingFile);
     dialog->setObjectName(QStringLiteral("openFileDialog"));
-    PresentFileDialog(dialog, /*append_suffix=*/false, std::move(done));
+    PresentFileDialog(dialog, std::move(done));
 }
 
 void getText(QWidget *parent, const QString &title, const QString &label,
@@ -465,9 +458,6 @@ void bringToFront(QWidget* w)
             w->setWindowFlags(flags);
             w->show();
         } else {
-#ifdef Q_OS_MACOS
-            ForceActivation();
-#endif
             // activateWindow() (sometimes) helps with keyboard focus on Windows
             if (w->isMinimized()) {
                 w->showNormal();
@@ -508,12 +498,6 @@ bool openQuicksilverConf()
 
     /* Open quicksilver.conf with the associated application */
     bool res = QDesktopServices::openUrl(QUrl::fromLocalFile(PathToQString(pathConfig)));
-#ifdef Q_OS_MACOS
-    // Workaround for macOS-specific behavior; see #15409.
-    if (!res) {
-        res = QProcess::startDetached("/usr/bin/open", QStringList{"-t", PathToQString(pathConfig)});
-    }
-#endif
 
     return res;
 }
@@ -624,7 +608,8 @@ bool SetStartOnSystemStartup(bool fAutoStart)
                 ppf->Release();
                 psl->Release();
                 CoUninitialize();
-                return true;
+                // A shortcut that was not saved is not an autostart.
+                return SUCCEEDED(hres);
             }
             psl->Release();
         }
@@ -645,6 +630,35 @@ fs::path static GetAutostartDir()
     char* pszHome = getenv("HOME");
     if (pszHome) return fs::path(pszHome) / ".config" / "autostart";
     return fs::path();
+}
+
+//! The executable path as one argument of a desktop entry's Exec key: quoted, so a path with spaces stays one
+//! argument, with the characters the spec reserves inside quotes escaped. The backslash is then doubled once more
+//! for the string escaping a desktop entry applies before its quoting rule, and "%" is doubled because the key
+//! treats it as a field code.
+std::string DesktopExecArgument(const std::string& path)
+{
+    std::string quoted{"\""};
+    for (const char c : path) {
+        switch (c) {
+        case '"':
+        case '`':
+        case '$':
+            quoted += "\\\\";
+            quoted += c;
+            break;
+        case '\\':
+            quoted += "\\\\\\\\";
+            break;
+        case '%':
+            quoted += "%%";
+            break;
+        default:
+            quoted += c;
+        }
+    }
+    quoted += '"';
+    return quoted;
 }
 
 fs::path static GetAutostartFilePath()
@@ -700,7 +714,7 @@ bool SetStartOnSystemStartup(bool fAutoStart)
             optionFile << "Name=Quicksilver\n";
         else
             optionFile << strprintf("Name=Quicksilver (%s)\n", ChainTypeToString(chain));
-        optionFile << "Exec=" << pszExePath << strprintf(" -min -chain=%s\n", ChainTypeToString(chain));
+        optionFile << "Exec=" << DesktopExecArgument(pszExePath) << strprintf(" -min -chain=%s\n", ChainTypeToString(chain));
         optionFile << "Terminal=false\n";
         optionFile << "Hidden=false\n";
         optionFile.close();
@@ -800,7 +814,7 @@ QString formatDurationStr(std::chrono::seconds dur)
 
 QString FormatPeerAge(std::chrono::seconds time_connected)
 {
-    const auto time_now{GetTime<std::chrono::seconds>()};
+    const auto time_now{Now<NodeSeconds>().time_since_epoch()};
     const auto age{time_now - time_connected};
     if (age >= 24h) return QObject::tr("%1 d").arg(age / 24h);
     if (age >= 1h) return QObject::tr("%1 h").arg(age / 1h);
@@ -826,12 +840,12 @@ QString formatPingTime(std::chrono::microseconds ping_time)
 {
     return (ping_time == std::chrono::microseconds::max() || ping_time == 0us) ?
         QObject::tr("N/A") :
-        QObject::tr("%1 ms").arg(QString::number((int)(count_microseconds(ping_time) / 1000), 10));
+        QObject::tr("%1 ms").arg(QString::number(static_cast<int>(count_microseconds(ping_time) / 1000), 10));
 }
 
 QString formatTimeOffset(int64_t time_offset)
 {
-  return QObject::tr("%1 s").arg(QString::number((int)time_offset, 10));
+  return QObject::tr("%1 s").arg(QString::number(static_cast<int>(time_offset), 10));
 }
 
 namespace {
@@ -919,7 +933,7 @@ qreal calculateIdealFontSize(int width, const QString& text, QFont font, qreal m
 }
 
 ThemedLabel::ThemedLabel(const PlatformStyle* platform_style, QWidget* parent)
-    : QLabel{parent}, m_platform_style{platform_style}
+    : QLabel{parent}, m_platform_style{platform_style}, m_pixmap_width{0}, m_pixmap_height{0}
 {
     assert(m_platform_style);
 }
@@ -968,11 +982,6 @@ bool ItemDelegate::eventFilter(QObject *object, QEvent *event)
 
 void PolishProgressDialog(QProgressDialog* dialog)
 {
-#ifdef Q_OS_MACOS
-    // Workaround for macOS-only Qt bug; see: QTBUG-65750, QTBUG-70357.
-    const int margin = TextWidth(dialog->fontMetrics(), ("X"));
-    dialog->resize(dialog->width() + 2 * margin, dialog->height());
-#endif
     // QProgressDialog estimates the time the operation will take (based on time
     // for steps), and only shows itself if that estimate is beyond minimumDuration.
     // The default minimumDuration value is 4 seconds, and it could make users
@@ -1022,20 +1031,12 @@ void PopupMenu(QMenu* menu, const QPoint& point, QAction* at_action)
 
 QDateTime StartOfDay(const QDate& date)
 {
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 14, 0))
     return date.startOfDay();
-#else
-    return QDateTime(date);
-#endif
 }
 
 bool HasPixmap(const QLabel* label)
 {
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 15, 0))
     return !label->pixmap(Qt::ReturnByValue).isNull();
-#else
-    return label->pixmap() != nullptr;
-#endif
 }
 
 QImage GetImage(const QLabel* label)
@@ -1044,11 +1045,7 @@ QImage GetImage(const QLabel* label)
         return QImage();
     }
 
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 15, 0))
     return label->pixmap(Qt::ReturnByValue).toImage();
-#else
-    return label->pixmap()->toImage();
-#endif
 }
 
 QString MakeHtmlLink(const QString& source, const QString& link)
@@ -1086,12 +1083,18 @@ void ShowModalDialogAsynchronously(QDialog* dialog)
 void ShowModalMessageBoxAsynchronously(QMessageBox* box, std::function<void(int result, QAbstractButton* clicked)> done)
 {
     QObject::connect(box, &QMessageBox::finished, box, [box, done = std::move(done)](int result) {
-        QAbstractButton* clicked = box->clickedButton();
-        QTimer::singleShot(0, [done, result, clicked]() {
-            if (done) done(result, clicked);
+        // The box stays alive until done has run, so the button handed to it is still a live object. Deleted on
+        // close, it could be freed before this deferred call, depending on the event loop's order, leaving done a
+        // dangling clickedButton() (only safe while every caller compared the address and never used it).
+        const QPointer<QAbstractButton> clicked{box->clickedButton()};
+        const QPointer<QMessageBox> guard{box};
+        QTimer::singleShot(0, [done, result, clicked, guard]() {
+            if (done) done(result, clicked.data());
+            if (guard) guard->deleteLater();
         });
     });
     ShowModalDialogAsynchronously(box);
+    box->setAttribute(Qt::WA_DeleteOnClose, false);
 }
 
 QString VaultDisplayName(const QString& name)

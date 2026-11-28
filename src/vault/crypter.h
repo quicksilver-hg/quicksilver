@@ -6,9 +6,16 @@
 #ifndef QUICKSILVER_VAULT_CRYPTER_H
 #define QUICKSILVER_VAULT_CRYPTER_H
 
+#include <pubkey.h>
 #include <serialize.h>
-#include <support/allocators/secure.h>
 #include <script/signingprovider.h>
+#include <support/allocators/secure.h>
+#include <support/cleanse.h>
+#include <uint256.h>
+
+#include <cstring>
+#include <span>
+#include <vector>
 
 
 namespace vault {
@@ -26,7 +33,7 @@ const unsigned int VAULT_CRYPTO_IV_SIZE = 16;
  *
  * Vault Private Keys are then encrypted using AES-256-CBC
  * with the double-sha256 of the public key as the IV, and the
- * master key's key as the encryption key (see keystore.[ch]).
+ * master key's key as the encryption key (see CCrypter below).
  */
 
 /** Master key for vault encryption */

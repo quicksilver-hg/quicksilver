@@ -7,6 +7,7 @@
 #define QUICKSILVER_CRYPTO_POLY1305_H
 
 #include <span.h>
+#include <support/cleanse.h>
 
 #include <cassert>
 #include <cstdlib>
@@ -52,6 +53,8 @@ public:
         assert(key.size() == KEYLEN);
         poly1305_donna::poly1305_init(&m_ctx, UCharCast(key.data()));
     }
+
+    ~Poly1305() { memory_cleanse(&m_ctx, sizeof(m_ctx)); }
 
     /** Process message bytes. */
     Poly1305& Update(Span<const std::byte> msg) noexcept

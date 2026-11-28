@@ -15,19 +15,6 @@ This is a wrapper around find_package() command that:
 
 #]=======================================================================]
 
-set(_qt_homebrew_prefix)
-if(CMAKE_HOST_APPLE)
-  find_program(HOMEBREW_EXECUTABLE brew)
-  if(HOMEBREW_EXECUTABLE)
-    execute_process(
-      COMMAND ${HOMEBREW_EXECUTABLE} --prefix qt@${Qt_FIND_VERSION_MAJOR}
-      OUTPUT_VARIABLE _qt_homebrew_prefix
-      ERROR_QUIET
-      OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-  endif()
-endif()
-
 # Save CMAKE_FIND_ROOT_PATH_MODE_LIBRARY state.
 unset(_qt_find_root_path_mode_library_saved)
 if(DEFINED CMAKE_FIND_ROOT_PATH_MODE_LIBRARY)
@@ -43,10 +30,8 @@ set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
 
 find_package(Qt${Qt_FIND_VERSION_MAJOR} ${Qt_FIND_VERSION}
   COMPONENTS ${Qt_FIND_COMPONENTS}
-  HINTS ${_qt_homebrew_prefix}
   PATH_SUFFIXES Qt${Qt_FIND_VERSION_MAJOR}  # Required on OpenBSD systems.
 )
-unset(_qt_homebrew_prefix)
 
 # Restore CMAKE_FIND_ROOT_PATH_MODE_LIBRARY state.
 if(DEFINED _qt_find_root_path_mode_library_saved)

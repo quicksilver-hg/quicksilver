@@ -8,9 +8,10 @@
 
 class ArgsManager;
 struct CoinsViewOptions;
+namespace util { template <typename T> class Result; }
 
 namespace node {
-void ReadCoinsViewArgs(const ArgsManager& args, CoinsViewOptions& options);
+[[nodiscard]] util::Result<void> ReadCoinsViewArgs(const ArgsManager& args, CoinsViewOptions& options);
 } // namespace node
 
 #endif // QUICKSILVER_NODE_COINS_VIEW_ARGS_H

@@ -13,7 +13,7 @@ namespace kernel {
 struct Context;
 
 /**
- *  Ensure a usable environment with all necessary library support.
+ *  Check that the operating system supplies cryptographic randomness.
  */
 [[nodiscard]] util::Result<void> SanityChecks(const Context&);
 } // namespace kernel

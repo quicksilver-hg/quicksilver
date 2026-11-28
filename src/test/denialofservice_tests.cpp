@@ -27,6 +27,8 @@
 #include <future>
 #include <mutex>
 #include <thread>
+#include <utility>
+#include <vector>
 #include <stdint.h>
 
 #include <boost/test/unit_test.hpp>
@@ -109,8 +111,14 @@ BOOST_AUTO_TEST_CASE(headers_answered_notifications_are_serialized)
     std::atomic<bool> callback_count_matches{true};
     std::mutex notifications_mutex;
     std::vector<int> notifications;
+    // (begin?, count) for every callback entry and exit (S0339-A-02).
+    std::vector<std::pair<bool, int>> events;
     boost::signals2::scoped_connection connection{uiInterface.NotifyHeadersAnsweredPeersChanged_connect(
         [&](int count) {
+            {
+                std::lock_guard lock{notifications_mutex};
+                events.emplace_back(true, count);
+            }
             // Reading the count in a callback must remain possible while publication is serialized.
             if (peerman.GetHeadersAnsweredPeers() != count) callback_count_matches = false;
             if (count == 0) {
@@ -119,6 +127,7 @@ BOOST_AUTO_TEST_CASE(headers_answered_notifications_are_serialized)
             }
             std::lock_guard lock{notifications_mutex};
             notifications.push_back(count);
+            events.emplace_back(false, count);
         })};
     std::thread disconnect_thread{[&] { peerman.FinalizeNode(first_peer); }};
     disconnected.wait();
@@ -130,6 +139,11 @@ BOOST_AUTO_TEST_CASE(headers_answered_notifications_are_serialized)
     });
     started.wait();
     // A second peer cannot publish while the preceding disconnect callback is still running.
+    // The 100 ms wait is only a detection window, not proof: the default build exposes no
+    // observable for "the second worker is blocked on m_headers_answered_mutex" (the lock
+    // contention log exists only under DEBUG_LOCKCONTENTION), so a descheduled worker passes
+    // it. When the worker does reach publication inside the window, an unserialized publisher
+    // completes the answer early and interleaves the callback events checked below.
     const auto answer_status = answer.wait_for(100ms);
     release_callback.set_value();
     disconnect_thread.join();
@@ -139,6 +153,13 @@ BOOST_AUTO_TEST_CASE(headers_answered_notifications_are_serialized)
     BOOST_CHECK_EQUAL(peerman.GetHeadersAnsweredPeers(), 1);
     const std::vector<int> expected{0, 1};
     BOOST_CHECK_EQUAL_COLLECTIONS(notifications.begin(), notifications.end(), expected.begin(), expected.end());
+    // Callbacks never overlap: each one ends before the next begins.
+    const std::vector<std::pair<bool, int>> expected_events{{true, 0}, {false, 0}, {true, 1}, {false, 1}};
+    BOOST_REQUIRE_EQUAL(events.size(), expected_events.size());
+    for (size_t i = 0; i < events.size(); ++i) {
+        BOOST_CHECK_MESSAGE(events[i] == expected_events[i],
+                            "callback event " << i << ": " << (events[i].first ? "begin " : "end ") << events[i].second);
+    }
     connection.disconnect();
     peerman.FinalizeNode(second_peer);
 }

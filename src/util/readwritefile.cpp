@@ -7,11 +7,12 @@
 #include <util/readwritefile.h>
 
 #include <util/fs.h>
+#include <util/fs_helpers.h>
 
 #include <algorithm>
 #include <cstdio>
-#include <limits>
 #include <string>
+#include <system_error>
 #include <utility>
 
 std::pair<bool,std::string> ReadBinaryFile(const fs::path &filename, size_t maxsize)
@@ -37,14 +38,22 @@ std::pair<bool,std::string> ReadBinaryFile(const fs::path &filename, size_t maxs
 
 bool WriteBinaryFile(const fs::path &filename, const std::string &data)
 {
-    FILE *f = fsbridge::fopen(filename, "wb");
+    // Write a sibling temp file, sync it, then rename it over the target: a crash or a
+    // failed write leaves the previous file whole (a Tor or I2P key, a peer store), never
+    // a truncated one that a later read would accept.
+    const fs::path tmp{filename + ".tmp"};
+    FILE *f = fsbridge::fopen(tmp, "wb");
     if (f == nullptr)
         return false;
-    if (fwrite(data.data(), 1, data.size(), f) != data.size()) {
-        fclose(f);
+    const bool written{fwrite(data.data(), 1, data.size(), f) == data.size() && FileCommit(f)};
+    if (fclose(f) != 0 || !written) {
+        std::error_code ec;
+        fs::remove(tmp, ec);
         return false;
     }
-    if (fclose(f) != 0) {
+    if (!RenameOver(tmp, filename)) {
+        std::error_code ec;
+        fs::remove(tmp, ec);
         return false;
     }
     return true;

@@ -12,8 +12,6 @@
 #include <common/args.h>
 #include <consensus/merkle.h>
 #include <consensus/validation.h>
-#include <deploymentstatus.h>
-#include <external_signer.h>
 #include <index/blockfilterindex.h>
 #include <init.h>
 #include <interfaces/chain.h>
@@ -41,17 +39,13 @@
 #include <node/transaction.h>
 #include <node/types.h>
 #include <node/warnings.h>
-#include <policy/policy.h>
 #include <pow.h>
-#include <policy/replacement.h>
-#include <policy/settings.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <protocol.h>
 #include <rpc/blockchain.h>
 #include <rpc/protocol.h>
 #include <rpc/server.h>
-#include <support/allocators/secure.h>
 #include <sync.h>
 #include <txrelaypool.h>
 #include <uint256.h>
@@ -63,8 +57,6 @@
 #include <util/translation.h>
 #include <validation.h>
 #include <validationinterface.h>
-
-#include <quicksilver-build-config.h> // IWYU pragma: keep
 
 #include <any>
 #include <memory>
@@ -90,16 +82,6 @@ namespace node {
 // All members of the classes in this namespace are intentionally public, as the
 // classes themselves are private.
 namespace {
-#ifdef ENABLE_EXTERNAL_SIGNER
-class ExternalSignerImpl : public interfaces::ExternalSigner
-{
-public:
-    ExternalSignerImpl(::ExternalSigner signer) : m_signer(std::move(signer)) {}
-    std::string getName() override { return m_signer.m_name; }
-    ::ExternalSigner m_signer;
-};
-#endif
-
 class NodeImpl : public Node
 {
 public:
@@ -226,20 +208,6 @@ public:
         }
         return false;
     }
-    std::vector<CService> getNodeAddresses(size_t count) override
-    {
-        std::vector<CService> services;
-        if (!m_context->connman) return services;
-
-        const std::vector<CAddress> addresses{m_context->connman->GetAddresses(count, /*max_pct=*/0, std::nullopt)};
-        services.reserve(addresses.size());
-        for (const CAddress& address : addresses) {
-            const CService service{address};
-            if (!service.IsValid() || service.GetPort() == 0 || !service.IsRelayable()) continue;
-            services.push_back(service);
-        }
-        return services;
-    }
     bool getBanned(banmap_t& banmap) override
     {
         if (m_context->banman) {
@@ -286,29 +254,6 @@ public:
         }
         return false;
     }
-    std::vector<std::unique_ptr<interfaces::ExternalSigner>> listExternalSigners() override
-    {
-#ifdef ENABLE_EXTERNAL_SIGNER
-        std::vector<ExternalSigner> signers = {};
-        const std::string command = args().GetArg("-signer", "");
-        if (command == "") return {};
-        ExternalSigner::Enumerate(command, signers, Params().GetChainTypeString());
-        std::vector<std::unique_ptr<interfaces::ExternalSigner>> result;
-        result.reserve(signers.size());
-        for (auto& signer : signers) {
-            result.emplace_back(std::make_unique<ExternalSignerImpl>(std::move(signer)));
-        }
-        return result;
-#else
-        // This result is indistinguishable from a successful call that returns
-        // no signers. For the current GUI this doesn't matter, because the vault
-        // creation dialog hides the external signer checkbox entirely when
-        // compiled out. The return type could be changed to
-        // std::optional<std::vector> (or something that also includes error
-        // messages) if this distinction becomes important.
-        return {};
-#endif // ENABLE_EXTERNAL_SIGNER
-    }
     int64_t getTotalBytesRecv() override { return m_context->connman ? m_context->connman->GetTotalBytesRecv() : 0; }
     int64_t getTotalBytesSent() override { return m_context->connman ? m_context->connman->GetTotalBytesSent() : 0; }
     size_t getRelayPoolSize() override { return m_context->relaypool ? m_context->relaypool->size() : 0; }
@@ -341,10 +286,6 @@ public:
     {
         const CBlockIndex* tip = WITH_LOCK(::cs_main, return chainman().ActiveChain().Tip());
         return tip ? tip->GetBlockHash() : chainman().GetParams().GenesisBlock().GetHash();
-    }
-    double getVerificationProgress() override
-    {
-        return chainman().GuessVerificationProgress(WITH_LOCK(chainman().GetMutex(), return chainman().ActiveChain().Tip()));
     }
     bool isInitialBlockDownload() override
     {
@@ -689,7 +630,7 @@ public:
         WAIT_LOCK(cs_main, lock);
         const CBlockIndex* block = chainman().m_blockman.LookupBlockIndex(block_hash);
         const CBlockIndex* ancestor = chainman().m_blockman.LookupBlockIndex(ancestor_hash);
-        if (block && ancestor && block->GetAncestor(ancestor->nHeight) != ancestor) ancestor = nullptr;
+        if (!block || !ancestor || block->GetAncestor(ancestor->nHeight) != ancestor) ancestor = nullptr;
         return FillBlock(ancestor, ancestor_out, lock, chainman().ActiveChain(), chainman().m_blockman);
     }
     bool findCommonAncestor(const uint256& block_hash1, const uint256& block_hash2, const FoundBlock& ancestor_out, const FoundBlock& block1_out, const FoundBlock& block2_out) override
@@ -720,7 +661,7 @@ public:
     }
     bool hasBlocks(const uint256& block_hash, int min_height, std::optional<int> max_height) override
     {
-        if (!hasChainstate()) return false;
+        if (!hasChainstate() || (max_height && *max_height < 0)) return false;
         // hasBlocks returns true if all ancestors of block_hash in specified
         // range have block data (are not pruned), false if any ancestors in
         // specified range are missing data.
@@ -979,10 +920,9 @@ public:
     {
         BlockAssembler::Options assemble_options{options};
         ApplyArgsManOptions(*Assert(m_node.args), assemble_options);
-        return std::make_unique<BlockTemplateImpl>(BlockAssembler{chainman().ActiveChainstate(), context()->relaypool.get(), assemble_options}.CreateNewBlock(), m_node);
+        return std::make_unique<BlockTemplateImpl>(BlockAssembler{chainman().ActiveChainstate(), m_node.relaypool.get(), assemble_options}.CreateNewBlock(), m_node);
     }
 
-    NodeContext* context() override { return &m_node; }
     ChainstateManager& chainman() { return *Assert(m_node.chainman); }
     KernelNotifications& notifications() { return *Assert(m_node.notifications); }
     NodeContext& m_node;

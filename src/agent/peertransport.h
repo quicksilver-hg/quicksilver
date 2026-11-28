@@ -6,6 +6,7 @@
 #define QUICKSILVER_AGENT_PEERTRANSPORT_H
 
 #include <net.h>
+#include <util/result.h>
 
 #include <chrono>
 #include <cstddef>
@@ -38,6 +39,17 @@ struct PeerHandshakeResult {
     std::string error;
 };
 
+/** Frame `message` for the active network and send all of it within `timeout`.
+ *  Returns the number of bytes written. */
+util::Result<size_t> SendWireMessage(const Sock& sock,
+                                     const CSerializedNetMsg& message,
+                                     std::chrono::milliseconds timeout);
+
+/** Receive one framed message for the active network. `timeout` bounds the header and
+ *  payload together. Rejects a foreign network magic, an invalid message type, an
+ *  oversized payload and a bad checksum. */
+util::Result<CSerializedNetMsg> ReceiveWireMessage(const Sock& sock, std::chrono::milliseconds timeout);
+
 PeerHandshakeResult CompletePeerHandshake(const Sock& sock, const CService& peer, std::chrono::milliseconds timeout);
 
 /** Send a transaction and wait for a pong proving ordered peer processing. */
@@ -46,7 +58,8 @@ PeerTransactionRelayResult RelayTransactionOnSocket(const Sock& sock,
                                                     std::chrono::milliseconds timeout,
                                                     uint64_t nonce);
 
-/** Decode the active network's BIP155 fixed-seed blob into usable endpoints. */
+/** Decode the active network's BIP155 fixed-seed blob into usable endpoints.
+ *  Throws std::ios_base::failure if the blob is malformed. */
 std::vector<CService> FixedSeedPeers();
 std::vector<CService> FixedSeedPeers(const CChainParams& params);
 

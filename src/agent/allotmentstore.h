@@ -12,10 +12,25 @@
 #include <util/result.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <string_view>
 #include <vector>
 
 namespace agent {
+
+//! The agent's day: whole UTC days since the epoch. The agent's daily limit
+//! (SpentTodayFromActivities) and the vault's (F-661, vault/spend.cpp) share it.
+inline constexpr int64_t SECONDS_PER_UTC_DAY{86400};
+
+inline constexpr uint64_t MAX_ALLOTMENT_RECEIPTS{1'000'000};
+inline constexpr uint64_t MAX_ALLOTMENT_RECEIPT_ACTIVITIES{2'000'000};
+
+//! The record caps a receipt store is saved and loaded under. Save refuses what
+//! load would refuse, so a store that saves always loads. Tests pass smaller caps.
+struct AllotmentStoreLimits {
+    uint64_t max_receipts{MAX_ALLOTMENT_RECEIPTS};
+    uint64_t max_activities{MAX_ALLOTMENT_RECEIPT_ACTIVITIES};
+};
 
 enum class AllotmentStoreResult {
     OK,
@@ -76,14 +91,20 @@ const char* AllotmentReceiptActivityTypeString(AllotmentReceiptActivityType type
 /** Hold the receipt store directory lock until the process exits. */
 util::LockResult LockReceiptStoreDirectory(const fs::path& directory);
 
+//! Writes a uniquely named temp file beside `path` and renames it over `path`; the
+//! temp file is removed on any failure. TOO_MANY_RECEIPTS / TOO_MANY_ACTIVITIES
+//! when the data exceeds `limits`, before anything is written.
 AllotmentStoreResult SaveAllotmentReceiptStore(const AllotmentReceiptStoreData& data,
                                          const fs::path& path,
-                                         const uint256& genesis_hash);
+                                         const uint256& genesis_hash,
+                                         const AllotmentStoreLimits& limits = {});
 AllotmentStoreResult SaveAllotmentPaymentReceipts(const std::vector<AllotmentPaymentReceiptArtifact>& receipts,
                                             const fs::path& path,
                                             const uint256& genesis_hash);
+//! FILE_OPEN_FAILED, not an exception, when `path` cannot even be probed.
 AllotmentReceiptStoreLoadResult LoadAllotmentPaymentReceipts(const fs::path& path,
-                                                       const uint256& expected_genesis_hash);
+                                                       const uint256& expected_genesis_hash,
+                                                       const AllotmentStoreLimits& limits = {});
 util::Result<AllotmentReceiptStoreData> LoadAllotmentReceiptStore(const fs::path& path,
                                                             std::string_view expected_chain,
                                                             const uint256& expected_genesis_hash);

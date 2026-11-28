@@ -164,6 +164,12 @@ bool MockableBatch::WriteKey(DataStream&& key, DataStream&& value, bool overwrit
         probe >> type;
         if (type == DBKeys::MASTER_KEY) return false;
     }
+    if (m_fail_write_types && !m_fail_write_types->empty()) {
+        DataStream probe{key};
+        std::string type;
+        probe >> type;
+        if (m_fail_write_types->contains(type)) return false;
+    }
     if (m_counters && !m_txn_active) ++m_counters->implicit;
     SerializeData key_data{key.begin(), key.end()};
     SerializeData value_data{value.begin(), value.end()};

@@ -58,7 +58,7 @@ void ChaCha20Aligned::Seek(Nonce96 nonce, uint32_t block_counter) noexcept
     input[11] = nonce.second >> 32;
 }
 
-inline void ChaCha20Aligned::Keystream(Span<std::byte> output) noexcept
+void ChaCha20Aligned::Keystream(Span<std::byte> output) noexcept
 {
     std::byte* c = output.data();
     size_t blocks = output.size() / BLOCKLEN;
@@ -159,7 +159,7 @@ inline void ChaCha20Aligned::Keystream(Span<std::byte> output) noexcept
     }
 }
 
-inline void ChaCha20Aligned::Crypt(Span<const std::byte> in_bytes, Span<std::byte> out_bytes) noexcept
+void ChaCha20Aligned::Crypt(Span<const std::byte> in_bytes, Span<std::byte> out_bytes) noexcept
 {
     assert(in_bytes.size() == out_bytes.size());
     const std::byte* m = in_bytes.data();

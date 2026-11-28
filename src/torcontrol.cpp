@@ -391,6 +391,18 @@ TorController::~TorController()
     }
 }
 
+std::optional<Proxy> TorController::SocksProxyFromListener(const std::string& listener)
+{
+    if (listener.starts_with(ADDR_PREFIX_UNIX)) {
+        // Unix listeners are only usable where this build has Unix sockets.
+        if (!IsUnixSocketPath(listener)) return std::nullopt;
+        return Proxy(listener, /*_randomize_credentials=*/true);
+    }
+    const CService resolved{LookupNumeric(listener, DEFAULT_TOR_SOCKS_PORT)};
+    if (!resolved.IsValid()) return std::nullopt;
+    return Proxy(resolved, /*_randomize_credentials=*/true);
+}
+
 void TorController::get_socks_cb(TorControlConnection& _conn, const TorControlReply& reply)
 {
     // NOTE: We can only get here if -onion is unset
@@ -426,20 +438,22 @@ void TorController::get_socks_cb(TorControlConnection& _conn, const TorControlRe
         LogInfo(HgLog::TOR, "tor: Get SOCKS port command failed; error code %d\n", reply.code);
     }
 
-    CService resolved;
-    Assume(!resolved.IsValid());
-    if (!socks_location.empty()) {
-        resolved = LookupNumeric(socks_location, DEFAULT_TOR_SOCKS_PORT);
-    }
-    if (!resolved.IsValid()) {
-        // Fallback to old behaviour
-        resolved = LookupNumeric("127.0.0.1", DEFAULT_TOR_SOCKS_PORT);
+    std::optional<Proxy> onion_proxy;
+    if (socks_location.empty()) {
+        // Tor reported no listener (or is too old to answer): assume its default port.
+        onion_proxy = Proxy(LookupNumeric("127.0.0.1", DEFAULT_TOR_SOCKS_PORT), true);
+    } else {
+        onion_proxy = SocksProxyFromListener(socks_location);
+        if (!onion_proxy) {
+            // Tor named a listener we cannot use. Substituting 127.0.0.1:9050 would mark
+            // onion reachable through a proxy that may not exist: leave it unconfigured.
+            LogWarning(HgLog::TOR, "tor: cannot use the SOCKS listener Tor reported (%s); onion proxy not configured\n", socks_location);
+            return;
+        }
     }
 
-    Assume(resolved.IsValid());
-    LogDebug(HgLog::TOR, "Configuring onion proxy for %s\n", resolved.ToStringAddrPort());
-    Proxy addrOnion = Proxy(resolved, true);
-    SetProxy(NET_ONION, addrOnion);
+    LogDebug(HgLog::TOR, "Configuring onion proxy for %s\n", onion_proxy->ToString());
+    SetProxy(NET_ONION, *onion_proxy);
 
     const auto onlynets = gArgs.GetArgs("-onlynet");
 

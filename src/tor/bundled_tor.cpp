@@ -116,6 +116,7 @@ namespace {
 constexpr auto kControlPortTimeout{std::chrono::seconds{60}};
 constexpr auto kControlPortPollInterval{std::chrono::milliseconds{100}};
 
+Mutex g_bundled_tor_start_mutex;
 Mutex g_bundled_tor_mutex;
 std::unique_ptr<util::ContainedChild> g_bundled_tor GUARDED_BY(g_bundled_tor_mutex);
 
@@ -159,8 +160,11 @@ bilingual_str MissingTorMessage()
 }
 
 util::Result<std::string> StartBundledTor(const fs::path& datadir, const fs::path& override_path)
-    EXCLUSIVE_LOCKS_REQUIRED(!g_bundled_tor_mutex)
+    EXCLUSIVE_LOCKS_REQUIRED(!g_bundled_tor_start_mutex, !g_bundled_tor_mutex)
 {
+    // Reserve startup through the port wait without holding the child mutex.
+    TRY_LOCK(g_bundled_tor_start_mutex, start_lock);
+    if (!start_lock) return util::Error{Untranslated("A bundled Tor is already running")};
     {
         LOCK(g_bundled_tor_mutex);
         if (g_bundled_tor) return util::Error{Untranslated("A bundled Tor is already running")};
@@ -224,6 +228,12 @@ util::Result<std::string> StartBundledTor(const fs::path& datadir, const fs::pat
             std::string endpoint;
             const ControlPortParse parsed = ParseControlPortFile(contents, endpoint);
             if (parsed == ControlPortParse::kOk) {
+                // A port file is not a running Tor: one that wrote it and then died
+                // must not be registered as the bundled Tor.
+                if (child->Exited()) {
+                    return util::Error{strprintf(_("Tor exited right after reporting its control port; see %s"),
+                                                 fs::PathToString(log_path))};
+                }
                 LOCK(g_bundled_tor_mutex);
                 g_bundled_tor = std::move(child);
                 LogInfo(HgLog::TOR, "tor: bundled control port at %s\n", endpoint);

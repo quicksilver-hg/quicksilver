@@ -20,7 +20,6 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdio.h>
-#include <bit>       // std::countl_zero for SIZEMASK (portable __builtin_clz replacement)
 #include <chrono>
 #include <ctime>
 

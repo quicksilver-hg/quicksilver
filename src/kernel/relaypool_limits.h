@@ -8,6 +8,7 @@
 #include <policy/policy.h>
 
 #include <cstdint>
+#include <limits>
 
 namespace kernel {
 /**

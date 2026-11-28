@@ -20,7 +20,6 @@
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/validation.h>
-#include <external_signer.h>
 #include <interfaces/chain.h>
 #include <interfaces/handler.h>
 #include <interfaces/vault.h>
@@ -66,7 +65,6 @@
 #include <vault/context.h>
 #include <vault/crypter.h>
 #include <vault/db.h>
-#include <vault/external_signer_scriptpubkeyman.h>
 #include <vault/scriptpubkeyman.h>
 #include <vault/transaction.h>
 #include <vault/types.h>
@@ -78,9 +76,11 @@
 #include <cassert>
 #include <condition_variable>
 #include <exception>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <stdexcept>
+#include <system_error>
 #include <thread>
 #include <tuple>
 #include <utility>
@@ -88,8 +88,6 @@
 
 struct KeyOriginInfo;
 
-using common::AmountErrMsg;
-using common::AmountHighWarn;
 using common::PSQTError;
 using interfaces::FoundBlock;
 using util::ReplaceAll;
@@ -225,8 +223,16 @@ std::unique_ptr<interfaces::Handler> HandleLoadVault(VaultContext& context, Load
 
 void NotifyVaultLoaded(VaultContext& context, const std::shared_ptr<CVault>& vault)
 {
-    LOCK(context.vaults_mutex);
-    for (auto& load_vault : context.vault_load_fns) {
+    // Copy the handler list out and call the handlers without vaults_mutex: a handler
+    // (the Qt vault controller, the splash screen) may call back into GetVaults() or
+    // HandleLoadVault(), which take this mutex. A handler disconnected meanwhile is
+    // still called once from the copy, which is harmless for a one-shot notification.
+    std::vector<LoadVaultFn> load_fns;
+    {
+        LOCK(context.vaults_mutex);
+        load_fns.assign(context.vault_load_fns.begin(), context.vault_load_fns.end());
+    }
+    for (const LoadVaultFn& load_vault : load_fns) {
         load_vault(interfaces::MakeVault(context, vault));
     }
 }
@@ -401,9 +407,11 @@ std::shared_ptr<CVault> CreateVault(VaultContext& context, const std::string& na
         vault_creation_flags |= VAULT_FLAG_BLANK_VAULT;
     }
 
-    // Private keys must be disabled for an external signer vault
-    if ((vault_creation_flags & VAULT_FLAG_EXTERNAL_SIGNER) && !(vault_creation_flags & VAULT_FLAG_DISABLE_PRIVATE_KEYS)) {
-        error = Untranslated("Private keys must be disabled when using an external signer");
+    // External signing was removed until the adapter work (F-679). The loader
+    // refuses a vault carrying this flag, so nothing may create one; no caller
+    // in the tree sets it, so reaching this is a bug, not a user error.
+    if (vault_creation_flags & VAULT_FLAG_EXTERNAL_SIGNER) {
+        error = Untranslated(STR_INTERNAL_BUG("!(vault_creation_flags & VAULT_FLAG_EXTERNAL_SIGNER)"));
         status = DatabaseStatus::FAILED_CREATE;
         return nullptr;
     }
@@ -557,7 +565,10 @@ bool CVault::ChangeVaultPassphrase(const SecureString& strOldVaultPassphrase, co
 
     {
         LOCK2(m_relock_mutex, cs_vault);
-        Lock();
+        // No Lock() first: Unlock(_vMasterKey) checks the key against every
+        // manager whether or not the vault is unlocked, and a wrong old
+        // passphrase must leave an unlocked vault unlocked, with its relock
+        // timer (nRelockTime) still meaning what it says (S0201-B-01).
 
         CCrypter crypter;
         CKeyingMaterial _vMasterKey;
@@ -611,7 +622,7 @@ void CVault::chainStateFlushed(const CBlockLocator& loc)
         return;
     }
     VaultBatch batch(GetDatabase());
-    batch.WriteBestBlock(loc);
+    if (!batch.WriteBestBlock(loc)) VaultLogPrintf("failed to save best block locator");
 }
 
 void CVault::SetMinVersion(VaultBatch* batch_in)
@@ -842,7 +853,6 @@ bool CVault::EncryptVault(const SecureString& strVaultPassphrase)
 
         // Rewrite vault storage to avoid leaving unencrypted private key material in slack space.
         if (!GetDatabase().Rewrite()) VaultLogPrintf("failed to rewrite vault storage after encryption");
-        GetDatabase().ReloadDbEnv();
     }
     NotifyStatusChanged(this);
     NotifyBackupStateChanged();
@@ -854,11 +864,10 @@ int64_t CVault::IncOrderPosNext(VaultBatch* batch)
 {
     AssertLockHeld(cs_vault);
     int64_t nRet = nOrderPosNext++;
-    if (batch) {
-        batch->WriteOrderPosNext(nOrderPosNext);
-    } else {
-        VaultBatch(GetDatabase()).WriteOrderPosNext(nOrderPosNext);
-    }
+    const bool written{batch ? batch->WriteOrderPosNext(nOrderPosNext) : VaultBatch(GetDatabase()).WriteOrderPosNext(nOrderPosNext)};
+    // The counter stays right in memory; only a restart before the next good
+    // write can hand out this position again (S0195-A-10, S0195-A-03).
+    if (!written) VaultLogPrintf("failed to write the order position counter (%d)", nOrderPosNext);
     return nRet;
 }
 
@@ -930,7 +939,7 @@ CVaultTx* CVault::AddToVault(CTransactionRef tx, const TxState& state, const Upd
     bool fInsertedNew = ret.second;
     bool fUpdated = update_wtx && update_wtx(wtx, fInsertedNew);
     if (fInsertedNew) {
-        wtx.nTimeReceived = archived_times ? archived_times->first : GetTime();
+        wtx.nTimeReceived = archived_times ? archived_times->first : TicksSinceEpoch<std::chrono::seconds>(NodeClock::now());
         wtx.nOrderPos = IncOrderPosNext(&batch);
         wtx.m_it_wtxOrdered = wtxOrdered.insert(std::make_pair(wtx.nOrderPos, &wtx));
         wtx.nTimeSmart = archived_times ? archived_times->second : ComputeTimeSmart(wtx, rescanning_old_block);
@@ -969,9 +978,11 @@ CVaultTx* CVault::AddToVault(CTransactionRef tx, const TxState& state, const Upd
             CVaultTx* desc_tx = txs.back();
             txs.pop_back();
             desc_tx->m_state = inactive_state;
+            desc_tx->EraseRevivalSequence();
             // Break caches since we have changed the state
             desc_tx->MarkDirty();
-            batch.WriteTx(*desc_tx);
+            // Not persisted means live again after a restart: say so (S0195-A-10).
+            if (!batch.WriteTx(*desc_tx)) VaultLogPrintf("failed to write abandoned tx=%s", desc_tx->GetHash().ToString());
             MarkInputsDirty(desc_tx->tx);
             for (unsigned int i = 0; i < desc_tx->tx->vout.size(); ++i) {
                 COutPoint outpoint(desc_tx->GetHash(), i);
@@ -985,6 +996,9 @@ CVaultTx* CVault::AddToVault(CTransactionRef tx, const TxState& state, const Upd
             }
         }
     }
+
+    // A confirmed or abandoned transaction no longer competes as a revived one (F-698).
+    if ((wtx.isConfirmed() || wtx.isAbandoned()) && wtx.EraseRevivalSequence()) fUpdated = true;
 
     //// debug print
     VaultLogPrintf("saved tx=%s new=%d updated=%d state=%s", hash.ToString(), fInsertedNew, fUpdated, TxStateString(state));
@@ -1123,8 +1137,8 @@ bool CVault::AddToVaultIfInvolvingMe(const CTransactionRef& ptx, const SyncTxSta
                 }
             }
 
-            // Block disconnection override an abandoned tx as unconfirmed
-            // which means user may have to call abandontransaction again
+            // Block disconnection overrides an abandoned tx as unconfirmed,
+            // so it may have to be abandoned again
             TxState tx_state = std::visit([](auto&& s) -> TxState { return s; }, state);
             CVaultTx* wtx = AddToVault(MakeTransactionRef(tx), tx_state, /*update_wtx=*/nullptr, /*fFlushOnClose=*/false, rescanning_old_block);
             if (!wtx) {
@@ -1136,13 +1150,6 @@ bool CVault::AddToVaultIfInvolvingMe(const CTransactionRef& ptx, const SyncTxSta
         }
     }
     return false;
-}
-
-bool CVault::TransactionCanBeAbandoned(const uint256& hashTx) const
-{
-    LOCK(cs_vault);
-    const CVaultTx* wtx = GetVaultTx(hashTx);
-    return wtx && !wtx->isAbandoned() && GetTxDepthInMainChain(*wtx) == 0 && !wtx->InRelayPool();
 }
 
 void CVault::MarkInputsDirty(const CTransactionRef& tx)
@@ -1175,9 +1182,13 @@ bool CVault::AbandonTransaction(CVaultTx& tx)
         // If the orig tx was not in block/relaypool, none of its spends can be.
         assert(!wtx.isConfirmed());
         assert(!wtx.InRelayPool());
+        // A descendant whose stored block reference is not resolved yet is left
+        // alone, as the transaction itself would be above (S0195-A-08).
+        if (wtx.isBlockUnresolved()) return TxUpdate::UNCHANGED;
         // If already conflicted or abandoned, no need to set abandoned
         if (!wtx.isBlockConflicted() && !wtx.isAbandoned()) {
             wtx.m_state = TxStateInactive{/*abandoned=*/true};
+            wtx.EraseRevivalSequence();
             return TxUpdate::NOTIFY_CHANGED;
         }
         return TxUpdate::UNCHANGED;
@@ -1248,7 +1259,8 @@ void CVault::RecursiveUpdateTxState(VaultBatch* batch, const uint256& tx_hash, c
         TxUpdate update_state = try_updating_state(wtx);
         if (update_state != TxUpdate::UNCHANGED) {
             wtx.MarkDirty();
-            if (batch) batch->WriteTx(wtx);
+            // Not persisted means the old state returns after a restart: say so (S0195-A-10).
+            if (batch && !batch->WriteTx(wtx)) VaultLogPrintf("failed to write updated state of tx=%s", wtx.GetHash().ToString());
             // Iterate over all its outputs, and update those tx states as well (if applicable)
             for (unsigned int i = 0; i < wtx.tx->vout.size(); ++i) {
                 std::pair<TxSpends::const_iterator, TxSpends::const_iterator> range = mapTxSpends.equal_range(COutPoint(Txid::FromUint256(now), i));
@@ -1385,8 +1397,7 @@ void CVault::blockDisconnected(const interfaces::BlockInfo& block)
 
     // At block disconnection, this will change an abandoned transaction to
     // be unconfirmed, whether or not the transaction is added back to the relaypool.
-    // User may have to call abandontransaction again. It may be addressed in the
-    // future with a stickier abandoned state or even removing abandontransaction call.
+    // It may have to be abandoned again, by the user or by proof-of-work expiry.
     m_last_block_processed_height = block.height - 1;
     m_last_block_processed = *Assert(block.prev_hash);
     m_last_block_processed_time = -1;
@@ -1424,6 +1435,20 @@ void CVault::blockDisconnected(const interfaces::BlockInfo& block)
             }
         }
     }
+
+    // F-698: stamp this block's transactions with the disconnect order, after the loop so that
+    // a transaction revived above from a conflict keeps its older stamp. Among revived
+    // transactions that spend the same coins, GetBalance counts only the most recent set.
+    const int64_t revival_sequence{m_next_revival_sequence++};
+    VaultBatch batch(GetDatabase(), /*_fFlushOnClose=*/false);
+    for (const CTransactionRef& ptx : block.data->vtx) {
+        const auto it{mapVault.find(ptx->GetHash())};
+        if (it == mapVault.end()) continue;
+        CVaultTx& wtx{it->second};
+        if (!wtx.isInactive() || wtx.isAbandoned()) continue;
+        wtx.SetRevivalSequence(revival_sequence);
+        batch.WriteTx(wtx);
+    }
 }
 
 bool CVault::ApplyHeaderTip(int block_height, const uint256& block_hash, int64_t block_time)
@@ -1452,7 +1477,7 @@ bool CVault::ApplyHeaderTip(int block_height, const uint256& block_hash, int64_t
 
 void CVault::updatedBlockTip()
 {
-    m_best_block_time = GetTime();
+    m_best_block_time = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now());
 }
 
 void CVault::BlockUntilSyncedToCurrentChain() const
@@ -1589,9 +1614,12 @@ void CVault::SetVaultFlag(uint64_t flags)
 void CVault::SetVaultFlagWithDB(VaultBatch& batch, uint64_t flags)
 {
     LOCK(cs_vault);
-    m_vault_flags |= flags;
-    if (!batch.WriteVaultFlags(m_vault_flags))
+    // Write first and change the memory copy only on success (S0204-A-04): a failed
+    // write must not leave the flag set in memory while the file does not have it.
+    const uint64_t new_flags{m_vault_flags | flags};
+    if (!batch.WriteVaultFlags(new_flags))
         throw std::runtime_error(std::string(__func__) + ": writing vault flags failed");
+    m_vault_flags = new_flags;
 }
 
 void CVault::UnsetVaultFlag(uint64_t flag)
@@ -1603,9 +1631,10 @@ void CVault::UnsetVaultFlag(uint64_t flag)
 void CVault::UnsetVaultFlagWithDB(VaultBatch& batch, uint64_t flag)
 {
     LOCK(cs_vault);
-    m_vault_flags &= ~flag;
-    if (!batch.WriteVaultFlags(m_vault_flags))
+    const uint64_t new_flags{m_vault_flags & ~flag};
+    if (!batch.WriteVaultFlags(new_flags))
         throw std::runtime_error(std::string(__func__) + ": writing vault flags failed");
+    m_vault_flags = new_flags;
 }
 
 void CVault::UnsetBlankVaultFlag(VaultBatch& batch)
@@ -1839,7 +1868,9 @@ CVault::ScanResult CVault::ScanForVaultTransactions(const uint256& start_block, 
                     if (!loc.IsNull()) {
                         VaultLogPrintf("saved scan_progress_height=%d", block_height);
                         VaultBatch batch(GetDatabase());
-                        batch.WriteBestBlock(loc);
+                        // Progress is a resume hint; the scan itself succeeded, so a failed
+                        // write is logged and the next interval tries again.
+                        if (!batch.WriteBestBlock(loc)) VaultLogPrintf("failed to save scan progress");
                     }
                 }
             } else {
@@ -2012,8 +2043,11 @@ void CVault::ResubmitVaultTransactions(bool relay, bool force)
         LOCK(cs_vault);
 
         // First filter for the transactions we want to rebroadcast.
-        // We use a set with VaultTxOrderComparator so that rebroadcasting occurs in insertion order
-        std::set<CVaultTx*, VaultTxOrderComparator> to_submit;
+        // Ordered by nOrderPos so that rebroadcasting occurs in insertion order. A
+        // multiset: nOrderPos is unique only by convention (a failed ORDERPOSNEXT
+        // write and a restart can repeat one), and a set would drop the second
+        // transaction silently (S0195-A-03).
+        std::multiset<CVaultTx*, VaultTxOrderComparator> to_submit;
         for (auto& [txid, wtx] : mapVault) {
             // Only rebroadcast unconfirmed txs
             if (!wtx.isUnconfirmed()) continue;
@@ -2049,7 +2083,7 @@ void CVault::AbandonExpiredTransactions()
         if (!TryGetLastBlockHash(tip_hash)) return;
         const int64_t tip{GetLastBlockHeight()};
         const int64_t oldest_valid_anchor{tip - Params().GetConsensus().nMaxAnchorAge};
-        std::set<CVaultTx*, VaultTxOrderComparator> expired;
+        std::multiset<CVaultTx*, VaultTxOrderComparator> expired; // see to_submit (S0195-A-03)
         for (auto& [txid, wtx] : mapVault) {
             if (!wtx.isUnconfirmed() || wtx.InRelayPool()) continue;
             if (int64_t{wtx.tx->nAnchorHeight} >= oldest_valid_anchor) continue;
@@ -2327,6 +2361,14 @@ DBErrors CVault::LoadVault()
     Assert(m_vault_flags == 0);
     DBErrors nLoadVaultRet = VaultBatch(GetDatabase()).LoadVault(this);
 
+    // F-698: continue the disconnect order from the highest stored value.
+    m_next_revival_sequence = 1;
+    for (const auto& [_, wtx] : mapVault) {
+        if (const auto sequence{wtx.GetRevivalSequence()}; sequence && *sequence >= m_next_revival_sequence) {
+            m_next_revival_sequence = *sequence + 1;
+        }
+    }
+
     if (m_spk_managers.empty()) {
         assert(m_external_spk_managers.empty());
         assert(m_internal_spk_managers.empty());
@@ -2375,8 +2417,15 @@ util::Result<void> CVault::RemoveTxs(VaultBatch& batch, std::vector<uint256>& tx
                                    for (const auto& it : erased_txs) {
                                        const uint256 hash{it->first};
                                        wtxOrdered.erase(it->second.m_it_wtxOrdered);
-                                       for (const auto& txin : it->second.tx->vin)
-                                           mapTxSpends.erase(txin.prevout);
+                                       // Erase only this transaction's spend records: a
+                                       // conflicting transaction spending the same outpoint
+                                       // keeps its own (S0195-A-07).
+                                       for (const auto& txin : it->second.tx->vin) {
+                                           auto [spend, spend_end] = mapTxSpends.equal_range(txin.prevout);
+                                           while (spend != spend_end) {
+                                               spend = spend->second == hash ? mapTxSpends.erase(spend) : std::next(spend);
+                                           }
+                                       }
                                        mapVault.erase(it);
                                        NotifyTransactionChanged(hash, CT_DELETED);
                                    }
@@ -2543,20 +2592,6 @@ util::Result<CTxDestination> CVault::GetNewChangeDestination(const OutputType ty
     return op_dest;
 }
 
-std::optional<int64_t> CVault::GetOldestKeyPoolTime() const
-{
-    LOCK(cs_vault);
-    if (m_spk_managers.empty()) {
-        return std::nullopt;
-    }
-
-    std::optional<int64_t> oldest_key{std::numeric_limits<int64_t>::max()};
-    for (const auto& spk_man_pair : m_spk_managers) {
-        oldest_key = std::min(oldest_key, spk_man_pair.second->GetOldestKeyPoolTime());
-    }
-    return oldest_key;
-}
-
 void CVault::MarkDestinationsDirty(const std::set<CTxDestination>& destinations)
 {
     for (auto& entry : mapVault) {
@@ -2647,37 +2682,21 @@ void ReserveDestination::ReturnDestination()
     address = CNoDestination();
 }
 
-util::Result<void> CVault::DisplayAddress(const CTxDestination& dest)
-{
-    CScript scriptPubKey = GetScriptForDestination(dest);
-    for (const auto& spk_man : GetScriptPubKeyMans(scriptPubKey)) {
-        auto signer_spk_man = dynamic_cast<ExternalSignerScriptPubKeyMan*>(spk_man);
-        if (signer_spk_man == nullptr) {
-            continue;
-        }
-        ExternalSigner signer = ExternalSignerScriptPubKeyMan::GetExternalSigner();
-        return signer_spk_man->DisplayAddress(dest, signer);
-    }
-    return util::Error{_("There is no ScriptPubKeyManager for this address")};
-}
-
 bool CVault::LockCoin(const COutPoint& output, VaultBatch* batch)
 {
     AssertLockHeld(cs_vault);
+    // Write first: a failed write leaves the in-memory set as it was (S0201-A-01).
+    if (batch && !batch->WriteLockedUTXO(output)) return false;
     setLockedCoins.insert(output);
-    if (batch) {
-        return batch->WriteLockedUTXO(output);
-    }
     return true;
 }
 
 bool CVault::UnlockCoin(const COutPoint& output, VaultBatch* batch)
 {
     AssertLockHeld(cs_vault);
-    bool was_locked = setLockedCoins.erase(output);
-    if (batch && was_locked) {
-        return batch->EraseLockedUTXO(output);
-    }
+    // Erase on disk first: a failed erase leaves the coin locked in memory too (S0201-A-01).
+    if (batch && setLockedCoins.contains(output) && !batch->EraseLockedUTXO(output)) return false;
+    setLockedCoins.erase(output);
     return true;
 }
 
@@ -2733,6 +2752,7 @@ void CVault::ListLockedCoins(std::vector<COutPoint>& vOutpts) const
  */
 unsigned int CVault::ComputeTimeSmart(const CVaultTx& wtx, bool rescanning_old_block) const
 {
+    AssertLockHeld(cs_vault);
     std::optional<uint256> block_hash;
     if (auto* conf = wtx.state<TxStateConfirmed>()) {
         block_hash = conf->confirmed_block_hash;
@@ -2931,7 +2951,7 @@ std::shared_ptr<CVault> CVault::Create(VaultContext& context, const std::string&
             }
         }
 
-        if ((vault_creation_flags & VAULT_FLAG_EXTERNAL_SIGNER) || !(vault_creation_flags & (VAULT_FLAG_DISABLE_PRIVATE_KEYS | VAULT_FLAG_BLANK_VAULT))) {
+        if (!(vault_creation_flags & (VAULT_FLAG_DISABLE_PRIVATE_KEYS | VAULT_FLAG_BLANK_VAULT))) {
             LOCK(vaultInstance->cs_vault);
             vaultInstance->SetupDescriptorScriptPubKeyMans();
         }
@@ -3125,7 +3145,6 @@ bool CVault::AttachChain(const std::shared_ptr<CVault>& vaultInstance, interface
         }
         vaultInstance->m_attaching_chain = false;
         FlushSyncPointDuringLoad(*vaultInstance, chain.getTipLocator());
-        vaultInstance->GetDatabase().IncrementUpdateCounter();
     }
     vaultInstance->m_attaching_chain = false;
 
@@ -3159,10 +3178,95 @@ bool CVault::BackupVault(const std::string& strDest) const
         WITH_LOCK(cs_vault, chain().findBlock(m_last_block_processed, FoundBlock().locator(loc)));
         if (!loc.IsNull()) {
             VaultBatch batch(GetDatabase());
-            batch.WriteBestBlock(loc);
+            if (!batch.WriteBestBlock(loc)) return false;
         }
     }
     return GetDatabase().Backup(strDest);
+}
+
+//! F-687: true unless the path is known to be free. An error other than "not found" counts as taken, so a
+//! destination that cannot be inspected is refused rather than replaced.
+static bool BackupPathTaken(const fs::path& path)
+{
+    std::error_code ec;
+    return fs::symlink_status(path, ec).type() != fs::file_type::not_found;
+}
+
+//! F-687: whether target is this vault's database file or one of SQLite's files beside it. With overwrite, the
+//! rename would otherwise replace the open database under SQLite.
+static bool IsOwnDatabaseFile(const fs::path& target, const std::string& db_file)
+{
+    const fs::path db{fs::PathFromString(db_file)};
+    std::error_code ec;
+    if (fs::equivalent(target, db, ec)) return true;
+    const fs::path canonical_target{fs::weakly_canonical(target, ec)};
+    if (ec) return false;
+    for (const char* suffix : {"", "-journal", "-wal", "-shm"}) {
+        const fs::path canonical_own{fs::weakly_canonical(fs::PathFromString(db_file + suffix), ec)};
+        if (!ec && canonical_own == canonical_target) return true;
+    }
+    return false;
+}
+
+SavedBackup CVault::SaveCheckedBackup(const std::string& destination, bool overwrite, bool corrupt_for_test) const
+{
+    SavedBackup saved;
+    fs::path target;
+    try {
+        target = fs::absolute(fs::PathFromString(destination));
+    } catch (const fs::filesystem_error&) {
+        saved.path = destination;
+        return saved; // step COPY: nothing was written
+    }
+    saved.path = fs::PathToString(target);
+
+    if (IsOwnDatabaseFile(target, GetDatabase().Filename())) {
+        saved.step = BackupStep::OWN_FILE;
+        return saved;
+    }
+    if (!overwrite && BackupPathTaken(target)) {
+        saved.step = BackupStep::EXISTS;
+        return saved;
+    }
+
+    // Write beside the destination, so the rename stays on one filesystem and a failed copy or check never
+    // touches the destination (c04-16).
+    const fs::path temp_path{fs::PathFromString(saved.path + ".new." + GetRandHash().ToString().substr(0, 16))};
+    struct TempCleanup {
+        const fs::path& path;
+        bool keep{false};
+        ~TempCleanup() { if (!keep) fs::remove_quiet(path); }
+    } cleanup{temp_path};
+
+    saved.step = BackupStep::COPY;
+    if (!WITH_LOCK(cs_vault, return BackupVault(fs::PathToString(temp_path)))) return saved;
+
+    if (corrupt_for_test) {
+        // Test only: stand in for a medium that does not keep what was written, so the check below is what fails.
+        std::fstream copy{temp_path, std::ios::binary | std::ios::in | std::ios::out};
+        const std::string zeros(100, '\0');
+        copy.write(zeros.data(), zeros.size());
+    }
+
+    saved.check = VerifyBackup(temp_path, /*passphrase=*/nullptr);
+    if (!saved.check.StepsPassed()) {
+        saved.step = BackupStep::CHECK;
+        RecordBackupCheck(saved.check);
+        return saved;
+    }
+
+    // Without overwrite, refuse again if the destination appeared while the copy was written and checked.
+    if (!overwrite && BackupPathTaken(target)) {
+        saved.step = BackupStep::EXISTS;
+        return saved;
+    }
+    saved.step = BackupStep::RENAME;
+    if (!RenameOver(temp_path, target)) return saved;
+    cleanup.keep = true;
+
+    saved.step = BackupStep::DONE;
+    RecordBackupCheck(saved.check);
+    return saved;
 }
 
 BackupCheck CVault::VerifyBackup(const fs::path& file, const SecureString* passphrase) const
@@ -3243,7 +3347,7 @@ BackupCheck CVault::VerifyBackup(const fs::path& file, const SecureString* passp
 bool CVault::RecordBackupCheck(const BackupCheck& check) const
 {
     BackupRecord record;
-    record.saved_time = GetTime();
+    record.saved_time = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now());
     record.checked = check.StepsPassed();
     record.passphrase_checked = check.result == BackupCheckResult::OK && check.passphrase_tested;
     record.fingerprint = check.fingerprint;
@@ -3353,7 +3457,17 @@ util::Result<AgentAllotmentRecord> CVault::RecordAgentAllotmentSetup(const std::
     const CKey vault_key{GenerateRandomKey()};
     const CKey agent_key{GenerateRandomKey()};
     const CKey cosigner_key{GenerateRandomKey()};
-    const std::string private_descriptor{strprintf("tr(%s,multi_a(2,%s,%s))", EncodeSecret(vault_key), EncodeSecret(agent_key), EncodeSecret(cosigner_key))};
+    // The WIF copies and the private descriptor are wiped on every exit (c04-21).
+    struct CleansedSecrets {
+        std::string vault_wif, agent_wif, cosigner_wif, descriptor;
+        ~CleansedSecrets()
+        {
+            for (std::string* s : {&vault_wif, &agent_wif, &cosigner_wif, &descriptor}) memory_cleanse(s->data(), s->size());
+        }
+    } secrets{EncodeSecret(vault_key), EncodeSecret(agent_key), EncodeSecret(cosigner_key), {}};
+    secrets.descriptor.reserve(64 + secrets.vault_wif.size() + secrets.agent_wif.size() + secrets.cosigner_wif.size());
+    secrets.descriptor.append("tr(").append(secrets.vault_wif).append(",multi_a(2,").append(secrets.agent_wif).append(",").append(secrets.cosigner_wif).append("))");
+    const std::string& private_descriptor{secrets.descriptor};
 
     FlatSigningProvider provider;
     std::string parse_error;
@@ -3374,7 +3488,7 @@ util::Result<AgentAllotmentRecord> CVault::RecordAgentAllotmentSetup(const std::
     }
 
     const std::string address_label{strprintf("agent:%s", trimmed_label)};
-    VaultDescriptor vault_descriptor{descriptor, /*creation_time=*/static_cast<uint64_t>(GetTime()), /*range_start=*/0, /*range_end=*/0, /*next_index=*/0};
+    VaultDescriptor vault_descriptor{descriptor, /*creation_time=*/static_cast<uint64_t>(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now())), /*range_start=*/0, /*range_end=*/0, /*next_index=*/0};
     if (!AddVaultDescriptor(vault_descriptor, provider, address_label, /*internal=*/false)) {
         return util::Error{_("Agent allotment descriptor could not be imported.")};
     }
@@ -3393,7 +3507,7 @@ util::Result<AgentAllotmentRecord> CVault::RecordAgentAllotmentSetup(const std::
     record.label = trimmed_label;
     record.funding_limit = funding_limit;
     record.daily_limit = daily_limit;
-    record.risk_accepted_time = GetTime();
+    record.risk_accepted_time = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now());
     record.funding_address = EncodeDestination(funding_dest);
     record.funding_descriptor = descriptor->ToString();
     record.stopped_time = 0;
@@ -3421,7 +3535,7 @@ bool CVault::StopAgentAllotment(const std::string& id)
     if (record_it == records.end()) return false;
     if (record_it->stopped_time != 0) return true;
 
-    record_it->stopped_time = GetTime();
+    record_it->stopped_time = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now());
     return batch.WriteAgentAllotmentRecords(records);
 }
 
@@ -3452,7 +3566,7 @@ std::string CVault::AgentAllotmentPolicyRequest(const AgentAllotmentRecord& reco
     policy.pushKV("funding_available_cinnabar", util::ToString(funding_available));
     policy.pushKV("daily_limit_cinnabar", util::ToString(record.daily_limit));
     policy.pushKV("risk_accepted_time", util::ToString(record.risk_accepted_time));
-    policy.pushKV("request_created_time", util::ToString(GetTime()));
+    policy.pushKV("request_created_time", util::ToString(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now())));
     return policy.write();
 }
 
@@ -3710,12 +3824,7 @@ void CVault::ConnectScriptPubKeyManNotifiers()
 
 DescriptorScriptPubKeyMan& CVault::LoadDescriptorScriptPubKeyMan(uint256 id, VaultDescriptor& desc)
 {
-    DescriptorScriptPubKeyMan* spk_manager;
-    if (IsVaultFlagSet(VAULT_FLAG_EXTERNAL_SIGNER)) {
-        spk_manager = new ExternalSignerScriptPubKeyMan(*this, desc, m_keypool_size);
-    } else {
-        spk_manager = new DescriptorScriptPubKeyMan(*this, desc, m_keypool_size);
-    }
+    DescriptorScriptPubKeyMan* spk_manager = new DescriptorScriptPubKeyMan(*this, desc, m_keypool_size);
     AddScriptPubKeyMan(id, std::unique_ptr<ScriptPubKeyMan>(spk_manager));
     return *spk_manager;
 }
@@ -3770,67 +3879,10 @@ void CVault::SetupDescriptorScriptPubKeyMans()
 {
     AssertLockHeld(cs_vault);
 
-    if (!IsVaultFlagSet(VAULT_FLAG_EXTERNAL_SIGNER)) {
-        if (!RunWithinTxn(GetDatabase(), /*process_desc=*/"setup descriptors", [&](VaultBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(cs_vault) {
-                SetupOwnDescriptorScriptPubKeyMans(batch);
-                return true;
-            })) throw std::runtime_error("Error: cannot process db transaction for descriptors setup");
-    } else {
-        ExternalSigner signer = ExternalSignerScriptPubKeyMan::GetExternalSigner();
-
-        // TODO: add account parameter
-        int account = 0;
-        UniValue signer_res = signer.GetDescriptors(account);
-
-        if (!signer_res.isObject()) throw std::runtime_error(std::string(__func__) + ": Unexpected result");
-
-        VaultBatch batch(GetDatabase());
-        if (!batch.TxnBegin()) throw std::runtime_error("Error: cannot create db transaction for descriptors import");
-
-        // One active ScriptPubKeyMan per (output type, chain). A throw
-        // here is rolled back by SQLiteBatch::Close aborting the txn.
-        std::map<std::pair<OutputType, bool>, std::string> imported;
-        for (bool internal : {false, true}) {
-            const UniValue& descriptor_vals = signer_res.find_value(internal ? "internal" : "receive");
-            if (!descriptor_vals.isArray()) throw std::runtime_error(std::string(__func__) + ": Unexpected result");
-            for (const UniValue& desc_val : descriptor_vals.get_array().getValues()) {
-                const std::string& desc_str = desc_val.getValStr();
-                FlatSigningProvider keys;
-                std::string desc_error;
-                auto descs = Parse(desc_str, keys, desc_error, false);
-                if (descs.empty()) {
-                    throw std::runtime_error(std::string(__func__) + ": Invalid descriptor \"" + desc_str + "\" (" + desc_error + ")");
-                }
-                auto& desc = descs.at(0);
-                if (!desc->GetOutputType()) {
-                    throw std::runtime_error(std::string(__func__) + ": Descriptor \"" + desc_str + "\" has no address type");
-                }
-                OutputType t = *desc->GetOutputType();
-                const auto key = std::make_pair(t, internal);
-                auto it = imported.find(key);
-                if (it != imported.end()) {
-                    throw std::runtime_error(std::string(__func__) + ": Multiple descriptors for output type " + FormatOutputType(t) + " (" + (internal ? "internal" : "receive") + "): \"" + it->second + "\" and \"" + desc_str + "\"");
-                }
-                auto spk_manager = std::unique_ptr<ExternalSignerScriptPubKeyMan>(new ExternalSignerScriptPubKeyMan(*this, m_keypool_size));
-                spk_manager->SetupDescriptor(batch, std::move(desc));
-                uint256 id = spk_manager->GetID();
-                AddScriptPubKeyMan(id, std::move(spk_manager));
-                AddActiveScriptPubKeyManWithDb(batch, id, t, internal);
-                imported.emplace(key, desc_str);
-            }
-        }
-
-        for (bool internal : {false, true}) {
-            for (OutputType t : OUTPUT_TYPES) {
-                if (!imported.contains(std::make_pair(t, internal))) {
-                    VaultLogPrintf("signer missing type=%s internal=%d", FormatOutputType(t), internal);
-                }
-            }
-        }
-
-        // Ensure imported descriptors are committed to disk
-        if (!batch.TxnCommit()) throw std::runtime_error("Error: cannot commit db transaction for descriptors import");
-    }
+    if (!RunWithinTxn(GetDatabase(), /*process_desc=*/"setup descriptors", [&](VaultBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(cs_vault) {
+            SetupOwnDescriptorScriptPubKeyMans(batch);
+            return true;
+        })) throw std::runtime_error("Error: cannot process db transaction for descriptors setup");
 }
 
 void CVault::AddActiveScriptPubKeyMan(uint256 id, OutputType type, bool internal)

@@ -71,10 +71,6 @@ BASE_BUILD_DIR=${BASE_BUILD_DIR:-$BASE_SCRATCH_DIR/build-$HOST}
 mkdir -p "${BASE_BUILD_DIR}"
 cd "${BASE_BUILD_DIR}"
 
-# Do not pass -DENABLE_EXTERNAL_SIGNER=ON: shipping builds and the checked-in
-# man pages omit the signer, so an ON full-suite build fails
-# feature_generated_docs.py (F-274, F-307). Run signer-ON tests as targeted
-# vault_signer.py and rpc_signer.py runs instead.
 QUICKSILVER_CONFIG_ALL="$QUICKSILVER_CONFIG_ALL -DCMAKE_INSTALL_PREFIX=$BASE_OUTDIR"
 
 if [[ "${RUN_TIDY}" == "true" ]]; then

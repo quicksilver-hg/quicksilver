@@ -27,7 +27,7 @@ void OnSessionManagerLost(const QuitAction& quit, bool& already_requested);
 
 //! Replaces libICE's default IO-error handler with one that calls
 //! OnSessionManagerLost(quit). Returns false, and does nothing, in a build
-//! with no libICE (Windows, macOS, static-Qt depends builds).
+//! with no libICE (Windows, static-Qt depends builds).
 //! Must be called before the event loop runs.
 bool InstallIceIoErrorHandler(QuitAction quit);
 

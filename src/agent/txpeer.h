@@ -10,6 +10,7 @@
 #include <primitives/transaction.h>
 #include <protocol.h>
 
+#include <chrono>
 #include <cstddef>
 #include <deque>
 #include <map>
@@ -19,13 +20,20 @@
 
 namespace agent {
 
+//! A getdata the peer has neither answered nor refused (notfound) is dropped after
+//! this long, so the transaction can be requested again. Matches the node's
+//! GETDATA_TX_INTERVAL.
+inline constexpr std::chrono::seconds TX_REQUEST_EXPIRY{60};
+
 enum class TxPeerResultCode {
     INV_SENT,
     GETDATA_SENT,
     TX_SENT,
     TX_NOT_FOUND,
     INV_ALREADY_KNOWN,
+    INV_NO_TRANSACTIONS,
     TX_RECEIVED,
+    NOTFOUND_RECEIVED,
     IGNORED_MESSAGE,
     DECODE_FAILED,
 };
@@ -38,8 +46,14 @@ struct TxPeerResult {
     std::vector<CInv> requested_inventory;
     std::vector<CInv> served_inventory;
     std::vector<CInv> matched_requests;
+    //! inv: entries already known or already requested. getdata: repeats of an
+    //! entry already served in the same message.
     size_t duplicate_count{0};
+    //! getdata: entries the agent does not hold; they are answered with notfound.
     size_t missing_count{0};
+    //! inv: new entries not requested because TxPeer already has max_tx_inventory
+    //! requests pending.
+    size_t over_limit_count{0};
 
     bool ok() const { return code != TxPeerResultCode::DECODE_FAILED; }
 };
@@ -54,6 +68,20 @@ struct TxPeerAction {
 
 const char* TxPeerResultCodeString(TxPeerResultCode code);
 
+/**
+ * Transaction relay state for one peer.
+ *
+ * TxPeer serves only transactions handed to it locally (AnnounceTransaction,
+ * SendTransaction). A transaction received from the peer is reported to the caller
+ * and remembered as known so it is not requested again, but it is never stored for
+ * getdata and never relayed: a getdata for it is answered with notfound.
+ *
+ * Bounded state: at most max_tx_inventory requests are pending, each expires after
+ * TX_REQUEST_EXPIRY or when the peer sends notfound for it, and the known set keeps
+ * the most recent 3 * max_tx_inventory entries (each transaction is known under
+ * three inventory forms). The local relay set grows only with transactions the
+ * caller hands it.
+ */
 class TxPeer
 {
 public:
@@ -81,15 +109,21 @@ private:
                         std::vector<CInv> served_inventory = {},
                         std::vector<CInv> matched_requests = {},
                         size_t duplicate_count = 0,
-                        size_t missing_count = 0) const;
+                        size_t missing_count = 0,
+                        size_t over_limit_count = 0) const;
 
     TxPeerAction QueueResult(TxPeerResult result, std::optional<CSerializedNetMsg> outbound_message = std::nullopt);
     std::vector<CInv> MarkTransactionKnown(const CTransaction& transaction);
+    void MarkInventoryKnown(const CInv& inv);
+    void ExpireRequests();
     void StoreRelayTransaction(CTransactionRef transaction);
 
     size_t m_max_tx_inventory;
-    std::set<CInv> m_requested_inventory;
+    //! Pending getdata entries and when each was requested.
+    std::map<CInv, std::chrono::seconds> m_requested_inventory;
     std::set<CInv> m_known_inventory;
+    //! m_known_inventory in insertion order, oldest first, for eviction.
+    std::deque<CInv> m_known_order;
     std::map<CInv, CTransactionRef> m_relay_transactions;
     std::deque<CSerializedNetMsg> m_outbound_messages;
 };

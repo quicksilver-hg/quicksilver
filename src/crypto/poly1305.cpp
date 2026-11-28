@@ -5,6 +5,7 @@
 
 #include <crypto/common.h>
 #include <crypto/poly1305.h>
+#include <support/cleanse.h>
 
 #include <string.h>
 
@@ -168,20 +169,7 @@ void poly1305_finish(poly1305_context *st, unsigned char mac[16]) noexcept {
     WriteLE32(mac + 12, h3);
 
     /* zero out the state */
-    st->h[0] = 0;
-    st->h[1] = 0;
-    st->h[2] = 0;
-    st->h[3] = 0;
-    st->h[4] = 0;
-    st->r[0] = 0;
-    st->r[1] = 0;
-    st->r[2] = 0;
-    st->r[3] = 0;
-    st->r[4] = 0;
-    st->pad[0] = 0;
-    st->pad[1] = 0;
-    st->pad[2] = 0;
-    st->pad[3] = 0;
+    memory_cleanse(st, sizeof(*st));
 }
 
 void poly1305_update(poly1305_context *st, const unsigned char *m, size_t bytes) noexcept {

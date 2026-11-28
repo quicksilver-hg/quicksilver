@@ -15,20 +15,7 @@ Copyright: 2010-2011, Jonas Smedegaard <dr@jones.dk>
            2011, Matt Corallo <matt@bluematt.me>
 License: GPL-2+
 
-Files: src/qt/res/icons/add.png
-       src/qt/res/icons/address-book.png
-       src/qt/res/icons/chevron.png
-       src/qt/res/icons/edit.png
-       src/qt/res/icons/editcopy.png
-       src/qt/res/icons/editpaste.png
-       src/qt/res/icons/export.png
-       src/qt/res/icons/eye.png
-       src/qt/res/icons/lock_*.png
-       src/qt/res/icons/overview.png
-       src/qt/res/icons/remove.png
-       src/qt/res/icons/transaction*.png
-       src/qt/res/icons/tx_output.png
-       src/qt/res/icons/warning.png
+Files: src/qt/res/icons/transaction*.png
        src/qt/res/src/transaction0.svg
 Copyright: Stephen Hutchings (and more)
            http://typicons.com
@@ -51,30 +38,23 @@ Files: src/qt/res/icons/tx_mined.png
        src/qt/res/src/mine.svg
        src/qt/res/icons/fontbigger.png
        src/qt/res/icons/fontsmaller.png
-       src/qt/res/icons/hd_disabled.png
-       src/qt/res/src/hd_disabled.svg
-       src/qt/res/icons/hd_enabled.png
-       src/qt/res/src/hd_enabled.svg
 Copyright: Jonas Schnelli
 License: Expat
 
 Files: src/qt/res/icons/clock*.png
-       src/qt/res/icons/tx_in*.png
        src/qt/res/src/clock_*.svg
-       src/qt/res/src/tx_*.svg
 Copyright: Stephen Hutchings, Jonas Schnelli
 License: Expat
 Comment: Modifications of Stephen Hutchings' Typicons
 
 Files: src/qt/res/icons/quicksilver.*
-       src/qt/res/icons/quicksilver_publictest.ico
        share/pixmaps/quicksilver*
        src/qt/res/src/quicksilver.svg
        doc/quicksilver_logo_doxygen.png
 Copyright: 2026, The Quicksilver developers
 License: Expat
-Comment: Original artwork (the Quicksilver Mercury brand mark and its
-         hue-shifted public-test variant); not derived from Bitcoin Core's logo.
+Comment: Original artwork (the Quicksilver Mercury brand mark); not derived
+         from Bitcoin Core's logo.
          See src/qt/res/src/quicksilver.svg for the design and
          contrib/devtools/gen-brand-icons.sh for regeneration.
 
@@ -82,10 +62,32 @@ Files: src/qt/res/icons/agent.png
        src/qt/res/icons/history.png
        src/qt/res/icons/receive.png
        src/qt/res/icons/send.png
+       src/qt/res/icons/address-book.png
+       src/qt/res/icons/chevron.png
+       src/qt/res/icons/editcopy.png
+       src/qt/res/icons/editpaste.png
+       src/qt/res/icons/lock_closed.png
+       src/qt/res/icons/lock_open.png
+       src/qt/res/icons/overview.png
+       src/qt/res/icons/remove.png
+       src/qt/res/icons/tx_inout.png
+       src/qt/res/icons/tx_input.png
+       src/qt/res/icons/tx_output.png
        src/qt/res/src/hud_agent.svg
        src/qt/res/src/hud_ledger.svg
        src/qt/res/src/hud_request.svg
        src/qt/res/src/hud_transfer.svg
+       src/qt/res/src/hud_address_book.svg
+       src/qt/res/src/hud_editcopy.svg
+       src/qt/res/src/hud_editpaste.svg
+       src/qt/res/src/hud_lock_closed.svg
+       src/qt/res/src/hud_lock_open.svg
+       src/qt/res/src/hud_overview.svg
+       src/qt/res/src/hud_prompt.svg
+       src/qt/res/src/hud_remove.svg
+       src/qt/res/src/hud_tx_inout.svg
+       src/qt/res/src/hud_tx_input.svg
+       src/qt/res/src/hud_tx_output.svg
 Copyright: 2026, The Quicksilver developers
 License: Expat
 Comment: Original artwork (the Quicksilver GUI heads-up-display glyph set).
@@ -110,12 +112,10 @@ Files: src/crypto/cuckatoo/vendor/barrier.hpp
        src/crypto/cuckatoo/vendor/cuckatoo.h
        src/crypto/cuckatoo/vendor/graph.hpp
        src/crypto/cuckatoo/vendor/lean.cpp
-       src/crypto/cuckatoo/vendor/lean.cu
        src/crypto/cuckatoo/vendor/lean.cl
        src/crypto/cuckatoo/vendor/lean.hpp
        src/crypto/cuckatoo/vendor/lean_ocl.cpp
        src/crypto/cuckatoo/vendor/lean_ocl.hpp
-       src/crypto/cuckatoo/vendor/siphash.cuh
        src/crypto/cuckatoo/vendor/siphash.hpp
        src/crypto/cuckatoo/vendor/siphashxN.h
        src/crypto/cuckatoo/vendor/LICENSE.txt
@@ -177,10 +177,6 @@ Comment: Full text in the file header.
 
 Files: src/bench/nanobench.h
 Copyright: 2019-2023, Martin Leitner-Ankerl <martin.ankerl@gmail.com>
-License: Expat
-
-Files: src/util/subprocess.h
-Copyright: 2016-2018, Arun Muralidharan
 License: Expat
 
 Files: src/cuckoocache.h

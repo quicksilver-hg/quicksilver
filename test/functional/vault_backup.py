@@ -163,12 +163,50 @@ class VaultBackupTest(QuicksilverTestFramework):
         # -test=corruptbackup damages each saved backup before it is checked, standing in for a bad disk or card.
         self.restart_node(0, self.extra_args[0] + ['-test=corruptbackup'])
         backup_path = node.datadir_path / 'corrupted.bak'
-        assert_raises_rpc_error(-4, "Error: The backup was saved, but checking it failed: the saved file cannot be read as a vault.",
+        assert_raises_rpc_error(-4, "Error: Vault backup failed verification: the saved file cannot be read as a vault.",
                                 node.backupvault, backup_path)
-        # The file stays where it was saved; the check does not delete user files.
-        assert backup_path.exists()
+        assert not backup_path.exists()
         self.restart_node(0, self.extra_args[0])
-        assert_equal(node.backupvault(node.datadir_path / 'uncorrupted.bak'), None)
+        clean_path = node.datadir_path / 'uncorrupted.bak'
+        assert_equal(node.backupvault(clean_path), str(clean_path))
+        assert_raises_rpc_error(-4, "Destination already exists", node.backupvault, clean_path)
+
+    def test_backup_overwrite(self):
+        self.log.info("Test backupvault refuses an existing destination unless overwrite is true")
+        node = self.nodes[0]
+        dest = node.datadir_path / 'overwrite.bak'
+        old_bytes = b'an earlier backup the caller wants kept'
+        dest.write_bytes(old_bytes)
+
+        def leftover_temp_files():
+            return [name for name in os.listdir(node.datadir_path) if name.startswith('overwrite.bak.new.')]
+
+        refused = "Error: Vault backup failed! Destination already exists. Pass overwrite=true to replace it."
+        assert_raises_rpc_error(-4, refused, node.backupvault, dest)
+        assert_raises_rpc_error(-4, refused, node.backupvault, dest, False)
+        assert_equal(dest.read_bytes(), old_bytes)
+
+        self.log.info("Test backupvault with overwrite=true keeps the old file when the new backup fails its check")
+        self.restart_node(0, self.extra_args[0] + ['-test=corruptbackup'])
+        assert_raises_rpc_error(-4, "Error: Vault backup failed verification: the saved file cannot be read as a vault.",
+                                node.backupvault, dest, True)
+        assert_equal(dest.read_bytes(), old_bytes)
+        assert_equal(leftover_temp_files(), [])
+        self.restart_node(0, self.extra_args[0])
+
+        self.log.info("Test backupvault with overwrite=true replaces the file with a checked backup")
+        assert_equal(node.backupvault(destination=dest, overwrite=True), str(dest))
+        assert dest.read_bytes() != old_bytes
+        assert_equal(leftover_temp_files(), [])
+        node.restorevault('overwrite_restored', dest)
+        assert_equal(node.get_vault_rpc('overwrite_restored').getvaultinfo()['vaultname'], 'overwrite_restored')
+        node.unloadvault('overwrite_restored')
+
+        self.log.info("Test quicksilver-cli backupvault takes a literal true for overwrite")
+        dest.write_bytes(old_bytes)
+        assert_equal(node.cli.backupvault(str(dest), True), str(dest))
+        assert dest.read_bytes() != old_bytes
+        assert_equal(leftover_temp_files(), [])
 
     def test_encrypted_vault_backup_check(self):
         self.log.info("Test backupvault checks an encrypted, locked vault's backup without its passphrase")
@@ -177,11 +215,13 @@ class VaultBackupTest(QuicksilverTestFramework):
         vault = node.get_vault_rpc('encrypted_backup')
         assert_equal(vault.getvaultinfo()['unlocked_until'], 0)
         backup_path = node.datadir_path / 'encrypted_backup.bak'
-        assert_equal(vault.backupvault(backup_path), None)
+        assert_equal(vault.backupvault(backup_path), str(backup_path))
         # The check reopened the file without unlocking the vault.
         assert_equal(vault.getvaultinfo()['unlocked_until'], 0)
         assert 'does not test it' in node.help('backupvault')
         node.unloadvault('encrypted_backup')
+        assert_raises_rpc_error(-8, "Vault name must be a single directory name.",
+                                node.restorevault, '../escape', backup_path)
         node.restorevault('encrypted_backup_restored', backup_path)
         restored = node.get_vault_rpc('encrypted_backup_restored')
         assert_equal(restored.getvaultinfo()['unlocked_until'], 0)
@@ -268,7 +308,17 @@ class VaultBackupTest(QuicksilverTestFramework):
         for sourcePath in sourcePaths:
             assert_raises_rpc_error(-4, "backup failed", self.nodes[0].backupvault, sourcePath)
 
+        # Nor with overwrite: the database file is never renamed over, and a directory is never replaced.
+        live_balance = self.nodes[0].getbalance()
+        for sourcePath in sourcePaths[:2]:
+            assert_raises_rpc_error(-4, "Error: Vault backup failed! The destination is this vault's own database file.",
+                                    self.nodes[0].backupvault, sourcePath, True)
+        for sourcePath in sourcePaths[2:]:
+            assert_raises_rpc_error(-4, "backup failed", self.nodes[0].backupvault, sourcePath, True)
+        assert_equal(self.nodes[0].getbalance(), live_balance)
+
         self.test_encrypted_vault_backup_check()
+        self.test_backup_overwrite()
         self.test_backup_check_failure()
         self.test_pruned_vault_backup()
 

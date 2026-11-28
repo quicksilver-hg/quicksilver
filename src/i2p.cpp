@@ -13,7 +13,6 @@
 #include <netaddress.h>
 #include <netbase.h>
 #include <random.h>
-#include <script/parsing.h>
 #include <sync.h>
 #include <tinyformat.h>
 #include <util/fs.h>

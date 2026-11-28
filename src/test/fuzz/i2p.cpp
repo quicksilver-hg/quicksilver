@@ -13,7 +13,12 @@
 #include <test/fuzz/util/net.h>
 #include <test/util/setup_common.h>
 #include <util/fs_helpers.h>
+#include <util/strencodings.h>
 #include <util/threadinterrupt.h>
+
+#include <cassert>
+#include <cstdint>
+#include <vector>
 
 void initialize_i2p()
 {
@@ -52,7 +57,22 @@ FUZZ_TARGET(i2p, .init = initialize_i2p)
 
     bool proxy_error;
 
-    if (session.Connect(CService{}, conn, proxy_error)) {
+    // S0396-A-01: connect to a production-like destination, a .b32.i2p address
+    // (52 base32 characters of a 32-byte hash), not CService{}. SAM 3.1 has no
+    // ports: any port but I2P_SAM31_PORT is refused before the proxy is asked.
+    const std::vector<uint8_t> dest_hash{ConsumeFixedLengthByteVector(fuzzed_data_provider, 32)};
+    CNetAddr dest_addr;
+    assert(dest_addr.SetSpecial(EncodeBase32(dest_hash, /*pad=*/false) + ".b32.i2p"));
+    assert(dest_addr.IsI2P());
+    const uint16_t dest_port{fuzzed_data_provider.ConsumeBool() ? I2P_SAM31_PORT : fuzzed_data_provider.ConsumeIntegral<uint16_t>()};
+    const CService dest{dest_addr, dest_port};
+    const bool connected{session.Connect(dest, conn, proxy_error)};
+    if (dest_port != I2P_SAM31_PORT) {
+        assert(!connected);
+        assert(!proxy_error);
+    }
+    if (connected) {
+        assert(conn.peer == dest);
         try {
             conn.sock->SendComplete("verack\n", 10ms, interrupt);
         } catch (const std::runtime_error&) {

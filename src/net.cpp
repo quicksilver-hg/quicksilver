@@ -298,6 +298,11 @@ bool AddLocal(const CService& addr_, int nScore)
             info.nScore = nScore + (is_newly_added ? 0 : 1);
             info.nPort = addr.GetPort();
         }
+        if (is_newly_added) {
+            info.m_mapped_only = (nScore == LOCAL_MAPPED);
+        } else if (nScore != LOCAL_MAPPED) {
+            info.m_mapped_only = false;
+        }
     }
 
     return true;
@@ -313,6 +318,17 @@ void RemoveLocal(const CService& addr)
     LOCK(g_maplocalhost_mutex);
     LogInfo(HgLog::MESH, "unlinked local_addr=%s\n", addr.ToStringAddrPort());
     mapLocalHost.erase(addr);
+}
+
+bool RemoveMappedLocal(const CService& addr_)
+{
+    const CService addr{MaybeFlipIPv6toCJDNS(addr_)};
+    LOCK(g_maplocalhost_mutex);
+    const auto it = mapLocalHost.find(addr);
+    if (it == mapLocalHost.end() || !it->second.m_mapped_only) return false;
+    LogInfo(HgLog::MESH, "unlinked mapped local_addr=%s\n", addr.ToStringAddrPort());
+    mapLocalHost.erase(it);
+    return true;
 }
 
 /** vote for a local address */
@@ -2379,7 +2395,7 @@ void CConnman::DumpAddresses()
 {
     const auto start{SteadyClock::now()};
 
-    DumpPeerAddresses(::gArgs, addrman);
+    if (!DumpPeerAddresses(::gArgs, addrman)) return;
 
     LogDebug(HgLog::MESH, "Flushed %d addresses to peers.dat  %dms\n",
              addrman.Size(), Ticks<std::chrono::milliseconds>(SteadyClock::now() - start));

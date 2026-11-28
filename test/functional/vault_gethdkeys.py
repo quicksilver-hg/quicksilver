@@ -131,6 +131,16 @@ class VaultGetHDKeyTest(QuicksilverTestFramework):
         assert_equal(qpub_info[0]["descriptors"][0]["desc"], pub_desc)
         assert_equal(qpub_info[0]["descriptors"][0]["active"], False)
 
+        self.log.info("private=true omits qprv for a watch-only HD key (S0204-A-01)")
+        self.nodes[0].createvault("watchonly", disable_private_keys=True, blank=True)
+        watch = self.nodes[0].get_vault_rpc("watchonly")
+        assert_equal(watch.importdescriptors([{"desc": pub_desc, "timestamp": "now"}])[0]["success"], True)
+        qpub_info = watch.gethdkeys(private=True)
+        assert_equal(len(qpub_info), 1)
+        assert_equal(qpub_info[0]["qpub"], qpub)
+        assert_equal(qpub_info[0]["has_private"], False)
+        assert "qprv" not in qpub_info[0]
+
     def test_ranged_multisig(self):
         self.log.info("HD keys of a multisig appear in gethdkeys")
         def_vault = self.nodes[0].get_vault_rpc(self.default_vault_name)

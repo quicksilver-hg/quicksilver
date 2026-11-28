@@ -6,6 +6,7 @@
 #include <merkleblock.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
+#include <util/check.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -74,6 +75,31 @@ BOOST_AUTO_TEST_CASE(merkleblock_construct_from_txids_not_found)
     BOOST_CHECK_EQUAL(merkleBlock.txn.ExtractMatches(vMatched, vIndex).GetHex(), block.hashMerkleRoot.GetHex());
     BOOST_CHECK_EQUAL(vMatched.size(), 0U);
     BOOST_CHECK_EQUAL(vIndex.size(), 0U);
+}
+
+BOOST_AUTO_TEST_CASE(merkleblock_builder_preconditions)
+{
+    BOOST_CHECK_THROW(CPartialMerkleTree({}, {}), NonFatalCheckError);
+    BOOST_CHECK_THROW(CPartialMerkleTree({uint256{1}}, {}), NonFatalCheckError);
+}
+
+BOOST_AUTO_TEST_CASE(merkleblock_replaces_outputs)
+{
+    const uint256 txid{1};
+    CPartialMerkleTree valid({txid}, {true});
+    std::vector<uint256> matches{uint256{2}};
+    std::vector<unsigned int> indices{99};
+    BOOST_CHECK_EQUAL(valid.ExtractMatches(matches, indices), txid);
+    BOOST_REQUIRE_EQUAL(matches.size(), 1U);
+    BOOST_CHECK_EQUAL(matches.front(), txid);
+    BOOST_REQUIRE_EQUAL(indices.size(), 1U);
+    BOOST_CHECK_EQUAL(indices.front(), 0U);
+
+    // An invalid proof must discard the matches found before validation failed.
+    CPartialMerkleTree invalid({txid, txid}, {true, true});
+    BOOST_CHECK(invalid.ExtractMatches(matches, indices).IsNull());
+    BOOST_CHECK(matches.empty());
+    BOOST_CHECK(indices.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

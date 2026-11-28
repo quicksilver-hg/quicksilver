@@ -6,8 +6,12 @@
 
 #include <primitives/block.h>
 #include <streams.h>
+#include <util/strencodings.h>
 
+#include <algorithm>
 #include <array>
+#include <string>
+#include <utility>
 
 #include <boost/test/unit_test.hpp>
 
@@ -271,6 +275,92 @@ BOOST_AUTO_TEST_CASE(unsupported_edgebits_29_is_not_dispatched)
     cuckatoo::Cycle out{};
     uint32_t nonce{0};
     BOOST_CHECK(!cuckatoo::CuckatooSolve(prepow, /*edgebits=*/29, /*start=*/0, /*max=*/0, out, nonce));
+}
+
+// S0119-C-01: known-answer proof hashes, computed independently in Python from
+// the definition in crypto/cuckatoo/proofhash.cpp (BLAKE2b-256 over the 42 edges
+// as little-endian uint32):
+//   hashlib.blake2b(b''.join(struct.pack('<I', e) for e in cycle), digest_size=32)
+// The expected strings are the digest bytes in order (HexStr, not GetHex).
+BOOST_AUTO_TEST_CASE(proofhash_known_answers)
+{
+    BOOST_CHECK_EQUAL(HexStr(cuckatoo::CuckatooProofHash(GOLDEN28_CYCLE)),
+                      "dc2fc2aa498d57f3ec0217e4751b0ec25cfdf029dce98122f32a9fb3a444dd39");
+    cuckatoo::Cycle one_to_42{};
+    for (uint32_t i = 0; i < cuckatoo::PROOFSIZE; ++i) one_to_42[i] = i + 1;
+    BOOST_CHECK_EQUAL(HexStr(cuckatoo::CuckatooProofHash(one_to_42)),
+                      "a3c5fa15b25b7c6374f69abb90cc04ebe9223374ae1a8dbfed3bdf26be4071e9");
+}
+
+// S0131-A-04, S0134-A-02: header keys are BLAKE2b-256 of the pre-image read as
+// four little-endian uint64. The golden pre-image yields exactly GOLDEN28_KEYS,
+// which ties key derivation to a verified cycle; a second pre-image (bytes 0..83)
+// is checked against struct.unpack('<4Q', hashlib.blake2b(pre, digest_size=32).digest()).
+BOOST_AUTO_TEST_CASE(setheader_blake2b_known_answers)
+{
+    std::array<unsigned char, 80> golden{};
+    const std::string tag{"QUICKSILVER-E28-GOLDEN-91"};
+    std::copy(tag.begin(), tag.end(), golden.begin());
+    const cuckatoo::Keys g{cuckatoo::CuckatooSetHeader(golden.data(), golden.size())};
+    BOOST_CHECK_EQUAL(g.k0, GOLDEN28_KEYS.k0);
+    BOOST_CHECK_EQUAL(g.k1, GOLDEN28_KEYS.k1);
+    BOOST_CHECK_EQUAL(g.k2, GOLDEN28_KEYS.k2);
+    BOOST_CHECK_EQUAL(g.k3, GOLDEN28_KEYS.k3);
+    BOOST_CHECK(cuckatoo::CuckatooVerify(GOLDEN28_CYCLE, g, 28));
+
+    std::array<unsigned char, cuckatoo::PREPOW_BYTES> pre{};
+    for (size_t i = 0; i < pre.size(); ++i) pre[i] = static_cast<unsigned char>(i);
+    const cuckatoo::Keys k{cuckatoo::CuckatooSetHeader(pre.data(), pre.size())};
+    BOOST_CHECK_EQUAL(k.k0, 0xcf57bc971a82d6a7ULL);
+    BOOST_CHECK_EQUAL(k.k1, 0x3994683c95255e6bULL);
+    BOOST_CHECK_EQUAL(k.k2, 0x3e3a904c3679dabeULL);
+    BOOST_CHECK_EQUAL(k.k3, 0x2febecc91d67b664ULL);
+}
+
+// S0121-C-02: the malformed-cycle classes cuckatoo_verify_codes_tests checks on a
+// vendor copy, run through production CuckatooVerify at 19 on tampered copies of
+// GOLDEN19_CYCLE. The bool API cannot name the class; each must be rejected.
+// Branch, dead-end and short-cycle graphs need the fake key table and cannot be
+// built under real SipHash keys; the vendor-copy tests cover those.
+BOOST_AUTO_TEST_CASE(production_verify_rejects_each_malformed_class_at_19)
+{
+    BOOST_REQUIRE(cuckatoo::CuckatooVerify(GOLDEN19_CYCLE, GOLDEN19_KEYS, 19));
+
+    cuckatoo::Cycle too_big{GOLDEN19_CYCLE};
+    too_big[41] = uint32_t{1} << 19;  // out of range for a 2^19-edge graph
+    BOOST_CHECK(!cuckatoo::CuckatooVerify(too_big, GOLDEN19_KEYS, 19));
+
+    cuckatoo::Cycle swapped{GOLDEN19_CYCLE};
+    std::swap(swapped[0], swapped[1]);  // not ascending
+    BOOST_CHECK(!cuckatoo::CuckatooVerify(swapped, GOLDEN19_KEYS, 19));
+
+    cuckatoo::Cycle duplicate{GOLDEN19_CYCLE};
+    duplicate[1] = duplicate[0];  // not strictly ascending
+    BOOST_CHECK(!cuckatoo::CuckatooVerify(duplicate, GOLDEN19_KEYS, 19));
+
+    cuckatoo::Cycle tampered{GOLDEN19_CYCLE};
+    tampered[20] += 1;  // still ascending, endpoints no longer match
+    BOOST_REQUIRE(tampered[20] < tampered[21]);
+    BOOST_CHECK(!cuckatoo::CuckatooVerify(tampered, GOLDEN19_KEYS, 19));
+
+    cuckatoo::Cycle first_edges{};
+    for (uint32_t i = 0; i < cuckatoo::PROOFSIZE; ++i) first_edges[i] = i;  // 0..41
+    BOOST_CHECK(!cuckatoo::CuckatooVerify(first_edges, GOLDEN19_KEYS, 19));
+}
+
+// S0122-A: the E28 range edge. An edge equal to 2^28 is out of range; 2^28 - 1 is
+// in range and keeps the cycle ascending, but breaks the cycle. Both are
+// rejected, without reading outside the graph (the union gate runs this under ASan).
+BOOST_AUTO_TEST_CASE(verify28_rejects_edges_at_and_below_the_graph_bound)
+{
+    BOOST_REQUIRE(cuckatoo::CuckatooVerify(GOLDEN28_CYCLE, GOLDEN28_KEYS, 28));
+    cuckatoo::Cycle at_bound{GOLDEN28_CYCLE};
+    at_bound[41] = uint32_t{1} << 28;
+    BOOST_CHECK(!cuckatoo::CuckatooVerify(at_bound, GOLDEN28_KEYS, 28));
+    cuckatoo::Cycle below_bound{GOLDEN28_CYCLE};
+    below_bound[41] = (uint32_t{1} << 28) - 1;
+    BOOST_REQUIRE(below_bound[40] < below_bound[41]);
+    BOOST_CHECK(!cuckatoo::CuckatooVerify(below_bound, GOLDEN28_KEYS, 28));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -8,9 +8,7 @@
 
 #include <QValidator>
 
-/** Base58 entry widget validator, checks for valid characters and
- * removes some whitespace.
- */
+/** Filters address characters and strips spacing from typed or pasted input. */
 class QuicksilverAddressEntryValidator : public QValidator
 {
     Q_OBJECT

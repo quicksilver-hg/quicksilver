@@ -239,6 +239,11 @@ ssize_t FuzzedSock::Recv(void* buf, size_t len, int flags) const
 
     // Pad to len bytes.
     std::memset(reinterpret_cast<uint8_t*>(buf) + copied_so_far, 0x0, len - copied_so_far);
+    if ((flags & MSG_PEEK) != 0) {
+        // S0406-A-01: the padding is part of what this peek returned, so the
+        // next read must return it too, like the peeked bytes above.
+        m_peek_data.insert(m_peek_data.end(), len - copied_so_far, uint8_t{0});
+    }
 
     return len;
 }

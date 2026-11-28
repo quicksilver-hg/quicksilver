@@ -12,12 +12,30 @@
 #include <qt/vaultmodel.h>
 
 #include <support/allocators/secure.h>
+#include <support/cleanse.h>
 
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
+
+namespace {
+//! The line edit's text as a SecureString. QString::toStdString() would leave a
+//! plain std::string copy of the passphrase on the heap; the UTF-8 buffer here is
+//! wiped before it is freed (F-682, S0217-A-03).
+SecureString PassphraseFrom(const QLineEdit* edit)
+{
+    QByteArray utf8{edit->text().toUtf8()};
+    SecureString passphrase(utf8.constData(), utf8.size());
+    memory_cleanse(utf8.data(), utf8.size());
+    return passphrase;
+}
+
+//! Echo mode resets the input-method hints. Showing the passphrase keeps it out
+//! of predictive keyboards, IME history and dictation (F-682, S0254-B-04).
+constexpr Qt::InputMethodHints PASSPHRASE_HINTS{Qt::ImhSensitiveData | Qt::ImhNoPredictiveText | Qt::ImhNoAutoUppercase};
+} // namespace
 
 AskPassphraseDialog::AskPassphraseDialog(Mode _mode, QWidget *parent, SecureString* passphrase_out) :
     QDialog(parent, GUIUtil::dialog_flags),
@@ -96,13 +114,9 @@ void AskPassphraseDialog::accept()
     SecureString oldpass, newpass1, newpass2;
     if (!model && mode != Encrypt)
         return;
-    oldpass.reserve(MAX_PASSPHRASE_SIZE);
-    newpass1.reserve(MAX_PASSPHRASE_SIZE);
-    newpass2.reserve(MAX_PASSPHRASE_SIZE);
-
-    oldpass.assign(std::string_view{ui->passEdit1->text().toStdString()});
-    newpass1.assign(std::string_view{ui->passEdit2->text().toStdString()});
-    newpass2.assign(std::string_view{ui->passEdit3->text().toStdString()});
+    oldpass = PassphraseFrom(ui->passEdit1);
+    newpass1 = PassphraseFrom(ui->passEdit2);
+    newpass2 = PassphraseFrom(ui->passEdit3);
 
     secureClearPassFields();
 
@@ -141,9 +155,10 @@ void AskPassphraseDialog::accept()
                 }
                 QDialog::accept(); // Success
             }
-        } catch (const std::runtime_error& e) {
+        } catch (const std::exception& e) {
             auto* box = new QMessageBox(QMessageBox::Critical, tr("Vault unlock failed"), e.what(),
                                   QMessageBox::Ok, this);
+            box->setTextFormat(Qt::PlainText);
             box->setObjectName(QStringLiteral("unlockVaultRuntimeError"));
             GUIUtil::ShowModalDialogAsynchronously(box);
         }
@@ -196,7 +211,7 @@ void AskPassphraseDialog::finishEncrypt(const SecureString& newpass1, const Secu
     QString encryption_reminder = tr("Remember that encrypting your vault cannot fully protect "
     "your Hg from being stolen by malware infecting your computer.");
     if (m_passphrase_out) {
-        m_passphrase_out->assign(newpass1);
+        // The caller receives the passphrase only once the user confirms (S0217-A-04).
         auto* msgBoxWarning = new QMessageBox(QMessageBox::Warning,
                                               tr("Vault to be encrypted"),
                                               "<qt>" +
@@ -206,11 +221,12 @@ void AskPassphraseDialog::finishEncrypt(const SecureString& newpass1, const Secu
                                               QMessageBox::Cancel | QMessageBox::Yes, this);
         msgBoxWarning->setObjectName(QStringLiteral("encryptVaultReminder"));
         msgBoxWarning->setDefaultButton(QMessageBox::Cancel);
-        GUIUtil::ShowModalMessageBoxAsynchronously(msgBoxWarning, [this](int retval, QAbstractButton*) {
-            if (retval == QMessageBox::Cancel) {
-                QDialog::reject();
+        GUIUtil::ShowModalMessageBoxAsynchronously(msgBoxWarning, [this, newpass1](int retval, QAbstractButton*) {
+            if (retval != QMessageBox::Yes) {
+                reject();
                 return;
             }
+            m_passphrase_out->assign(newpass1);
             QDialog::accept();
         });
         return;
@@ -241,6 +257,14 @@ void AskPassphraseDialog::finishEncrypt(const SecureString& newpass1, const Secu
         box->setObjectName(QStringLiteral("encryptVaultFailed"));
         GUIUtil::ShowModalMessageBoxAsynchronously(box, accept_after);
     }
+}
+
+void AskPassphraseDialog::reject()
+{
+    // Cancel leaves no passphrase behind: not in the fields, not with the caller.
+    secureClearPassFields();
+    if (m_passphrase_out) m_passphrase_out->clear();
+    QDialog::reject();
 }
 
 void AskPassphraseDialog::textChanged()
@@ -283,9 +307,10 @@ void AskPassphraseDialog::toggleShowPassword(bool show)
 {
     ui->toggleShowPasswordButton->setDown(show);
     const auto mode = show ? QLineEdit::Normal : QLineEdit::Password;
-    ui->passEdit1->setEchoMode(mode);
-    ui->passEdit2->setEchoMode(mode);
-    ui->passEdit3->setEchoMode(mode);
+    for (QLineEdit* edit : {ui->passEdit1, ui->passEdit2, ui->passEdit3}) {
+        edit->setEchoMode(mode);
+        edit->setInputMethodHints(edit->inputMethodHints() | PASSPHRASE_HINTS);
+    }
 }
 
 bool AskPassphraseDialog::eventFilter(QObject *object, QEvent *event)

@@ -8,7 +8,6 @@
 #include <chain.h>
 #include <coins.h>
 #include <consensus/amount.h>
-#include <consensus/validation.h>
 #include <core_io.h>
 #include <index/txindex.h>
 #include <key_io.h>
@@ -17,9 +16,6 @@
 #include <node/context.h>
 #include <node/psqt.h>
 #include <node/transaction.h>
-#include <node/types.h>
-#include <policy/packages.h>
-#include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <psqt.h>
 #include <random.h>
@@ -40,7 +36,6 @@
 #include <util/string.h>
 #include <util/vector.h>
 #include <validation.h>
-#include <validationinterface.h>
 
 #include <numeric>
 #include <stdint.h>
@@ -165,7 +160,7 @@ static std::vector<RPCArg> CreateTxDoc()
 
 // Update PSQT with information from the relaypool, the UTXO set, the txindex, and the provided descriptors.
 // Optionally, sign the inputs that we can using information from the descriptors.
-PartiallySignedQuicksilverTransaction ProcessPSQT(const std::string& psqt_string, const std::any& context, const HidingSigningProvider& provider, int sighash_type, bool finalize)
+static PartiallySignedQuicksilverTransaction ProcessPSQT(const std::string& psqt_string, const std::any& context, const HidingSigningProvider& provider, int sighash_type, bool finalize)
 {
     // Unserialize the transactions
     PartiallySignedQuicksilverTransaction psqtx;
@@ -200,7 +195,7 @@ PartiallySignedQuicksilverTransaction ProcessPSQT(const std::string& psqt_string
         }
         // If we still don't have it look in the relaypool
         if (!tx) {
-            tx = node.relaypool->get(tx_in.prevout.hash);
+            tx = EnsureRelayPool(node).get(tx_in.prevout.hash);
         }
         if (tx) {
             psqt_input.non_witness_utxo = tx;
@@ -707,7 +702,7 @@ static RPCHelpMan signrawtransactionwithkey()
                     {"hexstring", RPCArg::Type::STR, RPCArg::Optional::NO, "The transaction hex string"},
                     {"privkeys", RPCArg::Type::ARR, RPCArg::Optional::NO, "The base58-encoded private keys for signing",
                         {
-                            {"privatekey", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "private key in base58-encoding"},
+                            {"privatekey", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "private key in base58 encoding"},
                         },
                         },
                     {"prevtxs", RPCArg::Type::ARR, RPCArg::Optional::OMITTED, "The previous dependent transaction outputs",
@@ -1058,16 +1053,16 @@ static RPCHelpMan decodepsqt()
 
     // Add the global extended public keys.
     UniValue global_qpubs(UniValue::VARR);
-    for (std::pair<KeyOriginInfo, std::set<CExtPubKey>> xpub_pair : psqtx.m_xpubs) {
-        for (auto& xpub : xpub_pair.second) {
-            std::vector<unsigned char> ser_xpub;
-            ser_xpub.assign(BIP32_EXTKEY_WITH_VERSION_SIZE, 0);
-            xpub.EncodeWithVersion(ser_xpub.data());
+    for (std::pair<KeyOriginInfo, std::set<CExtPubKey>> qpub_pair : psqtx.m_qpubs) {
+        for (auto& qpub : qpub_pair.second) {
+            std::vector<unsigned char> ser_qpub;
+            ser_qpub.assign(BIP32_EXTKEY_WITH_VERSION_SIZE, 0);
+            qpub.EncodeWithVersion(ser_qpub.data());
 
             UniValue keypath(UniValue::VOBJ);
-            keypath.pushKV("qpub", EncodeBase58Check(ser_xpub));
-            keypath.pushKV("master_fingerprint", HexStr(Span<unsigned char>(xpub_pair.first.fingerprint, xpub_pair.first.fingerprint + 4)));
-            keypath.pushKV("path", WriteHDKeypath(xpub_pair.first.path));
+            keypath.pushKV("qpub", EncodeBase58Check(ser_qpub));
+            keypath.pushKV("master_fingerprint", HexStr(Span<unsigned char>(qpub_pair.first.fingerprint, qpub_pair.first.fingerprint + 4)));
+            keypath.pushKV("path", WriteHDKeypath(qpub_pair.first.path));
             global_qpubs.push_back(std::move(keypath));
         }
     }
@@ -1720,11 +1715,11 @@ static RPCHelpMan joinpsqts()
         for (unsigned int i = 0; i < psqt.tx->vout.size(); ++i) {
             merged_psqt.AddOutput(psqt.tx->vout[i], psqt.outputs[i]);
         }
-        for (auto& xpub_pair : psqt.m_xpubs) {
-            if (merged_psqt.m_xpubs.count(xpub_pair.first) == 0) {
-                merged_psqt.m_xpubs[xpub_pair.first] = xpub_pair.second;
+        for (auto& qpub_pair : psqt.m_qpubs) {
+            if (merged_psqt.m_qpubs.count(qpub_pair.first) == 0) {
+                merged_psqt.m_qpubs[qpub_pair.first] = qpub_pair.second;
             } else {
-                merged_psqt.m_xpubs[xpub_pair.first].insert(xpub_pair.second.begin(), xpub_pair.second.end());
+                merged_psqt.m_qpubs[qpub_pair.first].insert(qpub_pair.second.begin(), qpub_pair.second.end());
             }
         }
         merged_psqt.unknown.insert(psqt.unknown.begin(), psqt.unknown.end());
@@ -1860,7 +1855,7 @@ static RPCHelpMan analyzepsqt()
     };
 }
 
-RPCHelpMan descriptorprocesspsqt()
+static RPCHelpMan descriptorprocesspsqt()
 {
     return RPCHelpMan{"descriptorprocesspsqt",
                 "\nUpdate all witness inputs in a PSQT with information from output descriptors, the UTXO set or the relay pool. \n"

@@ -38,12 +38,6 @@
 #include <QObject>
 #include <QString>
 
-class OptionsModel;
-
-namespace interfaces {
-class Node;
-} // namespace interfaces
-
 QT_BEGIN_NAMESPACE
 class QApplication;
 class QByteArray;
@@ -75,9 +69,6 @@ public:
     explicit PaymentServer(QObject* parent, bool startLocalServer = true);
     ~PaymentServer();
 
-    // OptionsModel is used for getting proxy settings and display unit
-    void setOptionsModel(OptionsModel *optionsModel);
-
 Q_SIGNALS:
     // Fired when a valid payment request is received
     void receivedPaymentRequest(SendCoinsRecipient);
@@ -98,13 +89,12 @@ private Q_SLOTS:
 
 protected:
     // Constructor registers this on the parent QApplication to
-    // receive QEvent::FileOpen and QEvent:Drop events
+    // receive QEvent::FileOpen events
     bool eventFilter(QObject *object, QEvent *event) override;
 
 private:
     bool saveURIs{true}; // true during startup
     QLocalServer* uriServer{nullptr};
-    OptionsModel* optionsModel{nullptr};
 };
 
 #endif // QUICKSILVER_QT_PAYMENTSERVER_H

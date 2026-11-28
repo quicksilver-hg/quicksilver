@@ -15,6 +15,7 @@
 #include <util/time.h>
 #include <util/translation.h>
 
+#include <chrono>
 #include <algorithm>
 #include <filesystem>
 #include <string>
@@ -115,7 +116,7 @@ bool StartLogging(const ArgsManager& args)
     }
 
     if (!LogInstance().m_log_timestamps)
-        LogInfo(HgLog::INIT, "ready startup_time=%s\n", FormatISO8601DateTime(GetTime()));
+        LogInfo(HgLog::INIT, "ready startup_time=%s\n", FormatISO8601DateTime(GetTime<std::chrono::seconds>().count()));
     LogInfo(HgLog::INIT, "ready datadir_default=%s\n", fs::PathToString(GetDefaultDataDir()));
     LogInfo(HgLog::INIT, "ready datadir=%s\n", fs::PathToString(gArgs.GetDataDirNet()));
 

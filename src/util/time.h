@@ -28,7 +28,6 @@ using NodeSeconds = std::chrono::time_point<NodeClock, std::chrono::seconds>;
 using SteadyClock = std::chrono::steady_clock;
 using SteadySeconds = std::chrono::time_point<std::chrono::steady_clock, std::chrono::seconds>;
 using SteadyMilliseconds = std::chrono::time_point<std::chrono::steady_clock, std::chrono::milliseconds>;
-using SteadyMicroseconds = std::chrono::time_point<std::chrono::steady_clock, std::chrono::microseconds>;
 
 using SystemClock = std::chrono::system_clock;
 
@@ -128,8 +127,7 @@ T GetTime()
 }
 
 /**
- * ISO 8601 formatting is preferred. Use the FormatISO8601{DateTime,Date}
- * helper functions if possible.
+ * Format Unix seconds in UTC. The supported ISO 8601 output range is years 0000 through 9999.
  */
 std::string FormatISO8601DateTime(int64_t nTime);
 std::string FormatISO8601Date(int64_t nTime);

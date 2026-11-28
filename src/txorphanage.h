@@ -100,7 +100,7 @@ public:
 
     /** Total usage (weight) of orphans for which this peer is an announcer. If an orphan has multiple
      * announcers, its weight will be accounted for in each PeerOrphanInfo, so the total of all
-     * peers' UsageByPeer() may be larger than TotalOrphanBytes(). */
+     * peers' UsageByPeer() may be larger than TotalOrphanUsage(). */
     unsigned int UsageByPeer(NodeId peer) const {
         auto peer_it = m_peer_orphanage_info.find(peer);
         return peer_it == m_peer_orphanage_info.end() ? 0 : peer_it->second.m_total_usage;
@@ -136,7 +136,7 @@ protected:
         /** Total weight of orphans for which this peer is an announcer.
          * If orphans are provided by different peers, its weight will be accounted for in each
          * PeerOrphanInfo, so the total of all peers' m_total_usage may be larger than
-         * m_total_orphan_size. If a peer is removed as an announcer, even if the orphan still
+         * m_total_orphan_usage. If a peer is removed as an announcer, even if the orphan still
          * remains in the orphanage, this number will be decremented. */
         unsigned int m_total_usage{0};
     };

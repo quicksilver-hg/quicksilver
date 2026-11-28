@@ -153,19 +153,19 @@ static bool RPCAuthorized(const std::string& strAuth, std::string& strAuthUserna
     return multiUserAuthorized(strUserPass);
 }
 
-static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
+static void HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
 {
     // JSONRPC handles only POST
     if (req->GetRequestMethod() != HTTPRequest::POST) {
         req->WriteReply(HTTP_BAD_METHOD, "JSONRPC server handles only POST requests");
-        return false;
+        return;
     }
     // Check authorization
     std::pair<bool, std::string> authHeader = req->GetHeader("authorization");
     if (!authHeader.first) {
         req->WriteHeader("WWW-Authenticate", WWW_AUTH_HEADER_DATA);
         req->WriteReply(HTTP_UNAUTHORIZED);
-        return false;
+        return;
     }
 
     JSONRPCRequest jreq;
@@ -181,7 +181,7 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
 
         req->WriteHeader("WWW-Authenticate", WWW_AUTH_HEADER_DATA);
         req->WriteReply(HTTP_UNAUTHORIZED);
-        return false;
+        return;
     }
 
     try {
@@ -198,7 +198,7 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
         if (!user_has_whitelist && g_rpc_whitelist_default) {
             LogInfo(HgLog::RPC, "RPC User %s not allowed to call any methods\n", jreq.authUser);
             req->WriteReply(HTTP_FORBIDDEN);
-            return false;
+            return;
 
         // singleton request
         } else if (valRequest.isObject()) {
@@ -206,7 +206,7 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
             if (user_has_whitelist && !g_rpc_whitelist[jreq.authUser].count(jreq.strMethod)) {
                 LogInfo(HgLog::RPC, "RPC User %s not allowed to call method %s\n", jreq.authUser, jreq.strMethod);
                 req->WriteReply(HTTP_FORBIDDEN);
-                return false;
+                return;
             }
 
             reply = JSONRPCExec(jreq, /*catch_errors=*/true);
@@ -214,7 +214,7 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
             if (jreq.IsNotification()) {
                 // Even though we do execute notifications, we do not respond to them
                 req->WriteReply(HTTP_NO_CONTENT);
-                return true;
+                return;
             }
 
         // array of requests
@@ -225,17 +225,17 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
             // Check authorization for each request's method
             if (user_has_whitelist) {
                 for (unsigned int reqIdx = 0; reqIdx < valRequest.size(); reqIdx++) {
-                    if (!valRequest[reqIdx].isObject()) {
-                        throw JSONRPCError(RPC_INVALID_REQUEST, "Invalid Request object");
-                    } else {
-                        const UniValue& request = valRequest[reqIdx].get_obj();
-                        // Parse method
-                        std::string strMethod = request.find_value("method").get_str();
-                        if (!g_rpc_whitelist[jreq.authUser].count(strMethod)) {
-                            LogInfo(HgLog::RPC, "RPC User %s not allowed to call method %s\n", jreq.authUser, strMethod);
-                            req->WriteReply(HTTP_FORBIDDEN);
-                            return false;
-                        }
+                    // A malformed member (not an object, or no string method) cannot run:
+                    // the loop below answers it with its own error, as for any user.
+                    // Aborting the whole batch here would drop the valid members too.
+                    if (!valRequest[reqIdx].isObject()) continue;
+                    const UniValue& method = valRequest[reqIdx].get_obj().find_value("method");
+                    if (!method.isStr()) continue;
+                    const std::string& strMethod = method.get_str();
+                    if (!g_rpc_whitelist[jreq.authUser].count(strMethod)) {
+                        LogInfo(HgLog::RPC, "RPC User %s not allowed to call method %s\n", jreq.authUser, strMethod);
+                        req->WriteReply(HTTP_FORBIDDEN);
+                        return;
                     }
                 }
             }
@@ -266,7 +266,7 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
             // All-notification batches have no response.
             if (reply.size() == 0) {
                 req->WriteReply(HTTP_NO_CONTENT);
-                return true;
+                return;
             }
         }
         else
@@ -276,12 +276,11 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
         req->WriteReply(HTTP_OK, reply.write() + "\n");
     } catch (UniValue& e) {
         JSONErrorReply(req, std::move(e), jreq);
-        return false;
+        return;
     } catch (const std::exception& e) {
         JSONErrorReply(req, JSONRPCError(RPC_PARSE_ERROR, e.what()), jreq);
-        return false;
+        return;
     }
-    return true;
 }
 
 static bool InitRPCAuthentication()
@@ -360,7 +359,7 @@ bool StartHTTPRPC(const std::any& context)
     if (!InitRPCAuthentication())
         return false;
 
-    auto handle_rpc = [context](HTTPRequest* req, const std::string&) { return HTTPReq_JSONRPC(context, req); };
+    auto handle_rpc = [context](HTTPRequest* req, const std::string&) { HTTPReq_JSONRPC(context, req); };
     RegisterHTTPHandler("/", true, handle_rpc);
     if (g_vault_init_interface.HasVaultSupport()) {
         RegisterHTTPHandler("/vault/", false, handle_rpc);

@@ -14,7 +14,9 @@
 
 #include <cassert>
 
-static constexpr auto MAX_DIGITS_HG = 16;
+//! Digits in the largest amount, MAX_MONEY in cinnabar (18), so a justified
+//! column holds every value (S0239-A-04).
+static constexpr auto MAX_DIGITS_HG = 18;
 
 QuicksilverUnits::QuicksilverUnits(QObject *parent):
         QAbstractListModel(parent),
@@ -146,29 +148,34 @@ QString QuicksilverUnits::format(Unit unit, const CAmount& nIn, bool fPlus, Sepa
 {
     // Note: not using straight sprintf here because we do NOT want
     // localized number formatting.
-    qint64 n = (qint64)nIn;
-    qint64 coin = factor(unit);
+    // Unsigned magnitude: `-n` overflows for INT64_MIN (S0239-A-03).
+    const qint64 n = (qint64)nIn;
+    const quint64 coin = static_cast<quint64>(factor(unit));
     int num_decimals = decimals(unit);
-    qint64 n_abs = (n > 0 ? n : -n);
-    qint64 quotient = n_abs / coin;
+    // -(n + 1) cannot overflow, even at INT64_MIN, and no unsigned arithmetic
+    // wraps (CI's integer sanitizer reports every wrap in first-party code).
+    const quint64 n_abs = n < 0 ? static_cast<quint64>(-(n + 1)) + 1 : static_cast<quint64>(n);
+    const quint64 quotient = n_abs / coin;
     const bool group = separators != SeparatorStyle::NEVER;
     QString quotient_str = QString::number(quotient);
     if (group) {
         quotient_str = GroupDigits(quotient_str);
     }
+
+    // The sign sits beside the digits, inside the column padding.
+    if (n < 0)
+        quotient_str.insert(0, '-');
+    else if (fPlus && n > 0)
+        quotient_str.insert(0, '+');
+
     if (justify) {
         const int digits = MAX_DIGITS_HG - num_decimals;
         const int width = group ? GroupedWidth(digits) : digits;
         quotient_str = quotient_str.rightJustified(width, QLatin1Char(' '));
     }
 
-    if (n < 0)
-        quotient_str.insert(0, '-');
-    else if (fPlus && n > 0)
-        quotient_str.insert(0, '+');
-
     if (num_decimals > 0) {
-        qint64 remainder = n_abs % coin;
+        const quint64 remainder = n_abs % coin;
         QString remainder_str = QString::number(remainder).rightJustified(num_decimals, '0');
         return quotient_str + QString(".") + remainder_str;
     } else {
@@ -193,7 +200,6 @@ QString QuicksilverUnits::formatHtmlWithUnit(Unit unit, const CAmount& amount, b
 
 QString QuicksilverUnits::formatInlineHtmlWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy)
 {
-    assert(amount >= 0);
     const QString value = privacy ? format(unit, 0, false, separators, true).replace('0', '#')
                                   : format(unit, amount, false, separators, true);
     return HtmlWithUnitSuffix(unit, value.trimmed());
@@ -201,7 +207,6 @@ QString QuicksilverUnits::formatInlineHtmlWithPrivacy(Unit unit, const CAmount& 
 
 QString QuicksilverUnits::formatWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy)
 {
-    assert(amount >= 0);
     QString value;
     if (privacy) {
         value = format(unit, 0, false, separators, true).replace('0', '#');
@@ -213,7 +218,6 @@ QString QuicksilverUnits::formatWithPrivacy(Unit unit, const CAmount& amount, Se
 
 QString QuicksilverUnits::formatInlineValueWithPrivacy(Unit unit, const CAmount& amount, SeparatorStyle separators, bool privacy)
 {
-    assert(amount >= 0);
     const QString value = privacy ? format(unit, 0, false, separators, true).replace('0', '#')
                                   : format(unit, amount, false, separators, true);
     return value.trimmed();
@@ -244,10 +248,25 @@ bool QuicksilverUnits::parse(Unit unit, const QString& value, CAmount* val_out)
     // A comma is a thousands separator only when the whole part is groups
     // of three. `1,5` and `1,2,3` are refused rather than read as 15 and 123.
     const QString spaced = StripAmountSpaces(value);
+
+    // Digits, grouping commas and one dot only. No caller takes a signed
+    // amount, and a bare `.` is not a zero (S0239-A-01, -A-02).
+    bool has_digit = false;
+    for (const QChar ch : spaced) {
+        if (ch >= QLatin1Char('0') && ch <= QLatin1Char('9')) {
+            has_digit = true;
+        } else if (ch != QLatin1Char(',') && ch != QLatin1Char('.')) {
+            return false;
+        }
+    }
+    if (!has_digit) {
+        return false;
+    }
     const int spaced_dot = spaced.indexOf(QLatin1Char('.'));
     const QString grouped = spaced_dot < 0 ? spaced : spaced.left(spaced_dot);
     if (grouped.contains(QLatin1Char(','))) {
-        static const QRegularExpression groups(QStringLiteral("^[0-9]{1,3}(,[0-9]{3})+$"));
+        // The first group may not start with a zero: `0,001` is not 1 (S0239-A-09).
+        static const QRegularExpression groups(QStringLiteral("^[1-9][0-9]{0,2}(,[0-9]{3})+$"));
         if (!groups.match(grouped).hasMatch()) {
             return false;
         }

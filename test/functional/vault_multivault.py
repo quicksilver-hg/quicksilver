@@ -152,6 +152,10 @@ class MultiVaultTest(QuicksilverTestFramework):
 
         self.start_node(0, ['-vault=w1', '-vault=w1'])
         self.stop_node(0, 'Warning: Ignoring duplicate -vault w1.')
+        self.start_node(0, ['-vault=w1', '-vault=./w1'])
+        # w1 once; the default vault is also loaded, from the node's startup settings.
+        assert_equal(sorted(self.nodes[0].listvaults()), sorted(['w1', self.default_vault_name]))
+        self.stop_node(0, 'Warning: Ignoring duplicate -vault ./w1.')
 
         # should not initialize if vault file is a symlink
         os.symlink('w8', vault_dir('w8_symlink'))

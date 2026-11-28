@@ -15,8 +15,8 @@ Start with:
 - [Getting Started](getting-started.md) — choose a program and network, start a
   node, and check connectivity
 - [Building Quicksilver](../INSTALL.md) — platform build guides and build profiles
-- [GPU Solver](gpu-solver.md) — building a CUDA or ROCm graphics helper
-  yourself
+- [GPU Solver](gpu-solver.md) — the graphics helper: checking cards, exit
+  statuses, the Windows watchdog, and using a helper you built yourself
 - [Bootstrapping](bootstrapping.md) — Tor, explicit peers, ports, and zero-peer
   diagnosis
 
@@ -37,12 +37,6 @@ generated executable from the build directory:
 Build Quicksilver from source with the Windows build notes below, then run
 `quicksilver.exe` or `quicksilver-daemon.exe` from the generated build output.
 
-### macOS (unsupported)
-
-macOS is not a supported platform. See the macOS support status below for
-the technical blockers: Apple Silicon cannot compile, and Intel Macs are
-not gated.
-
 ### Need Help?
 
 * See the documents in this directory for build, runtime, vault, networking,
@@ -57,7 +51,6 @@ Building
 The following are developer notes on how to build Quicksilver on your native platform. They are not complete guides, but include notes on the necessary libraries, compile flags, etc.
 
 - [Dependencies](dependencies.md)
-- [macOS Support Status (unsupported)](build-osx.md)
 - [Unix Build Notes](build-unix.md)
 - [Windows Build Notes (Visual Studio)](build-windows-msvc.md)
 - [Windows Build Notes (cross-compilation)](build-windows.md)
@@ -83,7 +76,6 @@ The Quicksilver repo's [root README](../README.md) contains relevant information
 - [JSON-RPC Interface](JSON-RPC-interface.md)
 - [Output Descriptors](descriptors.md)
 - [USDT Tracing](tracing.md)
-- [Unauthenticated REST Interface](REST-interface.md)
 - [BIPS](bips.md)
 - [0.1.x Release Notes](release-notes.md)
 - [Publishing the Source Tree](source-publication.md)
@@ -107,7 +99,6 @@ The Quicksilver repo's [root README](../README.md) contains relevant information
 - [GPU Solver](gpu-solver.md)
 - [Multisig Tutorial](multisig-tutorial.md)
 - [Offline Signing Tutorial](offline-signing-tutorial.md)
-- [External Signer](external-signer.md)
 - [P2P bad ports definition and list](p2p-bad-ports.md)
 - [PSQT support](psqt.md)
 - [Reduce Memory](reduce-memory.md)

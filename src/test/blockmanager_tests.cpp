@@ -6,15 +6,19 @@
 #include <chain.h>
 #include <chainparams.h>
 #include <clientversion.h>
+#include <node/blockmanager_args.h>
 #include <node/blockstorage.h>
 #include <node/context.h>
+#include <node/interface_ui.h>
 #include <node/kernel_notifications.h>
 #include <script/solver.h>
 #include <primitives/block.h>
 #include <util/chaintype.h>
+#include <util/string.h>
 #include <validation.h>
 
 #include <boost/test/unit_test.hpp>
+#include <boost/signals2/connection.hpp>
 #include <test/util/logging.h>
 #include <test/util/setup_common.h>
 
@@ -25,6 +29,57 @@ using node::MAX_BLOCKFILE_SIZE;
 
 // use BasicTestingSetup here for the data directory configuration, setup, and cleanup
 BOOST_FIXTURE_TEST_SUITE(blockmanager_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(prune_target_floor_by_chain)
+{
+    auto check = [&](ChainType chain, int64_t requested_mib, uint64_t expected_mib, bool expect_warning) {
+        ArgsManager args;
+        args.ForceSetArg("-prune", util::ToString(requested_mib));
+        const auto params{CreateChainParams(args, chain)};
+        KernelNotifications notifications{Assert(m_node.shutdown_request), m_node.exit_status, *Assert(m_node.warnings)};
+        BlockManager::Options opts{
+            .chainparams = *params,
+            .blocks_dir = m_args.GetBlocksDirPath(),
+            .notifications = notifications,
+            .block_tree_db_params = DBParams{.path = m_args.GetDataDirNet() / "blocks" / "index", .cache_bytes = 0},
+        };
+        std::vector<std::string> warnings;
+        auto connection = uiInterface.ThreadSafeMessageBox_connect([&](const bilingual_str& message, const std::string&, unsigned int style) {
+            if (style == CClientUIInterface::MSG_WARNING) warnings.push_back(message.original);
+            return false;
+        });
+        auto result{node::ApplyArgsManOptions(args, opts, /*warn_on_adjustment=*/true)};
+        connection.disconnect();
+        BOOST_REQUIRE(result);
+        BOOST_CHECK_EQUAL(opts.prune_target, requested_mib == 1 ? BlockManager::PRUNE_TARGET_MANUAL : expected_mib * 1024 * 1024);
+        BOOST_CHECK_EQUAL(warnings.size(), expect_warning ? 1U : 0U);
+        if (expect_warning && !warnings.empty()) {
+            BOOST_CHECK(warnings[0].find(util::ToString(requested_mib)) != std::string::npos);
+            BOOST_CHECK(warnings[0].find(util::ToString(expected_mib)) != std::string::npos);
+        }
+    };
+
+    check(ChainType::MAIN, 550, 2956, true);
+    check(ChainType::MAIN, 2955, 2956, true);
+    check(ChainType::PUBLIC_TEST, 550, 2956, true);
+    check(ChainType::PUBLIC_TEST, 2955, 2956, true);
+    check(ChainType::MAIN, 2956, 2956, false);
+    check(ChainType::SANDBOX, 550, 550, false);
+    check(ChainType::SANDBOX, 0, 0, false);
+    check(ChainType::SANDBOX, 1, 1, false);
+
+    ArgsManager negative_args;
+    negative_args.ForceSetArg("-prune", "-1");
+    const auto params{CreateChainParams(negative_args, ChainType::MAIN)};
+    KernelNotifications notifications{Assert(m_node.shutdown_request), m_node.exit_status, *Assert(m_node.warnings)};
+    BlockManager::Options opts{
+        .chainparams = *params,
+        .blocks_dir = m_args.GetBlocksDirPath(),
+        .notifications = notifications,
+        .block_tree_db_params = DBParams{.path = m_args.GetDataDirNet() / "blocks" / "index", .cache_bytes = 0},
+    };
+    BOOST_CHECK(!node::ApplyArgsManOptions(negative_args, opts, /*warn_on_adjustment=*/true));
+}
 
 BOOST_AUTO_TEST_CASE(blockmanager_find_block_pos)
 {

@@ -7,9 +7,7 @@
 //! that are used internally by node code, but also used externally by vault,
 //! mining or GUI code.
 //!
-//! This file is intended to define only simple types that do not have external
-//! dependencies. More complicated types should be defined in dedicated header
-//! files.
+//! Keep these definitions limited to shared enums and option structs.
 
 #ifndef QUICKSILVER_NODE_TYPES_H
 #define QUICKSILVER_NODE_TYPES_H
@@ -52,19 +50,12 @@ struct BlockCreateOptions {
      */
     size_t coinbase_output_max_additional_sigops{400};
     /**
-     * Script to put in the coinbase transaction. The default is an
-     * anyone-can-spend dummy.
+     * Script for the coinbase output. Production paths that mine a block
+     * supply a payout script. The default is a placeholder for tests and the
+     * getblocktemplate RPC, whose caller constructs its own coinbase.
      *
-     * Should only be used for tests, when the default doesn't suffice.
-     *
-     * Note that higher level code like the getblocktemplate RPC may omit the
-     * coinbase transaction entirely. It's instead constructed by pool software
-     * using fields like coinbasevalue and default_witness_commitment.
-     * This software typically also controls the payout outputs, even for solo
-     * mining.
-     *
-     * The size and sigops are not checked against
-     * coinbase_max_additional_weight and coinbase_output_max_additional_sigops.
+     * The caller must account for coinbase weight in block_reserved_weight and
+     * for output sigops in coinbase_output_max_additional_sigops.
      */
     CScript coinbase_output_script{CScript() << OP_TRUE};
     /**

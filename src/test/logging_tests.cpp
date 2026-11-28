@@ -368,6 +368,7 @@ BOOST_AUTO_TEST_CASE(logging_log_rate_limiter)
 
 BOOST_AUTO_TEST_CASE(logging_log_limit_stats)
 {
+    using Status = HgLog::LogRateLimiter::Status;
     HgLog::LogRateLimiter::Stats stats(HgLog::RATELIMIT_MAX_BYTES);
 
     // Check that stats gets initialized correctly.
@@ -375,16 +376,18 @@ BOOST_AUTO_TEST_CASE(logging_log_limit_stats)
     BOOST_CHECK_EQUAL(stats.m_dropped_bytes, uint64_t{0});
 
     const uint64_t MESSAGE_SIZE{HgLog::RATELIMIT_MAX_BYTES / 2};
-    BOOST_CHECK(stats.Consume(MESSAGE_SIZE));
+    BOOST_CHECK_EQUAL(stats.Consume(MESSAGE_SIZE), Status::UNSUPPRESSED);
     BOOST_CHECK_EQUAL(stats.m_available_bytes, HgLog::RATELIMIT_MAX_BYTES - MESSAGE_SIZE);
     BOOST_CHECK_EQUAL(stats.m_dropped_bytes, uint64_t{0});
 
-    BOOST_CHECK(stats.Consume(MESSAGE_SIZE));
+    BOOST_CHECK_EQUAL(stats.Consume(MESSAGE_SIZE), Status::UNSUPPRESSED);
     BOOST_CHECK_EQUAL(stats.m_available_bytes, HgLog::RATELIMIT_MAX_BYTES - MESSAGE_SIZE * 2);
     BOOST_CHECK_EQUAL(stats.m_dropped_bytes, uint64_t{0});
 
-    // Consuming more bytes after already having consumed RATELIMIT_MAX_BYTES should fail.
-    BOOST_CHECK(!stats.Consume(500));
+    // The transition line is still written. Only subsequent lines are dropped.
+    BOOST_CHECK_EQUAL(stats.Consume(500), Status::NEWLY_SUPPRESSED);
+    BOOST_CHECK_EQUAL(stats.m_dropped_bytes, uint64_t{0});
+    BOOST_CHECK_EQUAL(stats.Consume(500), Status::STILL_SUPPRESSED);
     BOOST_CHECK_EQUAL(stats.m_available_bytes, uint64_t{0});
     BOOST_CHECK_EQUAL(stats.m_dropped_bytes, uint64_t{500});
 }
@@ -493,6 +496,37 @@ BOOST_FIXTURE_TEST_CASE(logging_filesize_rate_limit, LogSetup)
             TestLogFromLocation(location, log_message, Status::UNSUPPRESSED, /*suppressions_active=*/false);
         }
     }
+}
+
+BOOST_FIXTURE_TEST_CASE(logging_reset_counts_only_suppressed_bytes, LogSetup)
+{
+    auto& logger{LogInstance()};
+    logger.m_log_timestamps = false;
+    logger.m_log_sourcelocations = false;
+    logger.m_log_threadnames = false;
+    auto limiter{HgLog::LogRateLimiter::Create([](auto, auto) {}, 0, 60s)};
+    const auto loc{std::source_location::current()};
+    BOOST_CHECK_EQUAL(limiter->Consume(loc, "written transition"), HgLog::LogRateLimiter::Status::NEWLY_SUPPRESSED);
+    BOOST_CHECK_EQUAL(limiter->Consume(loc, "dropped"), HgLog::LogRateLimiter::Status::STILL_SUPPRESSED);
+    limiter->Reset();
+    BOOST_CHECK_EQUAL(ReadDebugLogLines().back(),
+                      strprintf("[all:warning] Restarting logging from %s:%d (%s): 7 bytes were dropped during the last 60s.",
+                                loc.file_name(), loc.line(), loc.function_name()));
+}
+
+BOOST_FIXTURE_TEST_CASE(logging_callback_rejects_reentry, LogSetup)
+{
+    auto& logger{LogInstance()};
+    bool entered{false};
+    const auto callback{logger.PushBackCallback([&](const std::string& line) {
+        if (line.find("callback test message") == std::string::npos) return;
+        entered = true;
+        BOOST_CHECK_THROW(logger.Enabled(), NonFatalCheckError);
+        BOOST_CHECK_THROW(logger.PushBackCallback([](const std::string&) {}), NonFatalCheckError);
+    })};
+    LogInfo(HgLog::ALL, "callback test message");
+    logger.DeleteCallback(callback);
+    BOOST_CHECK(entered);
 }
 
 BOOST_FIXTURE_TEST_CASE(logging_categorized_unconditional, LogSetup)

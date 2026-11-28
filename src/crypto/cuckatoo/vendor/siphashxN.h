@@ -194,10 +194,8 @@ void siphash24x4(const siphash_keys *keys, const uint64_t *indices, uint64_t *ha
 #endif
 
 #ifndef NSIPHASH
-// how many siphash24 to compute in parallel
-// currently 1, 2, 4, 8 are supported, but
-// more than 1 requires the use of sse2 or avx2
-// more than 4 requires the use of avx2
+// Number of SipHash computations in parallel. The scalar path uses 1.
+// The 2, 4, 8 and 16 paths require their corresponding SIMD definitions.
 #define NSIPHASH 1
 #endif
 

@@ -13,9 +13,6 @@
   <property name="focusPolicy">
    <enum>Qt::TabFocus</enum>
   </property>
-  <property name="autoFillBackground">
-   <bool>false</bool>
-  </property>
   <layout class="QGridLayout" name="gridLayout">
    <property name="leftMargin">
     <number>0</number>
@@ -210,8 +207,6 @@
   <tabstop>addAsLabel</tabstop>
   <tabstop>deleteButton</tabstop>
  </tabstops>
- <resources>
-  <include location="../quicksilver.qrc"/>
- </resources>
+ <resources/>
  <connections/>
 </ui>

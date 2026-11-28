@@ -12,6 +12,7 @@ clears it, inbound failures never raise it, and it is logged once per raise.
 
 import time
 
+from test_framework.blocktools import PRUNE_FLOOR_MIB
 from test_framework.p2p import P2PInterface
 from test_framework.test_framework import QuicksilverTestFramework
 from test_framework.util import (
@@ -48,8 +49,9 @@ class HandshakeFailureWarningTest(QuicksilverTestFramework):
                 f"-peertimeout={PEER_TIMEOUT}", f"-v2transport={int(v2)}"]
         self.start_node(0, args)
         # -prune: on start the publictest node warns on stderr when the disk can't hold the whole
-        # publictest chain (128 GB), which this test never downloads; pruned, the check asks for 550 MB.
-        self.start_node(1, args + ["-prune=550"])
+        # publictest chain (128 GB), which this test never downloads; pruned at the chain's floor, the check
+        # asks for that much instead.
+        self.start_node(1, args + [f"-prune={PRUNE_FLOOR_MIB}"])
         assert_equal(self.nodes[0].getblockchaininfo()["chain"], "sandbox")
         assert_equal(self.nodes[1].getblockchaininfo()["chain"], "publictest")
 

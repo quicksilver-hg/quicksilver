@@ -6,13 +6,13 @@
 #ifndef QUICKSILVER_VAULT_TEST_UTIL_H
 #define QUICKSILVER_VAULT_TEST_UTIL_H
 
-#include <quicksilver-build-config.h> // IWYU pragma: keep
-
 #include <addresstype.h>
 #include <vault/db.h>
 #include <vault/scriptpubkeyman.h>
 
 #include <memory>
+#include <set>
+#include <string>
 
 class ArgsManager;
 class CChain;
@@ -28,9 +28,7 @@ class VaultDatabase;
 struct VaultContext;
 
 static const DatabaseFormat DATABASE_FORMATS[] = {
-#ifdef USE_SQLITE
        DatabaseFormat::SQLITE,
-#endif
 };
 
 //! Sandbox P2WSH over an all-zero 32-byte witness program: valid to encode, and
@@ -89,6 +87,8 @@ private:
     bool* m_fail_txn_begin{nullptr};
     bool* m_fail_master_key_write{nullptr};
     bool* m_fail_descriptor_key_erase{nullptr};
+    const std::set<std::string>* m_fail_write_types{nullptr};
+    bool* m_fail_txn_commit{nullptr};
 
     bool ReadKey(DataStream&& key, DataStream& value) override;
     ReadStatus ReadKeyStatus(DataStream&& key, DataStream& value) override;
@@ -98,7 +98,7 @@ private:
     bool ErasePrefix(Span<const std::byte> prefix) override;
 
 public:
-    explicit MockableBatch(MockableData& records, bool pass, MockableCommitCounters* counters = nullptr, bool* allotment_read_error = nullptr, bool* fail_txn_begin = nullptr, bool* fail_master_key_write = nullptr, bool* fail_descriptor_key_erase = nullptr) : m_records(records), m_pass(pass), m_counters(counters), m_allotment_read_error(allotment_read_error), m_fail_txn_begin(fail_txn_begin), m_fail_master_key_write(fail_master_key_write), m_fail_descriptor_key_erase(fail_descriptor_key_erase) {}
+    explicit MockableBatch(MockableData& records, bool pass, MockableCommitCounters* counters = nullptr, bool* allotment_read_error = nullptr, bool* fail_txn_begin = nullptr, bool* fail_master_key_write = nullptr, bool* fail_descriptor_key_erase = nullptr, const std::set<std::string>* fail_write_types = nullptr, bool* fail_txn_commit = nullptr) : m_records(records), m_pass(pass), m_counters(counters), m_allotment_read_error(allotment_read_error), m_fail_txn_begin(fail_txn_begin), m_fail_master_key_write(fail_master_key_write), m_fail_descriptor_key_erase(fail_descriptor_key_erase), m_fail_write_types(fail_write_types), m_fail_txn_commit(fail_txn_commit) {}
     ~MockableBatch() = default;
 
     void Flush() override {}
@@ -121,6 +121,8 @@ public:
     {
         if (!m_pass || !m_txn_active) return false;
         m_txn_active = false;
+        // A failed commit ends the transaction, as a real one does.
+        if (m_fail_txn_commit && *m_fail_txn_commit) return false;
         if (m_counters) ++m_counters->explicit_txn;
         return true;
     }
@@ -145,7 +147,11 @@ public:
     bool m_fail_txn_begin{false};
     bool m_fail_master_key_write{false};
     bool m_fail_descriptor_key_erase{false};
+    //! Writes of these record types fail, for fault injection on one path.
+    std::set<std::string> m_fail_write_types;
     bool m_fail_rewrite{false};
+    //! TxnCommit fails (the writes made inside it are not undone by the mock).
+    bool m_fail_txn_commit{false};
     MockableCommitCounters m_commits;
 
     MockableDatabase(MockableData records = {}) : VaultDatabase(), m_records(records) {}
@@ -157,13 +163,10 @@ public:
     bool Backup(const std::string& strDest) const override { return m_pass && m_backup_pass; }
     void Flush() override {}
     void Close() override {}
-    bool PeriodicFlush() override { return m_pass; }
-    void IncrementUpdateCounter() override {}
-    void ReloadDbEnv() override {}
 
     std::string Filename() override { return "mockable"; }
     std::string Format() override { return "mock"; }
-    std::unique_ptr<DatabaseBatch> MakeBatch(bool flush_on_close = true) override { return std::make_unique<MockableBatch>(m_records, m_pass, &m_commits, &m_allotment_read_error, &m_fail_txn_begin, &m_fail_master_key_write, &m_fail_descriptor_key_erase); }
+    std::unique_ptr<DatabaseBatch> MakeBatch(bool flush_on_close = true) override { return std::make_unique<MockableBatch>(m_records, m_pass, &m_commits, &m_allotment_read_error, &m_fail_txn_begin, &m_fail_master_key_write, &m_fail_descriptor_key_erase, &m_fail_write_types, &m_fail_txn_commit); }
 };
 
 std::unique_ptr<VaultDatabase> CreateMockableVaultDatabase(MockableData records = {});

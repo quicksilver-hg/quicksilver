@@ -113,60 +113,6 @@
     </spacer>
    </item>
    <item>
-    <widget class="QGroupBox" name="groupBox">
-     <property name="title">
-      <string>Advanced Options</string>
-     </property>
-     <property name="alignment">
-      <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignVCenter</set>
-     </property>
-     <property name="flat">
-      <bool>false</bool>
-     </property>
-     <property name="checkable">
-      <bool>false</bool>
-     </property>
-     <layout class="QVBoxLayout" name="verticalLayout_groupbox">
-      <property name="spacing">
-       <number>9</number>
-      </property>
-      <item>
-       <widget class="QCheckBox" name="disable_privkeys_checkbox">
-        <property name="enabled">
-         <bool>true</bool>
-        </property>
-        <property name="toolTip">
-         <string>Disable private keys for this vault. Vaults with private keys disabled will have no private keys and cannot have an HD seed or imported private keys. This is ideal for vaults that only track addresses.</string>
-        </property>
-        <property name="text">
-         <string>Disable Private Keys</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QCheckBox" name="blank_vault_checkbox">
-        <property name="toolTip">
-         <string>Make a blank vault. Blank vaults do not initially have private keys or scripts. Private keys and addresses can be imported, or an HD seed can be set, at a later time.</string>
-        </property>
-        <property name="text">
-         <string>Make Blank Vault</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QCheckBox" name="external_signer_checkbox">
-        <property name="toolTip">
-         <string>Use an external signing device such as a hardware signer. Configure the external signer script in vault preferences first.</string>
-        </property>
-        <property name="text">
-         <string>External signer</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
     <spacer name="verticalSpacer_2">
      <property name="orientation">
       <enum>Qt::Vertical</enum>
@@ -194,9 +140,6 @@
  <tabstops>
   <tabstop>vault_name_line_edit</tabstop>
   <tabstop>encrypt_vault_checkbox</tabstop>
-  <tabstop>disable_privkeys_checkbox</tabstop>
-  <tabstop>blank_vault_checkbox</tabstop>
-  <tabstop>external_signer_checkbox</tabstop>
  </tabstops>
  <resources/>
  <connections>

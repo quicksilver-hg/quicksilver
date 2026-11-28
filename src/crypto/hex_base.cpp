@@ -6,6 +6,7 @@
 #include <crypto/hex_base.h>
 
 #include <array>
+#include <cassert>
 #include <cstring>
 #include <string>
 

@@ -30,10 +30,12 @@
 #include <util/translation.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <ctime>
+#include <string_view>
 #include <vector>
 
 const TranslateFn G_TRANSLATION_FUN{nullptr};

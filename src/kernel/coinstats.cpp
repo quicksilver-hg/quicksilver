@@ -16,18 +16,14 @@
 #include <span.h>
 #include <streams.h>
 #include <sync.h>
-#include <tinyformat.h>
 #include <uint256.h>
 #include <util/check.h>
 #include <util/overflow.h>
 #include <validation.h>
 
 #include <cassert>
-#include <iosfwd>
-#include <iterator>
 #include <map>
 #include <memory>
-#include <string>
 #include <utility>
 
 namespace kernel {

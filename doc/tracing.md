@@ -249,25 +249,6 @@ Arguments passed:
 2. Whether `CreateTransactionInternal` succeeded as `bool`
 3. The position of the change output as an `int32`
 
-#### Tracepoint `coin_selection:attempting_aps_create_tx`
-
-Is called when `CreateTransactionInternal` is called the second time for the optimistic
-Avoid Partial Spends selection attempt. This is used to determine whether the next
-tracepoints called are for the Avoid Partial Spends solution, or a different transaction.
-
-Arguments passed:
-1. Vault name as `pointer to C-style string`
-
-#### Tracepoint `coin_selection:aps_create_tx_internal`
-
-Is called when the second `CreateTransactionInternal` with Avoid Partial Spends enabled completes.
-
-Arguments passed:
-1. Vault name as `pointer to C-style string`
-2. Whether the Avoid Partial Spends solution will be used as `bool`
-3. Whether `CreateTransactionInternal` succeeded as` bool`
-4. The position of the change output as an `int32`
-
 ### Context `relaypool`
 
 This provider carried the upstream transaction-pool name until the relay pool

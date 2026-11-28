@@ -308,7 +308,10 @@ static RPCHelpMan generatetoaddress()
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
     const int num_blocks{request.params[0].getInt<int>()};
-    const uint64_t max_tries{request.params[2].isNull() ? DEFAULT_MAX_TRIES : request.params[2].getInt<int>()};
+    if (!request.params[2].isNull() && request.params[2].getInt<int64_t>() < 0) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "maxtries must be nonnegative");
+    }
+    const uint64_t max_tries{request.params[2].isNull() ? DEFAULT_MAX_TRIES : self.Arg<uint64_t>("maxtries")};
 
     CTxDestination destination = DecodeDestination(request.params[1].get_str());
     if (!IsValidDestination(destination)) {
@@ -724,7 +727,7 @@ static RPCHelpMan getblocktemplate()
     return RPCHelpMan{"getblocktemplate",
         "\nIf the request parameters include a 'mode' key, that is used to explicitly select between the default 'template' request or a 'proposal'.\n"
         "It returns data needed to construct a block to work on.\n"
-        "\nThis method is for external mining software on a populated network. On the live network it\n"
+        "\nThis method is for external mining software on a populated network. On main it\n"
         "refuses while the node has no peers or is still syncing. To mine while bootstrapping a chain,\n"
         "use startmining, which builds templates in-process and is not gated on peer count.\n",
         {
@@ -772,7 +775,7 @@ static RPCHelpMan getblocktemplate()
                         {
                             {RPCResult::Type::NUM, "", "transactions before this one (by 1-based index in 'transactions' list) that must be present in the final block if this one is"},
                         }},
-                        {RPCResult::Type::NUM, "mintvalue", "Quicksilver per-tx mint claim authorized by this transaction's proof, in cinnabar"},
+                        {RPCResult::Type::NUM, "mintvalue", "Per-transaction mint claim before the block mint cap, in cinnabar; the sum can exceed the block mintvalue"},
                         {RPCResult::Type::STR, "txwork", "Quicksilver actual per-tx proof work as a decimal arith_uint256 string"},
                         {RPCResult::Type::STR, "txwork_surplus", "Quicksilver per-tx proof work above the anchor-derived floor as a decimal arith_uint256 string"},
                         {RPCResult::Type::NUM, "txwork_rate", "Quicksilver surplus per-tx proof work per virtual byte"},
@@ -782,7 +785,7 @@ static RPCHelpMan getblocktemplate()
                 }},
                 {RPCResult::Type::NUM, "coinbasevalue", "maximum allowable input to coinbase transaction, including the generation award and per-tx mints (in cinnabar); equals subsidy + mintvalue"},
                 {RPCResult::Type::NUM, "subsidy", "the base block subsidy portion of coinbasevalue (in cinnabar)"},
-                {RPCResult::Type::NUM, "mintvalue", "the Frame-B per-tx mint portion of coinbasevalue (sum of nTxPowMint over the anchor-valid included txs, in cinnabar)"},
+                {RPCResult::Type::NUM, "mintvalue", "The capped transaction mint portion of coinbasevalue, in cinnabar"},
                 {RPCResult::Type::STR, "longpollid", "an id to include with a request to longpoll on an update to this template"},
                 {RPCResult::Type::STR, "target", "The hash target"},
                 {RPCResult::Type::OBJ, "pow", "block proof-of-work descriptor (Cuckatoo) for external miners",
@@ -963,7 +966,7 @@ static RPCHelpMan getblocktemplate()
     static int64_t time_start;
     static std::unique_ptr<BlockTemplate> block_template;
     if (!pindexPrev || pindexPrev->GetBlockHash() != tip ||
-        (relaypool.GetTransactionsUpdated() != nTransactionsUpdatedLast && GetTime() - time_start > 5))
+        (relaypool.GetTransactionsUpdated() != nTransactionsUpdatedLast && GetTime<std::chrono::seconds>().count() - time_start > 5))
     {
         // Clear pindexPrev so future calls make a new block, despite any failures from here on
         pindexPrev = nullptr;
@@ -971,7 +974,7 @@ static RPCHelpMan getblocktemplate()
         // Store the pindexBest used before createNewBlock, to avoid races
         nTransactionsUpdatedLast = relaypool.GetTransactionsUpdated();
         CBlockIndex* pindexPrevNew = chainman.m_blockman.LookupBlockIndex(tip);
-        time_start = GetTime();
+        time_start = GetTime<std::chrono::seconds>().count();
 
         // Create new block
         block_template = miner.createNewBlock();

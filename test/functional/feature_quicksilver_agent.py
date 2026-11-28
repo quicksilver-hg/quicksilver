@@ -151,6 +151,9 @@ class QuicksilverAgentTest(QuicksilverTestFramework):
         self._test_vault_reclaims_by_key_path(funding_address, destination)
         recovery_scan = self._test_importrecovery_finds_taproot_allotment(funding_address)
         self._test_importrecovery_refuses_foreign_outputs(funding_address, recovery_scan)
+        self._test_processheaders_creates_the_store_directory()
+        self._test_peer_store_requires_its_schema()
+        self._test_peer_store_refuses_more_than_it_can_load()
 
     def _test_sequential_spend_uses_change(self, funding_address: str, destination: str, wif: str, genesis: str) -> None:
         bundle = self.make_bundle(
@@ -288,6 +291,74 @@ class QuicksilverAgentTest(QuicksilverTestFramework):
         txid = output["txid"]
         self.wait_until(lambda: txid in node.getrawrelaypool())
         return txid
+
+    def _test_processheaders_creates_the_store_directory(self):
+        # The offline pipeline in a fresh data directory: nothing has created
+        # <datadir>/<chain>/agent yet. An empty headers reply ("00") syncs the peer
+        # and saves the store.
+        datadir = os.path.join(self.options.tmpdir, "agent_fresh_headers")
+        os.makedirs(datadir)
+        output = self.agent_output(datadir, ["-message=00", "processheaders"])
+        assert_equal(output["header_height"], "0")
+        status = self.agent_output(datadir, ["status"])
+        assert os.path.isfile(status["header_store"]), status
+
+    def _peer_store_path(self, datadir: str) -> str:
+        return self.agent_output(datadir, ["listpeers"])["peer_store"]
+
+    def _test_peer_store_requires_its_schema(self):
+        datadir = os.path.join(self.options.tmpdir, "agent_peer_schema")
+        os.makedirs(datadir)
+        self.agent_output(datadir, ["-peer=127.0.0.1:19556", "addpeer"])
+        path = self._peer_store_path(datadir)
+        with open(path, encoding="utf8") as f:
+            saved = json.load(f)
+        assert_equal(sorted(saved), ["chain", "genesis_hash", "peers", "type", "version"])
+
+        # What the agent itself wrote still loads.
+        assert_equal(self.agent_output(datadir, ["listpeers"])["stored_peer_count"], "1")
+
+        cases = {
+            "type": "is not a relay peer store",
+            "version": "has an unsupported version",
+            "chain": "does not name its chain and genesis hash",
+            "genesis_hash": "does not name its chain and genesis hash",
+        }
+        for field, message in cases.items():
+            broken = {k: v for k, v in saved.items() if k != field}
+            with open(path, "w", encoding="utf8") as f:
+                json.dump(broken, f)
+            result = self.agent_process(datadir, ["listpeers"], check=False)
+            assert result.returncode != 0, field
+            assert message in result.stderr, (field, result.stderr)
+        with open(path, "w", encoding="utf8") as f:
+            json.dump(dict(saved, version=2), f)
+        assert "has an unsupported version" in self.agent_process(datadir, ["listpeers"], check=False).stderr
+
+    def _test_peer_store_refuses_more_than_it_can_load(self):
+        # Each import is capped at 1000 peers, but imports add up. Three batches of
+        # long IPv6 addresses would write a store past the loader's 100,000-byte
+        # read window, after which every peer command fails.
+        datadir = os.path.join(self.options.tmpdir, "agent_peer_bound")
+        os.makedirs(datadir)
+
+        def batch(n):
+            return json.dumps([{"address": f"2a01:4f8:{n:x}:{i:x}::1", "port": 9555} for i in range(1000)])
+
+        imported = 0
+        refused = None
+        for n in range(4):
+            result = self.agent_process(datadir, [f"-peeraddresses={batch(n)}", "importnodeaddresses"], check=False)
+            if result.returncode != 0:
+                refused = result
+                break
+            imported += 1000
+        assert refused is not None, "no import was refused"
+        assert "nothing was saved" in refused.stderr, refused.stderr
+        path = self._peer_store_path(datadir)
+        assert os.path.getsize(path) <= 100_000
+        # The store still loads and still holds every earlier batch.
+        assert_equal(self.agent_output(datadir, ["listpeers"])["stored_peer_count"], str(imported))
 
     def _test_vault_reclaims_by_key_path(self, funding_address, destination):
         node = self.nodes[0]

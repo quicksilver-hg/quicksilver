@@ -876,15 +876,16 @@ static RPCHelpMan pruneblockchain()
         heightParam = pindex->nHeight;
     }
 
-    unsigned int height = (unsigned int) heightParam;
-    unsigned int chainHeight = (unsigned int) active_chain.Height();
-    if (chainHeight < chainman.GetParams().PruneAfterHeight()) {
+    int height = heightParam;
+    const int chain_height = active_chain.Height();
+    const int max_prune_height = std::max(0, chain_height - static_cast<int>(MIN_BLOCKS_TO_KEEP));
+    if (chain_height < static_cast<int>(chainman.GetParams().PruneAfterHeight())) {
         throw JSONRPCError(RPC_MISC_ERROR, "Blockchain is too short for pruning.");
-    } else if (height > chainHeight) {
+    } else if (height > chain_height) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Blockchain is shorter than the attempted prune height.");
-    } else if (height > chainHeight - MIN_BLOCKS_TO_KEEP) {
+    } else if (height > max_prune_height) {
         LogDebug(HgLog::RPC, "Attempt to prune blocks close to the tip.  Retaining the minimum number of blocks.\n");
-        height = chainHeight - MIN_BLOCKS_TO_KEEP;
+        height = max_prune_height;
     }
 
     PruneBlockFilesManual(active_chainstate, height);
@@ -958,6 +959,8 @@ static RPCHelpMan gettxoutsetinfo()
                         {RPCResult::Type::NUM, "transactions", /*optional=*/true, "The number of transactions with unspent outputs (not available when coinstatsindex is used)"},
                         {RPCResult::Type::NUM, "disk_size", /*optional=*/true, "The estimated size of the chainstate on disk (not available when coinstatsindex is used)"},
                         {RPCResult::Type::STR_AMOUNT, "total_amount", "The total amount of coins in the UTXO set"},
+                        {RPCResult::Type::STR_AMOUNT, "total_subsidy", /*optional=*/true, "Cumulative block subsidy through this height (only available if coinstatsindex is used)"},
+                        {RPCResult::Type::STR_AMOUNT, "total_mint_allowance", /*optional=*/true, "Cumulative transaction proof-of-work mint allowance through this height (only available if coinstatsindex is used)"},
                         {RPCResult::Type::STR_AMOUNT, "total_unspendable_amount", /*optional=*/true, "The total amount of coins permanently excluded from the UTXO set (only available if coinstatsindex is used)"},
                         {RPCResult::Type::OBJ, "block_info", /*optional=*/true, "Info on amounts in the block at this block height (only available if coinstatsindex is used)",
                         {
@@ -1045,6 +1048,8 @@ static RPCHelpMan gettxoutsetinfo()
             ret.pushKV("transactions", static_cast<int64_t>(stats.nTransactions));
             ret.pushKV("disk_size", stats.nDiskSize);
         } else {
+            ret.pushKV("total_subsidy", ValueFromAmount(stats.total_subsidy));
+            ret.pushKV("total_mint_allowance", ValueFromAmount(stats.total_mint_allowance));
             ret.pushKV("total_unspendable_amount", ValueFromAmount(stats.total_unspendable_amount));
 
             CCoinsStats prev_stats{};
@@ -1273,8 +1278,7 @@ static void SoftForkDescPushBack(const CBlockIndex* blockindex, UniValue& softfo
     softforks.pushKV(DeploymentName(id), std::move(rv));
 }
 
-// used by rest.cpp:rest_chaininfo, so cannot be static
-RPCHelpMan getblockchaininfo()
+static RPCHelpMan getblockchaininfo()
 {
     return RPCHelpMan{"getblockchaininfo",
         "Returns an object containing various state info regarding blockchain processing.\n",
@@ -1389,7 +1393,7 @@ UniValue DeploymentInfo(const CBlockIndex* blockindex, const ChainstateManager& 
 }
 } // anon namespace
 
-RPCHelpMan getdeploymentinfo()
+static RPCHelpMan getdeploymentinfo()
 {
     return RPCHelpMan{"getdeploymentinfo",
         "Returns an object containing various state info regarding deployments of consensus changes.",
@@ -1821,7 +1825,7 @@ static RPCHelpMan getblockstats()
                 {RPCResult::Type::NUM, "mediantxsize", /*optional=*/true, "Truncated median transaction size"},
                 {RPCResult::Type::NUM, "mintxsize", /*optional=*/true, "Minimum transaction size"},
                 {RPCResult::Type::NUM, "outs", /*optional=*/true, "The number of outputs"},
-                {RPCResult::Type::NUM, "subsidy", /*optional=*/true, "The block subsidy"},
+                {RPCResult::Type::NUM, "subsidy", /*optional=*/true, "The block subsidy plus its capped transaction mint allowance"},
                 {RPCResult::Type::NUM, "witness_total_size", /*optional=*/true, "Total size of all witness transactions"},
                 {RPCResult::Type::NUM, "witness_total_weight", /*optional=*/true, "Total weight of all witness transactions"},
                 {RPCResult::Type::NUM, "witness_txs", /*optional=*/true, "The number of witness transactions"},
@@ -1972,7 +1976,8 @@ static RPCHelpMan getblockstats()
     ret_all.pushKV("mediantxsize", CalculateTruncatedMedian(txsize_array));
     ret_all.pushKV("mintxsize", mintxsize == MAX_BLOCK_SERIALIZED_SIZE ? 0 : mintxsize);
     ret_all.pushKV("outs", outputs);
-    ret_all.pushKV("subsidy", GetBlockSubsidy(pindex.nHeight, chainman.GetParams().GetConsensus()));
+    ret_all.pushKV("subsidy", GetBlockSubsidy(pindex.nHeight, chainman.GetParams().GetConsensus()) +
+                               GetBlockMintAllowance(block, chainman.GetParams().GetConsensus(), pindex.pprev));
     ret_all.pushKV("witness_total_size", witness_total_size);
     ret_all.pushKV("witness_total_weight", witness_total_weight);
     ret_all.pushKV("witness_txs", witness_txs);
@@ -2100,7 +2105,7 @@ static const auto scan_result_status_some = RPCResult{
 
 static RPCHelpMan scantxoutset()
 {
-    const std::string EXAMPLE_DESCRIPTOR_RAW = "addr(" + EXAMPLE_ADDRESS[0] + ")#pw2393jx";
+    const std::string EXAMPLE_DESCRIPTOR_RAW = "addr(" + EXAMPLE_ADDRESS[0] + ")#zaveh8ah";
 
     return RPCHelpMan{"scantxoutset",
         "\nScans the unspent transaction output set for entries that match certain output descriptors.\n"
@@ -2206,7 +2211,6 @@ static RPCHelpMan scantxoutset()
 
         // Scan the unspent transaction output set for inputs
         UniValue unspents(UniValue::VARR);
-        std::vector<CTxOut> input_txos;
         std::map<COutPoint, Coin> coins;
         g_should_abort_scan = false;
         int64_t count = 0;
@@ -2232,7 +2236,6 @@ static RPCHelpMan scantxoutset()
             const Coin& coin = it.second;
             const CTxOut& txo = coin.out;
             const CBlockIndex& coinb_block{*CHECK_NONFATAL(tip->GetAncestor(coin.nHeight))};
-            input_txos.push_back(txo);
             total_in += txo.nValue;
 
             UniValue unspent(UniValue::VOBJ);
@@ -2462,7 +2465,7 @@ static RPCHelpMan scanblocks()
                     WITH_LOCK(::cs_main, return chainman.ActiveChain()[start_block + amount_per_chunk]) :
                     stop_block;
 
-            if (!index->LookupFilterRange(start_block, end_range, filters)) {
+            if (!end_range || !index->LookupFilterRange(start_block, end_range, filters)) {
                 throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to read block filters from index");
             }
             for (const BlockFilter& filter : filters) {

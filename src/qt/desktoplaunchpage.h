@@ -117,7 +117,6 @@ private:
     void refreshLastBlockAge();
     QDateTime now() const { return m_now ? m_now() : QDateTime::currentDateTime(); }
 
-    const PlatformStyle* m_platform_style;
     const uint64_t m_blockchain_size_gb;
     const uint64_t m_chain_state_size_gb;
 
@@ -131,6 +130,8 @@ private:
     QSortFilterProxyModel* m_first_rows{nullptr};
     LedgerRows* m_ledger_rows{nullptr};
     QPointer<VaultModel> m_ledger_model;
+    //! The display-unit connection on the tracked model's options model, dropped when the model changes.
+    QMetaObject::Connection m_ledger_unit_connection{};
     QList<QPointer<TransactionDescDialog>> m_opened_dialogs;
     void closeOpenedDialogs();
 

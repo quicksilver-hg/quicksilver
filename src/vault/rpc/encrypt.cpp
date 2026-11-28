@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <rpc/util.h>
+#include <util/time.h>
 #include <vault/rpc/util.h>
 #include <vault/vault.h>
 
@@ -72,9 +73,11 @@ RPCHelpMan vaultpassphrase()
             throw JSONRPCError(RPC_VAULT_PASSPHRASE_INCORRECT, "Error: The vault passphrase entered was incorrect.");
         }
 
-        pvault->TopUpKeyPool();
+        // The unlock stands either way; a failed top-up only means fewer
+        // pre-generated addresses, and it is logged rather than dropped (S0196-A-04).
+        if (!pvault->TopUpKeyPool()) pvault->VaultLogPrintf("keypool top-up after unlock failed");
 
-        pvault->nRelockTime = GetTime() + nSleepTime;
+        pvault->nRelockTime = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()) + nSleepTime;
         relock_time = pvault->nRelockTime;
     }
 

@@ -11,6 +11,7 @@
 #include <test/fuzz/util.h>
 #include <test/util/random.h>
 #include <util/bytevectorhash.h>
+#include <util/fastrange.h>
 #include <util/golombrice.h>
 
 #include <algorithm>

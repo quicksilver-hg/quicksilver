@@ -135,9 +135,14 @@ bilingual_str NotAcceptedText(const std::string& reason)
 void AppendLastProcessedBlock(UniValue& entry, const CVault& vault)
 {
     AssertLockHeld(vault.cs_vault);
+    // Before the vault has processed a block (during -reindex, until the first block connects)
+    // there is no block to report, and the asserting getters would abort the node (S0204-A-02).
+    int height;
+    uint256 hash;
+    if (!vault.TryGetLastBlockProcessed(height, hash)) return;
     UniValue lastprocessedblock{UniValue::VOBJ};
-    lastprocessedblock.pushKV("hash", vault.GetLastBlockHash().GetHex());
-    lastprocessedblock.pushKV("height", vault.GetLastBlockHeight());
+    lastprocessedblock.pushKV("hash", hash.GetHex());
+    lastprocessedblock.pushKV("height", height);
     entry.pushKV("lastprocessedblock", std::move(lastprocessedblock));
 }
 

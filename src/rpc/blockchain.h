@@ -6,13 +6,12 @@
 #ifndef QUICKSILVER_RPC_BLOCKCHAIN_H
 #define QUICKSILVER_RPC_BLOCKCHAIN_H
 
-#include <consensus/amount.h>
 #include <core_io.h>
 #include <sync.h>
 #include <validation.h>
 
-#include <any>
-#include <stdint.h>
+#include <optional>
+
 
 class CBlock;
 class CBlockIndex;

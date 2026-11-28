@@ -20,6 +20,13 @@ private Q_SLOTS:
     void timeOffsetPluralAtEveryUnit();
     void timeOffsetPairsYearsWithWeeks();
     void timeOffsetBoundariesPickTheIntendedUnit();
+    void saveDialogAsksBeforeReplacingTheSuffixedFile();
+    void messageBoxHandsOverALiveButton();
+#if defined(Q_OS_LINUX)
+    void autostartExecArgumentEscapesReservedCharacters_data();
+    void autostartExecArgumentEscapesReservedCharacters();
+    void autostartEntryQuotesTheExecutable();
+#endif
 #ifdef USE_DBUS
     void notificationImageMarshalsInitializedFields();
     void testsCannotReachTheSessionBus();

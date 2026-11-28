@@ -52,7 +52,8 @@ static inline bool operator&(ConnectionDirection a, ConnectionDirection b) {
  *
  * @param      name     The string provided by the user representing a local path
  *
- * @returns Whether the string has proper format, length, and points to an existing file path
+ * @returns Whether the string has the "unix:" prefix, a non-empty path and a length the platform accepts
+ *          (whether the file exists is not checked)
  */
 bool IsUnixSocketPath(const std::string& name);
 
@@ -300,7 +301,7 @@ std::unique_ptr<Sock> ConnectDirectly(const CService& dest, bool manual_connecti
  * @param[in] proxy The SOCKS5 proxy.
  * @param[in] dest The destination service to which to connect.
  * @param[in] port The destination port.
- * @param[out] proxy_connection_failed Whether or not the connection to the SOCKS5 proxy failed.
+ * @param[out] proxy_connection_failed Whether or not the connection to the SOCKS5 proxy failed. Set on every call.
  *
  * @returns the connected socket if the operation succeeded. Otherwise an empty unique_ptr.
  */

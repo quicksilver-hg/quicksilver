@@ -31,7 +31,6 @@ MAKEOVERRIDES := $(filter V=%,$(MAKEOVERRIDES))
 SOURCES_PATH ?= $(BASEDIR)/sources
 WORK_PATH = $(BASEDIR)/work
 BASE_CACHE ?= $(BASEDIR)/built
-SDK_PATH ?= $(BASEDIR)/SDKs
 NO_BOOST ?=
 NO_LIBEVENT ?=
 NO_QT ?=
@@ -77,7 +76,6 @@ build_arch =$(firstword $(subst -, ,$(build)))
 build_vendor=$(word 2,$(subst -, ,$(build)))
 full_build_os:=$(subst $(build_arch)-$(build_vendor)-,,$(build))
 build_os:=$(findstring linux,$(full_build_os))
-build_os+=$(findstring darwin,$(full_build_os))
 build_os+=$(findstring freebsd,$(full_build_os))
 build_os+=$(findstring netbsd,$(full_build_os))
 build_os+=$(findstring openbsd,$(full_build_os))
@@ -90,7 +88,6 @@ host_arch=$(firstword $(subst -, ,$(canonical_host)))
 host_vendor=$(word 2,$(subst -, ,$(canonical_host)))
 full_host_os:=$(subst $(host_arch)-$(host_vendor)-,,$(canonical_host))
 host_os:=$(findstring linux,$(full_host_os))
-host_os+=$(findstring darwin,$(full_host_os))
 host_os+=$(findstring freebsd,$(full_host_os))
 host_os+=$(findstring netbsd,$(full_host_os))
 host_os+=$(findstring openbsd,$(full_host_os))
@@ -202,7 +199,6 @@ $(host_prefix)/toolchain.cmake : toolchain.cmake.in $(host_prefix)/.stamp_$(fina
             -e 's|@host_arch@|$(host_arch)|' \
             -e 's|@CC@|$(host_CC)|' \
             -e 's|@CXX@|$(host_CXX)|' \
-            -e 's|@OSX_SDK@|$(OSX_SDK)|' \
             -e 's|@AR@|$(host_AR)|' \
             -e 's|@RANLIB@|$(host_RANLIB)|' \
             -e 's|@STRIP@|$(host_STRIP)|' \
@@ -264,16 +260,14 @@ install: check-packages $(host_prefix)/toolchain.cmake
 
 download-one: check-sources $(all_sources)
 
-download-osx:
-	@$(MAKE) -s HOST=x86_64-apple-darwin download-one
 download-linux:
 	@$(MAKE) -s HOST=x86_64-unknown-linux-gnu download-one
 download-win:
 	@$(MAKE) -s HOST=x86_64-w64-mingw32 download-one
-download: download-osx download-linux download-win
+download: download-linux download-win
 
 $(foreach package,$(all_packages),$(eval $(call ext_add_stages,$(package))))
 
-.PHONY: install cached clean clean-all download-one download-osx download-linux download-win download check-packages check-sources
+.PHONY: install cached clean clean-all download-one download-linux download-win download check-packages check-sources
 .PHONY: FORCE
 $(V).SILENT:

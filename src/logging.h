@@ -10,6 +10,7 @@
 #include <crypto/siphash.h>
 #include <threadsafety.h>
 #include <tinyformat.h>
+#include <util/check.h>
 #include <util/fs.h>
 #include <util/string.h>
 #include <util/time.h>
@@ -74,7 +75,6 @@ namespace HgLog {
         RPC         = (CategoryMask{1} <<  7),
         FORGE       = (CategoryMask{1} <<  8),
         PEERBOOK    = (CategoryMask{1} <<  9),
-        SELECTINPUTS = (CategoryMask{1} << 10),
         REINDEX     = (CategoryMask{1} << 11),
         CMPCTBLOCK  = (CategoryMask{1} << 12),
         RAND        = (CategoryMask{1} << 13),
@@ -115,16 +115,24 @@ namespace HgLog {
     class LogRateLimiter
     {
     public:
+        //! Suppression status of a source log location.
+        enum class Status {
+            UNSUPPRESSED,     // string fits within the limit
+            NEWLY_SUPPRESSED, // suppression has started since this string
+            STILL_SUPPRESSED, // suppression is still ongoing
+        };
         //! Keeps track of an individual source location and how many available bytes are left for logging from it.
         struct Stats {
             //! Remaining bytes
             uint64_t m_available_bytes;
-            //! Number of bytes that were consumed but didn't fit in the available bytes.
+            //! Number of bytes suppressed after the final line written to disk.
             uint64_t m_dropped_bytes{0};
 
+            bool m_suppressed{false};
+
             Stats(uint64_t max_bytes) : m_available_bytes{max_bytes} {}
-            //! Updates internal accounting and returns true if enough available_bytes were remaining
-            bool Consume(uint64_t bytes);
+            //! Update the quota and report whether the line is suppressed.
+            Status Consume(uint64_t bytes);
         };
 
     private:
@@ -154,12 +162,6 @@ namespace HgLog {
         const uint64_t m_max_bytes;
         //! Interval after which the window is reset.
         const std::chrono::seconds m_reset_window;
-        //! Suppression status of a source log location.
-        enum class Status {
-            UNSUPPRESSED,     // string fits within the limit
-            NEWLY_SUPPRESSED, // suppression has started since this string
-            STILL_SUPPRESSED, // suppression is still ongoing
-        };
         //! Consumes `source_loc`'s available bytes corresponding to the size of the (formatted)
         //! `str` and returns its status.
         [[nodiscard]] Status Consume(
@@ -210,6 +212,9 @@ namespace HgLog {
 
         std::string LogTimestampStr(SystemClock::time_point now, std::chrono::seconds mocktime) const;
 
+        static thread_local bool m_invoking_callback;
+        void NotifyPrintCallbacks(const std::string& message) EXCLUSIVE_LOCKS_REQUIRED(m_cs);
+
         /** Slots that connect to the print signal */
         std::list<std::function<void(const std::string&)>> m_print_callbacks GUARDED_BY(m_cs) {};
 
@@ -239,13 +244,17 @@ namespace HgLog {
         /** Returns whether logs will be written to any output */
         bool Enabled() const EXCLUSIVE_LOCKS_REQUIRED(!m_cs)
         {
+            CHECK_NONFATAL(!m_invoking_callback);
             StdLockGuard scoped_lock(m_cs);
             return m_buffering || m_print_to_console || m_print_to_file || !m_print_callbacks.empty();
         }
 
-        /** Connect a slot to the print signal and return the connection */
+        /** Connect a synchronous print callback and return its connection.
+         * Callbacks run under the logger lock and must not call logging or change registration.
+         */
         std::list<std::function<void(const std::string&)>>::iterator PushBackCallback(std::function<void(const std::string&)> fun) EXCLUSIVE_LOCKS_REQUIRED(!m_cs)
         {
+            CHECK_NONFATAL(!m_invoking_callback);
             StdLockGuard scoped_lock(m_cs);
             m_print_callbacks.push_back(std::move(fun));
             return --m_print_callbacks.end();
@@ -254,6 +263,7 @@ namespace HgLog {
         /** Delete a connection */
         void DeleteCallback(std::list<std::function<void(const std::string&)>>::iterator it) EXCLUSIVE_LOCKS_REQUIRED(!m_cs)
         {
+            CHECK_NONFATAL(!m_invoking_callback);
             StdLockGuard scoped_lock(m_cs);
             m_print_callbacks.erase(it);
         }
@@ -265,6 +275,7 @@ namespace HgLog {
 
         void SetRateLimiting(std::shared_ptr<LogRateLimiter> limiter) EXCLUSIVE_LOCKS_REQUIRED(!m_cs)
         {
+            CHECK_NONFATAL(!m_invoking_callback);
             StdLockGuard scoped_lock(m_cs);
             m_limiter = std::move(limiter);
         }
@@ -281,11 +292,13 @@ namespace HgLog {
 
         std::unordered_map<LogFlags, Level> CategoryLevels() const EXCLUSIVE_LOCKS_REQUIRED(!m_cs)
         {
+            CHECK_NONFATAL(!m_invoking_callback);
             StdLockGuard scoped_lock(m_cs);
             return m_category_log_levels;
         }
         void SetCategoryLogLevel(const std::unordered_map<LogFlags, Level>& levels) EXCLUSIVE_LOCKS_REQUIRED(!m_cs)
         {
+            CHECK_NONFATAL(!m_invoking_callback);
             StdLockGuard scoped_lock(m_cs);
             m_category_log_levels = levels;
         }

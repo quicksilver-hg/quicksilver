@@ -126,6 +126,85 @@ BOOST_FIXTURE_TEST_CASE(index_orders_by_descending_rate, TestingSetup)
     BOOST_CHECK_EQUAL(it->GetTx().GetHash().ToString(), CTransaction(tx_lo).GetHash().ToString());
 }
 
+// Rates that round to the same double are still ordered by their exact value (c01a-29).
+BOOST_AUTO_TEST_CASE(exact_rate_comparison)
+{
+    const arith_uint256 big{arith_uint256{1} << 200};
+    // The doubles agree; the exact rates do not.
+    BOOST_REQUIRE_EQUAL((big + 1).getdouble() / 3, big.getdouble() / 3);
+    BOOST_CHECK_GT(CompareTxWorkRate(big + 1, 3, big, 3), 0);
+    BOOST_CHECK_LT(CompareTxWorkRate(big, 3, big + 1, 3), 0);
+    BOOST_CHECK_EQUAL(CompareTxWorkRate(big, 3, big, 3), 0);
+    // Different vsizes: 7/2 = 3.5 > 10/3, and 2/4 == 1/2 exactly.
+    BOOST_CHECK_GT(CompareTxWorkRate(arith_uint256{7}, 2, arith_uint256{10}, 3), 0);
+    BOOST_CHECK_EQUAL(CompareTxWorkRate(arith_uint256{2}, 4, arith_uint256{1}, 2), 0);
+    BOOST_CHECK_EQUAL(CompareTxWorkRate(arith_uint256{0}, 4, arith_uint256{0}, 9), 0);
+    // Above 2^224 the quotient/remainder path keeps it exact without overflowing 256 bits.
+    const arith_uint256 huge{arith_uint256{1} << 250};
+    BOOST_CHECK_GT(CompareTxWorkRate(huge + 2, 3, huge + 1, 3), 0);
+    // Same quotient, different remainder: 2^250 = 1 (mod 3), so both divide to the same
+    // quotient and only the remainders (2 against 1) tell them apart.
+    BOOST_CHECK_GT(CompareTxWorkRate(huge + 1, 3, huge, 3), 0);
+    BOOST_CHECK_LT(CompareTxWorkRate(huge, 3, huge + 1, 3), 0);
+    BOOST_CHECK_EQUAL(CompareTxWorkRate(huge * 2, 6, huge, 3), 0);
+    BOOST_CHECK_LT(CompareTxWorkRate(huge, 100000, huge, 99999), 0);
+    const arith_uint256 max{~arith_uint256{}};
+    BOOST_CHECK_GT(CompareTxWorkRate(max, 1, max - 1, 1), 0);
+    BOOST_CHECK_LT(CompareTxWorkRate(max, 0xFFFFFFFF, max, 0xFFFFFFFE), 0);
+    // Mixed: one side above 2^224, one below.
+    BOOST_CHECK_GT(CompareTxWorkRate(huge, 3, arith_uint256{1} << 200, 3), 0);
+}
+
+BOOST_FIXTURE_TEST_CASE(index_orders_rates_that_round_equal_exactly, TestingSetup)
+{
+    CTxRelayPool& pool = *Assert(m_node.relaypool);
+    LOCK2(cs_main, pool.cs);
+    TestRelayPoolEntryHelper entry;
+
+    auto make_tx = [](int n) {
+        CMutableTransaction t;
+        t.vout.resize(1);
+        t.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+        t.vout[0].nValue = (n + 1) * COIN;
+        return t;
+    };
+    const arith_uint256 big{arith_uint256{1} << 200};
+    const CMutableTransaction older = make_tx(0);
+    const CMutableTransaction newer_but_higher = make_tx(1);
+    // Older, and lower by one unit of work: rounded to double the two tie and the
+    // older would rank first. Exactly, the newer one's rate is higher.
+    AddToRelayPool(pool, entry.Time(NodeSeconds{std::chrono::seconds{100}}).TxWorkSurplus(big).FromTx(older));
+    AddToRelayPool(pool, entry.Time(NodeSeconds{std::chrono::seconds{200}}).TxWorkSurplus(big + 1).FromTx(newer_but_higher));
+    BOOST_REQUIRE_EQUAL(pool.GetIter(CTransaction(older).GetHash()).value()->GetTxWorkRate(),
+                        pool.GetIter(CTransaction(newer_but_higher).GetHash()).value()->GetTxWorkRate());
+
+    auto it = pool.mapTx.get<txwork_rate>().begin();
+    BOOST_CHECK_EQUAL(it->GetTx().GetHash().ToString(), CTransaction(newer_but_higher).GetHash().ToString());
+}
+
+BOOST_FIXTURE_TEST_CASE(equal_rate_and_time_order_by_entry_sequence, TestingSetup)
+{
+    CTxRelayPool& pool = *Assert(m_node.relaypool);
+    LOCK2(cs_main, pool.cs);
+    TestRelayPoolEntryHelper entry;
+
+    auto make_tx = [](int n) {
+        CMutableTransaction t;
+        t.vout.resize(1);
+        t.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+        t.vout[0].nValue = (n + 1) * COIN;
+        return t;
+    };
+    // Same rate, same second: the earlier entry sequence ranks first, whatever the insertion order.
+    const CMutableTransaction second = make_tx(0);
+    const CMutableTransaction first = make_tx(1);
+    AddToRelayPool(pool, entry.Time(NodeSeconds{std::chrono::seconds{100}}).Sequence(2).TxWorkSurplus(arith_uint256{50}).FromTx(second));
+    AddToRelayPool(pool, entry.Time(NodeSeconds{std::chrono::seconds{100}}).Sequence(1).TxWorkSurplus(arith_uint256{50}).FromTx(first));
+
+    auto it = pool.mapTx.get<txwork_rate>().begin();
+    BOOST_CHECK_EQUAL(it->GetTx().GetHash().ToString(), CTransaction(first).GetHash().ToString());
+}
+
 // The miner includes relaypool txs in descending surplus-work-rate order. Uses
 // several independent txs with surpluses assigned in an order uncorrelated to
 // txid, so the old fee-based (txid-tiebreak) ordering reliably disagrees.

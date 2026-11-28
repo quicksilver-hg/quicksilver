@@ -9,8 +9,6 @@
 
 #include <coins.h>
 #include <compressor.h>
-#include <consensus/consensus.h>
-#include <primitives/transaction.h>
 #include <serialize.h>
 
 /** Formatter for a spent CTxIn's output and metadata. */

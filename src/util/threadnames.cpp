@@ -5,10 +5,9 @@
 
 #include <quicksilver-build-config.h> // IWYU pragma: keep
 
+#include <algorithm>
 #include <cstring>
 #include <string>
-#include <thread>
-#include <utility>
 
 #if (defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__DragonFly__))
 #include <pthread.h>
@@ -30,8 +29,6 @@ static void SetThreadName(const char* name)
     ::prctl(PR_SET_NAME, name, 0, 0, 0);
 #elif (defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__DragonFly__))
     pthread_set_name_np(pthread_self(), name);
-#elif defined(__APPLE__)
-    pthread_setname_np(name);
 #else
     // Prevent warnings for unused parameters...
     (void)name;
@@ -55,9 +52,25 @@ static void SetInternalName(const std::string& name)
     g_thread_name[copy_bytes] = '\0';
 }
 
+std::string util::OsThreadName(std::string_view name)
+{
+    std::string result{"qs-"};
+    constexpr size_t MAX_OS_NAME_BYTES{15};
+    constexpr size_t TAIL_BYTES{5};
+    const size_t available{MAX_OS_NAME_BYTES - result.size()};
+    if (name.size() <= available) {
+        result.append(name);
+    } else {
+        result.append(name.substr(0, available - TAIL_BYTES - 1));
+        result.push_back('~');
+        result.append(name.substr(name.size() - TAIL_BYTES));
+    }
+    return result;
+}
+
 void util::ThreadRename(const std::string& name)
 {
-    SetThreadName(("qs-" + name).c_str());
+    SetThreadName(OsThreadName(name).c_str());
     SetInternalName(name);
 }
 

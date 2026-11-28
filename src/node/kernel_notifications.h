@@ -13,8 +13,10 @@
 #include <uint256.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <optional>
 
 class ArgsManager;
 class CBlockIndex;

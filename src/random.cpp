@@ -22,6 +22,8 @@
 #include <util/time.h>
 
 #include <array>
+#include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdlib>
 #include <optional>
@@ -35,7 +37,7 @@
 #include <sys/time.h>
 #endif
 
-#if defined(HAVE_GETRANDOM) || (defined(HAVE_GETENTROPY_RAND) && defined(__APPLE__))
+#if defined(HAVE_GETRANDOM)
 #include <sys/random.h>
 #endif
 
@@ -274,6 +276,7 @@ void Strengthen(const unsigned char (&seed)[32], SteadyClock::duration dur, CSHA
     int have = 0;
     do {
         ssize_t n = read(f, ent32 + have, NUM_OS_RANDOM_BYTES - have);
+        if (n < 0 && errno == EINTR) continue;
         if (n <= 0 || n + have > NUM_OS_RANDOM_BYTES) {
             close(f);
             RandFailure();
@@ -315,10 +318,6 @@ void GetOSRand(unsigned char *ent32)
        The function call is always successful.
      */
     arc4random_buf(ent32, NUM_OS_RANDOM_BYTES);
-#elif defined(HAVE_GETENTROPY_RAND) && defined(__APPLE__)
-    if (getentropy(ent32, NUM_OS_RANDOM_BYTES) != 0) {
-        RandFailure();
-    }
 #elif defined(HAVE_SYSCTL_ARND)
     /* FreeBSD, NetBSD and similar. It is possible for the call to return less
      * bytes than requested, so need to read in a loop.
@@ -604,12 +603,20 @@ std::atomic<bool> g_used_g_prng{false}; // Only accessed from tests
 void GetRandBytes(Span<unsigned char> bytes) noexcept
 {
     g_used_g_prng = true;
-    ProcRand(bytes.data(), bytes.size(), RNGLevel::FAST, /*always_use_real_rng=*/false);
+    if (bytes.empty()) ProcRand(bytes.data(), 0, RNGLevel::FAST, /*always_use_real_rng=*/false);
+    for (size_t offset = 0; offset < bytes.size(); offset += NUM_OS_RANDOM_BYTES) {
+        const size_t chunk = std::min<size_t>(NUM_OS_RANDOM_BYTES, bytes.size() - offset);
+        ProcRand(bytes.data() + offset, static_cast<int>(chunk), RNGLevel::FAST, /*always_use_real_rng=*/false);
+    }
 }
 
 void GetStrongRandBytes(Span<unsigned char> bytes) noexcept
 {
-    ProcRand(bytes.data(), bytes.size(), RNGLevel::SLOW, /*always_use_real_rng=*/true);
+    if (bytes.empty()) ProcRand(bytes.data(), 0, RNGLevel::SLOW, /*always_use_real_rng=*/true);
+    for (size_t offset = 0; offset < bytes.size(); offset += NUM_OS_RANDOM_BYTES) {
+        const size_t chunk = std::min<size_t>(NUM_OS_RANDOM_BYTES, bytes.size() - offset);
+        ProcRand(bytes.data() + offset, static_cast<int>(chunk), RNGLevel::SLOW, /*always_use_real_rng=*/true);
+    }
 }
 
 void RandAddPeriodic() noexcept

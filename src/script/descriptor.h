@@ -7,11 +7,17 @@
 #define QUICKSILVER_SCRIPT_DESCRIPTOR_H
 
 #include <outputtype.h>
+#include <pubkey.h>
 #include <script/script.h>
 #include <script/sign.h>
 #include <script/signingprovider.h>
+#include <uint256.h>
 
+#include <memory>
 #include <optional>
+#include <set>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 using ExtPubKeyMap = std::unordered_map<uint32_t, CExtPubKey>;
@@ -152,6 +158,7 @@ struct Descriptor {
     virtual std::optional<int64_t> ScriptSize() const = 0;
 
     /** Get the maximum size of a satisfaction for this descriptor, in weight units.
+     * Returns nullopt when no bounded maximum is known.
      *
      * @param use_max_sig Whether to assume ECDSA signatures will have a high-r.
      */

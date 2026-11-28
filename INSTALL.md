@@ -3,7 +3,6 @@
 Quicksilver 0.1.x is distributed as source. Choose the guide for your platform:
 
 - [Unix and Linux](doc/build-unix.md)
-- [macOS support status (unsupported)](doc/build-osx.md)
 - [Windows with Visual Studio](doc/build-windows-msvc.md)
 - [Windows cross-compilation](doc/build-windows.md)
 - [FreeBSD](doc/build-freebsd.md)
@@ -59,7 +58,7 @@ and `-DCONFIG=Release` to the manifest check. In PowerShell, keep the quotes:
 an unquoted `-D` value containing a `.` is split there.
 
 If `CUCKATOO_GPU_SOLVER` is unset, `gpu_parity_tests` is skipped; set it to a
-`qsgpusolve-cuda` binary to run the test. On MSVC, `compilerbug_tests` also skips
+`qsgpusolve-opencl` binary to run the test. On MSVC, `compilerbug_tests` also skips
 because its only case is GNU-specific. A skipped test is still counted in
 `100%` — the results check rejects other skips. See [GPU Solver](doc/gpu-solver.md)
 for what the parity test needs. Add `-j` to `ctest` as well if you want it to
@@ -85,7 +84,7 @@ are placed under `build/bin/`.
 programs that use it, which find it there on their own. It prepares transfer
 proofs and mines blocks on AMD, NVIDIA and Intel cards that have an OpenCL
 driver. It loads the driver when it runs, so building it needs no OpenCL SDK.
-The CUDA helper, `qsgpusolve-cuda`, is still built separately; see
+To use a helper you built yourself instead, see
 [doc/gpu-solver.md](doc/gpu-solver.md).
 
 ## After building

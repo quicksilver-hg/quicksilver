@@ -24,7 +24,6 @@ EXCLUDE = [
     'src/bench/nanobench.h',
     'src/cuckoocache.h',
     'src/test/torcontrol_tests.cpp',
-    'src/util/subprocess.h',
     # python init:
     '*__init__.py',
 ]

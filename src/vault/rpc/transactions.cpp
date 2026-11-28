@@ -61,8 +61,11 @@ static void VaultTxToJSON(const CVault& vault, const CVaultTx& wtx, UniValue& en
     entry.pushKV("time", wtx.GetTxTime());
     entry.pushKV("timereceived", int64_t{wtx.nTimeReceived});
 
-    for (const std::pair<const std::string, std::string>& item : wtx.mapValue)
+    for (const std::pair<const std::string, std::string>& item : wtx.mapValue) {
+        // F-698: the revival order is internal state, never part of the RPC output.
+        if (item.first == CVaultTx::REVIVAL_SEQUENCE_KEY) continue;
         entry.pushKV(item.first, item.second);
+    }
 }
 
 struct tallyitem
@@ -406,6 +409,7 @@ static std::vector<RPCResult> TransactionDescriptionString()
            {RPCResult::Type::NUM_TIME, "time", "The transaction time expressed in " + UNIX_EPOCH_TIME + "."},
            {RPCResult::Type::NUM_TIME, "timereceived", "The time received expressed in " + UNIX_EPOCH_TIME + "."},
            {RPCResult::Type::STR, "comment", /*optional=*/true, "If a comment is associated with the transaction, only present if not empty."},
+           {RPCResult::Type::STR, "agent_allotment", /*optional=*/true, "Only present on a spend this vault co-signed for an agent allotment: the ID of that allotment."},
            {RPCResult::Type::ARR, "parent_descs", /*optional=*/true, "Only if 'category' is 'received'. List of parent descriptors for the output script of this coin.", {
                {RPCResult::Type::STR, "desc", "The descriptor string."},
            }},
@@ -494,7 +498,7 @@ RPCHelpMan listtransactions()
         {
             CVaultTx *const pwtx = (*it).second;
             ListTransactions(*pvault, *pwtx, 0, true, ret, filter, filter_label);
-            if ((int)ret.size() >= (nCount+nFrom)) break;
+            if (static_cast<int64_t>(ret.size()) >= static_cast<int64_t>(nCount) + nFrom) break;
         }
     }
 
@@ -502,7 +506,7 @@ RPCHelpMan listtransactions()
 
     if (nFrom > (int)ret.size())
         nFrom = ret.size();
-    if ((nFrom + nCount) > (int)ret.size())
+    if (static_cast<int64_t>(nFrom) + nCount > static_cast<int64_t>(ret.size()))
         nCount = ret.size() - nFrom;
 
     auto txs_rev_it{std::make_move_iterator(ret.rend())};
@@ -745,47 +749,6 @@ RPCHelpMan gettransaction()
 
     AppendLastProcessedBlock(entry, *pvault);
     return entry;
-},
-    };
-}
-
-RPCHelpMan abandontransaction()
-{
-    return RPCHelpMan{"abandontransaction",
-                "\nMark in-vault transaction <txid> as abandoned\n"
-                "This will mark this transaction and all its in-vault descendants as abandoned which will allow\n"
-                "for their inputs to be respent.  It can be used to replace \"stuck\" or evicted transactions.\n"
-                "It only works on transactions which are not included in a block and are not currently in the relay pool.\n"
-                "It has no effect on transactions which are already abandoned.\n",
-                {
-                    {"txid", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The transaction id"},
-                },
-                RPCResult{RPCResult::Type::NONE, "", ""},
-                RPCExamples{
-                    HelpExampleCli("abandontransaction", "\"1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d\"")
-            + HelpExampleRpc("abandontransaction", "\"1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d\"")
-                },
-        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
-{
-    std::shared_ptr<CVault> const pvault = GetVaultForJSONRPCRequest(request);
-    if (!pvault) return UniValue::VNULL;
-
-    // Make sure the results are valid at least up to the most recent block
-    // the user could have gotten from another RPC command prior to now
-    pvault->BlockUntilSyncedToCurrentChain();
-
-    LOCK(pvault->cs_vault);
-
-    uint256 hash(ParseHashV(request.params[0], "txid"));
-
-    if (!pvault->mapVault.count(hash)) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid or non-vault transaction id");
-    }
-    if (!pvault->AbandonTransaction(hash)) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Transaction not eligible for abandonment");
-    }
-
-    return UniValue::VNULL;
 },
     };
 }

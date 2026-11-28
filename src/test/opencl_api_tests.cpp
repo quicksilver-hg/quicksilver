@@ -47,6 +47,12 @@ BOOST_AUTO_TEST_CASE(constants_match_khronos)
     static_assert(qsgpu::cl::kDeviceTopologyAmd == CL_DEVICE_TOPOLOGY_AMD);
     static_assert(qsgpu::cl::kDeviceBoardNameAmd == CL_DEVICE_BOARD_NAME_AMD);
     static_assert(qsgpu::cl::kDeviceTopologyTypePcieAmd == CL_DEVICE_TOPOLOGY_TYPE_PCIE_AMD);
+    // S0126-C-01: no Khronos source defines the NVIDIA PCI ids. The
+    // cl_nv_device_attribute_query registry text (version 1.0, 2009) and the
+    // Khronos OpenCL-Headers cl_ext.h define only 0x4000-0x4006 for that
+    // extension; CL_DEVICE_PCI_{BUS,SLOT,DOMAIN}_ID_NV are NVIDIA driver values.
+    // So this block compiles only against a vendor header that has them, and
+    // the three constants have no independent check on a Khronos-only host.
 #ifdef CL_DEVICE_PCI_BUS_ID_NV
     static_assert(qsgpu::cl::kDevicePciBusIdNv == CL_DEVICE_PCI_BUS_ID_NV);
     static_assert(qsgpu::cl::kDevicePciSlotIdNv == CL_DEVICE_PCI_SLOT_ID_NV);

@@ -114,6 +114,7 @@ void RandAddEvent(const uint32_t event_info) noexcept;
  * bypassed, and a deterministic, seeded, PRNG is used instead.
  *
  * Thread-safe.
+ * Long spans are generated in 32-byte chunks.
  */
 void GetRandBytes(Span<unsigned char> bytes) noexcept;
 
@@ -126,6 +127,7 @@ void GetRandBytes(Span<unsigned char> bytes) noexcept;
  * The normal PRNG is never bypassed here, even in test mode.
  *
  * Thread-safe.
+ * Long spans are generated in 32-byte chunks.
  */
 void GetStrongRandBytes(Span<unsigned char> bytes) noexcept;
 
@@ -328,9 +330,14 @@ public:
     typename Chrono::duration rand_uniform_duration(typename Chrono::duration range) noexcept
     {
         using Dur = typename Chrono::duration;
-        return range.count() > 0 ? /* interval [0..range) */ Dur{Impl().randrange(range.count())} :
-               range.count() < 0 ? /* interval (range..0] */ -Dur{Impl().randrange(-range.count())} :
-                                   /* interval [0..0] */ Dur{0};
+        if (range.count() > 0) return Dur{Impl().randrange(range.count())};
+        if (range.count() == 0) return Dur{0};
+        using Rep = typename Dur::rep;
+        using URep = std::make_unsigned_t<Rep>;
+        // |range| without an unsigned wrap (CI's integer sanitizer reports every wrap in
+        // first-party code): -(count + 1) cannot overflow, even at the minimum value.
+        const URep magnitude = static_cast<URep>(-(range.count() + 1)) + URep{1};
+        return Dur{-static_cast<Rep>(Impl().randrange(magnitude))};
     };
 
     /** Generate a uniform random duration in the range [0..max). Precondition: max.count() > 0 */

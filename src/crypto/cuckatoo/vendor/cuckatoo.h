@@ -30,6 +30,7 @@ typedef uint64_t u64;
 #define PROOFSIZE 42
 #endif
 
+#ifndef SIZEMASK
 static constexpr uint32_t qs_countl_zero32(uint32_t x) {
   uint32_t n = 32;
   while (x != 0) {
@@ -39,7 +40,6 @@ static constexpr uint32_t qs_countl_zero32(uint32_t x) {
   return n;
 }
 
-#ifndef SIZEMASK
 // qs_countl_zero32 replaces GCC's __builtin_clz, which MSVC lacks.
 // PROOFSIZE is a fixed positive constant, so this is a compile-time constant and
 // bit-for-bit identical to the builtin on every platform (the builtin is UB only
@@ -64,37 +64,15 @@ typedef uint16_t word_t;
 // number of edges
 #define NEDGES NNODES1
 
-// Common Solver parameters, to return to caller
 struct SolverParams {
-	u32 nthreads = 0;
-	u32 ntrims = 0;
-	bool showcycle;
-	bool allrounds;
-	bool mutate_nonce = 1;
-	bool cpuload = 1;
-
-	// Common cuda params
-	u32 device = 0;
-
-	// Cuda-lean specific params
-	u32 blocks = 0;
-	u32 tpb = 0;
-
-	// Cuda-mean specific params
-	u32 expand = 0;
-	u32 genablocks = 0;
-	u32 genatpb = 0;
-	u32 genbtpb = 0;
-	u32 trimtpb = 0;
-	u32 tailtpb = 0;
-	u32 recoverblocks = 0;
-	u32 recovertpb = 0;
+  u32 nthreads = 0;
+  u32 ntrims = 0;
+  bool mutate_nonce = true;
 };
 
 // Solutions result structs to be instantiated by caller,
 // and filled by solver if desired
 struct Solution {
- u64 id = 0;
  u64 nonce = 0;
  u64 proof[PROOFSIZE];
 };
@@ -103,27 +81,6 @@ struct SolverSolutions {
  u32 edge_bits = 0;
  u32 num_sols = 0;
  Solution sols[MAX_SOLS];
-};
-
-#define MAX_NAME_LEN 256
-
-// last error reason, to be picked up by stats
-// to be returned to caller
-char LAST_ERROR_REASON[MAX_NAME_LEN];
-
-// Solver statistics, to be instantiated by caller
-// and filled by solver if desired
-struct SolverStats {
-	u32 device_id = 0;
-	u32 edge_bits = 0;
-	char plugin_name[MAX_NAME_LEN]; // will be filled in caller-side
-	char device_name[MAX_NAME_LEN];
-	bool has_errored = false;
-	char error_reason[MAX_NAME_LEN];
-	u32 iterations = 0;
-	u64 last_start_time = 0;
-	u64 last_end_time = 0;
-	u64 last_solution_time = 0;
 };
 
 // generate edge endpoint in cuck(at)oo graph without partition bit
@@ -195,21 +152,6 @@ u64 timestamp() {
 	auto dn = now.time_since_epoch();
 	return dn.count();
 }
-
-/////////////////////////////////////////////////////////////////
-// Declarations to make it easier for callers to link as required
-/////////////////////////////////////////////////////////////////
-
-#ifndef C_CALL_CONVENTION
-#define C_CALL_CONVENTION 0
-#endif
-
-// convention to prepend to called functions
-#if C_CALL_CONVENTION
-#define CALL_CONVENTION extern "C"
-#else
-#define CALL_CONVENTION
-#endif
 
 // Ability to squash printf output at compile time, if desired
 #ifndef SQUASH_OUTPUT

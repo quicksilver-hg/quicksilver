@@ -109,7 +109,16 @@ WITNESS_COMMITMENT_HEADER = b"\xaa\x21\xa9\xed"
 
 NORMAL_GBT_REQUEST_PARAMS = {"rules": ["segwit"]}
 VERSIONBITS_LAST_OLD_BLOCK_VERSION = 4
-MIN_BLOCKS_TO_KEEP = 288
+# validation.h: the blocks a pruned node always keeps, one week at 300 s spacing (F-703).
+MIN_BLOCKS_TO_KEEP = 2016
+# Upstream's value, two days at 600 s. Tests whose chain lengths were sized for it grow their
+# chains by the difference wherever a prune request must reach below the tip, so their prune
+# heights and expected results stay as they were.
+UPSTREAM_MIN_BLOCKS_TO_KEEP = 288
+KEEP_WINDOW_GROWTH = MIN_BLOCKS_TO_KEEP - UPSTREAM_MIN_BLOCKS_TO_KEEP
+# validation.h MIN_DISK_SPACE_FOR_BLOCK_FILES: the lowest -prune target (MiB) main and publictest accept
+# without a startup warning. A lower target is raised to it and warned about on stderr. Sandbox keeps 550.
+PRUNE_FLOOR_MIB = 2956
 
 SANDBOX_RETARGET_PERIOD = 150
 

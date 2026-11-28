@@ -38,9 +38,20 @@ struct HeaderAcceptResult {
 
 const char* HeaderAcceptCodeString(HeaderAcceptCode code);
 
+/**
+ * An in-memory header tree rooted at the active chain's genesis.
+ *
+ * Threading: none. A HeaderChain has no lock and must be used by one thread at a
+ * time. Every owner today builds its own and keeps it on one thread: the command-line
+ * agent holds one per command through AgentClient, and the desktop's thin header
+ * source loads a fresh one per refresh. Sharing one across threads needs an external
+ * lock around every call, including the const accessors.
+ */
 class HeaderChain
 {
 public:
+    //! Throws std::invalid_argument when `genesis` is not params.hashGenesisBlock:
+    //! a tree rooted anywhere else would only fail later, header by header.
     HeaderChain(const Consensus::Params& params, const CBlockHeader& genesis);
     HeaderChain(const HeaderChain&) = delete;
     HeaderChain& operator=(const HeaderChain&) = delete;

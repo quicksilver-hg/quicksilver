@@ -61,6 +61,7 @@ public:
     }
     TokenPipeEnd& operator=(TokenPipeEnd&& other)
     {
+        if (this == &other) return *this;
         Close();
         m_fd = other.m_fd;
         other.m_fd = -1;

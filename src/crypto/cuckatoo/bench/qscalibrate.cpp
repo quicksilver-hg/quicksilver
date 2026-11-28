@@ -13,7 +13,6 @@
 // distribution, and raw rows let a later reader recompute a statistic we did not
 // think to record.
 
-#include <crypto/cuckatoo/bench/gpu_csv.h>
 #include <crypto/cuckatoo/bench/registry.h>
 #include <crypto/cuckatoo/cuckatoo.h>
 #include <util/string.h>
@@ -23,7 +22,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -68,43 +66,6 @@ std::vector<unsigned char> KeyedPrepow(const std::vector<unsigned char>& prepow,
 
 } // namespace
 
-//! Re-check a qsgpucalibrate CSV on the CPU. Returns a process exit code.
-int VerifyGpuCsvFile(const std::string& path)
-{
-    std::ifstream in(path);
-    if (!in) {
-        std::fprintf(stderr, "qscalibrate: cannot open %s\n", path.c_str());
-        return 1;
-    }
-    // The pre-image both harnesses are fixed to. qsgpucalibrate.cu carries the
-    // same literal; they must not drift apart.
-    std::vector<unsigned char> prepow(84, 0);  // production block pre-pow width
-    const char* seed = "quicksilver-calibration-vector";
-    std::memcpy(prepow.data(), seed, std::strlen(seed));
-
-    const auto v = cuckatoo::bench::VerifyGpuCsv(in, prepow);
-    if (!v.error.empty()) {
-        std::fprintf(stderr, "qscalibrate: %s: %s\n", path.c_str(), v.error.c_str());
-        return 5;
-    }
-    const std::string summary = path + ": rows=" + util::ToString(v.rows) +
-                                " found=" + util::ToString(v.found) +
-                                " verified=" + util::ToString(v.verified) +
-                                " consensus_checked=" + util::ToString(v.consensus_checked) +
-                                " failed=" + util::ToString(v.failed_nonces.size()) + "\n";
-    std::fputs(summary.c_str(), stdout);
-    if (!v.failed_nonces.empty()) {
-        std::fprintf(stderr, "qscalibrate: %zu cycle(s) FAILED CPU verification; "
-                             "first offending nonces:", v.failed_nonces.size());
-        for (size_t i = 0; i < v.failed_nonces.size() && i < 20; ++i) {
-            std::fprintf(stderr, " %u", v.failed_nonces[i]);
-        }
-        std::fprintf(stderr, "\n");
-        return 4;
-    }
-    return 0;
-}
-
 //! Six fixed decimal places, locale-independently. printf's "%.6f" honours
 //! the numeric locale, so under a comma-decimal one it emits "1,234567" and silently
 //! corrupts the CSV this tool exists to produce. The measurement is a duration, so
@@ -122,21 +83,6 @@ int main(int argc, char* argv[])
 {
     unsigned edgebits = 0, graphs = 0, threads = 0;
     bool have_edgebits = false, have_graphs = false, have_threads = false;
-
-    // Verification mode is a different job from timing: it consumes a GPU run's
-    // output instead of producing one, so it takes no other flags.
-    const std::string_view kVerifyFlag{"--verify-gpu-csv="};
-    for (int i = 1; i < argc; ++i) {
-        const std::string_view arg{argv[i]};
-        if (arg.substr(0, kVerifyFlag.size()) == kVerifyFlag) {
-            if (argc != 2) {
-                std::fprintf(stderr,
-                             "qscalibrate: --verify-gpu-csv takes no other arguments\n");
-                return 1;
-            }
-            return VerifyGpuCsvFile(std::string(arg.substr(kVerifyFlag.size())));
-        }
-    }
 
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg{argv[i]};
@@ -165,8 +111,7 @@ int main(int argc, char* argv[])
 
     if (!have_edgebits || !have_graphs) {
         std::fprintf(stderr,
-                     "usage: qscalibrate --edgebits=N --graphs=N [--threads=N]\n"
-                     "       qscalibrate --verify-gpu-csv=PATH\n");
+                     "usage: qscalibrate --edgebits=N --graphs=N [--threads=N]\n");
         return 1;
     }
     if (edgebits > 255) {

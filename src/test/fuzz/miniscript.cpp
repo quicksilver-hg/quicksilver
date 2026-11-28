@@ -880,7 +880,10 @@ NodeRef GenNode(MsCtx script_ctx, F ConsumeNode, Type root_type, bool strict_val
             // used in the miniscript::internal::Parse function to prevent runaway string parsing.
             scriptsize += miniscript::internal::ComputeScriptLen(node_info->fragment, ""_mst, node_info->subtypes.size(), node_info->k, node_info->subtypes.size(),
                                                                  node_info->keys.size(), script_ctx) - 1;
-            if (scriptsize > MAX_STANDARD_P2WSH_SCRIPT_SIZE) return {};
+            // S0397-A-01: the standard P2WSH size limit applies to P2WSH only.
+            // Tapscript has its own limit (MaxScriptSize below), so a large
+            // Tapscript is generated and tested rather than discarded here.
+            if (!miniscript::IsTapscript(script_ctx) && scriptsize > MAX_STANDARD_P2WSH_SCRIPT_SIZE) return {};
             switch (node_info->fragment) {
             case Fragment::JUST_0:
             case Fragment::JUST_1:

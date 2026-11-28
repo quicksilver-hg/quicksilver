@@ -76,9 +76,8 @@ of citation are not, and were corrected rather than kept:
   named the *policy*. That distinction did not survive inspection: `RelayPoolAccept`
   sets replacement eligibility from conflicts alone, so nothing ever read the
   signal. The signalling apparatus was dead code wearing an accurate citation, and
-  both went together. What remains are the "Rule 3/6 analog" comments in
-  `policy/replacement.h`, which cite BIP125's *rules* as the lineage of a work-denominated
-  test that really is descended from them.
+  both went together. Quicksilver checks both the total surplus work and
+  its rate when evaluating a replacement.
   BIP133 describes a fee-rate filter on transaction relay. An earlier pass kept
   the command registered so BIP324 short ids would stay put, and ignored inbound
   copies. That is the same mistake: a fee-named protocol message wearing a

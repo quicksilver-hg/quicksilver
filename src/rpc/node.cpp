@@ -19,12 +19,15 @@
 #include <rpc/server_util.h>
 #include <rpc/util.h>
 #include <scheduler.h>
+#include <support/lockedpool.h>
 #include <univalue.h>
-#include <util/any.h>
 #include <util/check.h>
 #include <util/time.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <stdint.h>
+
 #ifdef HAVE_MALLOC_INFO
 #include <malloc.h>
 #endif

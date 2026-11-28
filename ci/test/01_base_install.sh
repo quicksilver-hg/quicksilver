@@ -92,9 +92,5 @@ if [[ "${RUN_TIDY}" == "true" ]]; then
   make -C /iwyu-build/ install "$MAKEJOBS"
 fi
 
-# XCODE_VERSION is set only in depends/hosts/darwin.mk, which this script
-# never sources, so the old SDK fetch could never run: its `[ -n
-# "$XCODE_VERSION" ]` guard was always false, and the SDK_URL it would have
-# fetched from is not defined anywhere under ci/ either. The depends host
-# still names that SDK for a manual cross build; CI does not download it.
+# The depends host no longer has a macOS SDK; CI downloads none.
 git config --global ${CFG_DONE} "true"

@@ -6,6 +6,7 @@
 """Test the getblockfrompeer RPC."""
 
 from test_framework.authproxy import JSONRPCException
+from test_framework.blocktools import KEEP_WINDOW_GROWTH
 from test_framework.messages import (
     CBlock,
     from_hex,
@@ -122,8 +123,10 @@ class GetBlockFromPeerTest(QuicksilverTestFramework):
         pruned_node = self.nodes[2]
         self.sync_blocks([self.nodes[0], pruned_node])
 
-        # We need to generate more blocks to be able to prune
-        self.generate(self.nodes[0], 400, sync_fun=self.no_op)
+        # We need to generate more blocks to be able to prune. A pruned node keeps
+        # MIN_BLOCKS_TO_KEEP below the tip; the chain grows by the difference from upstream's
+        # 288, so every prune request below is clamped to the same height as before.
+        self.generate(self.nodes[0], 400 + KEEP_WINDOW_GROWTH, sync_fun=self.no_op)
         self.sync_blocks([self.nodes[0], pruned_node])
         pruneheight = pruned_node.pruneblockchain(300)
         assert pruneheight > 0
@@ -147,9 +150,11 @@ class GetBlockFromPeerTest(QuicksilverTestFramework):
         assert_equal(pruned_node.getblock(pruned_block)["hash"], pruned_block)
 
         self.log.info("Fetched block can be pruned again when prune height exceeds the height of the tip at the time when the block was fetched")
-        self.generate(self.nodes[0], 250, sync_fun=self.no_op)
+        # The fetch happened KEEP_WINDOW_GROWTH blocks higher than upstream's, so the request and
+        # the chain both grow by it again: the clamp lands 212 blocks above the fetch tip, as before.
+        self.generate(self.nodes[0], 250 + KEEP_WINDOW_GROWTH, sync_fun=self.no_op)
         self.sync_blocks([self.nodes[0], pruned_node])
-        final_pruneheight = pruned_node.pruneblockchain(1000)
+        final_pruneheight = pruned_node.pruneblockchain(1000 + KEEP_WINDOW_GROWTH)
         assert final_pruneheight > next_pruneheight
         assert_raises_rpc_error(-1, "Block not available (pruned data)", pruned_node.getblock, pruned_block)
 

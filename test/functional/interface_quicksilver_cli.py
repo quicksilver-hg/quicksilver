@@ -400,8 +400,9 @@ class TestQuicksilverCli(QuicksilverTestFramework):
             assert_raises_process_error(1, BLOCKS_VALUE_OF_ZERO, self.nodes[0].cli('-generate', 0).echo)
             assert_raises_process_error(1, TOO_MANY_ARGS, self.nodes[0].cli('-generate', 1, 2, 3).echo)
             # F-641: the node refuses the second stage (generatetoaddress) here. The cli must
-            # pass that error on, not print {address, blocks: null} and exit 0.
-            assert_raises_rpc_error(-1, "JSON integer out of range", self.nodes[0].cli('-generate', 1, 2**40).send_cli)
+            # pass that error on, not print {address, blocks: null} and exit 0. maxtries is a uint64
+            # (F-684), so the first value it cannot hold is 2**64.
+            assert_raises_rpc_error(-1, "JSON integer out of range", self.nodes[0].cli('-generate', 1, 2**64).send_cli)
 
             self.log.info('Test -generate with nblocks')
             generate = self.nodes[0].cli('-generate', n1).send_cli()

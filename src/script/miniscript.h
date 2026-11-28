@@ -257,8 +257,9 @@ namespace internal {
 //! The maximum size of a witness item for a Miniscript under Tapscript context. (A BIP340 signature with a sighash type byte.)
 static constexpr uint32_t MAX_TAPMINISCRIPT_STACK_ELEM_SIZE{65};
 
-//! version + nLockTime
-constexpr uint32_t TX_OVERHEAD{4 + 4};
+//! version + nLockTime + Quicksilver's per-tx PoW tail: nAnchorHeight (4) + nPowNonce (4) +
+//! 42 nCycle edges (168) = 176 bytes, all non-witness (S0142-A-01; as in spend.cpp's estimate).
+constexpr uint32_t TX_OVERHEAD{4 + 4 + 176};
 //! prevout + nSequence + scriptSig
 constexpr uint32_t TXIN_BYTES_NO_WITNESS{36 + 4 + 1};
 //! nValue + script len + OP_0 + pushdata 32.

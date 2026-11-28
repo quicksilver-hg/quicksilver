@@ -7,6 +7,7 @@
 #include <addresstype.h>
 #include <arith_uint256.h>
 #include <chain.h>
+#include <chainparams.h>
 #include <consensus/amount.h>
 #include <consensus/params.h>
 #include <crypto/cuckatoo/cuckatoo.h>
@@ -35,6 +36,14 @@
 #include <vector>
 
 namespace agent {
+
+bool AllowsAllotmentCpuFallback(uint8_t edgebits, bool allow_cpu_txpow)
+{
+    static const uint8_t sandbox_edgebits{CChainParams::Sandbox({})->GetConsensus().nTxEdgeBits};
+    static const uint8_t real_edgebits{CChainParams::Main()->GetConsensus().nTxEdgeBits};
+    return edgebits == sandbox_edgebits || (edgebits == real_edgebits && allow_cpu_txpow);
+}
+
 namespace {
 
 util::Result<void> ImportAgentDescriptor(AllotmentSpendContext& context)
@@ -138,13 +147,12 @@ util::Result<void> ProveAgentSpend(CMutableTransaction& transaction,
     if (anchor == nullptr || anchor->nHeight < 0) {
         return util::Error{Untranslated("Per-transaction proof-of-work requires a validated anchor.")};
     }
-    // F-51: this used to refuse outright, because a header-only chain carried no
-    // congestion multiplier and proving against the wrong target is worse than not
-    // proving at all. nCongestion is now a header field (header-field congestion pricing), so the anchor
-    // index carries the real m. See doc/design/agent-client.md for what that is and is
-    // not worth: the value is unvalidated SPV-grade — a full node would have rejected
-    // the block at connect if it were wrong — and both failure directions are bounded
-    // (too high wastes work, too low gets the transaction rejected; neither loses funds).
+    // nCongestion is a header field (header-field congestion pricing), so the anchor
+    // index carries the real multiplier m. See doc/design/agent-client.md for what that
+    // is and is not worth: the value is unvalidated SPV-grade -- a full node would have
+    // rejected the block at connect if it were wrong -- and both failure directions are
+    // bounded (too high wastes work, too low gets the transaction rejected; neither
+    // loses funds).
     transaction.nAnchorHeight = static_cast<uint32_t>(anchor->nHeight);
 
     // The agent grinds before the cosigner signs, so price the largest witness
@@ -183,7 +191,7 @@ util::Result<void> ProveAgentSpend(CMutableTransaction& transaction,
             // to read identically, which sent an operator with a working
             // -cuckatoosolver and selected -cuckatoodevice but a dead card looking
             // for a configuration mistake.
-            if (const auto fault = cuckatoo::SolverFault(solver_status, cpu_fallback)) {
+            if (const auto fault = cuckatoo::SolverFault(solver_status, cpu_fallback, "-allowcputxpow")) {
                 return util::Error{Untranslated("Per-transaction proof-of-work failed. " + *fault)};
             }
             return util::Error{Untranslated("Could not produce per-tx proof-of-work")};

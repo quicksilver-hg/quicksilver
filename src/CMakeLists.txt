@@ -153,7 +153,6 @@ add_library(quicksilver_common STATIC EXCLUDE_FROM_ALL
   common/messages.cpp
   common/netif.cpp
   common/pcp.cpp
-  common/run_command.cpp
   common/settings.cpp
   common/signmessage.cpp
   common/system.cpp
@@ -162,7 +161,6 @@ add_library(quicksilver_common STATIC EXCLUDE_FROM_ALL
   core_read.cpp
   core_write.cpp
   deploymentinfo.cpp
-  external_signer.cpp
   gpu/helper_config.cpp
   init/common.cpp
   kernel/chainparams.cpp
@@ -205,7 +203,6 @@ target_link_libraries(quicksilver_common
 add_library(quicksilver_agent STATIC EXCLUDE_FROM_ALL
   agent/agentclient.cpp
   agent/agentpeer.cpp
-  agent/agentpeerset.cpp
   agent/headerdriver.cpp
   agent/headermessages.cpp
   agent/headerchain.cpp
@@ -331,9 +328,7 @@ add_library(quicksilver_node STATIC EXCLUDE_FROM_ALL
   policy/replacement.cpp
   policy/settings.cpp
   policy/truc_policy.cpp
-  rest.cpp
   rpc/blockchain.cpp
-  rpc/external_signer.cpp
   rpc/relaypool.cpp
   rpc/mining.cpp
   rpc/net.cpp
@@ -431,28 +426,6 @@ endif()
 
 if(BUILD_GUI)
   add_subdirectory(qt)
-endif()
-
-
-if(BUILD_KERNEL_LIB)
-  add_subdirectory(kernel)
-endif()
-
-if(BUILD_UTIL_CHAINSTATE)
-  add_executable(quicksilver-chainstate
-    quicksilver-chainstate.cpp
-  )
-  # TODO: The `SKIP_BUILD_RPATH` property setting can be deleted
-  #       in the future after reordering Guix script commands to
-  #       perform binary checks after the installation step.
-  set_target_properties(quicksilver-chainstate PROPERTIES
-    SKIP_BUILD_RPATH OFF
-  )
-  target_link_libraries(quicksilver-chainstate
-    PRIVATE
-      core_interface
-      quicksilverkernel
-  )
 endif()
 
 

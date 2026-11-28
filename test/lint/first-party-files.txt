@@ -41,13 +41,10 @@ contrib/release/stage-release.py
 contrib/release/test_release_tooling.py
 contrib/release/verify-release.sh
 contrib/tor/fetch-tor.ps1
-contrib/windows/build-qsgpusolve-cuda-windows.ps1
 src/agent/agentclient.cpp
 src/agent/agentclient.h
 src/agent/agentpeer.cpp
 src/agent/agentpeer.h
-src/agent/agentpeerset.cpp
-src/agent/agentpeerset.h
 src/agent/allotmentpolicy.cpp
 src/agent/allotmentpolicy.h
 src/agent/allotmentspend.cpp
@@ -76,12 +73,11 @@ src/agent/txmessages.cpp
 src/agent/txmessages.h
 src/agent/txpeer.cpp
 src/agent/txpeer.h
+src/bench/cuckatoo_verify.cpp
 src/common/executable.cpp
 src/common/executable.h
 src/crypto/cuckatoo/CMakeLists.txt
 src/crypto/cuckatoo/bench/CMakeLists.txt
-src/crypto/cuckatoo/bench/gpu_csv.cpp
-src/crypto/cuckatoo/bench/gpu_csv.h
 src/crypto/cuckatoo/bench/qscalibrate.cpp
 src/crypto/cuckatoo/bench/registry.cpp
 src/crypto/cuckatoo/bench/registry.h
@@ -90,16 +86,13 @@ src/crypto/cuckatoo/blake2_prelude.h
 src/crypto/cuckatoo/cuckatoo.h
 src/crypto/cuckatoo/dispatch.cpp
 src/crypto/cuckatoo/gpu/CMakeLists.txt
-src/crypto/cuckatoo/gpu/device_health.cuh
 src/crypto/cuckatoo/gpu/listing_format.h
 src/crypto/cuckatoo/gpu/opencl_api.h
 src/crypto/cuckatoo/gpu/opencl_devices.cpp
 src/crypto/cuckatoo/gpu/opencl_devices.h
 src/crypto/cuckatoo/gpu/opencl_loader.cpp
 src/crypto/cuckatoo/gpu/opencl_loader.h
-src/crypto/cuckatoo/gpu/qsgpucalibrate.cu
 src/crypto/cuckatoo/gpu/qsgpusolve-opencl.cpp
-src/crypto/cuckatoo/gpu/qsgpusolve-cuda.cu
 src/crypto/cuckatoo/gpu/watchdog_check.h
 src/crypto/cuckatoo/gpu_devices.cpp
 src/crypto/cuckatoo/gpu_devices.h
@@ -123,6 +116,7 @@ src/node/block_solve.cpp
 src/node/block_solve.h
 src/node/mining_service.cpp
 src/node/mining_service.h
+src/node/prune_args.h
 src/qt/agentallotmentpage.cpp
 src/qt/agentallotmentpage.h
 src/qt/benchpanel.cpp
@@ -177,7 +171,6 @@ src/test/agent_headerchain_tests.cpp
 src/test/bundled_tor_tests.cpp
 src/test/chaintype_tests.cpp
 src/test/contained_child_tests.cpp
-src/test/cuckatoo_bench_gpu_csv_tests.cpp
 src/test/cuckatoo_bench_registry_tests.cpp
 src/test/cuckatoo_bench_solve_tests.cpp
 src/test/cuckatoo_f265_capture_tests.cpp
@@ -229,6 +222,7 @@ test/functional/feature_quicksilver_no_fee_rpcs.py
 test/functional/feature_quicksilver_replace.py
 test/functional/feature_quicksilver_txpow_anchor.py
 test/functional/feature_quicksilver_txwork_pricing.py
+test/functional/feature_rest_removed.py
 test/functional/mining_service.py
 test/functional/mining_zero_claim.py
 test/functional/p2p_handshake_failure_warning.py
@@ -253,6 +247,7 @@ test/lint/lint-desktop-packaging.py
 test/lint/lint-logo-assets.py
 test/lint/lint-platform-guarded-tests.py
 test/lint/lint-qt-branding.py
+test/lint/lint-qt-resources.py
 test/lint/lint-quicksilver-agent-prove-help.py
 test/lint/lint-quicksilver-bitcoin-term-variants.py
 test/lint/lint-quicksilver-bitcoin-unit-residue.py

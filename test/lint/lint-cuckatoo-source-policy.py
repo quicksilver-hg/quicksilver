@@ -95,12 +95,7 @@ def check_tree(repo_root: Path) -> list[str]:
         "solve_28.cpp": '"vendor/lean.cpp"',
         "verify_19.cpp": '"vendor/cuckatoo.h"',
         "verify_28.cpp": '"vendor/cuckatoo.h"',
-        "gpu/qsgpusolve-cuda.cu": '"../vendor/lean.cu"',
         "gpu/qsgpusolve-opencl.cpp": '"../vendor/lean_ocl.hpp"',
-        # Calibration-only CUDA twin of qsgpusolve-cuda: times every graph instead of
-        # stopping at the first cycle. Built only by gpu/Makefile (nvcc), never by
-        # CMake, so it cannot reach a node binary; see gpu/qsgpucalibrate.cu.
-        "gpu/qsgpucalibrate.cu": '"../vendor/lean.cu"',
         # Calibration-only template, generated per EDGEBITS by configure_file.
         # EXCLUDE_FROM_ALL and never linked into a node binary; see
         # src/crypto/cuckatoo/bench/CMakeLists.txt.
@@ -241,13 +236,6 @@ def create_valid_fixture(repo_root: Path) -> Path:
             '#include "vendor/cuckatoo.h"\n'
             "}\n",
         )
-    write(
-        cuckatoo / "gpu/qsgpusolve-cuda.cu",
-        "#define CUCKATOO_NO_MAIN\n"
-        "#define SQUASH_OUTPUT 1\n"
-        '#include "../vendor/lean.cu"\n'
-        "int main() { return 0; }\n",
-    )
     write(cuckatoo / "gpu_solver.cpp", "int parse_nonce() { return 0; }\n")
     write(cuckatoo / "dispatch.cpp", '#include <crypto/cuckatoo/cuckatoo.h>\n')
     write(
@@ -313,7 +301,7 @@ def run_self_tests() -> int:
 
         bad_cmake = tmp / "bad_cmake"
         cuckatoo = create_valid_fixture(bad_cmake)
-        write(cuckatoo / "CMakeLists.txt", "add_library(quicksilver_cuckatoo STATIC gpu/qsgpusolve-cuda.cu)\n")
+        write(cuckatoo / "CMakeLists.txt", "add_library(quicksilver_cuckatoo STATIC gpu/helper.cu)\n")
         failures.extend(expect_violation("bad cmake", bad_cmake, ".cu"))
 
         missing_solver = tmp / "missing_solver"

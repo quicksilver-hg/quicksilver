@@ -15,8 +15,10 @@ public:
     SIZE = size;
     BITMAP_WORDS = SIZE / BITS_PER_WORD;
     bits = new aword_t[BITMAP_WORDS];
-    assert(bits != 0);
   }
+  bitmap(const bitmap&) = delete;
+  bitmap& operator=(const bitmap&) = delete;
+
   ~bitmap() {
     freebits();
   }
@@ -27,11 +29,6 @@ public:
   void clear() {
     assert(bits);
     memset((word_t *)bits, 0, BITMAP_WORDS*sizeof(word_t));
-  }
- void prefetch(word_t u) const {
-#ifdef PREFETCH
-    __builtin_prefetch((const void *)(&bits[u/BITS_PER_WORD]), /*READ=*/0, /*TEMPORAL=*/0);
-#endif
   }
   void set(word_t u) {
     word_t idx = u / BITS_PER_WORD;

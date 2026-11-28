@@ -120,9 +120,6 @@ bool LaunchOpensVaultOnly(const ArgsManager& args, const QuicksilverApplication:
 bool IsChainSelectorArgument(QString arg)
 {
     if (arg.startsWith(QLatin1String("--"))) arg.remove(0, 1);
-#ifdef WIN32
-    if (arg.startsWith(QLatin1Char('/'))) arg[0] = QLatin1Char('-');
-#endif
     const QString lower = arg.toLower();
     return lower == QLatin1String("-sandbox") ||
         lower.startsWith(QLatin1String("-sandbox=")) ||
@@ -139,9 +136,6 @@ bool IsChainSelectorArgument(QString arg)
 bool IsSandboxOnlyArgument(QString arg)
 {
     if (arg.startsWith(QLatin1String("--"))) arg.remove(0, 1);
-#ifdef WIN32
-    if (arg.startsWith(QLatin1Char('/'))) arg[0] = QLatin1Char('-');
-#endif
     const QString lower = arg.toLower();
     return lower == QLatin1String("-test") ||
         lower.startsWith(QLatin1String("-test=")) ||
@@ -233,11 +227,7 @@ static void RegisterMetaTypes()
     qRegisterMetaType<QMessageBox::Icon>("QMessageBox::Icon");
     qRegisterMetaType<interfaces::BlockAndHeaderTipInfo>("interfaces::BlockAndHeaderTipInfo");
 
-#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
     qRegisterMetaTypeStreamOperators<QuicksilverUnit>("QuicksilverUnit");
-#else
-    qRegisterMetaType<QuicksilverUnit>("QuicksilverUnit");
-#endif
 }
 
 static QString GetLangTerritory()
@@ -275,11 +265,7 @@ static void initTranslations(QTranslator &qtTranslatorBase, QTranslator &qtTrans
     // The Quicksilver application itself is English-only (SP4), so no app
     // translator is installed.
 
-#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
     const QString translation_path{QLibraryInfo::location(QLibraryInfo::TranslationsPath)};
-#else
-    const QString translation_path{QLibraryInfo::path(QLibraryInfo::TranslationsPath)};
-#endif
     // Load e.g. qt_de.qm
     if (qtTranslatorBase.load("qt_" + lang, translation_path)) {
         QApplication::installTranslator(&qtTranslatorBase);
@@ -504,9 +490,6 @@ void QuicksilverApplication::createVaultController()
         m_vault_controller->setClientModel(clientModel);
     }
     window->setVaultController(m_vault_controller, /*show_loading_minimized=*/gArgs.GetBoolArg("-min", false));
-    if (paymentServer && optionsModel) {
-        paymentServer->setOptionsModel(optionsModel);
-    }
 }
 #endif // ENABLE_VAULT
 
@@ -681,7 +664,7 @@ void QuicksilverApplication::finishShutdown()
     clientModel = nullptr;
 
     if (!m_executor) {
-        node().appShutdown();
+        shutDownNodeOnce();
         launchPendingRestart();
         QCoreApplication::exit(0);
         return;
@@ -694,6 +677,16 @@ void QuicksilverApplication::finishShutdown()
     SessionEnd::InstallExitWait();
     SessionEnd::ExitLatch().MarkStarted();
     Q_EMIT requestedShutdown();
+}
+
+void QuicksilverApplication::shutDownNodeOnce()
+{
+    // After a failed consensus start the executor has already run appShutdown and
+    // is gone, so a later quit lands here. A second appShutdown would run every
+    // -shutdownnotify command again (S0234-A-03).
+    if (m_node_shut_down) return;
+    m_node_shut_down = true;
+    node().appShutdown();
 }
 
 void QuicksilverApplication::cleanupFailedConsensusInitialization()
@@ -709,7 +702,7 @@ void QuicksilverApplication::cleanupFailedConsensusInitialization()
 
         m_consensus_failure_cleanup = true;
         if (!m_executor) {
-            node().appShutdown();
+            shutDownNodeOnce();
             m_consensus_failure_cleanup = false;
             return;
         }
@@ -728,6 +721,7 @@ void QuicksilverApplication::shutdownResult()
 {
     if (m_consensus_failure_cleanup) {
         m_consensus_failure_cleanup = false;
+        m_node_shut_down = true;
         m_executor.reset();
         return;
     }
@@ -853,7 +847,7 @@ static void SetupUIArgs(ArgsManager& argsman)
     argsman.AddArg("-min", "Start minimized", ArgsManager::ALLOW_ANY, OptionsCategory::GUI);
     argsman.AddArg("-resetguisettings", "Reset all settings changed in the GUI", ArgsManager::ALLOW_ANY, OptionsCategory::GUI);
     argsman.AddArg("-splash", strprintf("Show splash screen on startup (default: %u)", DEFAULT_SPLASHSCREEN), ArgsManager::ALLOW_ANY, OptionsCategory::GUI);
-    argsman.AddArg("-uiplatform", strprintf("Select platform to customize UI for (one of windows, macosx, other; default: %s)", QuicksilverGUI::DEFAULT_UIPLATFORM), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::GUI);
+    argsman.AddArg("-uiplatform", strprintf("Select platform to customize UI for (one of windows, other; default: %s)", QuicksilverGUI::DEFAULT_UIPLATFORM), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::GUI);
 }
 
 #if defined(Q_OS_LINUX)
@@ -966,17 +960,10 @@ int GuiMain(int argc, char* argv[])
     /// 1. Basic Qt initialization (not dependent on parameters or configuration)
     Q_INIT_RESOURCE(quicksilver);
 
-#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
     // Generate high-dpi pixmaps
     QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
-#endif
 
-#if defined(QT_QPA_PLATFORM_ANDROID)
-    QApplication::setAttribute(Qt::AA_DontUseNativeMenuBar);
-    QApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
-    QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
-#endif
 
 #if defined(Q_OS_LINUX)
     const LinuxStartupAction startup_action{CheckLinuxStartup(argc, argv)};
@@ -1009,7 +996,6 @@ int GuiMain(int argc, char* argv[])
     QObject::connect(&app, &QGuiApplication::saveStateRequest, &app, no_session_restart, Qt::DirectConnection);
     QObject::connect(&app, &QGuiApplication::commitDataRequest, &app, no_session_restart, Qt::DirectConnection);
     if (!print_only) {
-        GUIUtil::LoadFont(QStringLiteral(":/fonts/monospace"));
         GUIUtil::LoadUnitGlyph();
     }
 

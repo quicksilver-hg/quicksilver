@@ -53,7 +53,7 @@ private:
         ERR
     };
 
-    size_t couldSignInputs(const PartiallySignedQuicksilverTransaction &psqtx);
+    size_t couldSignInputs();
     void updateTransactionDisplay();
     QString renderTransaction(const PartiallySignedQuicksilverTransaction &psqtx);
     void showStatus(const QString &msg, StatusLevel level);

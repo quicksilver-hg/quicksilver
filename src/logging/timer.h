@@ -25,9 +25,8 @@ class Timer
 {
 public:
     //! log_category is mandatory: it becomes the [tag] every line is rendered
-    //! with. log_level decides whether the line is gated by -debug= (Debug) or
-    //! is unconditional (Info) -- it is deliberately independent of the
-    //! category, so an unconditional timer still names its own surface.
+    //! with. Debug output requires an enabled category and severity level.
+    //! Info uses the regular logger and remains subject to disk rate limiting.
     Timer(
         std::string prefix,
         std::string end_msg,
@@ -95,7 +94,7 @@ private:
     //! The category this timer logs under; rendered as the line's [tag].
     const HgLog::LogFlags m_log_category;
 
-    //! Info logs unconditionally; Debug is gated by -debug=<category>.
+    //! Severity level used to choose the logging path.
     const HgLog::Level m_log_level;
 
     //! Whether to output the message again on completion.

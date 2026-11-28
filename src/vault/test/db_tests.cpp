@@ -3,25 +3,23 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <quicksilver-build-config.h> // IWYU pragma: keep
-
 #include <boost/test/unit_test.hpp>
 
 #include <test/util/setup_common.h>
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/translation.h>
-#ifdef USE_SQLITE
 #include <sqlite3.h>
 #include <vault/sqlite.h>
-#endif
 #include <vault/test/util.h>
+#include <vault/vaultdb.h>
 #include <vault/vaultutil.h> // for VAULT_FLAG_DESCRIPTORS
 
 #include <fstream>
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <stdexcept>
 
 inline std::ostream& operator<<(std::ostream& os, const std::pair<const SerializeData, SerializeData>& kv)
 {
@@ -67,16 +65,13 @@ static std::vector<std::unique_ptr<VaultDatabase>> TestDatabases(const fs::path&
     DatabaseOptions options;
     DatabaseStatus status;
     bilingual_str error;
-#ifdef USE_SQLITE
     dbs.emplace_back(MakeSQLiteDatabase(path_root / "sqlite", options, status, error));
     // A null database would be dereferenced by every caller (S0205-C-02).
     BOOST_REQUIRE_MESSAGE(dbs.back(), error.original);
-#endif
     dbs.emplace_back(CreateMockableVaultDatabase());
     return dbs;
 }
 
-#ifdef USE_SQLITE
 BOOST_AUTO_TEST_CASE(sqlite_erase_zeroes_the_record)
 {
     DatabaseOptions options;
@@ -104,8 +99,6 @@ BOOST_AUTO_TEST_CASE(sqlite_erase_zeroes_the_record)
     file.read(std::as_writable_bytes(std::span{bytes}));
     BOOST_CHECK(std::search(bytes.begin(), bytes.end(), secret.begin(), secret.end()) == bytes.end());
 }
-#endif
-
 BOOST_AUTO_TEST_CASE(db_cursor_prefix_range_test)
 {
     // Test each supported db
@@ -234,8 +227,6 @@ BOOST_AUTO_TEST_CASE(erase_prefix)
     }
 }
 
-#ifdef USE_SQLITE
-
 // Test-only statement execution error
 constexpr int TEST_SQLITE_ERROR = -999;
 
@@ -251,6 +242,68 @@ public:
         return m_base_exec.Exec(database, statement);
     }
 };
+
+class FailReopenSQLiteDatabase : public SQLiteDatabase {
+public:
+    using SQLiteDatabase::SQLiteDatabase;
+    bool fail_open{false};
+    void Open() override
+    {
+        if (fail_open) throw std::runtime_error("injected reopen failure");
+        SQLiteDatabase::Open();
+    }
+};
+
+BOOST_AUTO_TEST_CASE(reopen_failure_releases_write_semaphore)
+{
+    DatabaseOptions options;
+    const fs::path dir{m_path_root / "reopen-failure"};
+    FailReopenSQLiteDatabase database{dir, dir / "vault.dat", options};
+    auto batch{std::make_unique<SQLiteBatch>(database)};
+    BOOST_REQUIRE(batch->TxnBegin());
+    BOOST_REQUIRE(batch->Write(std::string{"key"}, std::string{"value"}));
+    batch->SetExecHandler(std::make_unique<DbExecBlocker>(std::set<std::string>{"ROLLBACK TRANSACTION"}));
+    database.fail_open = true;
+    batch.reset(); // destructor must swallow the injected reopen exception
+    database.fail_open = false;
+    database.Open();
+    auto next{database.MakeBatch()};
+    BOOST_CHECK(next->Write(std::string{"after"}, std::string{"ok"}));
+}
+
+BOOST_AUTO_TEST_CASE(run_within_txn_aborts_after_callback_throw)
+{
+    DatabaseOptions options;
+    DatabaseStatus status;
+    bilingual_str error;
+    auto database{MakeSQLiteDatabase(m_path_root / "txn-throw", options, status, error)};
+    BOOST_REQUIRE_MESSAGE(database, error.original);
+    BOOST_CHECK(!RunWithinTxn(*database, "injected callback", [](VaultBatch& batch) -> bool {
+        if (!batch.WriteName("addr", "label")) return false;
+        throw std::runtime_error("injected callback failure");
+    }));
+    BOOST_CHECK(!database->HasActiveTxn());
+    auto batch{database->MakeBatch()};
+    BOOST_CHECK(!batch->Exists(std::make_pair(DBKeys::NAME, std::string{"addr"})));
+    BOOST_CHECK(batch->Write(std::string{"after"}, std::string{"ok"}));
+}
+
+BOOST_AUTO_TEST_CASE(batch_constructor_finalizes_on_prepare_failure)
+{
+    DatabaseOptions options;
+    DatabaseStatus status;
+    bilingual_str error;
+    auto database{MakeSQLiteDatabase(m_path_root / "missing-table", options, status, error)};
+    BOOST_REQUIRE_MESSAGE(database, error.original);
+    // As a view, "main" lets the SELECT prepare and the INSERT fail, so the batch
+    // throws with one statement already prepared; it must be finalized.
+    BOOST_REQUIRE_EQUAL(sqlite3_exec(database->m_db, "DROP TABLE main; CREATE VIEW main AS SELECT x'00' AS key, x'00' AS value", nullptr, nullptr, nullptr), SQLITE_OK);
+    BOOST_CHECK_THROW(SQLiteBatch{*database}, std::runtime_error);
+    BOOST_CHECK(sqlite3_next_stmt(database->m_db, nullptr) == nullptr);
+    BOOST_REQUIRE_EQUAL(sqlite3_exec(database->m_db, "DROP VIEW main; CREATE TABLE main(key BLOB PRIMARY KEY NOT NULL, value BLOB NOT NULL)", nullptr, nullptr, nullptr), SQLITE_OK);
+    auto batch{database->MakeBatch()};
+    BOOST_CHECK(batch->Write(std::string{"key"}, std::string{"value"}));
+}
 
 BOOST_AUTO_TEST_CASE(txn_close_failure_dangling_txn)
 {
@@ -330,7 +383,5 @@ BOOST_AUTO_TEST_CASE(second_batch_cannot_end_another_batchs_txn)
     BOOST_CHECK(handler2->Read(key, read_value));
     BOOST_CHECK_EQUAL(read_value, value2);
 }
-#endif // USE_SQLITE
-
 BOOST_AUTO_TEST_SUITE_END()
 } // namespace vault

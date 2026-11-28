@@ -16,6 +16,10 @@
 // We can't use cpuid.h's __get_cpuid as it does not support subleafs.
 void static inline GetCPUID(uint32_t leaf, uint32_t subleaf, uint32_t& a, uint32_t& b, uint32_t& c, uint32_t& d)
 {
+    if (leaf > __get_cpuid_max(leaf & 0x80000000U, nullptr)) {
+        a = b = c = d = 0;
+        return;
+    }
 #ifdef __GNUC__
     __cpuid_count(leaf, subleaf, a, b, c, d);
 #else

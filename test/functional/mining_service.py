@@ -10,7 +10,7 @@ from pathlib import Path
 from decimal import Decimal
 
 from test_framework.address import address_to_scriptpubkey
-from test_framework.blocktools import quicksilver_sandbox_subsidy
+from test_framework.blocktools import PRUNE_FLOOR_MIB, quicksilver_sandbox_subsidy
 from test_framework.test_framework import QuicksilverTestFramework
 from test_framework.test_node import ErrorMatch
 from test_framework.util import assert_equal, assert_raises_rpc_error
@@ -270,8 +270,8 @@ class MiningServiceTest(QuicksilverTestFramework):
         env.update({"QS_SOLVER_STUB_SCRIPT": str(script),
                     "QS_SOLVER_STUB_LISTING": str(listing), "QS_SOLVER_STUB_DEVICE_SCRIPTS": str(mapping)})
         # -prune: on a first start the node warns on stderr when the disk can't hold the whole publictest chain
-        # (128 GB), which this case never downloads; pruned, the check asks for 550 MB.
-        self.start_node(0, extra_args=["-maxconnections=0", "-prune=550", "-minescript=6a", f"-cuckatoosolver={stub}",
+        # (128 GB), which this case never downloads; pruned at the chain's floor, the check asks for that much instead.
+        self.start_node(0, extra_args=["-maxconnections=0", f"-prune={PRUNE_FLOOR_MIB}", "-minescript=6a", f"-cuckatoosolver={stub}",
                                        *(f"-cuckatoodevice={card}" for card in ids)], env=env)
         node.startmining()
         def both_measured():

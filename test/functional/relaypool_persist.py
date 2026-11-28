@@ -175,8 +175,16 @@ class RelayPoolPersistTest(QuicksilverTestFramework):
         # which is an implementation detail that could change and break this test
         relaypooldotnew1 = relaypooldat1 + '.new'
         os.mkdir(relaypooldotnew1)
-        assert_raises_rpc_error(-1, "Unable to dump relay pool to disk", self.nodes[1].saverelaypool)
+        with self.nodes[1].assert_debug_log(["saved reason=file-open-failed"]):
+            assert_raises_rpc_error(-1, "Unable to dump relay pool to disk", self.nodes[1].saverelaypool)
         os.rmdir(relaypooldotnew1)
+
+        self.log.debug("A dump file of another version is refused, and debug.log says why")
+        wrong_version = os.path.join(self.nodes[1].datadir_path, "wrong_version.dat")
+        with open(wrong_version, "wb") as f:
+            f.write((3).to_bytes(8, "little"))
+        with self.nodes[1].assert_debug_log(["loaded reason=wrong-version version=3 expected=4"]):
+            assert_raises_rpc_error(-1, "Unable to import relay pool file, see debug.log for details.", self.nodes[1].importrelaypool, wrong_version)
 
         self.test_importrelaypool_union()
         self.test_persist_unbroadcast()

@@ -4,12 +4,17 @@
 
 #include <agent/headersync.h>
 
-#include <util/check.h>
+#include <net_processing.h>
 
 #include <algorithm>
 #include <cassert>
+#include <stdexcept>
 
 namespace agent {
+
+// The agent asks the node for headers and sizes its replies by the same cap.
+static_assert(DEFAULT_MAX_HEADERS_RESULTS == MAX_HEADERS_RESULTS,
+              "the agent's headers cap must match the node's MAX_HEADERS_RESULTS");
 
 const char* HeaderSyncResultCodeString(HeaderSyncResultCode code)
 {
@@ -37,7 +42,11 @@ HeaderSyncSession::HeaderSyncSession(HeaderChain& chain, size_t max_headers_resu
     : m_chain{chain},
       m_max_headers_result{max_headers_result}
 {
-    Assume(m_max_headers_result > 0);
+    // A zero cap would refuse every non-empty headers reply as TOO_MANY_HEADERS and
+    // the peer could never be synced; Assume() let that through in release builds.
+    if (m_max_headers_result == 0) {
+        throw std::invalid_argument("agent header sync: max_headers_result must be positive");
+    }
 }
 
 HeaderSyncRequest HeaderSyncSession::NextHeadersRequest(const uint256& stop_hash)
@@ -54,7 +63,7 @@ HeaderSyncProcessResult HeaderSyncSession::Result(HeaderSyncResultCode code,
                                                   size_t accepted_count,
                                                   size_t duplicate_count,
                                                   bool request_more,
-                                                  bool peer_synced) const
+                                                  bool peer_synced)
 {
     return {code, header_result, accepted_count, duplicate_count, request_more, peer_synced};
 }
@@ -95,7 +104,9 @@ HeaderSyncProcessResult HeaderSyncSession::ProcessHeaders(std::span<const CBlock
 
     m_request_in_flight = false;
     if (accepted_count == 0) {
-        if (duplicate_count == headers.size() && highest_duplicate_height > m_last_request_tip_height) {
+        // Every header here was a duplicate (anything else returned above), so only the
+        // height decides: did the reply reach past the tip this request started from?
+        if (highest_duplicate_height > m_last_request_tip_height) {
             const bool request_more{headers.size() == m_max_headers_result};
             m_peer_synced = !request_more;
             return Result(HeaderSyncResultCode::DUPLICATE_HEADERS,

@@ -5,9 +5,12 @@
 #include <qt/quicksilverstyle.h>
 
 #include <QApplication>
+#include <QList>
+#include <QPair>
 #include <QPalette>
 #include <QProxyStyle>
 #include <QStyleFactory>
+#include <QString>
 
 namespace QuicksilverStyle {
 
@@ -36,12 +39,6 @@ QColor Color(Token token)
         return QColor(QStringLiteral("#f5f7f9"));
     case Token::SilverMuted:
         return QColor(QStringLiteral("#8e9aa3"));
-    case Token::Teal:
-        return QColor(QStringLiteral("#9bd7c8"));
-    case Token::Amber:
-        return QColor(QStringLiteral("#f1cf7a"));
-    case Token::Violet:
-        return QColor(QStringLiteral("#c3ace8"));
     case Token::BenchSurface:
         return QColor(QStringLiteral("#15181c"));
     case Token::BenchSurfaceRaised:
@@ -157,14 +154,14 @@ QMainWindow QWidget, QDialog QWidget {
 }
 QToolTip {
     background-color: #20262b;
-    border: 1px solid #6b3431;
+    border: 1px solid {cinnabar_fill};
     color: #f5f7f9;
     padding: 5px 7px;
 }
 QMenuBar {
-    background-color: #0b0d0f;
+    background-color: {bench_top};
     border: 0;
-    border-bottom: 1px solid #2d2222;
+    border-bottom: 1px solid {hairline};
     color: #ccd5dc;
     padding: 3px 8px;
     spacing: 4px;
@@ -189,7 +186,7 @@ QMenu::item {
     padding: 6px 24px 6px 9px;
 }
 QMenu::item:selected {
-    background-color: #6b3431;
+    background-color: {cinnabar_fill};
     color: #f5f7f9;
 }
 QMenu::separator {
@@ -231,8 +228,6 @@ QLabel#commandRailSectionLabel {
     color: #5f6973;
     font-size: {caption}px;
     font-weight: 700;
-}
-QLabel#commandRailSectionLabel {
     padding: 12px 6px 4px 18px;
 }
 QToolBar#primaryCommandRail QToolButton {
@@ -246,21 +241,6 @@ QToolBar#primaryCommandRail QToolButton {
     padding-left: 16px;
     padding-right: 12px;
     text-align: left;
-}
-QToolBar#primaryCommandRail QToolButton[accent="cinnabar"] {
-    color: #ff7a6c;
-}
-QToolBar#primaryCommandRail QToolButton[accent="teal"] {
-    color: #9bd7c8;
-}
-QToolBar#primaryCommandRail QToolButton[accent="amber"] {
-    color: #f1cf7a;
-}
-QToolBar#primaryCommandRail QToolButton[accent="violet"] {
-    color: #c3ace8;
-}
-QToolBar#primaryCommandRail QToolButton[accent="silver"] {
-    color: #ccd5dc;
 }
 QToolBar#primaryCommandRail QToolButton:checked {
     background-color: #171a1f;
@@ -284,7 +264,7 @@ QPlainTextEdit {
     border-radius: 4px;
     color: #f5f7f9;
     padding: 6px 8px;
-    selection-background-color: #6b3431;
+    selection-background-color: {cinnabar_fill};
     selection-color: #f5f7f9;
 }
 QComboBox:focus,
@@ -351,7 +331,7 @@ QComboBox QAbstractItemView {
     border: 1px solid #39434b;
     color: #ccd5dc;
     outline: 0;
-    selection-background-color: #6b3431;
+    selection-background-color: {cinnabar_fill};
     selection-color: #f5f7f9;
 }
 QCheckBox,
@@ -407,7 +387,6 @@ CoinControlTreeWidget#treeWidget::indicator:disabled {
 QWidget[class="quicksilverPage"] QGroupBox,
 QFrame#coinControlPanel,
 QFrame#sendWorkProgressPanel,
-QFrame[class="consensusCostRow"],
 QFrame#consensusChoicePanel {
     background-color: #171b1f;
     border: 1px solid #39434b;
@@ -422,17 +401,6 @@ QWidget[class="quicksilverPage"] QGroupBox::title {
     subcontrol-origin: margin;
     left: 8px;
     padding: 0 4px;
-}
-QLabel[class="pageTitle"] {
-    color: #f5f7f9;
-    font-size: {title}px;
-    font-weight: 700;
-    padding: 4px 0;
-}
-QLabel[class="pageEyebrow"] {
-    color: #ff7a6c;
-    font-size: {caption}px;
-    font-weight: 700;
 }
 QLabel[class="sectionValue"] {
     color: #f5f7f9;
@@ -459,24 +427,19 @@ QLabel[class="policyReviewValid"] {
 }
 QLabel[class="policyReviewError"] {
     background-color: #2d2222;
-    border: 1px solid #6b3431;
+    border: 1px solid {cinnabar_fill};
     color: #ff7a6c;
-}
-QLabel[class="hudHeading"] {
-    color: #ff7a6c;
-    font-size: {body}px;
-    font-weight: 700;
 }
 QLabel[class="developerNetworkBanner"] {
     background-color: #2d2222;
-    border: 1px solid #6b3431;
+    border: 1px solid {cinnabar_fill};
     border-radius: 5px;
     color: #f5f7f9;
     padding: 8px 10px;
 }
 QLabel[class="isolationBanner"] {
     background-color: #2d2222;
-    border: 1px solid #6b3431;
+    border: 1px solid {cinnabar_fill};
     border-radius: 5px;
     color: #f5f7f9;
     padding: 8px 10px;
@@ -484,11 +447,6 @@ QLabel[class="isolationBanner"] {
 QFrame#consensusReviewHeader {
     background: transparent;
     border: 0;
-}
-QLabel#consensusReviewMark {
-    background-color: #2d2222;
-    border: 1px solid #6b3431;
-    border-radius: 23px;
 }
 QLabel[class="launchCapabilityState"] {
     background-color: #21312e;
@@ -540,7 +498,7 @@ QPushButton {
 QPushButton#sendButton,
 QPushButton#receiveButton,
 QPushButton[class="primaryActionButton"] {
-    background-color: #6b3431;
+    background-color: {cinnabar_fill};
     border-color: #d84b3e;
     color: #f5f7f9;
 }
@@ -570,23 +528,20 @@ QToolButton:hover {
     background-color: #293138;
     border-color: #56606a;
 }
-Line {
-    color: #39434b;
-}
 QAbstractItemView {
     alternate-background-color: #15191d;
     background-color: #101214;
     border: 1px solid #39434b;
     color: #ccd5dc;
     outline: 0;
-    selection-background-color: #6b3431;
+    selection-background-color: {cinnabar_fill};
     selection-color: #f5f7f9;
 }
 QAbstractItemView::item {
     min-height: 22px;
 }
 QAbstractItemView::item:selected {
-    background-color: #6b3431;
+    background-color: {cinnabar_fill};
     color: #f5f7f9;
 }
 QHeaderView {
@@ -644,11 +599,6 @@ QGroupBox::title {
     subcontrol-origin: margin;
     left: 9px;
     padding: 0 4px;
-}
-QFrame#nodeWindowHeader {
-    background-color: #171b1f;
-    border: 0;
-    border-bottom: 1px solid #39434b;
 }
 QScrollBar:vertical {
     background-color: #101214;
@@ -749,15 +699,7 @@ QFrame#benchTickerSeparator {
     background-color: %2;
     border: 0;
 }
-QMenuBar {
-    background-color: %1;
-    border-bottom: 1px solid %2;
-}
-QLabel#benchStatusGood {
-    color: %9;
-    font-size: {label}px;
-}
-)").arg(bench_top, hairline, bench_surface, bench_raised, rail, muted, hero, ticker, status_good);
+)").arg(bench_top, hairline, bench_surface, bench_raised, rail, muted, hero, ticker);
     sheet += QStringLiteral(R"(
 QPushButton#sendButton,
 QPushButton[class="primaryActionButton"] {
@@ -893,20 +835,6 @@ QPushButton[class="benchQuiet"]:disabled {
     border-color: %9;
     color: %10;
 }
-QPushButton[class="benchSegment"] {
-    background-color: %11;
-    border: 1px solid %5;
-    border-radius: 0;
-    color: %6;
-    min-height: 16px;
-    padding: 3px 10px;
-    margin: 0;
-}
-QPushButton[class="benchSegment"]:checked {
-    background-color: %12;
-    border-color: %13;
-    color: %2;
-}
 QTableView[class="benchTable"] {
     alternate-background-color: %14;
     background-color: %15;
@@ -958,7 +886,7 @@ QProgressBar#homeNodeSync {
 )")
                  .arg(muted, hero, status_good, Color(Token::Warning).name(), QStringLiteral("#2c3238"), Color(Token::RailText).name(),
                       QStringLiteral("#1b1f24"), QStringLiteral("#56606a"), hairline)
-                 .arg(Color(Token::RailDisabled).name(), QStringLiteral("#1b1f24"), QStringLiteral("#2a3037"), QStringLiteral("#3a4148"),
+                 .arg(Color(Token::RailDisabled).name(),
                       QStringLiteral("#171b20"), bench_surface, QStringLiteral("#2b2023"), bench_raised, QStringLiteral("#8b959e"))
                  .arg(QStringLiteral("#20252a"));
 
@@ -989,11 +917,13 @@ QTextBrowser#aboutMessage {
         {QStringLiteral("{caption}"), QString::number(FontPx(Type::Caption))},
         {QStringLiteral("{label}"), QString::number(FontPx(Type::Label))},
         {QStringLiteral("{body}"), QString::number(FontPx(Type::Body))},
-        {QStringLiteral("{value}"), QString::number(FontPx(Type::Value))},
         {QStringLiteral("{figure}"), QString::number(FontPx(Type::Figure))},
         {QStringLiteral("{title}"), QString::number(FontPx(Type::Title))},
         {QStringLiteral("{label_color}"), Color(Token::BenchLabel).name()},
         {QStringLiteral("{focus}"), Color(Token::Focus).name()},
+        {QStringLiteral("{cinnabar_fill}"), cinnabar_fill},
+        {QStringLiteral("{bench_top}"), bench_top},
+        {QStringLiteral("{hairline}"), hairline},
     };
     for (const auto& [token, value] : tokens) sheet.replace(token, value);
     app.setStyleSheet(sheet);

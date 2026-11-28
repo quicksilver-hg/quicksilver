@@ -35,6 +35,8 @@
 //                   (F-531's test does; `append` then `exit` cannot give that
 //                   order, since the marker is visible while the stub is still
 //                   alive)
+//   closeout        close stdout and carry on, so the parent sees end of stream
+//                   from a helper that is still running (S0118-C-02)
 //   loop            jump back to the first directive (runs forever)
 //   exit <code>     exit with <code>
 //
@@ -60,8 +62,10 @@
 #include <vector>
 
 #ifdef WIN32
+#include <io.h>
 #include <windows.h>
 #else
+#include <cerrno>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <unistd.h>
@@ -100,31 +104,48 @@ bool PathExists(const std::string& path)
 #endif
 }
 
-//! Take an exclusive lock on `path` and keep it for the rest of this process's
-//! life. Deliberately leaks the descriptor/handle: the lock must outlive every
-//! other teardown step, and the kernel drops it when the process dies, however
-//! it dies. That is the whole point -- see the `hold` directive.
+//! Give a contended lock up to five seconds to become available, so a probe
+//! can release it. Keep an acquired lock until process exit by leaving the
+//! descriptor or handle open for the kernel to close.
 bool HoldLock(const std::string& path)
 {
     // `loop` brings the directive list round again, so a held path must be a
     // no-op the second time: re-locking it from a second descriptor in this
-    // same process would fail (flock) or block (CreateFileW share 0).
+    // same process would contend with the lock it already owns.
     static std::vector<std::string> held;
     for (const std::string& path_held : held) {
         if (path_held == path) return true;
     }
-    held.push_back(path);
+    const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{5}};
 #ifdef WIN32
-    // Share mode 0: any other opener fails with ERROR_SHARING_VIOLATION until
-    // this handle is closed, which for a leaked handle is process exit.
-    const HANDLE file{CreateFileW(fs::PathFromString(path).wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
-                                  0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr)};
-    return file != INVALID_HANDLE_VALUE;
+    const auto wide_path{fs::PathFromString(path).wstring()};
 #else
     const int fd{open(path.c_str(), O_RDWR | O_CREAT, 0644)};
     if (fd == -1) return false;
-    return flock(fd, LOCK_EX | LOCK_NB) == 0;
 #endif
+    do {
+#ifdef WIN32
+        const HANDLE file{CreateFileW(wide_path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                                      0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr)};
+        if (file != INVALID_HANDLE_VALUE) break;
+        if (GetLastError() != ERROR_SHARING_VIOLATION) return false;
+#else
+        if (flock(fd, LOCK_EX | LOCK_NB) == 0) break;
+        if (errno != EWOULDBLOCK) {
+            close(fd);
+            return false;
+        }
+#endif
+        if (std::chrono::steady_clock::now() >= deadline) {
+#ifndef WIN32
+            close(fd);
+#endif
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    } while (true);
+    held.push_back(path);
+    return true;
 }
 
 //! Locale-free decimal parse, stopping at the first non-digit. The C library's
@@ -334,6 +355,13 @@ int main(int argc, char* argv[])
             }
             i = next;
             continue;
+        } else if (line == "closeout") {
+            std::fflush(stdout);
+#ifdef WIN32
+            _close(1);
+#else
+            close(1);
+#endif
         } else if (Directive(line, "loop", rest)) {
             i = 0;
             continue;

@@ -121,7 +121,7 @@ public:
     /* Divide (resulting in a hash for the difference of the sets) */
     MuHash3072& operator/=(const MuHash3072& div) noexcept;
 
-    /* Finalize into a 32-byte hash. Does not change this object's value. */
+    /* Finalize into a 32-byte hash, storing the reduced ratio back into this object. */
     void Finalize(uint256& out) noexcept;
 
     SERIALIZE_METHODS(MuHash3072, obj)

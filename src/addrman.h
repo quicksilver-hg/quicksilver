@@ -78,9 +78,8 @@ struct AddressPosition {
  *    * Addresses of nodes that are known to be accessible go into 256 "tried" buckets.
  *      * Each address range selects at random 8 of these buckets.
  *      * The actual bucket is chosen from one of these, based on the full address.
- *      * When adding a new good address to an occupied position of a bucket, a FEELER connection to the
- *        old address is attempted. The old entry is only replaced and moved back to the "new" buckets if this
- *        attempt was unsuccessful.
+ *      * When a good address collides with an occupied tried slot, a feeler probes the old address.
+ *        The new address can replace it after a failed probe or when the collision test window expires.
  *    * Bucket selection is based on cryptographic hashing, using a randomly-generated 256-bit key, which should not
  *      be observable by adversaries.
  *    * Several indexes are kept for high performance. Setting m_consistency_check_ratio with the -checkaddrman

@@ -27,6 +27,18 @@ def rpccall(node, user, method):
     return resp
 
 
+def rpcbatch(node, user, members):
+    url = urllib.parse.urlparse(node.url)
+    headers = {"Authorization": "Basic " + str_to_b64str('{}:{}'.format(user[0], user[3]))}
+    conn = http.client.HTTPConnection(url.hostname, url.port)
+    conn.connect()
+    conn.request('POST', '/', json.dumps(members), headers)
+    resp = conn.getresponse()
+    body = resp.read()
+    conn.close()
+    return resp.status, body
+
+
 def get_permissions(whitelist):
     return [perm for perm in whitelist.replace(" ", "").split(",") if perm]
 
@@ -91,6 +103,18 @@ class RPCWhitelistTest(QuicksilverTestFramework):
         assert_equal(403, rpccall(self.nodes[0], self.strange_users[3], "getbestblockhash").status)
         self.log.info("Strange test 5")
         assert_equal(200, rpccall(self.nodes[0], self.strange_users[4], "getblockcount").status)
+
+        self.log.info("A malformed batch member gets its own error; the allowed members still run")
+        allowed = {"jsonrpc": "2.0", "method": "getblockcount", "id": 1}
+        status, body = rpcbatch(self.nodes[0], self.users[1], [allowed, 7, {"jsonrpc": "2.0", "id": 3}, {"jsonrpc": "2.0", "method": 5, "id": 4}])
+        assert_equal(status, 200)
+        replies = json.loads(body)
+        assert_equal(len(replies), 4)
+        assert_equal(replies[0]["result"], self.nodes[0].getblockcount())
+        assert all(r["error"] is not None for r in replies[1:])
+        self.log.info("A forbidden method in a batch still refuses the whole batch")
+        status, _ = rpcbatch(self.nodes[0], self.users[1], [allowed, 7, {"jsonrpc": "2.0", "method": "getnetworkinfo", "id": 2}])
+        assert_equal(status, 403)
 
         self.test_users_permissions()
         self.test_rpcwhitelistdefault_0_no_permissions()

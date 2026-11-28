@@ -60,6 +60,13 @@ void GpuDeviceList::setDevices(const cuckatoo::GpuDiscovery& discovery, const QS
     for (const auto& device : discovery.listing.devices) if (device.type == "gpu") devices.push_back(device);
     std::sort(devices.begin(), devices.end(), [](const auto& a, const auto& b) { return cuckatoo::DeviceIdLess(a.id, b.id); });
 
+    // Automatic mode's cards come from the rule the miner itself uses, not a copy
+    // of it here (S0222-C-04).
+    m_automatic_ids.clear();
+    for (const auto& device : cuckatoo::SelectDevices(discovery.listing.devices, cuckatoo::DeviceChoice{}).use) {
+        m_automatic_ids.push_back(QString::fromStdString(device.id));
+    }
+
     QMap<QString, int> name_counts;
     for (const auto& device : devices) ++name_counts[QString::fromStdString(device.name)];
     for (const QString& id : chosen) {
@@ -77,6 +84,9 @@ void GpuDeviceList::setDevices(const cuckatoo::GpuDiscovery& discovery, const QS
         check->setObjectName(object);
         check->setChecked(ticked);
         auto* state = new QLabel(line);
+        // A faulted card's state carries the solver's whole fault sentence; wrapped,
+        // it cannot widen the dialog (S0222-C-03).
+        state->setWordWrap(true);
         state->setObjectName(object + QStringLiteral("_state"));
         layout->addWidget(check, 1);
         layout->addWidget(state);
@@ -93,7 +103,7 @@ void GpuDeviceList::setDevices(const cuckatoo::GpuDiscovery& discovery, const QS
     for (const auto& device : devices) {
         const QString id{QString::fromStdString(device.id)};
         seen.push_back(id);
-        const bool ticked{chosen.contains(id) || (chosen.isEmpty() && device.status == cuckatoo::DeviceStatus::kOk && !device.integrated)};
+        const bool ticked{chosen.contains(id) || (chosen.isEmpty() && m_automatic_ids.contains(id))};
         add(id, QString::fromStdString(device.name), device.integrated, false, device, ticked);
     }
     for (const QString& id : chosen) {
@@ -129,10 +139,13 @@ void GpuDeviceList::refreshRows()
     const auto stats = cuckatoo::GetGpuDeviceStats();
     std::optional<long> advised;
     for (Row& row : m_rows) {
-        row.check->setEnabled(m_mode == Mode::kChoose && !row.missing && row.device.status == cuckatoo::DeviceStatus::kOk);
+        // A chosen card that discovery no longer lists stays chosen until it is
+        // unticked here (S0222-C-01). Dropping it on OK emptied a Choose list whose
+        // only card it was, and an empty list reopens as Automatic: every card mined.
+        row.check->setEnabled(m_mode == Mode::kChoose && (row.missing || row.device.status == cuckatoo::DeviceStatus::kOk));
         QString state{row.missing ? gpusituation::MissingRowState() : gpusituation::RowState(row.device, m_mode == Mode::kAutomatic ? gpusituation::RowMode::kAutomatic : gpusituation::RowMode::kChoose, row.check->isChecked())};
         const bool chosen = !row.missing && row.device.status == cuckatoo::DeviceStatus::kOk &&
-            (m_mode == Mode::kAutomatic ? !row.integrated : m_mode == Mode::kChoose && row.check->isChecked());
+            (m_mode == Mode::kAutomatic ? m_automatic_ids.contains(row.id) : m_mode == Mode::kChoose && row.check->isChecked());
         if (chosen && !m_mining_active) state = tr("Chosen");
         if (chosen && m_mining_active) {
             const auto it = std::find_if(stats.begin(), stats.end(), [&row](const auto& item) { return item.device == row.device.id; });
@@ -157,14 +170,14 @@ void GpuDeviceList::refreshRows()
 QStringList GpuDeviceList::tickedIds() const
 {
     QStringList out;
-    for (const Row& row : m_rows) if (row.check->isChecked() && !row.missing) out.push_back(row.id);
+    for (const Row& row : m_rows) if (row.check->isChecked()) out.push_back(row.id);
     return out;
 }
 
 QMap<QString, QString> GpuDeviceList::tickedNames() const
 {
     QMap<QString, QString> out;
-    for (const Row& row : m_rows) if (row.check->isChecked() && !row.missing) out.insert(row.id, row.name);
+    for (const Row& row : m_rows) if (row.check->isChecked()) out.insert(row.id, row.name);
     return out;
 }
 

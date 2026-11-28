@@ -5,18 +5,13 @@
 
 #include <qt/paymentserver.h>
 
-#include <qt/quicksilverunits.h>
 #include <qt/guiutil.h>
-#include <qt/optionsmodel.h>
 
 #include <chainparams.h>
 #include <common/args.h>
-#include <interfaces/node.h>
 #include <key_io.h>
 #include <logging.h>
 #include <node/interface_ui.h>
-#include <policy/policy.h>
-#include <vault/vault.h>
 
 #include <cstdlib>
 #include <memory>
@@ -27,7 +22,6 @@
 #include <QDebug>
 #include <QFile>
 #include <QFileOpenEvent>
-#include <QHash>
 #include <QList>
 #include <QLocalServer>
 #include <QLocalSocket>
@@ -151,9 +145,7 @@ bool PaymentServer::ipcSendCommandLine()
 PaymentServer::PaymentServer(QObject* parent, bool startLocalServer)
     : QObject(parent)
 {
-    // Install global event filter to catch QFileOpenEvents
-    // on Mac: sent when you click quicksilver: links
-    // other OSes: helpful when dealing with payment request files
+    // Catch file-open events for payment requests.
     if (parent)
         parent->installEventFilter(this);
 
@@ -187,9 +179,6 @@ PaymentServer::PaymentServer(QObject* parent, bool startLocalServer)
 
 PaymentServer::~PaymentServer() = default;
 
-//
-// OSX-specific way of handling quicksilver: URIs
-//
 bool PaymentServer::eventFilter(QObject *object, QEvent *event)
 {
     if (event->type() == QEvent::FileOpen) {
@@ -315,9 +304,4 @@ void PaymentServer::handleURIConnection()
         timer->start(QUICKSILVER_IPC_CONNECT_TIMEOUT);
         read_frame();
     }
-}
-
-void PaymentServer::setOptionsModel(OptionsModel *_optionsModel)
-{
-    this->optionsModel = _optionsModel;
 }

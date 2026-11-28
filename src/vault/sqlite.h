@@ -83,7 +83,7 @@ private:
 
 public:
     explicit SQLiteBatch(SQLiteDatabase& database);
-    ~SQLiteBatch() override { Close(); }
+    ~SQLiteBatch() override;
 
     void SetExecHandler(std::unique_ptr<SQliteExecHandler>&& handler) { m_exec_handler = std::move(handler); }
 
@@ -105,8 +105,6 @@ public:
 class SQLiteDatabase : public VaultDatabase
 {
 private:
-    const bool m_mock{false};
-
     const std::string m_dir_path;
 
     const std::string m_file_path;
@@ -126,7 +124,7 @@ public:
     SQLiteDatabase() = delete;
 
     /** Create DB handle to real database */
-    SQLiteDatabase(const fs::path& dir_path, const fs::path& file_path, const DatabaseOptions& options, bool mock = false);
+    SQLiteDatabase(const fs::path& dir_path, const fs::path& file_path, const DatabaseOptions& options);
 
     ~SQLiteDatabase();
 
@@ -149,19 +147,8 @@ public:
      */
     bool Backup(const std::string& dest) const override;
 
-    /** No-ops
-     *
-     * SQLite always flushes everything to the database file after each transaction
-     * (each Read/Write/Erase that we do is its own transaction unless we called
-     * TxnBegin) so there is no need to have Flush or Periodic Flush.
-     *
-     * There is no DB env to reload, so ReloadDbEnv has nothing to do
-     */
+    /** SQLite commits each transaction without a separate flush. */
     void Flush() override {}
-    bool PeriodicFlush() override { return false; }
-    void ReloadDbEnv() override {}
-
-    void IncrementUpdateCounter() override { ++nUpdateCounter; }
 
     std::string Filename() override { return m_file_path; }
     std::string Format() override { return "sqlite"; }

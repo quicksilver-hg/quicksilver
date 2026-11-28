@@ -4,10 +4,13 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <chain.h>
+#include <primitives/block.h>
+#include <sync.h>
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
 
+#include <cassert>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -34,8 +37,33 @@ FUZZ_TARGET(chain)
         (void)disk_block_index->IsValid();
     }
 
+    // S0392-B-01: compare the reconstructed fields and hash, not only call them.
+    // The expected header is assembled here from the index's own fields.
+    CBlockHeader expected;
+    expected.nVersion = disk_block_index->nVersion;
+    expected.hashPrevBlock = disk_block_index->hashPrev;
+    expected.hashMerkleRoot = disk_block_index->hashMerkleRoot;
+    expected.nTime = disk_block_index->nTime;
+    expected.nBits = disk_block_index->nBits;
+    expected.nCongestion = static_cast<uint32_t>(disk_block_index->m_congestion);
+    expected.nNonce = disk_block_index->nNonce;
+    expected.nCycle = disk_block_index->nCycle;
+    assert(disk_block_index->ConstructBlockHash() == expected.GetHash());
+
     const CBlockHeader block_header = disk_block_index->GetBlockHeader();
-    (void)CDiskBlockIndex{*disk_block_index};
+    // No pprev here, so the in-memory header has a null previous hash.
+    assert(block_header.hashPrevBlock.IsNull());
+    assert(block_header.nVersion == expected.nVersion);
+    assert(block_header.hashMerkleRoot == expected.hashMerkleRoot);
+    assert(block_header.nTime == expected.nTime);
+    assert(block_header.nBits == expected.nBits);
+    assert(block_header.nCongestion == expected.nCongestion);
+    assert(block_header.nNonce == expected.nNonce);
+    assert(block_header.nCycle == expected.nCycle);
+
+    const CDiskBlockIndex copy{*disk_block_index};
+    assert(copy.hashPrev == disk_block_index->hashPrev);
+    assert(copy.ConstructBlockHash() == expected.GetHash());
     (void)disk_block_index->BuildSkip();
 
     LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 10000) {
@@ -64,4 +92,6 @@ FUZZ_TARGET(chain)
     block_index.phashBlock = &zero;
     (void)block_index.GetBlockHash();
     (void)block_index.ToString();
+    // An index built from a header gives that header back, byte for byte.
+    assert(block_index.GetBlockHeader().GetHash() == block_header.GetHash());
 }

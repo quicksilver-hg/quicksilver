@@ -92,14 +92,16 @@ address, but it has no validated chain to read balances or history from and no
 peer to broadcast a transfer to.** Enable Consensus for anything that depends
 on the network.
 
-### The desktop prunes by default
+### The desktop keeps the full chain by default
 
-The first-run screen's storage limit **arrives already ticked**, at 2 GB. This
-is deliberate, and it is the opposite of the headless default below: this chain
-is sized for up to about 128 GB of block data a year at full traffic (it
-carries far less today), so an archival default
-would hand every desktop operator a cost they did not choose. Untick it on the
-first-run screen to keep full history. The reasoning is in
+The first-run screen's storage limit **arrives unticked**, so a new desktop
+keeps every block, the same as the headless default below. A pruned node still
+validates every block, but it does not offer its history to other nodes, so a
+network of pruned desktops could not help a new node sync. The chain carries
+far less today than its full-traffic design figure of about 128 GB of block
+data a year. Tick the limit on the first-run screen to choose pruning; its
+smallest displayed target is 4 GB, rounded up from the 2,956 MiB floor. The
+screen shows what each choice costs. The reasoning is in
 [Who Stores the Chain](design/chain-storage.md).
 
 ## Start the headless node
@@ -234,8 +236,7 @@ the id the helper lists:
 ./build/bin/quicksilver -cuckatoodevice=pci:0000:04:00.0
 ```
 
-To build a CUDA or ROCm helper yourself and use it instead, see
-[GPU Solver](gpu-solver.md).
+To use a helper you built yourself instead, see [GPU Solver](gpu-solver.md).
 
 ## Get help or report a problem
 

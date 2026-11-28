@@ -3,6 +3,8 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 //
 
+#include <quicksilver-build-config.h> // IWYU pragma: keep
+
 #include <boost/test/unit_test.hpp>
 #include <torcontrol.h>
 
@@ -69,6 +71,30 @@ BOOST_AUTO_TEST_CASE(reconnect_delay_is_capped)
     }
     BOOST_CHECK_EQUAL(timeout, 600.0F);
     BOOST_CHECK_EQUAL(TorController::NextReconnectDelayMillis(timeout), 600000);
+}
+
+BOOST_AUTO_TEST_CASE(socks_listener_becomes_the_proxy_it_names)
+{
+    // A numeric listener is used as given.
+    const auto tcp{TorController::SocksProxyFromListener("127.0.0.1:9150")};
+    BOOST_REQUIRE(tcp);
+    BOOST_CHECK(!tcp->m_is_unix_socket);
+    BOOST_CHECK_EQUAL(tcp->ToString(), "127.0.0.1:9150");
+    BOOST_CHECK(tcp->m_randomize_credentials);
+
+#ifdef HAVE_SOCKADDR_UN
+    // A Unix listener becomes a Unix-socket proxy, not 127.0.0.1:9050 (F-644 S0052-A-04).
+    const auto unix_proxy{TorController::SocksProxyFromListener("unix:/run/tor/socks")};
+    BOOST_REQUIRE(unix_proxy);
+    BOOST_CHECK(unix_proxy->m_is_unix_socket);
+    BOOST_CHECK_EQUAL(unix_proxy->ToString(), "unix:/run/tor/socks");
+    BOOST_CHECK(unix_proxy->m_randomize_credentials);
+#endif
+
+    // Listeners this node cannot use give no proxy at all, never a guessed default.
+    BOOST_CHECK(!TorController::SocksProxyFromListener("unix:"));
+    BOOST_CHECK(!TorController::SocksProxyFromListener("not-an-address"));
+    BOOST_CHECK(!TorController::SocksProxyFromListener("tor.example:9050"));
 }
 
 BOOST_AUTO_TEST_CASE(password_is_escaped)

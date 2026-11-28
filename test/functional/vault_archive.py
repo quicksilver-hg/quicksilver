@@ -19,11 +19,15 @@ See doc/design/vault-backup.md.
 import os
 
 from test_framework.test_framework import QuicksilverTestFramework
+from test_framework.txpow import prove_raw_tx_pow
 from test_framework.util import (
     assert_equal,
     assert_greater_than,
     assert_raises_rpc_error,
 )
+
+# Sandbox consensus.nMaxAnchorAge: a proof anchored more blocks back than this is expired.
+MAX_ANCHOR_AGE = 20
 
 
 class VaultArchiveTest(QuicksilverTestFramework):
@@ -33,6 +37,7 @@ class VaultArchiveTest(QuicksilverTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
         self.setup_clean_chain = True
+        self.extra_args = [["-txpownocycle=1"]]
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_vault()
@@ -58,6 +63,39 @@ class VaultArchiveTest(QuicksilverTestFramework):
         labelled = source.getnewaddress(label="a paid counterparty")
         source.sendtoaddress(labelled, 1)
         self.generate(node, 1)
+
+        # Keep three transfers out of the relay pool while giving each a different
+        # fate. An abandoned transfer must stay abandoned on import.
+        self.restart_node(0, extra_args=["-vault=source", "-vaultbroadcast=0", "-persistrelaypool=0", "-txpownocycle=1"])
+        source = node.get_vault_rpc("source")
+        # The abandontransaction RPC is removed (F-678). A transfer is abandoned when its
+        # proof expires, or from the desktop app, which a functional test cannot drive.
+        # So this one is left to expire: mine past its anchor window, then the vault's
+        # once-a-minute check abandons it. That a fresh abandoned proof survives import is
+        # pinned by the unit test vault_archive_v2_preserves_unconfirmed_states.
+        abandoned_txid = source.sendtoaddress(source.getnewaddress(), 1)
+        anchor = node.decoderawtransaction(source.gettransaction(abandoned_txid)["hex"])["anchor_height"]
+        self.generate(node, anchor + MAX_ANCHOR_AGE + 1 - node.getblockcount())
+        node.syncwithvalidationinterfacequeue()
+        node.mockscheduler(60)
+        node.syncwithvalidationinterfacequeue()
+        pending_txid = source.sendtoaddress(source.getnewaddress(), 1)
+        conflicted_txid = source.sendtoaddress(source.getnewaddress(), 1)
+
+        original = node.decoderawtransaction(source.gettransaction(conflicted_txid)["hex"])
+        inputs = [{"txid": vin["txid"], "vout": vin["vout"]} for vin in original["vin"]]
+        amount = sum(node.gettxout(vin["txid"], vin["vout"])["value"] for vin in inputs)
+        raw = source.createrawtransaction(inputs, [{source.getnewaddress(): amount}])
+        signed = source.signrawtransactionwithvault(raw)["hex"]
+        competing_txid = node.sendrawtransaction(prove_raw_tx_pow(signed, node))
+        self.generate(node, 1)
+        assert any(row["abandoned"] for row in source.gettransaction(abandoned_txid)["details"])
+        assert_equal(source.gettransaction(pending_txid)["confirmations"], 0)
+        assert source.gettransaction(conflicted_txid)["confirmations"] < 0
+        assert competing_txid not in (abandoned_txid, pending_txid, conflicted_txid)
+
+        self.restart_node(0, extra_args=["-vault=source", "-persistrelaypool=0", "-txpownocycle=1"])
+        source = node.get_vault_rpc("source")
 
         # listtransactions returns one row per category, so a self-send appears twice, and
         # it truncates to `count` rows. Compare the whole history as a set of txids: a
@@ -117,6 +155,10 @@ class VaultArchiveTest(QuicksilverTestFramework):
         assert_equal(len(expected_txids), result["transactions"])
         for txid, received in expected_received.items():
             assert_equal(restored.gettransaction(txid)["timereceived"], received)
+        assert any(row["abandoned"] for row in restored.gettransaction(abandoned_txid)["details"])
+        assert_equal(restored.gettransaction(pending_txid)["confirmations"], 0)
+        assert restored.gettransaction(conflicted_txid)["confirmations"] < 0
+        assert abandoned_txid not in node.getrawrelaypool()
 
         self.log.info("Importing the same archive again changes nothing")
         again = restored.importvaultarchive(archive_path, passphrase)

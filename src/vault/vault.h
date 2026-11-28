@@ -112,6 +112,27 @@ struct AgentCosignResult {
     CommitTransactionResult commit;
 };
 
+//! F-687: the step of CVault::SaveCheckedBackup that stopped it, or DONE.
+enum class BackupStep {
+    DONE,     //!< Saved, checked and renamed onto the destination.
+    OWN_FILE, //!< The destination is this vault's own database file. Nothing was written.
+    EXISTS,   //!< The destination exists and overwrite was not asked for, checked before the copy and again before the rename.
+    COPY,     //!< Writing the temporary copy failed.
+    CHECK,    //!< The temporary copy failed its check (BackupCheck::StepsPassed() is false).
+    RENAME,   //!< The checked copy could not be renamed onto the destination.
+};
+
+//! F-687: what CVault::SaveCheckedBackup did. On any step but DONE the destination is as it was.
+struct SavedBackup {
+    BackupStep step{BackupStep::COPY};
+    //! The check of the saved copy; meaningful once step is CHECK, RENAME or DONE.
+    BackupCheck check;
+    //! The absolute destination path, UTF-8.
+    std::string path;
+
+    bool ok() const { return step == BackupStep::DONE; }
+};
+
 //! Explicitly delete the vault.
 //! Blocks the current thread until the vault is destructed.
 void WaitForDeleteVault(std::shared_ptr<CVault>&& vault);
@@ -403,6 +424,13 @@ private:
      * full block notification or the separately validated thin header source. */
     int64_t m_last_block_processed_time GUARDED_BY(cs_vault) = -1;
 
+    // m_external_spk_managers, m_internal_spk_managers, m_spk_managers and
+    // m_cached_spks are not GUARDED_BY(cs_vault) (S0196-A-03): they are filled
+    // while the vault loads or under cs_vault, and read by lock-free accessors
+    // (GetScriptPubKeyMan, GetActiveScriptPubKeyMans, IsMine's cache lookup)
+    // that many callers reach both with and without cs_vault. The managers
+    // themselves are protected by their own cs_desc_man. Annotating these maps
+    // means annotating every accessor and caller, which is not this fix.
     std::map<OutputType, ScriptPubKeyMan*> m_external_spk_managers;
     std::map<OutputType, ScriptPubKeyMan*> m_internal_spk_managers;
 
@@ -470,6 +498,9 @@ public:
     const std::string& GetName() const { return m_name; }
 
     typedef std::map<unsigned int, CMasterKey> MasterKeyMap;
+    // Not GUARDED_BY(cs_vault) (S0196-A-03): every write (load, EncryptVault)
+    // and the passphrase loops hold cs_vault, but HasEncryptionKeys()/IsCrypted()
+    // read the map without it, from callers that hold it and callers that don't.
     MasterKeyMap mapMasterKeys;
     unsigned int nMasterKeyMaxID = 0;
 
@@ -499,9 +530,13 @@ public:
     std::unordered_map<uint256, CVaultTx, SaltedTxidHasher> mapVault GUARDED_BY(cs_vault);
 
     typedef std::multimap<int64_t, CVaultTx*> TxItems;
-    TxItems wtxOrdered;
+    TxItems wtxOrdered GUARDED_BY(cs_vault);
 
     int64_t nOrderPosNext GUARDED_BY(cs_vault) = 0;
+
+    //! Next disconnect order to stamp on a disconnected block's transactions (F-698). Set at
+    //! load to one past the highest stored value, so no separate counter record is kept.
+    int64_t m_next_revival_sequence GUARDED_BY(cs_vault){1};
 
     std::map<CTxDestination, CAddressBookData> m_address_book GUARDED_BY(cs_vault);
     const CAddressBookData* FindAddressBookEntry(const CTxDestination&, bool allow_change = false) const EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
@@ -555,9 +590,6 @@ public:
     bool IsSpentKey(const CScript& scriptPubKey) const EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
     void SetSpentKeyState(VaultBatch& batch, const uint256& hash, unsigned int n, bool used, std::set<CTxDestination>& tx_destinations) EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
 
-    /** Display address on an external signer. */
-    util::Result<void> DisplayAddress(const CTxDestination& dest) EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
-
     bool IsLockedCoin(const COutPoint& output) const EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
     bool LockCoin(const COutPoint& output, VaultBatch* batch = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
     bool UnlockCoin(const COutPoint& output, VaultBatch* batch = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
@@ -598,7 +630,7 @@ public:
     bool ChangeVaultPassphrase(const SecureString& strOldVaultPassphrase, const SecureString& strNewVaultPassphrase);
     bool EncryptVault(const SecureString& strVaultPassphrase);
 
-    unsigned int ComputeTimeSmart(const CVaultTx& wtx, bool rescanning_old_block) const;
+    unsigned int ComputeTimeSmart(const CVaultTx& wtx, bool rescanning_old_block) const EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
 
     /**
      * Increment the next transaction order id
@@ -697,7 +729,7 @@ public:
      *
      * @param[in] tx The transaction to be broadcast.
      * @param[in] mapValue key-values to be set on the transaction.
-     * @param[in] orderForm BIP 70 / BIP 21 order form details to be set on the transaction.
+     * @param[in] orderForm opaque key/value details (such as a BIP 21 label and message) to be saved with the transaction.
      */
     CommitTransactionResult CommitTransaction(CTransactionRef tx, mapValue_t mapValue, std::vector<std::pair<std::string, std::string>> orderForm);
 
@@ -730,8 +762,6 @@ public:
     size_t KeypoolCountExternalKeys() const EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
     bool TopUpKeyPool(unsigned int kpSize = 0);
 
-    std::optional<int64_t> GetOldestKeyPoolTime() const;
-
     // Filter struct for 'ListAddrBookAddresses'
     struct AddrBookFilter {
         // Fetch addresses with the provided label
@@ -751,8 +781,7 @@ public:
     std::set<std::string> ListAddrBookLabels(const std::optional<AddressPurpose> purpose) const EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
 
     /**
-     * Walk-through the address book entries.
-     * Stops when the provided 'ListAddrBookFunc' returns false.
+     * Walk-through the address book entries, calling 'ListAddrBookFunc' for each one.
      */
     using ListAddrBookFunc = std::function<void(const CTxDestination& dest, const std::string& label, bool is_change, const std::optional<AddressPurpose> purpose)>;
     void ForEachAddrBookEntry(const ListAddrBookFunc& func) const EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
@@ -817,7 +846,7 @@ public:
     //! Check if a given transaction has any of its outputs spent by another transaction in the vault
     bool HasVaultSpend(const CTransactionRef& tx) const EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
 
-    //! Flush vault (bitdb flush)
+    //! Flush the vault database
     void Flush();
 
     //! Close vault database
@@ -854,7 +883,11 @@ public:
 
     /**
      * Vault status (encrypted, locked) changed.
-     * Note: Called without locks held.
+     * Lock() and Unlock() raise it after their own lock scope, but their callers
+     * often hold cs_vault and m_relock_mutex (vaultlock, the relock timer,
+     * EncryptVault, ChangeVaultPassphrase, Unlock by passphrase), so a handler
+     * may run with both held and must not wait on another thread that takes
+     * them (S0196-A-01).
      */
     boost::signals2::signal<void(CVault* vault)> NotifyStatusChanged;
 
@@ -872,9 +905,6 @@ public:
     /** Set whether this vault broadcasts transactions. */
     void SetBroadcastTransactions(bool broadcast) { fBroadcastTransactions = broadcast; }
 
-    /** Return whether transaction can be abandoned */
-    bool TransactionCanBeAbandoned(const uint256& hashTx) const;
-
     /* Mark a transaction (and it in-vault descendants) as abandoned so its inputs may be respent. */
     bool AbandonTransaction(const uint256& hashTx);
     bool AbandonTransaction(CVaultTx& tx) EXCLUSIVE_LOCKS_REQUIRED(cs_vault);
@@ -889,7 +919,18 @@ public:
     void postInitProcess();
 
     //! Copy the vault to strDest. The copy alone records nothing; see VerifyBackup and RecordBackupCheck (F-567).
+    //! Writes in place: callers that name a user's file use SaveCheckedBackup.
     bool BackupVault(const std::string& strDest) const;
+    /**
+     * F-687: the one backup procedure the backupvault RPC and the GUI both run. Resolves destination (UTF-8) to an
+     * absolute path, refuses an existing one unless overwrite is set, copies the vault to a uniquely named temporary
+     * file beside it, checks that copy with no passphrase (VerifyBackup), and only if the check passes renames it
+     * onto the destination, replacing an existing file when overwrite is set. The temporary file is removed on every
+     * failure, so a failed backup leaves any earlier file at the destination unchanged. Records the check
+     * (RecordBackupCheck) when it fails and after a successful rename. corrupt_for_test damages the copy before the
+     * check (-test=corruptbackup).
+     */
+    SavedBackup SaveCheckedBackup(const std::string& destination, bool overwrite, bool corrupt_for_test = false) const EXCLUSIVE_LOCKS_REQUIRED(!cs_vault);
     //! The pre-F-567 flag. Read only to tell a legacy backup (NOT_CHECKED) from none.
     bool IsBackupRecorded() const;
     bool SetBackupRecorded(bool recorded) const;

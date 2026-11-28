@@ -12,6 +12,7 @@ This test takes 30 mins or more (up to 2 hours)
 import os
 
 from test_framework.blocktools import (
+    KEEP_WINDOW_GROWTH,
     MIN_BLOCKS_TO_KEEP,
     create_block,
     create_coinbase,
@@ -33,6 +34,12 @@ from test_framework.util import (
 # the manual prune RPC avoids pruning blocks in the same window to be
 # compatible with pruning based on key creation time.
 TIMESTAMP_WINDOW = 2 * 60 * 60
+
+# A pruned node keeps MIN_BLOCKS_TO_KEEP (2016, F-703) blocks below its tip; upstream sized this
+# test for 288. Wherever the scenario relies on that window, the chain grows by the difference,
+# G, in small blocks (~600 bytes each, about 1 MB in all). The large blocks, and so every disk
+# usage check against the 550 MiB target, sit relative to the prune cutoffs exactly as before.
+G = KEEP_WINDOW_GROWTH
 
 def mine_large_blocks(node, n):
     # Make a large scriptPubKey for the coinbase transaction. This is OP_RETURN
@@ -136,9 +143,12 @@ class PruneTest(QuicksilverTestFramework):
             extra_args=['-prune=-1'],
         )
         self.nodes[0].assert_start_raises_init_error(
-            expected_msg='Error: Prune configured below the minimum of 550 MiB.  Please use a higher number.',
-            extra_args=['-prune=549'],
+            expected_msg='Error: Prune target is too large.',
+            extra_args=[f'-prune={2**44}'],
         )
+        with self.nodes[0].assert_debug_log(expected_msgs=['Configured -prune target 549 MiB is below the minimum for this chain; using 550 MiB.']):
+            self.start_node(0, extra_args=['-prune=549'])
+        self.stop_node(0, expected_stderr='Warning: Configured -prune target 549 MiB is below the minimum for this chain; using 550 MiB.')
         self.nodes[0].assert_start_raises_init_error(
             expected_msg='Error: Prune mode is incompatible with -txindex.',
             extra_args=['-prune=550', '-txindex'],
@@ -156,6 +166,8 @@ class PruneTest(QuicksilverTestFramework):
         assert os.path.isfile(os.path.join(self.prunedir, "blk00000.dat")), "blk00000.dat is missing, pruning too early"
         self.log.info("Success")
         self.log.info(f"Though we're already using more than 550MiB, current usage: {calc_usage(self.prunedir)}")
+        self.log.info(f"Mine {G} small blocks so that blk00000.dat falls below the MIN_BLOCKS_TO_KEEP window")
+        self.generate(self.nodes[0], G, sync_fun=lambda: self.sync_blocks(self.nodes[0:3]))
         self.log.info("Mining 25 more blocks should cause the first block file to be pruned")
         # Pruning doesn't run until we're allocating another chunk, 20 full blocks past the height cutoff will ensure this
         mine_large_blocks(self.nodes[0], 25)
@@ -196,19 +208,22 @@ class PruneTest(QuicksilverTestFramework):
         self.log.info(f"Usage can be over target because of high stale rate: {calc_usage(self.prunedir)}")
 
     def reorg_test(self):
-        # Node 1 will mine a 300 block chain starting 287 blocks back from Node 0 and Node 2's tip
-        # This will cause Node 2 to do a reorg requiring 288 blocks of undo data to the reorg_test chain
+        # Node 1 will mine a 300 + 2G block chain starting MIN_BLOCKS_TO_KEEP - 1 blocks back from
+        # Node 0 and Node 2's tip. This will cause Node 2 to do a reorg requiring MIN_BLOCKS_TO_KEEP
+        # blocks of undo data to the reorg_test chain: every one of them must have been kept.
 
         height = self.nodes[1].getblockcount()
         self.log.info(f"Current block height: {height}")
 
-        self.forkheight = height - 287
+        self.forkheight = height - (MIN_BLOCKS_TO_KEEP - 1)
         self.forkhash = self.nodes[1].getblockhash(self.forkheight)
         self.log.info(f"Invalidating block {self.forkhash} at height {self.forkheight}")
         self.nodes[1].invalidateblock(self.forkhash)
 
         # We've now switched to our previously mined-24 block fork on node 1, but that's not what we want
-        # So invalidate that fork as well, until we're on the same chain as node 0/2 (but at an ancestor 288 blocks ago)
+        # So invalidate that fork as well, until we're on the same chain as node 0/2 (but at an ancestor
+        # MIN_BLOCKS_TO_KEEP blocks ago). With G small blocks below the stale forks the fork point is
+        # under all of them, so there may be nothing to invalidate.
         mainchainhash = self.nodes[0].getblockhash(self.forkheight - 1)
         curhash = self.nodes[1].getblockhash(self.forkheight - 1)
         while curhash != mainchainhash:
@@ -222,8 +237,11 @@ class PruneTest(QuicksilverTestFramework):
         self.disconnect_nodes(0, 1)
         self.disconnect_nodes(1, 2)
 
-        self.log.info("Generating new longer chain of 300 more blocks")
-        self.generate(self.nodes[1], 300, sync_fun=self.no_op)
+        # 300 + G is enough to outgrow the old chain. The second G keeps the large blocks where
+        # upstream had them relative to the prune cutoff after the 220 below, so the stale blocks
+        # fall out of the window as they did.
+        self.log.info(f"Generating new longer chain of {300 + 2 * G} more blocks")
+        self.generate(self.nodes[1], 300 + 2 * G, sync_fun=self.no_op)
 
         self.log.info("Reconnect nodes")
         self.connect_nodes(0, 1)
@@ -250,9 +268,9 @@ class PruneTest(QuicksilverTestFramework):
         self.log.info(f"Will need to redownload block {self.forkheight}")
 
         # Verify that we have enough history to reorg back to the fork point
-        # Although this is more than 288 blocks, because this chain was written more recently
-        # and only its other 299 small and 220 large blocks are in the block files after it,
-        # it is expected to still be retained
+        # Although this is more than MIN_BLOCKS_TO_KEEP blocks, because this chain was written more
+        # recently and only its other 299 + 2G small and 220 large blocks are in the block files
+        # after it, it is expected to still be retained
         self.nodes[2].getblock(self.nodes[2].getblockhash(self.forkheight))
 
         first_reorg_height = self.nodes[2].getblockcount()
@@ -268,7 +286,7 @@ class PruneTest(QuicksilverTestFramework):
         # because it has all the block data.
         # However it must mine enough blocks to have a more work chain than the reorg_test chain in order
         # to trigger node 2's block download logic.
-        # At this point node 2 is within 288 blocks of the fork point so it will preserve its ability to reorg
+        # At this point node 2 is within MIN_BLOCKS_TO_KEEP blocks of the fork point so it will preserve its ability to reorg
         if self.nodes[2].getblockcount() < self.mainchainheight:
             blocks_to_mine = first_reorg_height + 1 - self.mainchainheight
             self.log.info(f"Rewind node 0 to prev main chain to mine longer chain to trigger redownload. Blocks needed: {blocks_to_mine}")
@@ -331,6 +349,10 @@ class PruneTest(QuicksilverTestFramework):
         # Pruned block should still know the number of transactions
         assert_equal(node.getblockheader(node.getblockhash(1))["nTx"], block1_details["nTx"])
 
+        # Grow the chain by G small blocks so the MIN_BLOCKS_TO_KEEP clamp on a prune request sits
+        # where upstream's 288 put it at height 1001 (height 713), and the file checks below hold.
+        self.generate(node, G, sync_fun=self.no_op)
+
         # negative heights should raise an exception
         assert_raises_rpc_error(-8, "Negative block height", node.pruneblockchain, -10)
 
@@ -351,11 +373,11 @@ class PruneTest(QuicksilverTestFramework):
         prune(650)
         assert not has_block(1), "blk00001.dat is still there, should be pruned by now"
 
-        # height=1000 should not prune anything more, because tip-288 is in blk00002.dat.
+        # height=1000 should not prune anything more, because tip-MIN_BLOCKS_TO_KEEP is in blk00002.dat.
         prune(1000)
         assert has_block(2), "blk00002.dat is still there, should be pruned by now"
 
-        # advance the tip so blk00002.dat and blk00003.dat can be pruned (the last 288 blocks should now be in blk00004.dat)
+        # advance the tip so blk00002.dat and blk00003.dat can be pruned (the last MIN_BLOCKS_TO_KEEP blocks should now be in blk00004.dat)
         self.generate(node, MIN_BLOCKS_TO_KEEP, sync_fun=self.no_op)
         prune(1000)
         assert not has_block(2), "blk00002.dat is still there, should be pruned by now"
@@ -428,9 +450,11 @@ class PruneTest(QuicksilverTestFramework):
         self.mainchainheight = self.nodes[2].getblockcount()  # 1320
         self.mainchainhash2 = self.nodes[2].getblockhash(self.mainchainheight)
 
-        self.log.info("Check that we can survive a 288 block reorg still")
+        # The chain diagrams in this function show upstream's heights, before F-703 put G small
+        # blocks after height 995 and 2G more on the reorg_test chain; the shapes are unchanged.
+        self.log.info("Check that we can survive a MIN_BLOCKS_TO_KEEP block reorg still")
         self.reorg_test()  # (1033, )
-        # Now create a 288 block reorg by mining a longer chain on N1
+        # Now create a MIN_BLOCKS_TO_KEEP block reorg by mining a longer chain on N1
         # First disconnect N1
         # Then invalidate 1033 on main chain and 1032 on fork so height is 1032 on main chain
         # N1   **...*(1020) **...**(1032)X..

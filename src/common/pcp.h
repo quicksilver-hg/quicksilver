@@ -8,6 +8,11 @@
 
 #include <netaddress.h>
 
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <string>
 #include <variant>
 
 // RFC6886 NAT-PMP and RFC6887 Port Control Protocol (PCP) implementation.

@@ -13,7 +13,6 @@
 #include <random.h>
 #include <span.h>
 #include <util/check.h>
-#include <util/readwritefile.h>
 #include <util/sock.h>
 #include <util/strencodings.h>
 

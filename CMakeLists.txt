@@ -47,7 +47,6 @@ set(COPYRIGHT_YEAR "2026")
 # to set it before the `project()` command.
 set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
   CMAKE_CXX_COMPILE_OBJECT
-  CMAKE_OBJCXX_COMPILE_OBJECT
   CMAKE_CXX_LINK_EXECUTABLE
 )
 
@@ -70,11 +69,6 @@ set(CLIENT_BUGREPORT "${PROJECT_HOMEPAGE_URL}/issues")
 #=============================
 # Language setup
 #=============================
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_HOST_APPLE)
-  # We do not use the install_name_tool when cross-compiling for macOS.
-  # So disable this tool check in further enable_language() commands.
-  set(CMAKE_PLATFORM_HAS_INSTALLNAME FALSE)
-endif()
 enable_language(CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -104,9 +98,6 @@ option(BUILD_GPU_HELPER "Build qsgpusolve-opencl, the bundled graphics helper." 
 option(BUILD_TESTS "Build test_quicksilver executable." ON)
 option(BUILD_TX "Build quicksilver-tx executable." ${BUILD_TESTS})
 
-option(BUILD_UTIL_CHAINSTATE "Build experimental quicksilver-chainstate executable." OFF)
-option(BUILD_KERNEL_LIB "Build experimental quicksilverkernel library." ${BUILD_UTIL_CHAINSTATE})
-
 option(ENABLE_VAULT "Enable vault." ON)
 if(BUILD_GUI AND NOT ENABLE_VAULT)
   # The GUI is built around the vault; a vault-less GUI is not a supported build.
@@ -118,7 +109,7 @@ if(WITH_SQLITE)
     # Use of the `unofficial::` namespace is a vcpkg package manager convention.
     find_package(unofficial-sqlite3 CONFIG REQUIRED)
   else()
-    find_package(SQLite3 3.7.17 REQUIRED)
+    find_package(SQLite3 3.14 REQUIRED)
   endif()
   set(USE_SQLITE ON)
 endif()
@@ -139,22 +130,13 @@ if(WITH_USDT)
   find_package(USDT MODULE REQUIRED)
 endif()
 
-# External signing is a post-launch feature. The node-side endpoint is retained
-# deliberately -- it is our protocol endpoint, not inherited residue -- but no
-# signer adapter ships in v1 and the GUI must not advertise one, so this is OFF
-# on every platform. The former "NOT WIN32" condition was inherited verbatim and
-# had no rationale in this tree: upstream's reason was Boost.Process, and
-# src/util/subprocess.h now carries a full Windows path. Uniformly off by
-# decision, not off by platform accident.
-option(ENABLE_EXTERNAL_SIGNER "Enable external signer support (post-launch; no signer adapter ships in v1)." OFF)
-
 cmake_dependent_option(WITH_QRENCODE "Enable QR code support." ON "BUILD_GUI" OFF)
 if(WITH_QRENCODE)
   find_package(QRencode MODULE REQUIRED)
   set(USE_QRCODE TRUE)
 endif()
 
-cmake_dependent_option(WITH_DBUS "Enable DBus support." ON "NOT CMAKE_SYSTEM_NAME MATCHES \"(Windows|Darwin)\" AND BUILD_GUI" OFF)
+cmake_dependent_option(WITH_DBUS "Enable DBus support." ON "NOT CMAKE_SYSTEM_NAME STREQUAL \"Windows\" AND BUILD_GUI" OFF)
 
 cmake_dependent_option(BUILD_GUI_TESTS "Build test_quicksilver-qt executable." ON "BUILD_GUI;BUILD_TESTS" OFF)
 if(BUILD_GUI)
@@ -169,7 +151,7 @@ if(BUILD_GUI)
   if(BUILD_GUI_TESTS)
     list(APPEND qt_components Test)
   endif()
-  find_package(Qt 5.11.3 MODULE REQUIRED
+  find_package(Qt 5.15 MODULE REQUIRED
     COMPONENTS ${qt_components}
   )
   unset(qt_components)
@@ -220,11 +202,8 @@ if(BUILD_FOR_FUZZING)
   set(BUILD_CLI OFF)
   set(BUILD_AGENT OFF)
   set(BUILD_TX OFF)
-  set(BUILD_UTIL_CHAINSTATE OFF)
-  set(BUILD_KERNEL_LIB OFF)
   set(BUILD_VAULT_TOOL OFF)
   set(BUILD_GUI OFF)
-  set(ENABLE_EXTERNAL_SIGNER OFF)
   set(WITH_ZMQ OFF)
   set(BUILD_TESTS OFF)
   set(BUILD_GUI_TESTS OFF)
@@ -327,18 +306,6 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 4)
   target_compile_definitions(core_interface INTERFACE
     _FILE_OFFSET_BITS=64
   )
-endif()
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-  target_compile_definitions(core_interface INTERFACE OBJC_OLD_DISPATCH_PROTOTYPES=0)
-  # These flags are specific to ld64, and may cause issues with other linkers.
-  # For example: GNU ld will interpret -dead_strip as -de and then try and use
-  # "ad_strip" as the symbol for the entry point.
-  try_append_linker_flag("-Wl,-dead_strip" TARGET core_interface)
-  try_append_linker_flag("-Wl,-dead_strip_dylibs" TARGET core_interface)
-  if(CMAKE_HOST_APPLE)
-    try_append_linker_flag("-Wl,-headerpad_max_install_names" TARGET core_interface)
-  endif()
 endif()
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
@@ -521,11 +488,7 @@ if(ENABLE_HARDENING)
     endif()
 
     if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-      if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-        try_append_cxx_flags("-mbranch-protection=bti" TARGET hardening_interface SKIP_LINK)
-      else()
-        try_append_cxx_flags("-mbranch-protection=standard" TARGET hardening_interface SKIP_LINK)
-      endif()
+      try_append_cxx_flags("-mbranch-protection=standard" TARGET hardening_interface SKIP_LINK)
     endif()
 
     try_append_linker_flag("-Wl,--enable-reloc-section" TARGET hardening_interface)
@@ -535,9 +498,6 @@ if(ENABLE_HARDENING)
     try_append_linker_flag("-Wl,-z,relro" TARGET hardening_interface)
     try_append_linker_flag("-Wl,-z,now" TARGET hardening_interface)
     try_append_linker_flag("-Wl,-z,separate-code" TARGET hardening_interface)
-    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-      try_append_linker_flag("-Wl,-fixup_chains" TARGET hardening_interface)
-    endif()
   endif()
 endif()
 
@@ -626,7 +586,6 @@ include(Maintenance)
 setup_split_debug_script()
 add_maintenance_targets()
 add_windows_deploy_target()
-add_macos_deploy_target()
 
 message("\n")
 message("Configure summary")
@@ -639,14 +598,11 @@ message("  quicksilver-agent ....................... ${BUILD_AGENT}")
 message("  qsgpusolve-opencl ....................... ${QS_BUILD_GPU_HELPER}")
 message("  quicksilver-tx .......................... ${BUILD_TX}")
 message("  quicksilver-vault ....................... ${BUILD_VAULT_TOOL}")
-message("  quicksilver-chainstate (experimental) ... ${BUILD_UTIL_CHAINSTATE}")
-message("  libquicksilverkernel (experimental) ..... ${BUILD_KERNEL_LIB}")
 message("Optional features:")
 message("  vault support ...................... ${ENABLE_VAULT}")
 if(ENABLE_VAULT)
   message("   - SQLite ........................ ${WITH_SQLITE}")
 endif()
-message("  external signer ..................... ${ENABLE_EXTERNAL_SIGNER}")
 message("  ZeroMQ .............................. ${WITH_ZMQ}")
 message("  USDT tracing ........................ ${WITH_USDT}")
 message("  QR code (GUI) ....................... ${WITH_QRENCODE}")

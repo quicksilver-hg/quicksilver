@@ -7,7 +7,6 @@
 #ifndef QUICKSILVER_POLICY_POLICY_H
 #define QUICKSILVER_POLICY_POLICY_H
 
-#include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>

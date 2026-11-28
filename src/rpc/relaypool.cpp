@@ -4,6 +4,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <rpc/relaypool.h>
+
 #include <rpc/blockchain.h>
 
 #include <node/relaypool_persist.h>
@@ -15,7 +17,6 @@
 #include <net_processing.h>
 #include <node/relaypool_persist_args.h>
 #include <node/types.h>
-#include <policy/settings.h>
 #include <primitives/transaction.h>
 #include <rpc/server.h>
 #include <rpc/server_util.h>
@@ -69,7 +70,7 @@ static RPCHelpMan sendrawtransaction()
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
         {
-            const CAmount max_burn_amount = request.params[1].isNull() ? 0 : AmountFromValue(request.params[1]);
+            const CAmount max_burn_amount = request.params[1].isNull() ? DEFAULT_MAX_BURN_AMOUNT : AmountFromValue(request.params[1]);
 
             CMutableTransaction mtx;
             if (!DecodeHexTx(mtx, request.params[0].get_str())) {
@@ -890,7 +891,7 @@ static RPCHelpMan submitpackage()
             }
 
             // Burn sanity check is run with no context
-            const CAmount max_burn_amount = request.params[1].isNull() ? 0 : AmountFromValue(request.params[1]);
+            const CAmount max_burn_amount = request.params[1].isNull() ? DEFAULT_MAX_BURN_AMOUNT : AmountFromValue(request.params[1]);
 
             std::vector<CTransactionRef> txns;
             txns.reserve(raw_transactions.size());
@@ -978,6 +979,7 @@ static RPCHelpMan submitpackage()
                 if (it == package_result.m_tx_results.end()) {
                     // No results, report error and continue
                     result_inner.pushKV("error", "unevaluated");
+                    tx_result_map.pushKV(tx->GetWitnessHash().GetHex(), result_inner);
                     continue;
                 }
                 switch(it->second.m_result_type) {

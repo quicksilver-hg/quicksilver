@@ -150,5 +150,58 @@ static void ExactSearchExhaustion(benchmark::Bench& bench)
     });
 }
 
+// S0304-B-02: a pool no single OutputType can fund but the mixed pool can.
+// 600 COIN of BECH32 and 600 COIN of BECH32M against a 1000 COIN target: each
+// type alone falls short, so AttemptSelection must take the mixed path, and the
+// same pool without mixing must fail.
+static void CoinSelectionMixedOutputTypes(benchmark::Bench& bench)
+{
+    NodeContext node;
+    auto chain = interfaces::MakeChain(node);
+    CVault vault(chain.get(), "", CreateMockableVaultDatabase());
+    std::vector<std::unique_ptr<CVaultTx>> wtxs;
+    LOCK(vault.cs_vault);
+
+    addCoin(600 * COIN, vault, wtxs);
+    addCoin(600 * COIN, vault, wtxs);
+    vault::CoinsResult available_coins;
+    std::set<COutPoint> bech32_outpoints;
+    std::set<COutPoint> bech32m_outpoints;
+    for (size_t i = 0; i < wtxs.size(); ++i) {
+        const COutPoint outpoint{wtxs[i]->GetHash(), 0};
+        const OutputType type{i == 0 ? OutputType::BECH32 : OutputType::BECH32M};
+        (i == 0 ? bech32_outpoints : bech32m_outpoints).insert(outpoint);
+        available_coins.Add(type, COutput{outpoint, wtxs[i]->tx->vout.at(0), /*depth=*/6 * 24, BENCH_INPUT_BYTES, /*solvable=*/true, /*safe=*/true, wtxs[i]->GetTxTime(), /*from_me=*/true});
+    }
+
+    const CoinEligibilityFilter filter_standard(1, 6, 0);
+    FastRandomContext rand{};
+    const CoinSelectionParams coin_selection_params{rand};
+    auto group = vault::GroupOutputs(vault, available_coins, coin_selection_params, {{filter_standard}})[filter_standard];
+    Assert(group.TypesCount() == 2);
+    for (const OutputGroup& g : group.all_groups.positive_group) Assert(g.m_weight > 0);
+
+    // The success path, asserted before timing it.
+    Assert(!AttemptSelection(1000 * COIN, group, coin_selection_params, /*allow_mixed_output_types=*/false));
+    const auto check = [&](const util::Result<vault::SelectionResult>& result) {
+        assert(result);
+        bool has_bech32{false};
+        bool has_bech32m{false};
+        for (const auto& input : result->GetInputSet()) {
+            has_bech32 |= bech32_outpoints.count(input->outpoint) > 0;
+            has_bech32m |= bech32m_outpoints.count(input->outpoint) > 0;
+        }
+        assert(has_bech32 && has_bech32m);
+        assert(result->GetSelectedValue() == 1200 * COIN);
+    };
+    check(AttemptSelection(1000 * COIN, group, coin_selection_params, /*allow_mixed_output_types=*/true));
+
+    bench.run([&] {
+        auto result = AttemptSelection(1000 * COIN, group, coin_selection_params, /*allow_mixed_output_types=*/true);
+        ankerl::nanobench::doNotOptimizeAway(result);
+    });
+}
+
 BENCHMARK(CoinSelection, benchmark::PriorityLevel::HIGH);
+BENCHMARK(CoinSelectionMixedOutputTypes, benchmark::PriorityLevel::HIGH);
 BENCHMARK(ExactSearchExhaustion, benchmark::PriorityLevel::HIGH);

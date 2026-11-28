@@ -23,5 +23,4 @@ Context::Context()
     });
 }
 
-
 } // namespace kernel

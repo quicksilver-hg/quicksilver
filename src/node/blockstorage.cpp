@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <node/blockstorage.h>
+#include <node/prune_args.h>
 
 #include <arith_uint256.h>
 #include <chain.h>
@@ -324,7 +325,7 @@ void BlockManager::FindFilesToPrune(
     LOCK2(cs_main, cs_LastBlockFile);
     // Distribute our -prune budget over all chainstates.
     const auto target = std::max(
-        MIN_DISK_SPACE_FOR_BLOCK_FILES, GetPruneTarget() / chainman.GetAll().size());
+        PruneTargetFloor(chainman.GetParams()), GetPruneTarget() / chainman.GetAll().size());
     const uint64_t target_sync_height = chainman.m_best_header->nHeight;
 
     if (chain.m_chain.Height() < 0 || target == 0) {

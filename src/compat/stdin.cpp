@@ -18,30 +18,18 @@
 #include <unistd.h>
 #endif
 
-// https://stackoverflow.com/questions/1413445/reading-a-password-from-stdcin
-void SetStdinEcho(bool enable)
-{
+struct NoechoInst::RestoreState {
 #ifdef WIN32
-    HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE handle;
     DWORD mode;
-    GetConsoleMode(hStdin, &mode);
-    if (!enable) {
-        mode &= ~ENABLE_ECHO_INPUT;
-    } else {
-        mode |= ENABLE_ECHO_INPUT;
-    }
-    SetConsoleMode(hStdin, mode);
+    RestoreState(HANDLE h, DWORD m) : handle(h), mode(m) {}
+    ~RestoreState() { SetConsoleMode(handle, mode); }
 #else
-    struct termios tty;
-    tcgetattr(STDIN_FILENO, &tty);
-    if (!enable) {
-        tty.c_lflag &= ~ECHO;
-    } else {
-        tty.c_lflag |= ECHO;
-    }
-    (void)tcsetattr(STDIN_FILENO, TCSANOW, &tty);
+    struct termios mode;
+    explicit RestoreState(const struct termios& m) : mode(m) {}
+    ~RestoreState() { (void)tcsetattr(STDIN_FILENO, TCSANOW, &mode); }
 #endif
-}
+};
 
 bool StdinTerminal()
 {
@@ -85,5 +73,23 @@ bool StdinIsMidFile()
 #endif
 }
 
-NoechoInst::NoechoInst() { SetStdinEcho(false); }
-NoechoInst::~NoechoInst() { SetStdinEcho(true); }
+NoechoInst::NoechoInst()
+{
+#ifdef WIN32
+    HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode;
+    if (handle == INVALID_HANDLE_VALUE || !GetConsoleMode(handle, &mode)) return;
+    auto state = std::make_unique<RestoreState>(handle, mode);
+    if (!SetConsoleMode(handle, mode & ~ENABLE_ECHO_INPUT)) return;
+    m_state = std::move(state);
+#else
+    struct termios mode;
+    if (tcgetattr(STDIN_FILENO, &mode) != 0) return;
+    struct termios no_echo = mode;
+    no_echo.c_lflag &= ~ECHO;
+    auto state = std::make_unique<RestoreState>(mode);
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &no_echo) != 0) return;
+    m_state = std::move(state);
+#endif
+}
+NoechoInst::~NoechoInst() = default;

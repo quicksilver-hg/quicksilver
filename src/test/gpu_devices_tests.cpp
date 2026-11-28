@@ -273,6 +273,79 @@ static bool WaitFor(bool want_held, const std::string& path, std::chrono::millis
     while (std::chrono::steady_clock::now() < end) { if (LockHeld(path) == want_held) return true; std::this_thread::sleep_for(std::chrono::milliseconds{10}); }
     return LockHeld(path) == want_held;
 }
+//! The test's own hold on the stub's lock, by the same primitive the stub takes. Not inherited by the stub
+//! (O_CLOEXEC; a Windows handle is non-inheritable by default), so Release() really frees it.
+class TestLock
+{
+public:
+    explicit TestLock(const std::string& path)
+    {
+#ifdef WIN32
+        m_file = CreateFileW(fs::PathFromString(path).wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
+                             0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        m_held = m_file != INVALID_HANDLE_VALUE;
+#else
+        m_fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+        m_held = m_fd >= 0 && flock(m_fd, LOCK_EX | LOCK_NB) == 0;
+#endif
+    }
+    ~TestLock() { Release(); }
+    TestLock(const TestLock&) = delete;
+    TestLock& operator=(const TestLock&) = delete;
+    bool Held() const { return m_held; }
+    void Release()
+    {
+#ifdef WIN32
+        if (m_file != INVALID_HANDLE_VALUE) CloseHandle(m_file);
+        m_file = INVALID_HANDLE_VALUE;
+#else
+        if (m_fd >= 0) close(m_fd);
+        m_fd = -1;
+#endif
+        m_held = false;
+    }
+
+private:
+#ifdef WIN32
+    HANDLE m_file{INVALID_HANDLE_VALUE};
+#else
+    int m_fd{-1};
+#endif
+    bool m_held{false};
+};
+BOOST_AUTO_TEST_CASE(listing_stub_waits_for_contended_lock)
+{
+    Guard g;
+    const std::string lock{Tmp("qs-list-contended-lock")};
+    const std::string started{Tmp("qs-list-contended-started")};
+    std::remove(started.c_str());
+    const std::string script{Script("qs-list-contended", "append " + started + "\nhold " + lock + "\nsleep 60000\n")};
+    SetEnv("QS_SOLVER_STUB_LISTING", script);
+
+    TestLock test_lock{lock};
+    BOOST_REQUIRE_MESSAGE(test_lock.Held(), "the test could not take the lock itself");
+    auto listing = std::async(std::launch::async, [] {
+        return ListDevices(SOLVER_STUB_PATH, std::chrono::milliseconds{5000});
+    });
+    // Start the contention window once the stub is about to execute `hold`.
+    const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{2}};
+    while (Appended(started) == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    }
+    const bool reached_hold{Appended(started) > 0};
+    const bool waited{listing.wait_for(std::chrono::milliseconds{100}) == std::future_status::timeout};
+    test_lock.Release();
+    const bool acquired{reached_hold && waited && WaitFor(true, lock, std::chrono::seconds{2})};
+    if (acquired) KillOutstandingListings();
+    listing.wait();
+    std::remove(script.c_str());
+    std::remove(started.c_str());
+    std::remove(lock.c_str());
+
+    BOOST_REQUIRE_MESSAGE(reached_hold, "the stub did not reach the contended lock");
+    BOOST_REQUIRE_MESSAGE(waited, "the stub exited while the test still held the lock");
+    BOOST_CHECK_MESSAGE(acquired, "the stub did not hold the lock after the test released it");
+}
 //! F-606: a hung listing child must not outlive the app. The exit-time kill ends it and the listing returns.
 BOOST_AUTO_TEST_CASE(exit_kill_ends_outstanding_listing_child)
 {
@@ -288,5 +361,71 @@ BOOST_AUTO_TEST_CASE(exit_kill_ends_outstanding_listing_child)
     BOOST_REQUIRE_MESSAGE(returned, "the listing did not return after the exit-time kill");
     BOOST_CHECK(listing.get().outcome == ListOutcome::kFailed);
     std::remove(lock.c_str());
+}
+// S0118-B-01: a listing helper that closes its stdout and keeps running used to hold
+// ListDevices in Wait(), under the discovery lock, for as long as it lived. The reap
+// is bounded and the helper killed; a killed listing is a failed one.
+BOOST_AUTO_TEST_CASE(listing_helper_that_outlives_its_stdout_is_reaped, *boost::unit_test::timeout(60))
+{
+    Guard g;
+    SetEnv("QS_SOLVER_STUB_LISTING", Script("qs-list-closeout", "echo " + RX + "\ncloseout\nsleep 20000\n"));
+    SetReapLimitForTesting(std::chrono::milliseconds{300});
+    const auto start = std::chrono::steady_clock::now();
+    const DeviceListing listing{ListDevices(SOLVER_STUB_PATH)};
+    const auto took = std::chrono::steady_clock::now() - start;
+    BOOST_CHECK_MESSAGE(took < std::chrono::seconds{10}, "the listing waited "
+                        << std::chrono::duration_cast<std::chrono::milliseconds>(took).count() << " ms for the helper");
+    BOOST_CHECK(listing.outcome == ListOutcome::kFailed);
+}
+
+// S0228-B-02: LastGpuDiscovery is read by the desktop's once-a-second mining status
+// poll on the GUI thread. It must not wait while a listing holds the discovery lock.
+BOOST_AUTO_TEST_CASE(last_discovery_does_not_wait_for_a_listing, *boost::unit_test::timeout(60))
+{
+    Guard g;
+    const std::string mark{Tmp("qs-list-last")};
+    std::remove(mark.c_str());
+    SetEnv("CUCKATOO_GPU_SOLVER", SOLVER_STUB_PATH);
+    SetEnv("QS_SOLVER_STUB_LISTING", Script("qs-list-last-slow", "append " + mark + "\nsleep 3000\necho " + RX + "\nexit 0\n"));
+    auto listing = std::async(std::launch::async, [] { return DiscoverGpus(28); });
+    const auto started_by = std::chrono::steady_clock::now() + std::chrono::seconds{20};
+    while (Appended(mark) == 0 && std::chrono::steady_clock::now() < started_by) std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    BOOST_REQUIRE_EQUAL(Appended(mark), 1L);
+    const auto start = std::chrono::steady_clock::now();
+    BOOST_CHECK(!LastGpuDiscovery(28).has_value());
+    const auto took = std::chrono::steady_clock::now() - start;
+    BOOST_CHECK_MESSAGE(took < std::chrono::milliseconds{1000}, "LastGpuDiscovery waited "
+                        << std::chrono::duration_cast<std::chrono::milliseconds>(took).count() << " ms for the listing");
+    BOOST_CHECK(listing.get().situation == GpuSituation::kReady);
+    BOOST_REQUIRE(LastGpuDiscovery(28).has_value());
+    BOOST_CHECK(LastGpuDiscovery(28)->situation == GpuSituation::kReady);
+    std::remove(mark.c_str());
+}
+
+// S0118-B-02a: a hand-set CUCKATOO_GPU_DEVICES the parser refuses used to read as
+// automatic, so every card mined past a value such as "CPU" (the CPU-only setting is
+// "cpu"). It now reads as a chosen card that no listing has, so no card is used.
+BOOST_AUTO_TEST_CASE(refused_device_variable_uses_no_card)
+{
+    Guard g;
+    SetEnv("CUCKATOO_GPU_SOLVER", SOLVER_STUB_PATH);
+    SetEnv("QS_SOLVER_STUB_LISTING", Script("qs-list-refused-env", "echo " + RX + "\nexit 0\n"));
+    for (const std::string value : {"CPU", "cpu,pci:0000:04:00.0", "card0"}) {
+        ResetGpuDiscoveryForTesting();
+        SetEnv("CUCKATOO_GPU_DEVICES", value);
+        const DeviceChoice choice{DeviceChoiceFromEnv()};
+        BOOST_CHECK(choice.mode == DeviceChoice::Mode::kChosen);
+        BOOST_CHECK(choice.ids == std::vector<std::string>{value});
+        const GpuDiscovery discovery{DiscoverGpus(28)};
+        BOOST_CHECK_MESSAGE(discovery.selection.use.empty(), value << " put a card to use");
+        BOOST_CHECK(discovery.situation == GpuSituation::kChosenMissing);
+    }
+    // The values the node itself installs are read as before.
+    SetEnv("CUCKATOO_GPU_DEVICES", "cpu");
+    BOOST_CHECK(DeviceChoiceFromEnv().mode == DeviceChoice::Mode::kCpuOnly);
+    SetEnv("CUCKATOO_GPU_DEVICES", "pci:0000:04:00.0");
+    BOOST_CHECK(DeviceChoiceFromEnv().mode == DeviceChoice::Mode::kChosen);
+    Unset("CUCKATOO_GPU_DEVICES");
+    BOOST_CHECK(DeviceChoiceFromEnv().mode == DeviceChoice::Mode::kAutomatic);
 }
 BOOST_AUTO_TEST_SUITE_END()

@@ -14,9 +14,6 @@ The old names are assembled from fragments so that a future tree-wide rename
 sweep cannot quietly rewrite them and turn every assertion here into a
 tautology.
 """
-import http.client
-import urllib.parse
-
 from test_framework.authproxy import JSONRPCException
 from test_framework.test_framework import QuicksilverTestFramework
 from test_framework.util import assert_equal
@@ -48,15 +45,14 @@ RPC_METHOD_NOT_FOUND = -32601
 class RelayPoolNamesTest(QuicksilverTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
-        # Without -rest every path 404s, which would make the old-path
-        # assertions below pass without proving anything.
-        self.extra_args = [["-rest"]]
+        # The REST checks that used to live here went with the REST interface
+        # itself (F-643, owner ruling 2026-11-22); feature_rest_removed.py
+        # proves no /rest/ path answers at all.
 
     def run_test(self):
         self.test_old_rpc_names_do_not_resolve()
         self.test_new_rpc_names_resolve()
         self.test_old_json_names_are_gone()
-        self.test_old_rest_paths_404()
         self.test_old_flags_refuse_to_start()
 
     def test_old_rpc_names_do_not_resolve(self):
@@ -102,22 +98,6 @@ class RelayPoolNamesTest(QuicksilverTestFramework):
             assert_equal(e.error["code"], -8)
         else:
             raise AssertionError(f"gettxout still accepts include_{OLD}")
-
-    def test_old_rest_paths_404(self):
-        self.log.info("Old REST paths must 404 and new ones must serve")
-        url = urllib.parse.urlparse(self.nodes[0].url)
-        conn = http.client.HTTPConnection(url.hostname, url.port)
-        for path in (f"/rest/{OLD}/info.json", f"/rest/{OLD}/contents.json"):
-            conn.request("GET", path)
-            resp = conn.getresponse()
-            resp.read()
-            assert_equal(resp.status, 404)
-        for path in ("/rest/relaypool/info.json", "/rest/relaypool/contents.json"):
-            conn.request("GET", path)
-            resp = conn.getresponse()
-            resp.read()
-            assert_equal(resp.status, 200)
-        conn.close()
 
     def test_old_flags_refuse_to_start(self):
         self.log.info("Old command-line flags must be rejected, not migrated")

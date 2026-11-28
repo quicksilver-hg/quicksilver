@@ -13,7 +13,16 @@
 #include <pubkey.h>
 #include <script/keyorigin.h>
 #include <script/script.h>
+#include <span.h>
 #include <sync.h>
+#include <uint256.h>
+
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <tuple>
+#include <vector>
 
 struct ShortestVectorFirstComparator
 {
@@ -240,24 +249,9 @@ protected:
     KeyMap mapKeys GUARDED_BY(cs_KeyStore);
 
     /**
-     * Map of script id to scripts known by the signing provider.
-     *
-     * This map originally just held P2SH redeemScripts, and was used by vault
-     * code to look up script ids referenced in "OP_HASH160 <script id>
-     * OP_EQUAL" P2SH outputs. Later in 605e8473a7d it was extended to hold
-     * P2WSH witnessScripts as well, and used to look up nested scripts
-     * referenced in "OP_0 <script hash>" P2WSH outputs. Later in commits
-     * f4691ab3a9d and 248f3a76a82, it was extended once again to hold segwit
-     * "OP_0 <key or script hash>" scriptPubKeys, in order to give the vault a
-     * way to distinguish between segwit outputs that it generated addresses for
-     * and wanted to receive payments from, and segwit outputs that it never
-     * generated addresses for, but it could spend just because of having keys.
-     * (Before segwit activation it was also important to not treat segwit
-     * outputs to arbitrary vault keys as payments, because these could be
-     * spent by anyone without even needing to sign with the keys.)
-     *
-     * The FillableSigningProvider::mapScripts script map contains scripts used
-     * for solving and signing. It does not by itself expand vault ownership.
+     * Scripts known to this signing provider, keyed by script ID.
+     * Redeem scripts and witness scripts supply the data needed to solve
+     * and sign spends. The map alone does not determine vault ownership.
      */
     ScriptMap mapScripts GUARDED_BY(cs_KeyStore);
 

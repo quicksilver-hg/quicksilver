@@ -21,9 +21,7 @@
 #define YMARGIN                 10
 
 TrafficGraphWidget::TrafficGraphWidget(QWidget* parent)
-    : QWidget(parent),
-      vSamplesIn(),
-      vSamplesOut()
+    : QWidget(parent)
 {
     timer = new QTimer(this);
     connect(timer, &QTimer::timeout, this, &TrafficGraphWidget::updateRates);
@@ -83,7 +81,7 @@ void TrafficGraphWidget::paintEvent(QPaintEvent *)
     // if we drew 3 or fewer lines, break them up at the next lower order of magnitude
     if(fMax / val <= 3.0f) {
         axisCol = axisCol.darker();
-        val = pow(10.0f, base - 1);
+        val = std::pow(10.0f, base - 1);
         painter.setPen(axisCol);
         painter.drawText(XMARGIN, YMARGIN + h - h * val / fMax-yMarginText, QString("%1 %2").arg(val).arg(units));
         int count = 1;
@@ -146,8 +144,7 @@ void TrafficGraphWidget::updateRates()
 
 void TrafficGraphWidget::setGraphRange(std::chrono::minutes new_range)
 {
-    m_range = new_range;
-    const auto msecs_per_sample{std::chrono::duration_cast<std::chrono::milliseconds>(m_range) / DESIRED_SAMPLES};
+    const auto msecs_per_sample{std::chrono::duration_cast<std::chrono::milliseconds>(new_range) / DESIRED_SAMPLES};
     timer->stop();
     timer->setInterval(msecs_per_sample);
 

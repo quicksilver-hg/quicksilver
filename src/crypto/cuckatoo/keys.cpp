@@ -15,8 +15,7 @@ Keys CuckatooSetHeader(const unsigned char* header, uint32_t headerlen)
 {
     // Mirrors the vendored setheader()/siphash_keys::setkeys():
     // blake2b(header) -> 32-byte key -> four little-endian u64 siphash keys.
-    // We inline the four reads instead of pulling siphash.hpp (whose member
-    // definitions are non-inline) into global scope.
+    // This API derives keys without depending on the vendor graph types.
     unsigned char hdrkey[32];
     blake2b(hdrkey, sizeof(hdrkey), header, headerlen, nullptr, 0);
 

@@ -8,7 +8,7 @@
 #define QUICKSILVER_RPC_CLIENT_H
 
 #include <string>
-#include <string_view>
+#include <vector>
 
 #include <univalue.h>
 

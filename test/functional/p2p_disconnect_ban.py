@@ -62,6 +62,11 @@ class DisconnectBanTest(QuicksilverTestFramework):
         self.log.info("setban: fail to ban with past absolute timestamp")
         assert_raises_rpc_error(-8, "Error: Absolute timestamp is in the past", self.nodes[1].setban, "127.27.0.1", "add", 123, True)
 
+        self.nodes[1].setban("127.27.0.2", "add", 2**63 - 1)
+        huge_ban = next(ban for ban in self.nodes[1].listbanned() if ban["address"] == "127.27.0.2/32")
+        assert_equal(huge_ban["banned_until"], 2**63 - 1)
+        self.nodes[1].setban("127.27.0.2", "remove")
+
         self.log.info("setban remove: fail to unban a non-banned subnet")
         assert_raises_rpc_error(-30, "Error: Unban failed", self.nodes[1].setban, "127.0.0.1", "remove")
         assert_equal(len(self.nodes[1].listbanned()), 1)

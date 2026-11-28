@@ -38,13 +38,13 @@ struct CNodeStateStats {
     int nSyncHeight = -1;
     int nCommonHeight = -1;
     int m_starting_height = -1;
-    std::chrono::microseconds m_ping_wait;
+    std::chrono::microseconds m_ping_wait{0};
     std::vector<int> vHeightInFlight;
-    bool m_relay_txs;
+    bool m_relay_txs{false};
     uint64_t m_addr_processed = 0;
     uint64_t m_addr_rate_limited = 0;
     bool m_addr_relay_enabled{false};
-    ServiceFlags their_services;
+    ServiceFlags their_services{NODE_NONE};
     int64_t presync_height{-1};
     std::chrono::seconds time_offset{0};
 };

@@ -7,6 +7,7 @@
 #include <consensus/amount.h>
 #include <streams.h>
 #include <tinyformat.h>
+#include <random.h>
 #include <util/fs_helpers.h>
 #include <util/readwritefile.h>
 #include <util/result.h>
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <system_error>
 #include <map>
 #include <set>
 #include <string>
@@ -29,12 +31,72 @@ namespace {
 constexpr uint32_t ALLOTMENT_RECEIPT_STORE_MAGIC{0x47525351}; // "QSRG" in little-endian streams.
 constexpr uint32_t ALLOTMENT_RECEIPT_STORE_VERSION{3};
 constexpr uint32_t ALLOTMENT_RECEIPT_STORE_MIN_VERSION{1};
-constexpr uint64_t MAX_ALLOTMENT_RECEIPTS{1'000'000};
-constexpr uint64_t MAX_ALLOTMENT_RECEIPT_ACTIVITIES{2'000'000};
 constexpr size_t MAX_PAYMENT_RECEIPT_FILE_SIZE{1'000'000};
-constexpr int64_t SECONDS_PER_UTC_DAY{86400};
 
 using FundingOutpointKey = std::pair<std::string, uint32_t>;
+
+//! A header count is only a claim until the records behind it have been read, so
+//! a corrupt count must not size an allocation; the vectors grow as records arrive.
+constexpr uint64_t MAX_STORE_RESERVE{1024};
+
+//! A temp name of its own per save, so two writers never share one and a stale
+//! file from a crashed run cannot block the next save.
+fs::path UniqueTempPath(const fs::path& path)
+{
+    return path + strprintf(".new-%016x", FastRandomContext().rand64()).c_str();
+}
+
+AllotmentStoreResult WriteReceiptStoreFile(const AllotmentReceiptStoreData& data,
+                                           const fs::path& temp_path,
+                                           const fs::path& path,
+                                           const uint256& genesis_hash)
+{
+    AutoFile file{fsbridge::fopen(temp_path, "wb")};
+    if (file.IsNull()) return AllotmentStoreResult::FILE_OPEN_FAILED;
+
+    try {
+        file << ALLOTMENT_RECEIPT_STORE_MAGIC;
+        file << ALLOTMENT_RECEIPT_STORE_VERSION;
+        file << genesis_hash;
+        file << static_cast<uint64_t>(data.receipts.size());
+        for (const AllotmentPaymentReceiptArtifact& receipt : data.receipts) {
+            file << receipt.chain;
+            file << receipt.genesis_hash;
+            file << receipt.funding_address;
+            file << receipt.funding_output.txid;
+            file << receipt.funding_output.vout;
+            file << receipt.funding_output.amount;
+            file << receipt.received_time;
+            file << receipt.payment_id;
+            file << receipt.label;
+            file << receipt.memo;
+            file << receipt.payer;
+        }
+        file << static_cast<uint64_t>(data.activities.size());
+        for (const AllotmentReceiptActivity& activity : data.activities) {
+            const uint8_t type{static_cast<uint8_t>(activity.type)};
+            file << type;
+            file << activity.funding_address;
+            file << activity.funding_output.txid;
+            file << activity.funding_output.vout;
+            file << activity.funding_output.amount;
+            file << activity.event_time;
+            file << activity.related_txid;
+            file << activity.payment_id;
+            file << activity.label;
+            file << activity.memo;
+            file << activity.payer;
+        }
+
+        if (!file.Commit()) return AllotmentStoreResult::FILE_COMMIT_FAILED;
+        if (file.fclose() != 0) return AllotmentStoreResult::FILE_COMMIT_FAILED;
+        if (!RenameOver(temp_path, path)) return AllotmentStoreResult::FILE_RENAME_FAILED;
+    } catch (const std::exception&) {
+        return AllotmentStoreResult::FILE_WRITE_FAILED;
+    }
+    if (path.has_parent_path()) DirectoryCommit(path.parent_path());
+    return AllotmentStoreResult::OK;
+}
 
 std::set<FundingOutpointKey> SpentOutpoints(const std::vector<AllotmentReceiptActivity>& activities,
                                             std::string_view funding_address)
@@ -127,53 +189,21 @@ util::LockResult LockReceiptStoreDirectory(const fs::path& directory)
 
 AllotmentStoreResult SaveAllotmentReceiptStore(const AllotmentReceiptStoreData& data,
                                          const fs::path& path,
-                                         const uint256& genesis_hash)
+                                         const uint256& genesis_hash,
+                                         const AllotmentStoreLimits& limits)
 {
-    const fs::path temp_path{path + ".new"};
-    AutoFile file{fsbridge::fopen(temp_path, "wb")};
-    if (file.IsNull()) return AllotmentStoreResult::FILE_OPEN_FAILED;
+    // The loader refuses a store past these caps, so refuse to write one: a store
+    // that saves must load.
+    if (data.receipts.size() > limits.max_receipts) return AllotmentStoreResult::TOO_MANY_RECEIPTS;
+    if (data.activities.size() > limits.max_activities) return AllotmentStoreResult::TOO_MANY_ACTIVITIES;
 
-    try {
-        file << ALLOTMENT_RECEIPT_STORE_MAGIC;
-        file << ALLOTMENT_RECEIPT_STORE_VERSION;
-        file << genesis_hash;
-        file << static_cast<uint64_t>(data.receipts.size());
-        for (const AllotmentPaymentReceiptArtifact& receipt : data.receipts) {
-            file << receipt.chain;
-            file << receipt.genesis_hash;
-            file << receipt.funding_address;
-            file << receipt.funding_output.txid;
-            file << receipt.funding_output.vout;
-            file << receipt.funding_output.amount;
-            file << receipt.received_time;
-            file << receipt.payment_id;
-            file << receipt.label;
-            file << receipt.memo;
-            file << receipt.payer;
-        }
-        file << static_cast<uint64_t>(data.activities.size());
-        for (const AllotmentReceiptActivity& activity : data.activities) {
-            const uint8_t type{static_cast<uint8_t>(activity.type)};
-            file << type;
-            file << activity.funding_address;
-            file << activity.funding_output.txid;
-            file << activity.funding_output.vout;
-            file << activity.funding_output.amount;
-            file << activity.event_time;
-            file << activity.related_txid;
-            file << activity.payment_id;
-            file << activity.label;
-            file << activity.memo;
-            file << activity.payer;
-        }
-
-        if (!file.Commit()) return AllotmentStoreResult::FILE_COMMIT_FAILED;
-        file.fclose();
-        if (!RenameOver(temp_path, path)) return AllotmentStoreResult::FILE_RENAME_FAILED;
-    } catch (const std::exception&) {
-        return AllotmentStoreResult::FILE_WRITE_FAILED;
+    const fs::path temp_path{UniqueTempPath(path)};
+    const AllotmentStoreResult result{WriteReceiptStoreFile(data, temp_path, path, genesis_hash)};
+    if (result != AllotmentStoreResult::OK) {
+        std::error_code ignored;
+        fs::remove(temp_path, ignored);
     }
-    return AllotmentStoreResult::OK;
+    return result;
 }
 
 AllotmentStoreResult SaveAllotmentPaymentReceipts(const std::vector<AllotmentPaymentReceiptArtifact>& receipts,
@@ -184,11 +214,18 @@ AllotmentStoreResult SaveAllotmentPaymentReceipts(const std::vector<AllotmentPay
 }
 
 AllotmentReceiptStoreLoadResult LoadAllotmentPaymentReceipts(const fs::path& path,
-                                                       const uint256& expected_genesis_hash)
+                                                       const uint256& expected_genesis_hash,
+                                                       const AllotmentStoreLimits& limits)
 {
-    if (path.empty() || !fs::exists(path)) {
-        return LoadResult(AllotmentStoreResult::FILE_NOT_FOUND);
+    if (path.empty()) return LoadResult(AllotmentStoreResult::FILE_NOT_FOUND);
+    // A permission or path error is a result here, not an exception.
+    bool exists{false};
+    try {
+        exists = fs::exists(path);
+    } catch (const fs::filesystem_error&) {
+        return LoadResult(AllotmentStoreResult::FILE_OPEN_FAILED);
     }
+    if (!exists) return LoadResult(AllotmentStoreResult::FILE_NOT_FOUND);
 
     AutoFile file{fsbridge::fopen(path, "rb")};
     if (file.IsNull()) return LoadResult(AllotmentStoreResult::FILE_OPEN_FAILED);
@@ -207,10 +244,10 @@ AllotmentReceiptStoreLoadResult LoadAllotmentPaymentReceipts(const fs::path& pat
         if (magic != ALLOTMENT_RECEIPT_STORE_MAGIC) return LoadResult(AllotmentStoreResult::BAD_MAGIC);
         if (version < ALLOTMENT_RECEIPT_STORE_MIN_VERSION || version > ALLOTMENT_RECEIPT_STORE_VERSION) return LoadResult(AllotmentStoreResult::BAD_VERSION);
         if (stored_genesis != expected_genesis_hash) return LoadResult(AllotmentStoreResult::BAD_GENESIS);
-        if (receipt_count > MAX_ALLOTMENT_RECEIPTS) return LoadResult(AllotmentStoreResult::TOO_MANY_RECEIPTS);
+        if (receipt_count > limits.max_receipts) return LoadResult(AllotmentStoreResult::TOO_MANY_RECEIPTS);
 
         std::vector<AllotmentPaymentReceiptArtifact> receipts;
-        receipts.reserve(receipt_count);
+        receipts.reserve(std::min(receipt_count, MAX_STORE_RESERVE));
         for (uint64_t i{0}; i < receipt_count; ++i) {
             AllotmentPaymentReceiptArtifact receipt;
             file >> receipt.chain;
@@ -232,8 +269,8 @@ AllotmentReceiptStoreLoadResult LoadAllotmentPaymentReceipts(const fs::path& pat
         if (version >= 2) {
             uint64_t activity_count{0};
             file >> activity_count;
-            if (activity_count > MAX_ALLOTMENT_RECEIPT_ACTIVITIES) return LoadResult(AllotmentStoreResult::TOO_MANY_ACTIVITIES);
-            activities.reserve(activity_count);
+            if (activity_count > limits.max_activities) return LoadResult(AllotmentStoreResult::TOO_MANY_ACTIVITIES);
+            activities.reserve(std::min(activity_count, MAX_STORE_RESERVE));
             for (uint64_t i{0}; i < activity_count; ++i) {
                 uint8_t type{0};
                 AllotmentReceiptActivity activity;
@@ -386,8 +423,17 @@ util::Result<AllotmentReceiptDirectoryScanResult> ScanAllotmentPaymentReceiptDir
     }
     if (*added > 0) {
         const fs::path parent_path{store_path.parent_path()};
-        if (!parent_path.empty() && !fs::is_directory(parent_path) && !TryCreateDirectories(parent_path)) {
-            return util::Error{Untranslated(strprintf("Could not create agent receipt store directory %s.", fs::PathToString(parent_path)))};
+        // A permission or path error is reported, not thrown.
+        if (!parent_path.empty()) {
+            bool parent_ok{false};
+            try {
+                fs::create_directories(parent_path);
+                parent_ok = fs::is_directory(parent_path);
+            } catch (const fs::filesystem_error&) {
+            }
+            if (!parent_ok) {
+                return util::Error{Untranslated(strprintf("Could not create agent receipt store directory %s.", fs::PathToString(parent_path)))};
+            }
         }
         const AllotmentStoreResult saved{SaveAllotmentReceiptStore(*store, store_path, expected_genesis_hash)};
         if (saved != AllotmentStoreResult::OK) {

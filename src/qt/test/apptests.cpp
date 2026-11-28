@@ -27,10 +27,12 @@
 #include <qt/rpcconsole.h>
 #ifdef ENABLE_VAULT
 #include <interfaces/vault.h>
+#include <qt/createvaultdialog.h>
 #include <qt/vaultcontroller.h>
 #include <qt/vaultframe.h>
 #include <qt/vaultmodel.h>
 #include <qt/vaultview.h>
+#include <vault/vault.h>
 #include <vault/vaultutil.h>
 #endif
 #include <qt/test/util.h>
@@ -57,6 +59,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QDialogButtonBox>
 #include <QFile>
 #include <QFileInfo>
 #include <QVBoxLayout>
@@ -739,8 +742,10 @@ void TestModernShell(QuicksilverGUI* window)
     // copy instead of quoting zero growth. This still pins the wiring, which is what the
     // pre-F-562 assertion was for: any nonzero reaching the page selects the measured
     // sentence instead and fails this compare. The figures a real user reads are asserted
-    // in StorageCostsTests, at the chainparams figures injected.
-    const QString sandbox_cost_copy = QStringLiteral("Transfers require proof-of-work. Enabling consensus records up to 2 GB of blockchain data. Without consensus, the vault keeps your keys and addresses but cannot see incoming payments or send.");
+    // in StorageCostsTests, at the chainparams figures injected. F-705 (owner,
+    // 2026-11-21): the desktop keeps the full chain by default, so this copy no longer
+    // says consensus "records up to 3 GB", which was the pruned figure.
+    const QString sandbox_cost_copy = QStringLiteral("Transfers require proof-of-work. Enabling consensus keeps the full chain by default. Pruning is an option that caps the block data at 4 GB. Without consensus, the vault keeps your keys and addresses but cannot see incoming payments or send.");
     QCOMPARE(launch_cost->text(), sandbox_cost_copy);
     QWidget* backup_panel = launch->findChild<QWidget*>(QStringLiteral("desktopLaunchBackupPanel"));
     QVERIFY(backup_panel);
@@ -806,7 +811,10 @@ bool ClickNetworkRestartDialogButton(const QString& button_text, QString* text, 
     for (QWidget* widget : QApplication::topLevelWidgets()) {
         if (!widget->inherits("QMessageBox")) continue;
         QMessageBox* box = qobject_cast<QMessageBox*>(widget);
-        if (!box || box->windowTitle() != QStringLiteral("Switch network")) continue;
+        // Only a box on screen can be answered. A dismissed box stays alive, hidden, until its
+        // deferred result has run (GUIUtil::ShowModalMessageBoxAsynchronously), and clicking it
+        // instead of the open one answers nothing.
+        if (!box || !box->isVisible() || box->windowTitle() != QStringLiteral("Switch network")) continue;
         if (text) *text = box->text();
         if (informative_text) *informative_text = box->informativeText();
         for (QAbstractButton* button : box->buttons()) {
@@ -1100,6 +1108,68 @@ void TestLateVaultNetworkSyncUsesSharedState(QuicksilverGUI* window, interfaces:
     QCOMPARE(sync->text(), QStringLiteral("Synchronized"));
 }
 
+//! F-678: the create-vault dialog lost its "Disable Private Keys" and "Make
+//! Blank Vault" options. A vault made through the dialog, driven the way a user
+//! drives it, holds its own keys and uses descriptors: not watch-only, not
+//! blank, and not a signer vault.
+void TestCreateVaultDialogMakesAKeyedVault(QuicksilverGUI* window, interfaces::Node& node)
+{
+    auto* controller = window->getVaultController();
+    QVERIFY(controller);
+    const std::string name{"hg-dialog-flags"};
+    QPointer<CreateVaultActivity> activity{new CreateVaultActivity(controller, window)};
+    QPointer<VaultModel> model;
+    bool finished{false};
+    QObject::connect(activity, &CreateVaultActivity::created, [&model](VaultModel* created) { model = created; });
+    QObject::connect(activity, &VaultControllerActivity::finished, [&finished] { finished = true; });
+    activity->create();
+
+    auto* dialog = window->findChild<CreateVaultDialog*>();
+    QVERIFY(dialog);
+    QVERIFY(dialog->isVisible());
+    auto* name_edit = dialog->findChild<QLineEdit*>(QStringLiteral("vault_name_line_edit"));
+    auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("buttonBox"));
+    QVERIFY(name_edit && buttons);
+    QVERIFY(!dialog->findChild<QCheckBox*>(QStringLiteral("disable_privkeys_checkbox")));
+    QVERIFY(!dialog->findChild<QCheckBox*>(QStringLiteral("blank_vault_checkbox")));
+    QTest::keyClicks(name_edit, QString::fromStdString(name));
+    QPushButton* create = buttons->button(QDialogButtonBox::Ok);
+    QVERIFY(create && create->isEnabled());
+    create->click();
+
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 60000);
+    QVERIFY(!window->findChild<QMessageBox*>(QStringLiteral("createVaultFailed")));
+    QVERIFY(model);
+    struct UnloadVault {
+        QPointer<VaultModel> model;
+        ~UnloadVault()
+        {
+            if (model) model->vault().remove();
+            QCoreApplication::processEvents();
+        }
+    } unload{model};
+
+    vault::VaultContext* context = node.vaultLoader().context();
+    QVERIFY(context);
+    const std::shared_ptr<vault::CVault> created = vault::GetVault(*context, name);
+    QVERIFY(created);
+    QVERIFY(created->IsVaultFlagSet(vault::VAULT_FLAG_DESCRIPTORS));
+    QVERIFY(!created->IsVaultFlagSet(vault::VAULT_FLAG_DISABLE_PRIVATE_KEYS));
+    QVERIFY(!created->IsVaultFlagSet(vault::VAULT_FLAG_BLANK_VAULT));
+    QVERIFY(!created->IsVaultFlagSet(vault::VAULT_FLAG_EXTERNAL_SIGNER));
+    QVERIFY(!model->vault().privateKeysDisabled());
+    QVERIFY(model->vault().canGetAddresses());
+
+    // F-678: the status strip has no HD or "private key disabled" indicator
+    // for an open vault (spec changed: the HD icon used to be shown here).
+    QFrame* strip = window->statusBar()->findChild<QFrame*>(QStringLiteral("benchStatusStrip"));
+    QVERIFY(strip);
+    for (const QLabel* label : strip->findChildren<QLabel*>()) {
+        QVERIFY2(!label->toolTip().contains(QStringLiteral("HD key"), Qt::CaseInsensitive), qPrintable(label->toolTip()));
+        QVERIFY2(!label->toolTip().contains(QStringLiteral("Private key"), Qt::CaseInsensitive), qPrintable(label->toolTip()));
+    }
+}
+
 #endif
 
 //! A stale genesis tip is complete after a peer answers with no better header.
@@ -1165,7 +1235,7 @@ void TestDisabledVaultStripSyncState(interfaces::Node& node, OptionsModel* optio
     const QDateTime stale = QDateTime::currentDateTime().addSecs(-9 * 60 * 60);
     interfaces::BlockAndHeaderTipInfo tip{8294, stale.toSecsSinceEpoch(), 8294, stale.toSecsSinceEpoch(), 0.01};
     window.setClientModel(&client_model, &tip);
-    QVERIFY(!window.enableVault);
+    QVERIFY(!window.isVaultEnabled());
     QVERIFY(!window.findChild<QWidget*>(QStringLiteral("vaultFrame")));
     QVERIFY(!window.findChild<QWidget*>(QStringLiteral("desktopLaunchPage")));
     QVERIFY(!window.findChild<QLabel*>(QStringLiteral("homeNodeState")));
@@ -1491,6 +1561,116 @@ void AppTests::consensusTorPreflight()
     QVERIFY(!QuicksilverApplication::launchOpensVaultOnlyForTesting(*no_vault, locator(std::nullopt)));
 }
 
+void AppTests::modalMessageRaisesWindowWithoutConsensus()
+{
+    QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate(QuicksilverGUI::DEFAULT_UIPLATFORM.c_str()));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    QuicksilverGUI window(m_app.node(), platform_style.data(), network_style.data());
+
+    QVERIFY(window.isHidden());
+    window.message(QStringLiteral("Test"), QStringLiteral("Startup message"), CClientUIInterface::MSG_ERROR);
+    QVERIFY(window.isVisible());
+    auto* box = window.findChild<QMessageBox*>(QStringLiteral("clientMessageBox"));
+    QVERIFY(box);
+    box->accept();
+}
+
+void AppTests::vaultNameMustBeASingleDirectoryName()
+{
+    CreateVaultDialog dialog{nullptr};
+    auto* name = dialog.findChild<QLineEdit*>(QStringLiteral("vault_name_line_edit"));
+    auto* buttons = dialog.findChild<QDialogButtonBox*>(QStringLiteral("buttonBox"));
+    QVERIFY(name && buttons);
+    const auto* create = buttons->button(QDialogButtonBox::Ok);
+    QVERIFY(create);
+    for (const auto& value : {QStringLiteral("  "), QStringLiteral("sub/vault"), QStringLiteral("sub\\vault"),
+                              QStringLiteral("."), QStringLiteral("..")}) {
+        name->setText(value);
+        QVERIFY(!create->isEnabled());
+    }
+    name->setText(QStringLiteral("  Savings vault  "));
+    QVERIFY(create->isEnabled());
+    QCOMPARE(dialog.vaultName(), QStringLiteral("Savings vault"));
+}
+
+void AppTests::rpcConsoleAttachmentIsIdempotent()
+{
+    QScopedPointer<const PlatformStyle> style{PlatformStyle::instantiate(QuicksilverGUI::DEFAULT_UIPLATFORM.c_str())};
+    OptionsModel options{m_app.node()};
+    ClientModel model{m_app.node(), &options};
+    RPCConsole console{m_app.node(), style.data(), nullptr};
+    const auto* input = console.findChild<QLineEdit*>(QStringLiteral("lineEdit"));
+    QVERIFY(input);
+    QVERIFY(!input->isEnabled());
+
+    console.setClientModel(&model);
+    QVERIFY(input->isEnabled());
+    const auto* completer = input->completer();
+    QVERIFY(completer);
+    console.setClientModel(&model);
+    QCOMPARE(input->completer(), completer);
+
+    console.setClientModel();
+    QVERIFY(!input->isEnabled());
+    QVERIFY(!input->completer());
+    console.setClientModel();
+    console.setClientModel(&model);
+    QVERIFY(input->isEnabled());
+    console.setClientModel();
+    QVERIFY(!input->isEnabled());
+}
+
+void AppTests::modalMessageReleasesAnUnansweredCaller()
+{
+    // A node thread asking a modal question waits for the window's answer. If the
+    // queued question is dropped unrun, or its box is destroyed unanswered, the
+    // caller must still be let go, not left waiting for good (S0236-A-04).
+    // Runs before any slot creates the app window: every window subscribed to
+    // the node would ask too.
+    QScopedPointer<const PlatformStyle> platform_style(PlatformStyle::instantiate(QuicksilverGUI::DEFAULT_UIPLATFORM.c_str()));
+    QScopedPointer<const NetworkStyle> network_style(NetworkStyle::instantiate(Params().GetChainType()));
+    QuicksilverGUI window(m_app.node(), platform_style.data(), network_style.data());
+
+    struct DropQueuedCalls : QObject {
+        int dropped{0};
+        bool eventFilter(QObject*, QEvent* event) override
+        {
+            if (event->type() != QEvent::MetaCall) return false;
+            ++dropped;
+            return true;
+        }
+    };
+    const auto ask = [](const char* text) {
+        auto returned = std::make_shared<std::atomic<bool>>(false);
+        std::thread caller{[returned, text] {
+            uiInterface.ThreadSafeMessageBox(Untranslated(text), "", CClientUIInterface::MSG_ERROR);
+            *returned = true;
+        }};
+        return std::pair{std::move(caller), returned};
+    };
+    // A caller still waiting when a check fails is detached, so the failure is
+    // reported instead of the test hanging in join().
+    const auto finish = [](std::thread& caller, const std::atomic<bool>& returned) {
+        if (returned) caller.join(); else caller.detach();
+    };
+
+    {
+        DropQueuedCalls drop;
+        window.installEventFilter(&drop);
+        auto asked = ask("dropped question");
+        auto guard = qScopeGuard([&] { window.removeEventFilter(&drop); finish(asked.first, *asked.second); });
+        QTRY_VERIFY_WITH_TIMEOUT(drop.dropped > 0, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(asked.second->load(), 10000);
+    }
+    {
+        auto asked = ask("unanswered question");
+        auto guard = qScopeGuard([&] { finish(asked.first, *asked.second); });
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QMessageBox*>(QStringLiteral("clientMessageBox")), 10000);
+        delete window.findChild<QMessageBox*>(QStringLiteral("clientMessageBox"));
+        QTRY_VERIFY_WITH_TIMEOUT(asked.second->load(), 10000);
+    }
+}
+
 void AppTests::restartArgumentsForDeveloperNetwork()
 {
     const QStringList original_arguments{
@@ -1589,17 +1769,6 @@ void AppTests::daemonIsFoundBesideTheBinaryThenOnPath()
 //! Entry point for QuicksilverApplication tests.
 void AppTests::appTests()
 {
-#ifdef Q_OS_MACOS
-    if (QApplication::platformName() == "minimal") {
-        // Disable for mac on "minimal" platform to avoid crashes inside the Qt
-        // framework when it tries to look up unimplemented cocoa functions,
-        // and fails to handle returned nulls
-        // (https://bugreports.qt.io/browse/QTBUG-49686).
-        qWarning() << "Skipping AppTests on mac build with 'minimal' platform set due to Qt bugs. To run AppTests, invoke "
-                      "with 'QT_QPA_PLATFORM=cocoa test_quicksilver-qt' on mac, or else use a linux or windows build.";
-        return;
-    }
-#endif
 
     qRegisterMetaType<interfaces::BlockAndHeaderTipInfo>("interfaces::BlockAndHeaderTipInfo");
     m_app.parameterSetup();
@@ -1661,6 +1830,7 @@ void AppTests::guiTests(QuicksilverGUI* window)
     TestNetworkSyncUsesSharedState(window);
 #ifdef ENABLE_VAULT
     TestLateVaultNetworkSyncUsesSharedState(window, m_app.node());
+    TestCreateVaultDialogMakesAKeyedVault(window, m_app.node());
 #endif
     window->setNumConnections(0);
     window->setHeadersAnsweredPeers(-1);
@@ -2144,7 +2314,6 @@ void AppTests::optionsSaveWithNoNode()
     QVERIFY(model);
 
     const bool tray_available = QSystemTrayIcon::isSystemTrayAvailable();
-#ifndef Q_OS_MACOS
     if (tray_available) {
         QVERIFY(model->setOption(OptionsModel::ShowTrayIcon, false));
         QVERIFY(model->setOption(OptionsModel::MinimizeToTray, false));
@@ -2154,7 +2323,6 @@ void AppTests::optionsSaveWithNoNode()
         dialog = qobject_cast<OptionsDialog*>(QApplication::activeModalWidget());
         QVERIFY2(dialog, "optionsAction did not reopen an OptionsDialog");
     }
-#endif
 
     auto require = [](auto* widget, const char* name) {
         return widget ? QString{} : QStringLiteral("missing widget %1").arg(QLatin1String(name));
@@ -2169,8 +2337,6 @@ void AppTests::optionsSaveWithNoNode()
     auto* prune = dialog->findChild<QCheckBox*>(QStringLiteral("prune"));
     auto* prune_size = dialog->findChild<QSpinBox*>(QStringLiteral("pruneSize"));
     auto* spend_zero = dialog->findChild<QCheckBox*>(QStringLiteral("spendZeroConfChange"));
-    auto* coin_control = dialog->findChild<QCheckBox*>(QStringLiteral("coinControlFeatures"));
-    auto* signer = dialog->findChild<QLineEdit*>(QStringLiteral("externalSignerPath"));
     auto* psqt = dialog->findChild<QCheckBox*>(QStringLiteral("m_enable_psqt_controls"));
     auto* natpmp = dialog->findChild<QCheckBox*>(QStringLiteral("mapPortNatpmp"));
     auto* listen = dialog->findChild<QCheckBox*>(QStringLiteral("allowIncoming"));
@@ -2189,17 +2355,16 @@ void AppTests::optionsSaveWithNoNode()
     auto* ok = dialog->findChild<QPushButton*>(QStringLiteral("okButton"));
 
     const QWidget* widgets[] = {startup, threads, dbcache, gpu_path, cpu_mining, prune, prune_size, spend_zero,
-        coin_control, signer, psqt, natpmp, listen, server, proxy_use, proxy_ip, proxy_port, tor_use, tor_ip,
+        psqt, natpmp, listen, server, proxy_use, proxy_ip, proxy_port, tor_use, tor_ip,
         tor_port, lang, unit, third_party, gpu_cpu, ok};
     const char* names[] = {"quicksilverAtStartup", "threadsScriptVerif", "databaseCache", "gpuSolverPath",
-        "allowCpuBlockMining", "prune", "pruneSize", "spendZeroConfChange", "coinControlFeatures",
-        "externalSignerPath", "m_enable_psqt_controls", "mapPortNatpmp", "allowIncoming", "enableServer",
+        "allowCpuBlockMining", "prune", "pruneSize", "spendZeroConfChange",
+        "m_enable_psqt_controls", "mapPortNatpmp", "allowIncoming", "enableServer",
         "connectSocks", "proxyIp", "proxyPort", "connectSocksTor", "proxyIpTor", "proxyPortTor", "lang",
         "unit", "thirdPartyTxUrls", "gpuModeCpu", "okButton"};
     for (size_t i = 0; i < sizeof(widgets) / sizeof(widgets[0]); ++i) {
         if (!widgets[i]) problems << require(widgets[i], names[i]);
     }
-#ifndef Q_OS_MACOS
     if (!minimize_close) problems << require(minimize_close, "minimizeOnClose");
     QCheckBox* show_tray = nullptr;
     QCheckBox* minimize_tray = nullptr;
@@ -2209,7 +2374,6 @@ void AppTests::optionsSaveWithNoNode()
         if (!show_tray) problems << require(show_tray, "showTrayIcon");
         if (!minimize_tray) problems << require(minimize_tray, "minimizeToTray");
     }
-#endif
     QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QLatin1Char('\n'))));
 
     const bool want_startup = !startup->isChecked();
@@ -2225,10 +2389,6 @@ void AppTests::optionsSaveWithNoNode()
     prune_size->setValue(want_prune_size);
     const bool want_spend_zero = !spend_zero->isChecked();
     spend_zero->setChecked(want_spend_zero);
-    const bool want_coin_control = !coin_control->isChecked();
-    coin_control->setChecked(want_coin_control);
-    const QString want_signer = QStringLiteral("/tmp/qs-f482-signer");
-    signer->setText(want_signer);
     const bool want_psqt = !psqt->isChecked();
     psqt->setChecked(want_psqt);
     const bool want_natpmp = !natpmp->isChecked();
@@ -2248,14 +2408,12 @@ void AppTests::optionsSaveWithNoNode()
     tor_port->setText(want_tor_port);
     tor_use->setChecked(true);
 
-#ifndef Q_OS_MACOS
     const bool want_minimize_close = !minimize_close->isChecked();
     minimize_close->setChecked(want_minimize_close);
     if (tray_available) {
         show_tray->setChecked(true);
         minimize_tray->setChecked(true);
     }
-#endif
 
     const bool language_mapped = lang && !lang->isHidden();
     QString want_language;
@@ -2305,8 +2463,6 @@ void AppTests::optionsSaveWithNoNode()
     mismatch("Prune", fresh.getOption(OptionsModel::Prune).toString(), QStringLiteral("true"));
     mismatch("PruneSize", fresh.getOption(OptionsModel::PruneSize).toString(), QString::number(want_prune_size));
     mismatch("SpendZeroConfChange", fresh.getOption(OptionsModel::SpendZeroConfChange).toString(), want_spend_zero ? QStringLiteral("true") : QStringLiteral("false"));
-    mismatch("CoinControlFeatures", fresh.getOption(OptionsModel::CoinControlFeatures).toString(), want_coin_control ? QStringLiteral("true") : QStringLiteral("false"));
-    mismatch("ExternalSignerPath", fresh.getOption(OptionsModel::ExternalSignerPath).toString(), want_signer);
     mismatch("EnablePSQTControls", fresh.getOption(OptionsModel::EnablePSQTControls).toString(), want_psqt ? QStringLiteral("true") : QStringLiteral("false"));
     mismatch("MapPortNatpmp", fresh.getOption(OptionsModel::MapPortNatpmp).toString(), want_natpmp ? QStringLiteral("true") : QStringLiteral("false"));
     mismatch("Listen", fresh.getOption(OptionsModel::Listen).toString(), want_listen ? QStringLiteral("true") : QStringLiteral("false"));
@@ -2317,13 +2473,11 @@ void AppTests::optionsSaveWithNoNode()
     mismatch("ProxyUseTor", fresh.getOption(OptionsModel::ProxyUseTor).toString(), QStringLiteral("true"));
     mismatch("ProxyIPTor", fresh.getOption(OptionsModel::ProxyIPTor).toString(), want_proxy_ip);
     mismatch("ProxyPortTor", fresh.getOption(OptionsModel::ProxyPortTor).toString(), want_tor_port);
-#ifndef Q_OS_MACOS
     mismatch("MinimizeOnClose", fresh.getOption(OptionsModel::MinimizeOnClose).toString(), want_minimize_close ? QStringLiteral("true") : QStringLiteral("false"));
     if (tray_available) {
         mismatch("ShowTrayIcon", fresh.getOption(OptionsModel::ShowTrayIcon).toString(), QStringLiteral("true"));
         mismatch("MinimizeToTray", fresh.getOption(OptionsModel::MinimizeToTray).toString(), QStringLiteral("true"));
     }
-#endif
     if (language_mapped) {
         mismatch("Language", fresh.getOption(OptionsModel::Language).toString(), want_language);
     }

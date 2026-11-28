@@ -38,7 +38,6 @@ add_executable(test_quicksilver
   compress_tests.cpp
   contained_child_tests.cpp
   crypto_tests.cpp
-  cuckatoo_bench_gpu_csv_tests.cpp
   cuckatoo_bench_registry_tests.cpp
   cuckatoo_bench_solve_tests.cpp
   cuckatoo_f265_capture_tests.cpp
@@ -89,7 +88,6 @@ add_executable(test_quicksilver
   raii_event_tests.cpp
   random_tests.cpp
   replacement_tests.cpp
-  rest_tests.cpp
   result_tests.cpp
   reverselock_tests.cpp
   rpc_tests.cpp
@@ -110,7 +108,6 @@ add_executable(test_quicksilver
   span_tests.cpp
   streams_tests.cpp
   sync_tests.cpp
-  system_tests.cpp
   timeoffsets_tests.cpp
   torcontrol_tests.cpp
   transaction_tests.cpp

@@ -42,6 +42,7 @@ class ListSinceBlockTest(QuicksilverTestFramework):
         self.test_no_blockhash()
         self.test_invalid_blockhash()
         self.test_reorg()
+        self.test_revival_order_is_not_shown()
         self.test_cant_read_block()
         self.test_double_spend()
         self.test_double_send()
@@ -167,6 +168,25 @@ class ListSinceBlockTest(QuicksilverTestFramework):
         transactions = self.nodes[0].listsinceblock(nodes1_last_blockhash)['transactions']
         found = next(tx for tx in transactions if tx['txid'] == senttx)
         assert_equal(found['blockheight'], self.nodes[0].getblockheader(nodes2_first_blockhash)['height'])
+
+    def test_revival_order_is_not_shown(self):
+        """F-698: a transaction revived by a disconnect carries the disconnect's order in
+        its record. That order is internal state and is never part of the RPC output."""
+        self.log.info("Test that a revived transaction does not show its revival order")
+        node = self.nodes[2]
+        txid = node.sendtoaddress(node.getnewaddress(), 1)
+        block = self.generate(node, 1)[0]
+        node.invalidateblock(block)
+        assert_equal(node.gettransaction(txid)['confirmations'], 0)
+        entries = [node.gettransaction(txid)]
+        entries += [tx for tx in node.listtransactions(count=1000) if tx['txid'] == txid]
+        entries += [tx for tx in node.listsinceblock()['transactions'] if tx['txid'] == txid]
+        assert len(entries) >= 3
+        for entry in entries:
+            assert 'revived' not in entry
+        node.reconsiderblock(block)
+        self.sync_all()
+        assert_equal(node.gettransaction(txid)['confirmations'], 1)
 
     def test_cant_read_block(self):
         self.log.info('Test the RPC error "Can\'t read block from disk"')

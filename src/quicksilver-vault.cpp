@@ -43,7 +43,7 @@ static void SetupVaultToolArgs(ArgsManager& argsman)
     argsman.AddArg("-printtoconsole", "Send trace/debug info to console (default: 1 when no -debug is true, 0 otherwise).", ArgsManager::ALLOW_ANY, OptionsCategory::DEBUG_TEST);
 
     argsman.AddCommand("info", "Get vault info");
-    argsman.AddCommand("create", "Create new vault file");
+    argsman.AddCommand("create", "Create a new unencrypted vault for testing; this command cannot create an encrypted vault");
     argsman.AddCommand("dump", "Print out all of the vault key-value records");
     argsman.AddCommand("createfromdump", "Create new vault file from dumped records");
 }
@@ -89,6 +89,15 @@ static std::optional<int> VaultAppInit(ArgsManager& args, int argc, char* argv[]
     }
     // Check for chain settings (Params() calls are only valid after this clause)
     SelectParams(args.GetChainType());
+
+    // F-686 (S0069-A-01): start the logger, or every record waits in the early buffer
+    // until exit. The tool never writes debug.log: it may share a datadir with a node.
+    // init::StartLogging is not used: init/common.cpp needs InitError from the node library.
+    LogInstance().m_print_to_file = false;
+    if (!LogInstance().StartLogging()) {
+        tfm::format(std::cerr, "Error: could not start logging\n");
+        return EXIT_FAILURE;
+    }
 
     return std::nullopt;
 }

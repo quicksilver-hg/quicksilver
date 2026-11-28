@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace cuckatoo {
@@ -29,7 +30,13 @@ namespace cuckatoo {
  * broken child process is always a fault -- reporting it while a CPU fallback
  * quietly carries on is the point, not a bug.
  */
-std::optional<std::string> SolverFault(GpuSolveStatus status, bool cpu_fallback);
+//! The node's option that permits processor proofs. The agent's is -allowcputxpow.
+inline constexpr std::string_view kNodeCpuOption{"-allowcpumining"};
+//! `cpu_option` is the caller's own option that permits processor proofs: the
+//! no-solver sentence names it, so a program that does not read -allowcpumining
+//! does not tell its operator to set it (S0322-A-01).
+std::optional<std::string> SolverFault(GpuSolveStatus status, bool cpu_fallback,
+                                       std::string_view cpu_option = kNodeCpuOption);
 
 /**
  * True when the reportable fault is specifically "no solver is configured", as
@@ -44,13 +51,17 @@ bool SolverMissing(GpuSolveStatus status, bool cpu_fallback);
 const char* GpuSolveStatusName(GpuSolveStatus status);
 
 /**
- * Return the solver path active in this process, or nullopt when the runtime
- * bridge has no solver. The GUI setting can change before restart, but the
- * bridge deliberately continues to use the environment installed during
- * startup; runtime status must use this same source or it can advertise a
- * solver that no solve attempt can actually start.
+ * Check whether the runtime bridge can select a helper for this graph size.
+ * It reads the environment set during startup, including the configured
+ * override and the bundled helper for supported graph sizes.
  */
 bool GpuHelperConfigured(uint8_t edgebits);
+//! -cuckatoosolvertimeout: the no-progress watchdog window, in seconds. The help
+//! text, the option's refusal and the solver's clamp all read these, so the
+//! documented default and range are the ones the solver applies (F-695).
+inline constexpr int kSolverTimeoutDefaultSec{30};
+inline constexpr int kSolverTimeoutMinSec{1};
+inline constexpr int kSolverTimeoutMaxSec{86400};
 int NoProgressTimeoutMs();
 std::string DescribeDiscovery(const GpuDiscovery& discovery);
 

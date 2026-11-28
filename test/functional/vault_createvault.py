@@ -39,6 +39,18 @@ class CreateVaultTest(QuicksilverTestFramework):
 
         self.nodes[0].createvault(vault_name='w0')
 
+        self.log.info("Test that createvault no longer takes external_signer (F-679)")
+        # The raw handle, not the framework's createvault wrapper, so the
+        # removed argument actually reaches the node (over RPC or the CLI).
+        raw = node.cli if self.options.usecli else node.rpc
+        assert_raises_rpc_error(-8, "Unknown named parameter external_signer",
+            raw.createvault, vault_name='wsigner', disable_private_keys=True, external_signer=True)
+        # By position the seventh argument is one too many: the help text comes back.
+        assert_raises_rpc_error(-1, 'createvault "vault_name"',
+            raw.createvault, 'wsigner', True, False, '', False, None, True)
+        assert 'wsigner' not in node.listvaults()
+        assert 'wsigner' not in [v['name'] for v in node.listvaultdir()['vaults']]
+
         self.log.info("Test disableprivatekeys creation.")
         self.nodes[0].createvault(vault_name='w1', disable_private_keys=True)
         w1 = node.get_vault_rpc('w1')

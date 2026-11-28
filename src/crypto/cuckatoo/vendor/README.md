@@ -52,7 +52,7 @@ The CPU-side files in this directory were imported from
 `a69ad1d6beea9b063b89f8ce8b3e3c7af4c90e88` (2026-04-18, "more precise siphash
 bounties"). The original vendoring commit `c6ec788f` carries the upstream
 `cuckoo-master.zip`; that zip's comment is the commit id above. After
-include-path flattening, those 11 CPU-side files match that revision.
+flattening the include paths, the imported CPU-side files matched that revision.
 
 The later GPU import (`853e9e2e`) brought `siphash.cuh`, which also matches
 `a69ad1d6`. `lean.cu` does not, and is not pinned to an upstream commit.
@@ -60,6 +60,17 @@ The new `lean.cl`, `lean_ocl.cpp`, and `lean_ocl.hpp` derivatives are likewise
 not pinned to an upstream commit.
 
 ## Local modifications
+
+The node uses a synchronous CPU solver and the BLAKE2b reference implementation.
+The local closure omits the lean solver's standalone CLI, plugin ABI and stats
+fields, unused cancellation hooks, disabled prefetch hooks and unused lean
+solver aliases. The owning bitmap is made non-copyable. It also omits
+unused BLAKE2 variants, the BLAKE2 alias, the SUPERCOP adapter, the standalone
+self-test, unused load/store/rotate helpers and the inactive native-endian
+branches. The SipHash key loader copies bytes into aligned words before endian
+conversion, and the CPU nonce writer copies its encoded word into the header.
+The OpenCL solver checks the host and vendor proof lengths at
+compile time.
 
 These files are *not* pristine. Portability and correctness changes were made
 in-tree and are recorded in the git history:
@@ -102,6 +113,11 @@ in-tree and are recorded in the git history:
   behaviour (UBSan: "shift exponent 64"). The existing `if (ffs & 64) break;`
   leaves the loop before the shifted value is read, so the output is
   unchanged.
+- F-265 bounds the graph before cycle recovery and records an overloaded
+  graph for replay. The debug log sink added in F-414 reports that capture.
+  A re-sync must preserve the graph bounds and replay data.
+- F-518 casts the BLAKE2b packing comparison to int so MSVC accepts the
+  constant-expression assert.
 - F-469 adds `lean.cl`, `lean_ocl.cpp`, and `lean_ocl.hpp` as Quicksilver
   derivatives offered under Tromp's same two licence options. Compared with
   `lean.cu`, shift counts are clamped explicitly, the 1-based ffs is derived

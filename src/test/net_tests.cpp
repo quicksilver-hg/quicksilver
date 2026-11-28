@@ -1781,4 +1781,37 @@ BOOST_AUTO_TEST_CASE(default_ports_do_not_collide)
     }
 }
 
+BOOST_AUTO_TEST_CASE(min_peer_proto_version_is_pinned)
+{
+    // Behaviour today is unchanged: the minimum equals the current version. The minimum is a
+    // literal of its own, so a later PROTOCOL_VERSION bump keeps accepting peers at 70016.
+    BOOST_CHECK_EQUAL(MIN_PEER_PROTO_VERSION, 70016);
+    BOOST_CHECK_EQUAL(PROTOCOL_VERSION, 70016);
+}
+
+BOOST_AUTO_TEST_CASE(mapped_local_endpoint_is_withdrawn)
+{
+    const CService mapped_only{Lookup("2.3.4.5", 7777, false).value()};
+    const CService also_bound{Lookup("2.3.4.6", 7777, false).value()};
+    const CService bound_first{Lookup("2.3.4.7", 7777, false).value()};
+
+    BOOST_REQUIRE(AddLocal(mapped_only, LOCAL_MAPPED));
+    BOOST_REQUIRE(AddLocal(also_bound, LOCAL_MAPPED));
+    BOOST_REQUIRE(AddLocal(also_bound, LOCAL_BIND));
+    BOOST_REQUIRE(AddLocal(bound_first, LOCAL_IF));
+    BOOST_REQUIRE(AddLocal(bound_first, LOCAL_MAPPED));
+
+    // Only the endpoint that nothing but the mapper claimed goes when its mapping lapses.
+    BOOST_CHECK(RemoveMappedLocal(mapped_only));
+    BOOST_CHECK(!IsLocal(mapped_only));
+    BOOST_CHECK(!RemoveMappedLocal(also_bound));
+    BOOST_CHECK(IsLocal(also_bound));
+    BOOST_CHECK(!RemoveMappedLocal(bound_first));
+    BOOST_CHECK(IsLocal(bound_first));
+    BOOST_CHECK(!RemoveMappedLocal(mapped_only));
+
+    RemoveLocal(also_bound);
+    RemoveLocal(bound_first);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

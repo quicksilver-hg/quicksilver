@@ -291,7 +291,7 @@ bool CPubKey::Verify(const uint256 &hash, const std::vector<unsigned char>& vchS
 }
 
 bool CPubKey::RecoverCompact(const uint256 &hash, const std::vector<unsigned char>& vchSig) {
-    if (vchSig.size() != COMPACT_SIGNATURE_SIZE)
+    if (vchSig.size() != COMPACT_SIGNATURE_SIZE || vchSig[0] < 27 || vchSig[0] > 34)
         return false;
     int recid = (vchSig[0] - 27) & 3;
     bool fComp = ((vchSig[0] - 27) & 4) != 0;
@@ -404,6 +404,7 @@ void CExtPubKey::DecodeWithVersion(const unsigned char code[BIP32_EXTKEY_WITH_VE
 
 bool CExtPubKey::Derive(CExtPubKey &out, unsigned int _nChild) const {
     if (nDepth == std::numeric_limits<unsigned char>::max()) return false;
+    memcpy(out.version, version, sizeof(version));
     out.nDepth = nDepth + 1;
     CKeyID id = pubkey.GetID();
     memcpy(out.vchFingerprint, &id, 4);

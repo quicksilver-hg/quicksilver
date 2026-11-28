@@ -250,6 +250,19 @@ class VaultDescriptorTest(QuicksilverTestFramework):
         self.nodes[0].loadvault("crashme")
         assert_equal(self.nodes[0].get_vault_rpc("crashme").getvaultinfo()["vaultname"], "crashme")
 
+        self.log.info("A wrongly typed field fails only its own importdescriptors request (S0200-A-04)")
+        self.nodes[0].createvault(vault_name="badtype", disable_private_keys=True, blank=True)
+        badtype = self.nodes[0].get_vault_rpc("badtype")
+        good_desc = descsum_create("pk(0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798)")
+        results = badtype.importdescriptors([
+            {"desc": good_desc, "timestamp": "now", "active": "yes"},
+            {"desc": good_desc, "timestamp": "now"},
+        ])
+        assert_equal(len(results), 2)
+        assert_equal(results[0]["success"], False)
+        assert_equal(results[0]["error"]["code"], -3)
+        assert_equal(results[1]["success"], True)
+
         self.test_concurrent_writes()
 
 

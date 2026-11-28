@@ -13,6 +13,8 @@
 #include <cstring>
 
 namespace qsgpu {
+static_assert(kOclProofSize == PROOFSIZE);
+
 namespace {
 constexpr word_t kMaxEdges{static_cast<word_t>(NEDGES >> 8)};
 constexpr int kMaxSolutions{4};

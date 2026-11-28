@@ -99,9 +99,9 @@ Returned proofs are verified before use.
 .HP
 \fB\-cuckatoosolvertimeout=\fR<sec>
 .IP
-No\-progress watchdog for the graphics helper, in seconds. A helper that
-prints nothing for this long is stopped, and work falls back as
-configured.
+No\-progress watchdog for the graphics helper, in seconds, from 1 to
+86400 (default: 30). A helper that prints nothing for this long
+is stopped, and work falls back as configured.
 .HP
 \fB\-daemon\fR
 .IP
@@ -119,8 +119,7 @@ Specify data directory
 \fB\-dbcache=\fR<n>
 .IP
 Maximum database cache size <n> MiB (minimum 4, default: 450). Make sure
-you have enough RAM. In addition, unused memory allocated to the
-relay pool is shared with this cache (see \fB\-maxrelaypool\fR).
+you have enough RAM.
 .HP
 \fB\-debuglogfile=\fR<file>
 .IP
@@ -172,9 +171,11 @@ delete specific blocks and enables automatic pruning of old
 blocks if a target size in MiB is provided. This mode is
 incompatible with \fB\-txindex\fR. Warning: Reverting this setting
 requires re\-downloading the entire blockchain. (default: 0 =
-disable pruning blocks, 1 = allow manual pruning via RPC, >=550 =
+disable pruning blocks, 1 = allow manual pruning via RPC, >=2 =
 automatically prune block files to stay under the specified
-target size in MiB)
+target size in MiB). On main and publictest, targets below 2956
+MiB are raised to 2956 MiB with a warning; sandbox keeps a 550
+MiB floor.
 .HP
 \fB\-reindex\fR
 .IP
@@ -422,7 +423,8 @@ getheaders during IBD, no disconnect after maxuploadtarget
 limit), addr (responses to GETADDR avoid hitting the cache and
 contain random records with the most up\-to\-date info). Specify
 multiple permissions separated by commas (default:
-download,noban,relay). Can be specified multiple times.
+download,noban,relay; relay is omitted with \fB\-blocksonly\fR). Can be
+specified multiple times.
 .HP
 \fB\-whitelist=\fR<[permissions@]IP address or network>
 .IP
@@ -573,7 +575,7 @@ any other categories are ignored. Other valid values for
 <category> are: bench, blockstore, cmpctblock, coindb, forge,
 http, i2p, init, ledger, leveldb, libevent, mesh, peerbook,
 proxy, prune, qt, rand, reindex, relaypool, relaypoolrej, rpc,
-scan, selectinputs, tor, txpackages, txpow, vault, vaultdb, zmq.
+scan, tor, txpackages, txpow, vault, vaultdb, zmq.
 This option can be specified multiple times to output multiple
 categories.
 .HP
@@ -691,10 +693,6 @@ where mining waits until a peer's headers show the node has
 caught up with the network (default: 1 on sandbox and publictest)
 .PP
 RPC server options:
-.HP
-\fB\-rest\fR
-.IP
-Accept public REST requests (default: 0)
 .HP
 \fB\-rpcallowip=\fR<ip>
 .IP

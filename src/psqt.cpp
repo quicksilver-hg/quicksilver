@@ -35,11 +35,11 @@ bool PartiallySignedQuicksilverTransaction::Merge(const PartiallySignedQuicksilv
     for (unsigned int i = 0; i < outputs.size(); ++i) {
         outputs[i].Merge(psqt.outputs[i]);
     }
-    for (auto& xpub_pair : psqt.m_xpubs) {
-        if (m_xpubs.count(xpub_pair.first) == 0) {
-            m_xpubs[xpub_pair.first] = xpub_pair.second;
+    for (auto& qpub_pair : psqt.m_qpubs) {
+        if (m_qpubs.count(qpub_pair.first) == 0) {
+            m_qpubs[qpub_pair.first] = qpub_pair.second;
         } else {
-            m_xpubs[xpub_pair.first].insert(xpub_pair.second.begin(), xpub_pair.second.end());
+            m_qpubs[qpub_pair.first].insert(qpub_pair.second.begin(), qpub_pair.second.end());
         }
     }
     unknown.insert(psqt.unknown.begin(), psqt.unknown.end());
@@ -462,7 +462,7 @@ void RemoveUnnecessaryTransactions(PartiallySignedQuicksilverTransaction& psqtx,
             int wit_ver;
             std::vector<unsigned char> wit_prog;
             if (input.witness_utxo.IsNull() || !input.witness_utxo.scriptPubKey.IsWitnessProgram(wit_ver, wit_prog)) {
-                // There's a non-segwit input or Segwit v0, so we cannot drop any witness_utxos
+                // Keep all non_witness_utxos if this input lacks a witness UTXO with a witness program.
                 to_drop.clear();
                 break;
             }

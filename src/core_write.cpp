@@ -86,6 +86,9 @@ const std::map<unsigned char, std::string> mapSigHashTypes = {
 
 std::string SighashToStr(unsigned char sighash_type)
 {
+    // SIGHASH_DEFAULT (0, Taproot) is a valid type that is not in the map: the map also
+    // decodes signature bytes in ScriptToAsmStr, where a 0x00 hash type means nothing.
+    if (sighash_type == SIGHASH_DEFAULT) return "DEFAULT";
     const auto& it = mapSigHashTypes.find(sighash_type);
     if (it == mapSigHashTypes.end()) return "";
     return it->second;
@@ -268,8 +271,10 @@ void TxToUniv(const CTransaction& tx, const uint256& block_hash, UniValue& entry
     entry.pushKV("vout", std::move(vout));
 
     if (have_undo) {
-        const CAmount value_delta = amt_total_in - amt_total_out;
-        CHECK_NONFATAL(MoneyRange(value_delta));
+        // A sanity check on the summed amounts, not a fee: consensus already refuses any
+        // transaction whose inputs and outputs differ (bad-txns-not-feeless).
+        const CAmount in_minus_out = amt_total_in - amt_total_out;
+        CHECK_NONFATAL(MoneyRange(in_minus_out));
     }
 
     if (!block_hash.IsNull()) {

@@ -22,3 +22,5 @@ target_sources(test_quicksilver
     vaultload_tests.cpp
 )
 target_link_libraries(test_quicksilver quicksilver_vault)
+target_compile_definitions(test_quicksilver PRIVATE
+  QS_VAULT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")

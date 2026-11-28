@@ -30,7 +30,8 @@ public:
     virtual void insert(std::function<void()> func) = 0;
 
     /**
-     * Forces the processing of all pending events.
+     * Forces processing of all pending events. Callers must satisfy the implementation's
+     * preconditions, including stopping the scheduler before flushing a SerialTaskRunner.
      */
     virtual void flush() = 0;
 

@@ -22,6 +22,12 @@ private Q_SLOTS:
     void datadirExistenceIsNotTheFirstRunQuestion();
     void chainDataIsFoundUnderTheNetworkSubdirectoryOnly();
     void pruneChoiceIsWithheldFromADataDirThatAlreadyHoldsAChain();
+    void pruneChoiceWaitsForTheLatestDirectoryCheck();
+    void vaultFolderFailureDoesNotRejectNewDataDirectory();
+    void freeSpaceCautionNamesTheFullChainOnlyWhenThatIsTheRequirement();
+    void pathUnderAnUnsearchableDirectoryIsReportedNotThrown();
+    void chainSetOnlyInTheConfigFileSelectsTheProbedNetwork();
+    void pruneArgumentLocksTheChoiceAndNothingIsWritten();
 };
 
 #endif // QUICKSILVER_QT_TEST_INTROTESTS_H

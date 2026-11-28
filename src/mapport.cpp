@@ -21,6 +21,7 @@
 #include <cassert>
 #include <chrono>
 #include <functional>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -44,12 +45,15 @@ static void ProcessPCP()
     const uint32_t requested_lifetime = std::chrono::seconds(PORT_MAPPING_REANNOUNCE_PERIOD * 2).count();
     uint32_t actual_lifetime = 0;
     std::chrono::milliseconds sleep_time;
+    // Endpoints this mapper advertised in the previous round and in this one. A mapping
+    // that is not renewed, or that dies with this function, must stop being advertised.
+    std::set<CService> mapped_prev, mapped_now;
 
     // Local functor to handle result from PCP/NATPMP mapping.
     auto handle_mapping = [&](std::variant<MappingResult, MappingError> &res) -> void {
         if (MappingResult* mapping = std::get_if<MappingResult>(&res)) {
             LogPrintLevel(HgLog::MESH, HgLog::Level::Info, "portmap: Added mapping %s\n", mapping->ToString());
-            AddLocal(mapping->external, LOCAL_MAPPED);
+            if (AddLocal(mapping->external, LOCAL_MAPPED)) mapped_now.insert(mapping->external);
             ret = true;
             actual_lifetime = std::min(actual_lifetime, mapping->lifetime);
         } else if (MappingError *err = std::get_if<MappingError>(&res)) {
@@ -64,6 +68,7 @@ static void ProcessPCP()
         actual_lifetime = requested_lifetime;
         no_resources = false; // Set to true if there was any "no resources" error.
         ret = false; // Set to true if any mapping succeeds.
+        mapped_now.clear();
 
         // IPv4
         std::optional<CNetAddr> gateway4 = QueryDefaultGateway(NET_IPV4);
@@ -99,6 +104,11 @@ static void ProcessPCP()
             }
         }
 
+        for (const CService& stale : mapped_prev) {
+            if (!mapped_now.contains(stale)) RemoveMappedLocal(stale);
+        }
+        mapped_prev = mapped_now;
+
         // Log message if we got NO_RESOURCES.
         if (no_resources) {
             LogPrintLevel(HgLog::MESH, HgLog::Level::Warning, "portmap: At least one mapping failed because of a NO_RESOURCES error. This usually indicates that the port is already used on the router. If this is the only instance of Quicksilver running on the network, this will resolve itself automatically. Otherwise, you might want to choose a different P2P port to prevent this conflict.\n");
@@ -107,7 +117,7 @@ static void ProcessPCP()
         // Sanity-check returned lifetime.
         if (actual_lifetime < 30) {
             LogPrintLevel(HgLog::MESH, HgLog::Level::Warning, "portmap: Got impossibly short mapping lifetime of %d seconds\n", actual_lifetime);
-            return;
+            break;
         }
         // RFC6887 11.2.1 recommends that clients send their first renewal packet at a time chosen with uniform random
         // distribution in the range 1/2 to 5/8 of expiration time.
@@ -115,6 +125,10 @@ static void ProcessPCP()
         std::chrono::seconds sleep_time_max(actual_lifetime * 5 / 8);
         sleep_time = sleep_time_min + FastRandomContext().randrange<std::chrono::milliseconds>(sleep_time_max - sleep_time_min);
     } while (ret && g_mapport_interrupt.sleep_for(sleep_time));
+
+    // Whatever ended the loop (no mapping renewed, a short lifetime, -natpmp turned off or
+    // shutdown), nothing renews these mappings any more: stop advertising them.
+    for (const CService& stale : mapped_prev) RemoveMappedLocal(stale);
 
     // We don't delete the mappings when the thread is interrupted because this would add additional complexity, so
     // we rather just choose a fairly short expiry time.

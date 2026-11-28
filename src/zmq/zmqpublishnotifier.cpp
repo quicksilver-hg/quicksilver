@@ -6,19 +6,13 @@
 #include <zmq/zmqpublishnotifier.h>
 
 #include <chain.h>
-#include <chainparams.h>
 #include <crypto/common.h>
-#include <kernel/cs_main.h>
 #include <logging.h>
 #include <netaddress.h>
 #include <netbase.h>
-#include <node/blockstorage.h>
-#include <primitives/block.h>
 #include <primitives/transaction.h>
-#include <rpc/server.h>
 #include <serialize.h>
 #include <streams.h>
-#include <sync.h>
 #include <uint256.h>
 #include <zmq/zmqutil.h>
 
@@ -34,10 +28,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-namespace Consensus {
-struct Params;
-}
 
 static std::multimap<std::string, CZMQAbstractPublishNotifier*> mapPublishNotifiers;
 
@@ -126,6 +116,7 @@ bool CZMQAbstractPublishNotifier::Initialize(void *pcontext)
         {
             zmqError("Failed to set outbound message high water mark");
             zmq_close(psocket);
+            psocket = nullptr;
             return false;
         }
 
@@ -134,6 +125,7 @@ bool CZMQAbstractPublishNotifier::Initialize(void *pcontext)
         if (rc != 0) {
             zmqError("Failed to set SO_KEEPALIVE");
             zmq_close(psocket);
+            psocket = nullptr;
             return false;
         }
 
@@ -143,6 +135,7 @@ bool CZMQAbstractPublishNotifier::Initialize(void *pcontext)
         if (rc != 0) {
             zmqError("Failed to set ZMQ_IPV6");
             zmq_close(psocket);
+            psocket = nullptr;
             return false;
         }
 
@@ -151,6 +144,7 @@ bool CZMQAbstractPublishNotifier::Initialize(void *pcontext)
         {
             zmqError("Failed to bind address");
             zmq_close(psocket);
+            psocket = nullptr;
             return false;
         }
 

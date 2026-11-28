@@ -1,12 +1,10 @@
 IDI_ICON1 ICON DISCARDABLE "icons/quicksilver.ico"
-IDI_ICON2 ICON DISCARDABLE "icons/quicksilver_publictest.ico"
-IDI_ICON4 ICON DISCARDABLE "icons/quicksilver_publictest.ico" // publictest
 
 #include <windows.h>             // needed for VERSIONINFO
 #include "../../clientversion.h" // holds the needed client version information
 
 #define VER_PRODUCTVERSION     CLIENT_VERSION_MAJOR,CLIENT_VERSION_MINOR,CLIENT_VERSION_BUILD
-#define VER_PRODUCTVERSION_STR STRINGIZE(CLIENT_VERSION_MAJOR) "." STRINGIZE(CLIENT_VERSION_MINOR) "." STRINGIZE(CLIENT_VERSION_BUILD)
+#define VER_PRODUCTVERSION_STR CLIENT_VERSION_STRING
 #define VER_FILEVERSION        VER_PRODUCTVERSION
 #define VER_FILEVERSION_STR    VER_PRODUCTVERSION_STR
 
@@ -25,7 +23,7 @@ BEGIN
             VALUE "FileVersion",        VER_FILEVERSION_STR
             VALUE "InternalName",       "quicksilver"
             VALUE "LegalCopyright",     COPYRIGHT_STR
-            VALUE "LegalTrademarks1",   "Distributed under the MIT software license, see the accompanying file COPYING or http://www.opensource.org/licenses/mit-license.php."
+            VALUE "LegalTrademarks1",   "Distributed under the MIT software license, see the accompanying file COPYING or https://opensource.org/license/mit/."
             VALUE "OriginalFilename",   "quicksilver.exe"
             VALUE "ProductName",        CLIENT_NAME
             VALUE "ProductVersion",     VER_PRODUCTVERSION_STR
@@ -34,6 +32,6 @@ BEGIN
 
     BLOCK "VarFileInfo"
     BEGIN
-        VALUE "Translation", 0x0, 1252 // language neutral - multilingual (decimal)
+        VALUE "Translation", 0x409, 1252 // U.S. English, Windows-1252: matches the 040904E4 block
     END
 END

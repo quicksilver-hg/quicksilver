@@ -12,7 +12,9 @@
 #include <primitives/transaction.h> // For CTransactionRef
 #include <util/result.h>
 
+#include <chrono>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stddef.h>
@@ -129,13 +131,9 @@ public:
     //! Get block hash. Height must be valid or this function will abort.
     virtual uint256 getBlockHash(int height) = 0;
 
-    //! Quicksilver per-transaction work pricing: the per-tx PoW target a transaction of this shape must
-    //! meet when anchored at `anchor_height`. Required work is per-transaction after
-    //! the flag day, and a sender grinds before its signature bytes exist, so it
-    //! passes an UPPER BOUND on its final serialized size here. Returns nullopt if
-    //! the height is not on the active chain. Routed through the interface rather
-    //! than recomputed in the vault so that sender and consensus cannot disagree
-    //! about the arithmetic. Height must be valid or this function will abort.
+    //! Return the per-transaction proof-of-work target at the given active-chain height.
+    //! Pass an upper bound on the final serialized size when signatures are pending.
+    //! Returns zero when chainstate is absent. With chainstate, an invalid height aborts.
     virtual uint256 txPowTarget(int anchor_height, uint64_t bytes, size_t nout, size_t nin) = 0;
 
     //! Check that the block is available on disk (i.e. has not been
@@ -302,9 +300,8 @@ public:
 
     //! Whether a chainstate exists behind this interface at all. False in the
     //! consensus-off shell, where the vault holds a live Chain pointer but the
-    //! node never built a ChainstateManager. Every other method on this
-    //! interface dereferences the chainstate and aborts when it is absent, so a
-    //! non-null Chain* is not on its own evidence that the chain can be used.
+    //! node never built a ChainstateManager. Methods that depend on chainstate
+    //! either return an empty result or require callers to check this first.
     virtual bool hasChainstate() = 0;
 
     //! Get internal node context. Useful for testing, but not

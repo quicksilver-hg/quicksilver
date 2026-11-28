@@ -8,10 +8,13 @@
 
 #include <span.h>
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
-#include <cstring>
+#include <iterator>
 #include <locale>
+#include <limits>
 #include <sstream>
 #include <string>      // IWYU pragma: export
 #include <string_view> // IWYU pragma: export
@@ -30,8 +33,9 @@ constexpr static void CheckNumFormatSpecifiers(const char* str)
         auto add_arg = [&] {
             unsigned maybe_num{0};
             while ('0' <= *it && *it <= '9') {
-                maybe_num *= 10;
-                maybe_num += *it - '0';
+                const unsigned digit = *it - '0';
+                maybe_num = maybe_num > (std::numeric_limits<unsigned>::max() - digit) / 10
+                    ? std::numeric_limits<unsigned>::max() : maybe_num * 10 + digit;
                 ++it;
             }
 

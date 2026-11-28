@@ -47,7 +47,7 @@ don't have test cases for.
 
 - Name the test `<area>_test.py`, where area can be one of the following:
     - `feature` for tests for full features that aren't vault/mining/relay pool, eg `feature_quicksilver_replace.py`
-    - `interface` for tests for other interfaces (REST, ZMQ, etc), eg `interface_rest.py`
+    - `interface` for tests for other interfaces (ZMQ, etc), eg `interface_zmq.py`
     - `mining` for tests for mining features, eg `mining_basic.py`
     - `p2p` for tests that explicitly test the p2p interface, eg `p2p_disconnect_ban.py`
     - `relaypool` for tests for relay pool behaviour, eg `relaypool_reorg.py`

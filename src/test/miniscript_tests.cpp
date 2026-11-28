@@ -9,6 +9,9 @@
 
 #include <addresstype.h>
 #include <core_io.h>
+#include <consensus/validation.h>
+#include <policy/policy.h>
+#include <primitives/transaction.h>
 #include <hash.h>
 #include <pubkey.h>
 #include <uint256.h>
@@ -498,6 +501,26 @@ void Test(const std::string& ms, const std::string& hexscript, const std::string
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(miniscript_tests, MiniScriptTest)
+
+BOOST_AUTO_TEST_CASE(tapscript_size_reserves_pow_tail)
+{
+    // The leeway is meant to be the non-witness weight of a one-input, one-output
+    // P2WSH spend plus the segwit marker and flag. Build that transaction and weigh
+    // its real serialization: a Quicksilver transaction also carries the 176-byte
+    // PoW tail (nAnchorHeight, nPowNonce, 42 nCycle edges), all non-witness, so it
+    // counts WITNESS_SCALE_FACTOR times (S0142-A-01).
+    CMutableTransaction tx;
+    tx.vin.resize(1);
+    tx.vout.emplace_back(0, GetScriptForDestination(WitnessV0ScriptHash{uint256::ONE}));
+    const int64_t body_weight{int64_t(::GetSerializeSize(TX_NO_WITNESS(tx))) * WITNESS_SCALE_FACTOR + 2};
+    BOOST_CHECK_EQUAL(body_weight, int64_t{miniscript::internal::TX_BODY_LEEWAY_WEIGHT});
+
+    // A maximal leaf with a maximal witness still spends within the standard weight.
+    constexpr auto script_size = miniscript::internal::MaxScriptSize(miniscript::MiniscriptContext::TAPSCRIPT);
+    const int64_t tx_weight{script_size + GetSizeOfCompactSize(script_size) + body_weight +
+        miniscript::internal::MAX_TAPSCRIPT_SAT_SIZE};
+    BOOST_CHECK_LE(tx_weight, int64_t{MAX_STANDARD_TX_WEIGHT});
+}
 
 BOOST_AUTO_TEST_CASE(fixed_tests)
 {

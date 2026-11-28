@@ -5,7 +5,7 @@
 // GATE: prove GPU-produced E28 cycles verify under the node's consensus
 // CuckatooVerify, for BOTH PoW paths: per-tx variable-length pre-images and
 // fixed-width (84-byte) block headers. Runs only when
-// CUCKATOO_GPU_SOLVER points at a qsgpusolve-cuda binary. Otherwise the cases
+// CUCKATOO_GPU_SOLVER points at a graphics helper (qsgpusolve-opencl). Otherwise the cases
 // skip -- Boost prints "is skipped because", and this suite's ctest row
 // matches SKIP_REGULAR_EXPRESSION -- so a GPU-less machine reports a skip
 // rather than a silent pass.
@@ -63,7 +63,7 @@ BOOST_AUTO_TEST_CASE(verifies, *boost::unit_test::precondition(gpu_solver_config
         cuckatoo::GpuSolveBytes(pre.data(), pre.size(), 28,
                                 *device,
                                 1, 100000, cyc, nonce),
-        "qsgpusolve-cuda produced no cycle in window — raise max_attempts");
+        "the graphics helper produced no cycle in window — raise max_attempts");
 
     // Reconstruct keys from the SAME bytes the solver hashed: nonce at buf[len-4..].
     pre[pre.size() - 4] = (unsigned char)(nonce & 0xff);
@@ -93,7 +93,7 @@ BOOST_AUTO_TEST_CASE(verifies_e28_block, *boost::unit_test::precondition(gpu_sol
         cuckatoo::GpuSolveBytes(pre.data(), pre.size(), 28,
                                 *device,
                                 1, 100000, cyc, nonce),
-        "qsgpusolve-cuda (E28) produced no cycle for the 84-byte block header — raise max_attempts");
+        "the graphics helper (E28) produced no cycle for the 84-byte block header — raise max_attempts");
 
     // Reconstruct keys from the SAME bytes the solver hashed: nonce at buf[len-4..].
     pre[pre.size() - 4] = (unsigned char)(nonce & 0xff);

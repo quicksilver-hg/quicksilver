@@ -8,6 +8,7 @@
 #include <util/strencodings.h>
 #include <vault/crypter.h>
 
+#include <limits>
 #include <vector>
 
 #include <boost/test/unit_test.hpp>
@@ -16,6 +17,13 @@ using namespace util::hex_literals;
 
 namespace vault {
 BOOST_FIXTURE_TEST_SUITE(vault_crypto_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(reject_rounds_that_overflow_the_kdf_counter)
+{
+    CCrypter crypter;
+    const std::vector<unsigned char> salt(VAULT_CRYPTO_SALT_SIZE, 0);
+    BOOST_CHECK(!crypter.SetKeyFromPassphrase(SecureString{"test"}, salt, std::numeric_limits<unsigned int>::max()));
+}
 
 class TestCrypter
 {

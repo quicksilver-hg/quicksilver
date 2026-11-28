@@ -14,8 +14,6 @@
 
 // Assumption: We assume the floating-point types to fulfill the requirements of
 //             IEC 559 (IEEE 754) standard.
-// Example(s): Floating-point division by zero in ConnectBlock, CreateTransaction
-//             and EstimateMedianVal.
 static_assert(std::numeric_limits<float>::is_iec559, "IEEE 754 float assumed");
 static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 double assumed");
 

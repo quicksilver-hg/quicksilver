@@ -16,7 +16,6 @@
 #include <util/time.h>
 
 #include <cstdint>
-#include <functional>
 #include <optional>
 
 class CChainParams;

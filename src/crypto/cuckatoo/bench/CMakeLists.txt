@@ -28,7 +28,6 @@ endforeach()
 
 add_library(quicksilver_cuckatoo_bench OBJECT EXCLUDE_FROM_ALL
   registry.cpp
-  gpu_csv.cpp
   ${QS_BENCH_GENERATED}
 )
 

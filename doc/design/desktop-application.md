@@ -73,7 +73,7 @@
 > policy request, the agent's key A, the public descriptor, and the current
 > spendable outputs. The command-line agent decodes that bundle, verifies that A
 > is the descriptor's agent key, checks a proposed spend against the daily
-> guardrail, and signs and proves its half of the spend from bundle funding
+> guardrail (the vault checks the daily limit again before it co-signs), and signs and proves its half of the spend from bundle funding
 > outputs or persisted/in-band payment receipts unless explicit UTXO metadata is
 > supplied. It rotates stored receipts by replacing spent outputs with
 > post-spend change receipts and keeps output-level receipt activity for
@@ -352,7 +352,7 @@ Creating one explains the model before anything is recorded: the agent holds one
 key and this vault holds the other, so the agent cannot spend without this
 vault's signature; Stop makes the vault refuse every later request, though a
 request it has already signed and broadcast still confirms; and spending limits
-are the agent's own check, which the vault does not enforce. The word *guarantee*
+are the agent's own check, and the vault also refuses a co-signature over the daily limit. The word *guarantee*
 appears once, negated. Limits are captured as inputs but described as a
 guardrail, so nothing on screen implies enforcement the vault or the protocol
 does not provide. The acceptance checkbox restates that every spend needs the

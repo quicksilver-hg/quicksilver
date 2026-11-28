@@ -7,8 +7,11 @@
 #include <chainparams.h>
 #include <test/util/mining.h>
 #include <consensus/merkle.h>
+#include <core_io.h>
 #include <pow.h>
+#include <script/interpreter.h>
 #include <streams.h>
+#include <util/strencodings.h>
 #include <test/util/random.h>
 #include <test/util/txrelaypool.h>
 
@@ -423,6 +426,31 @@ BOOST_AUTO_TEST_CASE(TransactionsRequestDeserializationOverflowTest) {
         // deserialize should fail
         BOOST_CHECK(true); // Needed to suppress "Test case [...] did not check any assertions"
     }
+}
+
+// c01a-23: core_io decode and naming (S0076-01, S0077-01).
+BOOST_AUTO_TEST_CASE(core_io_block_decode_refuses_trailing_bytes)
+{
+    const CBlock& genesis{Params().GenesisBlock()};
+    DataStream stream{};
+    stream << TX_WITH_WITNESS(genesis);
+    const std::string hex{HexStr(stream)};
+
+    CBlock decoded;
+    BOOST_CHECK(DecodeHexBlk(decoded, hex));
+    BOOST_CHECK_EQUAL(decoded.GetHash(), genesis.GetHash());
+    // A complete block followed by anything else is not a block.
+    CBlock with_tail;
+    BOOST_CHECK(!DecodeHexBlk(with_tail, hex + "00"));
+}
+
+BOOST_AUTO_TEST_CASE(sighash_default_has_a_name)
+{
+    BOOST_CHECK_EQUAL(SighashToStr(SIGHASH_DEFAULT), "DEFAULT");
+    BOOST_CHECK_EQUAL(SighashToStr(SIGHASH_ALL), "ALL");
+    BOOST_CHECK_EQUAL(SighashToStr(0x42), "");
+    // The name round-trips through the parser that already accepted it.
+    BOOST_CHECK_EQUAL(SighashFromStr("DEFAULT").value(), SIGHASH_DEFAULT);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

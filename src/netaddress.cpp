@@ -133,11 +133,16 @@ void CNetAddr::SetIP(const CNetAddr& ipIn)
 
     m_net = ipIn.m_net;
     m_addr = ipIn.m_addr;
+    // The scope travels with the address it belongs to (see m_scope_id).
+    m_scope_id = ipIn.m_scope_id;
 }
 
 void CNetAddr::SetLegacyIPv6(Span<const uint8_t> ipv6)
 {
     assert(ipv6.size() == ADDR_IPV6_SIZE);
+
+    // ADDRv1 carries no scope: never keep a zone from whatever this object held before.
+    m_scope_id = 0;
 
     size_t skip{0};
 
@@ -348,6 +353,12 @@ bool CNetAddr::IsRFC3849() const
     return IsIPv6() && HasPrefix(m_addr, std::array<uint8_t, 4>{0x20, 0x01, 0x0D, 0xB8});
 }
 
+bool CNetAddr::IsRFC9637() const
+{
+    // 3fff::/20: the first 20 bits are 0x3fff0.
+    return IsIPv6() && m_addr[0] == 0x3F && m_addr[1] == 0xFF && (m_addr[2] & 0xF0) == 0x00;
+}
+
 bool CNetAddr::IsRFC3964() const
 {
     return IsIPv6() && HasPrefix(m_addr, std::array<uint8_t, 2>{0x20, 0x02});
@@ -438,8 +449,8 @@ bool CNetAddr::IsValid() const
         return false;
     }
 
-    // documentation IPv6 address
-    if (IsRFC3849())
+    // documentation IPv6 addresses
+    if (IsRFC3849() || IsRFC9637())
         return false;
 
     if (IsInternal())

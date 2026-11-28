@@ -3,10 +3,17 @@
 #
 # Source of truth: src/qt/res/src/quicksilver.svg (☿ on a silver disc, Cinnabar ring). Every
 # raster below is derived from it, so edit the SVG and re-run this script rather
-# than touching the generated PNG/ICO/ICNS/BMP/XPM files by hand.
+# than touching the generated PNG/ICO/BMP/XPM files by hand.
 #
-# Requires: rsvg-convert (librsvg), ImageMagick `convert`, and python3 (for the
-# self-contained .icns packer — ImageMagick has no ICNS coder here).
+# Other sources in src/qt/res/src/:
+#   hud_*.svg               written by contrib/devtools/gen-qt-hud-icons.py (run below)
+#   connect-*.svg, network_disabled.svg, mine.svg, proxy.svg, clock_*.svg,
+#   transaction0.svg
+#                           upstream sources with no export recipe; their PNGs are
+#                           committed as they were drawn, not regenerated here.
+#
+# Requires: rsvg-convert (librsvg), ImageMagick `convert`, and python3 (for
+# contrib/devtools/gen-qt-hud-icons.py).
 #
 # Copyright (c) 2026 The Quicksilver developers
 # Distributed under the MIT software license, see the accompanying file COPYING
@@ -19,37 +26,16 @@ ICONS=src/qt/res/icons
 PIX=share/pixmaps
 DOCDIR=doc
 
-# Qt in-app app icon (1024) + Windows/macOS bundles
+# Qt in-app app icon (1024) + Windows .ico. This .ico is the one the Windows
+# executables embed (src/qt/res/quicksilver-res.rc); share/pixmaps/quicksilver.ico
+# below is the NSIS installer icon (cmake/module/GenerateSetupNsi.cmake). Both
+# are kept: each is resized from a different master (1024 vs 256 px PNG), so
+# their bytes differ though they carry the same sizes.
 rsvg-convert -w 1024 -h 1024 "$SVG" -o "$ICONS/quicksilver.png"
 convert -background none "$ICONS/quicksilver.png" -define icon:auto-resize=256,128,64,48,32,16 "$ICONS/quicksilver.ico"
 
-# macOS .icns: ImageMagick has no ICNS coder here, so render each size and pack
-# the PNGs into a real ICNS container (macOS 10.7+ reads PNG-based entries).
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-declare -A ICNS_TYPES=( [16]=icp4 [32]=icp5 [128]=ic07 [256]=ic08 [512]=ic09 [1024]=ic10 )
-icns_type_arg=""
-for s in 16 32 128 256 512 1024; do
-  rsvg-convert -w "$s" -h "$s" "$SVG" -o "$TMP/$s.png"
-  icns_type_arg+="${s}:${ICNS_TYPES[$s]},"
-done
-python3 - "$ICONS/quicksilver.icns" "$TMP" "$icns_type_arg" <<'PY'
-import struct, sys
-out, tmp, type_arg = sys.argv[1], sys.argv[2], sys.argv[3]
-types = {}
-for entry in type_arg.rstrip(',').split(','):
-    size, ostype = entry.split(':', 1)
-    types[int(size)] = ostype.encode('ascii')
-body = b''
-for size, ostype in types.items():
-    with open(f"{tmp}/{size}.png","rb") as f: data = f.read()
-    body += ostype + struct.pack(">I", len(data)+8) + data
-with open(out,"wb") as f:
-    f.write(b'icns' + struct.pack(">I", len(body)+8) + body)
-PY
-# Public-test tint (hue-rotate the Cinnabar ring for network distinction)
-convert "$ICONS/quicksilver.png" -modulate 100,100,60  -define icon:auto-resize=256,128,64,48,32,16 "$ICONS/quicksilver_publictest.ico"
-
 # Linux desktop pixmaps
 for s in 16 32 64 128 256; do rsvg-convert -w "$s" -h "$s" "$SVG" -o "$PIX/quicksilver${s}.png"; done
 convert -background none "$PIX/quicksilver256.png" -define icon:auto-resize=256,128,64,48,32,16 "$PIX/quicksilver.ico"

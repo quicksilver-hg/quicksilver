@@ -467,7 +467,6 @@ bool ContainedChild::Exited()
 
 void ContainedChild::KillGroup()
 {
-    if (m_impl->exited) return;
     if (m_impl->job) TerminateJobObject(m_impl->job, 1);
 }
 

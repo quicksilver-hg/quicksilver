@@ -19,6 +19,26 @@
 
 BOOST_AUTO_TEST_SUITE(arith_uint256_tests)
 
+BOOST_AUTO_TEST_CASE(single_limb_scalar_operations)
+{
+    struct TestUint32 : base_uint<32> {
+        using base_uint<32>::base_uint;
+        using base_uint<32>::operator=;
+        uint32_t low() const { return pn[0]; }
+    };
+    TestUint32 value{uint64_t{0x100000001}};
+    BOOST_CHECK_EQUAL(value.low(), 1U);
+    value = uint64_t{0x200000002};
+    BOOST_CHECK_EQUAL(value.low(), 2U);
+    value ^= uint64_t{0x100000003};
+    BOOST_CHECK_EQUAL(value.low(), 1U);
+    value |= uint64_t{0x100000004};
+    BOOST_CHECK_EQUAL(value.low(), 5U);
+    BOOST_CHECK(value == uint64_t{5});
+    BOOST_CHECK(value != uint64_t{0x100000005});
+    BOOST_CHECK_EQUAL(value.GetLow64(), 5U);
+}
+
 /// Convert vector to arith_uint256, via uint256 blob
 static inline arith_uint256 arith_uint256V(const std::vector<unsigned char>& vch)
 {

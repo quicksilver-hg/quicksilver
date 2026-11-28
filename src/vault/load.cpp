@@ -64,7 +64,7 @@ bool VerifyVaults(VaultContext& context)
             return false;
         }
         const auto& vault_file = vault.get_str();
-        const fs::path path = fsbridge::AbsPathJoin(GetVaultDir(), fs::PathFromString(vault_file));
+        const fs::path path{fsbridge::AbsPathJoin(GetVaultDir(), fs::PathFromString(vault_file)).lexically_normal()};
 
         if (!vault_paths.insert(path).second) {
             chain.initWarning(strprintf(_("Ignoring duplicate -vault %s."), vault_file));
@@ -102,7 +102,8 @@ bool LoadVaults(VaultContext& context)
                 return false;
             }
             const auto& name = vault.get_str();
-            if (!vault_paths.insert(fs::PathFromString(name)).second) {
+            const fs::path path{fsbridge::AbsPathJoin(GetVaultDir(), fs::PathFromString(name)).lexically_normal()};
+            if (!vault_paths.insert(path).second) {
                 continue;
             }
             DatabaseOptions options;
@@ -140,10 +141,7 @@ void StartVaults(VaultContext& context)
         pvault->postInitProcess();
     }
 
-    // Schedule periodic vault flushes and tx rebroadcasts
-    if (context.args->GetBoolArg("-flushvault", DEFAULT_FLUSHVAULT)) {
-        context.scheduler->scheduleEvery([&context] { MaybeCompactVaultDB(context); }, 500ms);
-    }
+    // Schedule transaction rebroadcasts.
     context.scheduler->scheduleEvery([&context] { MaybeResendVaultTxs(context); }, 1min);
 }
 

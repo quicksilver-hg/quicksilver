@@ -12,7 +12,11 @@
 #include <node/interface_ui.h>
 #include <sync.h>
 #include <util/time.h>
+
+#include <chrono>
 #include <util/translation.h>
+
+#include <limits>
 
 
 BanMan::BanMan(fs::path ban_file, CClientUIInterface* client_interface, int64_t default_ban_time)
@@ -64,6 +68,7 @@ void BanMan::DumpBanlist()
     if (!m_ban_db.Write(banmap)) {
         LOCK(m_banned_mutex);
         m_is_dirty = true;
+        return;
     }
 
     LogDebug(HgLog::MESH, "Flushed %d banned node addresses/subnets to disk  %dms\n", banmap.size(),
@@ -89,7 +94,7 @@ bool BanMan::IsDiscouraged(const CNetAddr& net_addr)
 
 bool BanMan::IsBanned(const CNetAddr& net_addr)
 {
-    auto current_time = GetTime();
+    auto current_time = GetTime<std::chrono::seconds>().count();
     LOCK(m_banned_mutex);
     for (const auto& it : m_banned) {
         CSubNet sub_net = it.first;
@@ -104,7 +109,7 @@ bool BanMan::IsBanned(const CNetAddr& net_addr)
 
 bool BanMan::IsBanned(const CSubNet& sub_net)
 {
-    auto current_time = GetTime();
+    auto current_time = GetTime<std::chrono::seconds>().count();
     LOCK(m_banned_mutex);
     banmap_t::iterator i = m_banned.find(sub_net);
     if (i != m_banned.end()) {
@@ -130,7 +135,7 @@ void BanMan::Discourage(const CNetAddr& net_addr)
 
 void BanMan::Ban(const CSubNet& sub_net, int64_t ban_time_offset, bool since_unix_epoch)
 {
-    CBanEntry ban_entry(GetTime());
+    CBanEntry ban_entry(GetTime<std::chrono::seconds>().count());
 
     int64_t normalized_ban_time_offset = ban_time_offset;
     bool normalized_since_unix_epoch = since_unix_epoch;
@@ -138,7 +143,9 @@ void BanMan::Ban(const CSubNet& sub_net, int64_t ban_time_offset, bool since_uni
         normalized_ban_time_offset = m_default_ban_time;
         normalized_since_unix_epoch = false;
     }
-    ban_entry.nBanUntil = (normalized_since_unix_epoch ? 0 : GetTime()) + normalized_ban_time_offset;
+    const int64_t base_time{normalized_since_unix_epoch ? 0 : GetTime<std::chrono::seconds>().count()};
+    ban_entry.nBanUntil = base_time > 0 && normalized_ban_time_offset > std::numeric_limits<int64_t>::max() - base_time
+        ? std::numeric_limits<int64_t>::max() : base_time + normalized_ban_time_offset;
 
     {
         LOCK(m_banned_mutex);
@@ -174,18 +181,22 @@ bool BanMan::Unban(const CSubNet& sub_net)
 
 void BanMan::GetBanned(banmap_t& banmap)
 {
-    LOCK(m_banned_mutex);
-    // Sweep the banlist so expired bans are not returned
-    SweepBanned();
-    banmap = m_banned; //create a thread safe copy
+    bool changed;
+    {
+        LOCK(m_banned_mutex);
+        // Sweep the banlist so expired bans are not returned.
+        changed = SweepBanned();
+        banmap = m_banned; // Create a thread-safe copy.
+    }
+    if (changed && m_client_interface) m_client_interface->BannedListChanged();
 }
 
-void BanMan::SweepBanned()
+bool BanMan::SweepBanned()
 {
     AssertLockHeld(m_banned_mutex);
 
-    int64_t now = GetTime();
-    bool notify_ui = false;
+    int64_t now = GetTime<std::chrono::seconds>().count();
+    bool changed = false;
     banmap_t::iterator it = m_banned.begin();
     while (it != m_banned.end()) {
         CSubNet sub_net = (*it).first;
@@ -193,15 +204,12 @@ void BanMan::SweepBanned()
         if (!sub_net.IsValid() || now > ban_entry.nBanUntil) {
             m_banned.erase(it++);
             m_is_dirty = true;
-            notify_ui = true;
+            changed = true;
             LogDebug(HgLog::MESH, "Removed banned node address/subnet: %s\n", sub_net.ToString());
         } else {
             ++it;
         }
     }
 
-    // update UI
-    if (notify_ui && m_client_interface) {
-        m_client_interface->BannedListChanged();
-    }
+    return changed;
 }

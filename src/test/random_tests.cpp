@@ -12,9 +12,36 @@
 #include <boost/test/unit_test.hpp>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <random>
 
 BOOST_FIXTURE_TEST_SUITE(random_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(random_span_over_32_bytes)
+{
+    std::array<unsigned char, 66> buffer{};
+    buffer.front() = 0x5a;
+    buffer.back() = 0xa5;
+    GetRandBytes(Span{buffer}.subspan(1, 64));
+    BOOST_CHECK_EQUAL(buffer.front(), 0x5a);
+    BOOST_CHECK_EQUAL(buffer.back(), 0xa5);
+    BOOST_CHECK(std::any_of(buffer.begin() + 1, buffer.end() - 1, [](unsigned char b) { return b != 0; }));
+    std::fill(buffer.begin() + 1, buffer.end() - 1, 0);
+    GetStrongRandBytes(Span{buffer}.subspan(1, 64));
+    BOOST_CHECK_EQUAL(buffer.front(), 0x5a);
+    BOOST_CHECK_EQUAL(buffer.back(), 0xa5);
+    BOOST_CHECK(std::any_of(buffer.begin() + 1, buffer.end() - 1, [](unsigned char b) { return b != 0; }));
+}
+
+BOOST_AUTO_TEST_CASE(minimum_negative_uniform_duration)
+{
+    struct MicroClock { using duration = std::chrono::microseconds; };
+    FastRandomContext ctx{true};
+    const auto value = ctx.rand_uniform_duration<MicroClock>(std::chrono::microseconds::min());
+    BOOST_CHECK(value.count() <= 0);
+    BOOST_CHECK(value.count() > std::chrono::microseconds::min().count());
+}
 
 BOOST_AUTO_TEST_CASE(osrandom_tests)
 {

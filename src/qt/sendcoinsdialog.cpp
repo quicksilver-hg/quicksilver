@@ -21,6 +21,7 @@
 
 #include <chainparams.h>
 #include <interfaces/node.h>
+#include <interfaces/vault.h>
 #include <key_io.h>
 #include <node/interface_ui.h>
 #include <node/types.h>
@@ -56,7 +57,6 @@
 #include <QTextDocument>
 #include <QThread>
 
-using common::PSQTError;
 using vault::CCoinControl;
 
 namespace {
@@ -111,15 +111,12 @@ SendCoinsDialog::SendCoinsDialog(const PlatformStyle *_platformStyle, QWidget *p
     // Coin Control: clipboard actions
     QAction *clipboardQuantityAction = new QAction(tr("Copy quantity"), this);
     QAction *clipboardAmountAction = new QAction(tr("Copy amount"), this);
-    QAction *clipboardBytesAction = new QAction(tr("Copy bytes"), this);
     QAction *clipboardChangeAction = new QAction(tr("Copy change"), this);
     connect(clipboardQuantityAction, &QAction::triggered, this, &SendCoinsDialog::coinControlClipboardQuantity);
     connect(clipboardAmountAction, &QAction::triggered, this, &SendCoinsDialog::coinControlClipboardAmount);
-    connect(clipboardBytesAction, &QAction::triggered, this, &SendCoinsDialog::coinControlClipboardBytes);
     connect(clipboardChangeAction, &QAction::triggered, this, &SendCoinsDialog::coinControlClipboardChange);
     ui->labelCoinControlQuantity->addAction(clipboardQuantityAction);
     ui->labelCoinControlAmount->addAction(clipboardAmountAction);
-    ui->labelCoinControlBytes->addAction(clipboardBytesAction);
     ui->labelCoinControlChange->addAction(clipboardChangeAction);
 
     GUIUtil::ExceptionSafeConnect(ui->sendButton, &QPushButton::clicked, this, &SendCoinsDialog::sendButtonClicked);
@@ -160,22 +157,9 @@ void SendCoinsDialog::setModel(VaultModel *_model)
 
         // Coin Control
         connect(_model->getOptionsModel(), &OptionsModel::displayUnitChanged, this, &SendCoinsDialog::coinControlUpdateLabels);
-        connect(_model->getOptionsModel(), &OptionsModel::coinControlFeaturesChanged, this, &SendCoinsDialog::coinControlFeatureChanged);
-        ui->frameCoinControl->setVisible(_model->getOptionsModel()->getCoinControlFeatures());
         coinControlUpdateLabels();
 
-        if (model->vault().hasExternalSigner()) {
-            //: "device" usually means a hardware vault.
-            ui->sendButton->setText(tr("Sign on device"));
-            if (model->getOptionsModel()->hasSigner()) {
-                ui->sendButton->setEnabled(true);
-                ui->sendButton->setToolTip(tr("Connect your hardware signer first."));
-            } else {
-                ui->sendButton->setEnabled(false);
-                //: "External signer" means using devices such as hardware vaults.
-                ui->sendButton->setToolTip(tr("Set external signer script path in Options -> Vault"));
-            }
-        } else if (model->vault().privateKeysDisabled()) {
+        if (model->vault().privateKeysDisabled()) {
             ui->sendButton->setText(tr("Cr&eate Unsigned"));
             ui->sendButton->setToolTip(tr("Creates a Partially Signed Quicksilver Transaction (PSQT) for use with e.g. an offline %1 vault, or a PSQT-compatible hardware signer.").arg(CLIENT_NAME));
         }
@@ -204,6 +188,18 @@ QString SendCoinsDialog::currentTransferNoteForTesting() const
 {
     return m_current_transaction ? m_current_transaction->getTransferNote() : QString{};
 }
+
+namespace {
+//! Automatic coin selection follows the vault's avoid_reuse flag, and partial-spend
+//! avoidance with it, as the spend RPCs do (F-667). A default CCoinControl says "do not
+//! avoid reuse", which AvailableCoins reads as permission to spend the dirty coins the
+//! balance leaves out (F-696). Coins picked in Coin Control are still spent as picked.
+void ApplyVaultAvoidReuse(interfaces::Vault& vault, CCoinControl& coin_control)
+{
+    coin_control.m_avoid_address_reuse = vault.avoidAddressReuse();
+    coin_control.m_avoid_partial_spends |= coin_control.m_avoid_address_reuse;
+}
+} // namespace
 
 bool SendCoinsDialog::prepareTransactionForAsync(std::unique_ptr<VaultModelTransaction>& transaction, CCoinControl& coin_control)
 {
@@ -250,6 +246,7 @@ bool SendCoinsDialog::prepareTransactionForAsync(std::unique_ptr<VaultModelTrans
     if (addresses.size() != recipients.size()) return refuse(VaultModel::DuplicateAddress);
 
     coin_control = *m_coin_control;
+    ApplyVaultAvoidReuse(model->vault(), coin_control);
     coin_control.m_allow_other_inputs = !coin_control.HasSelected();
     // Selected/unsafe inputs are outside the automatic safe-input bound.
     // A busy, uninitialized or uncertain-policy vault defers to the worker.
@@ -300,7 +297,7 @@ bool SendCoinsDialog::PrepareSendText(QString& question_string, QString& informa
         that the displayed transaction details represent the transaction the user intends to create. */
     question_string.append(tr("Do you want to create this transaction?"));
     question_string.append("<br /><span style='font-size:10pt;'>");
-    if (model->vault().privateKeysDisabled() && !model->vault().hasExternalSigner()) {
+    if (model->vault().privateKeysDisabled()) {
         /*: Text to inform a user attempting to create a transaction of their current options. At this stage,
             a user can only create a PSQT. This string is displayed when private keys are disabled and an external
             signer is not available. */
@@ -402,41 +399,6 @@ void SendCoinsDialog::presentPSQT(PartiallySignedQuicksilverTransaction& psqtx)
     });
 }
 
-bool SendCoinsDialog::signWithExternalSigner(PartiallySignedQuicksilverTransaction& psqtx, CMutableTransaction& mtx, bool& complete) {
-    auto show_error = [this](const QString& object_name, const QString& title, const QString& text) {
-        auto* box = new QMessageBox(QMessageBox::Critical, title, text, QMessageBox::Ok, this);
-        box->setObjectName(object_name);
-        GUIUtil::ShowModalDialogAsynchronously(box);
-    };
-    std::optional<PSQTError> err;
-    try {
-        err = model->vault().fillPSQT(SIGHASH_ALL, /*sign=*/true, /*bip32derivs=*/true, /*n_signed=*/nullptr, psqtx, complete);
-    } catch (const std::runtime_error& e) {
-        show_error(QStringLiteral("externalSignerSignFailed"), tr("Sign failed"), e.what());
-        return false;
-    }
-    if (err == PSQTError::EXTERNAL_SIGNER_NOT_FOUND) {
-        //: "External signer" means using devices such as hardware vaults.
-        const QString msg = tr("External signer not found");
-        show_error(QStringLiteral("externalSignerNotFound"), msg, msg);
-        return false;
-    }
-    if (err == PSQTError::EXTERNAL_SIGNER_FAILED) {
-        //: "External signer" means using devices such as hardware vaults.
-        const QString msg = tr("External signer failure");
-        show_error(QStringLiteral("externalSignerFailed"), msg, msg);
-        return false;
-    }
-    if (err) {
-        qWarning() << "Failed to sign PSQT";
-        processSendCoinsReturn(VaultModel::TransactionCreationFailed);
-        return false;
-    }
-    // fillPSQT does not always properly finalize
-    complete = FinalizeAndExtractPSQT(psqtx, mtx);
-    return true;
-}
-
 void SendCoinsDialog::finishSendFlow(bool send_failure)
 {
     if (!send_failure) {
@@ -461,7 +423,7 @@ void SendCoinsDialog::confirmAndSendPreparedTransaction()
     }
 
     const QString confirmation = tr("Confirm transfer");
-    const bool enable_send{!model->vault().privateKeysDisabled() || model->vault().hasExternalSigner()};
+    const bool enable_send{!model->vault().privateKeysDisabled()};
     const bool always_show_unsigned{model->getOptionsModel()->getEnablePSQTControls()};
     Q_EMIT prepareSendConfirmationReadyForTesting();
     auto confirmationDialog = new SendConfirmationDialog(confirmation, question_string, informative_text, detailed_text, SEND_CONFIRM_DELAY, enable_send, always_show_unsigned, this);
@@ -492,39 +454,16 @@ void SendCoinsDialog::handleSendConfirmationFinished(int retval)
         return;
     }
 
-    assert(!model->vault().privateKeysDisabled() || model->vault().hasExternalSigner());
-    bool broadcast = true;
-    if (model->vault().hasExternalSigner()) {
-        CMutableTransaction mtx = CMutableTransaction{*(m_current_transaction->getWtx())};
-        PartiallySignedQuicksilverTransaction psqtx(mtx);
-        bool complete = false;
-        const auto err{model->vault().fillPSQT(SIGHASH_ALL, /*sign=*/false, /*bip32derivs=*/true, /*n_signed=*/nullptr, psqtx, complete)};
-        assert(!complete);
-        assert(!err);
-        send_failure = !signWithExternalSigner(psqtx, mtx, complete);
-        broadcast = complete && !send_failure;
-        if (!send_failure) {
-            if (complete) {
-                const CTransactionRef tx = MakeTransactionRef(mtx);
-                m_current_transaction->setWtx(tx);
-            } else {
-                presentPSQT(psqtx);
-                return;
-            }
-        }
-    }
-
-    if (broadcast) {
-        const VaultModel::SendCoinsReturn status{model->sendCoins(*m_current_transaction)};
-        if (status.status == VaultModel::OK || status.status == VaultModel::OkNotAcceptedYet) {
-            // The vault holds the transfer either way, so the page moves on to
-            // History; a transfer the node did not take yet also says so.
-            Q_EMIT coinsSent(m_current_transaction->getWtx()->GetHash());
-            processSendCoinsReturn(status);
-        } else {
-            processSendCoinsReturn(status);
-            send_failure = true;
-        }
+    assert(!model->vault().privateKeysDisabled());
+    const VaultModel::SendCoinsReturn status{model->sendCoins(*m_current_transaction)};
+    if (status.status == VaultModel::OK || status.status == VaultModel::OkNotAcceptedYet) {
+        // The vault holds the transfer either way, so the page moves on to
+        // History; a transfer the node did not take yet also says so.
+        Q_EMIT coinsSent(m_current_transaction->getWtx()->GetHash());
+        processSendCoinsReturn(status);
+    } else {
+        processSendCoinsReturn(status);
+        send_failure = true;
     }
     finishSendFlow(send_failure);
 }
@@ -1025,9 +964,6 @@ void SendCoinsDialog::setBalance(const interfaces::VaultBalances& balances)
 {
     if(model && model->getOptionsModel())
     {
-        if (model->vault().hasExternalSigner()) {
-            m_summary_spendable_key->setText(tr("External balance"));
-        }
         m_spendable = balances.balance;
         refreshTransferSummary();
     }
@@ -1147,12 +1083,6 @@ void SendCoinsDialog::coinControlClipboardAmount()
     const auto unit = model && model->getOptionsModel() ? model->getOptionsModel()->getDisplayUnit() : QuicksilverUnit::HGS;
     const CAmount amount = static_cast<CAmount>(ui->labelCoinControlAmount->property(CoinControlDialog::kRawAmountProperty).toLongLong());
     GUIUtil::setClipboard(QuicksilverUnits::format(unit, amount, false, QuicksilverUnits::SeparatorStyle::NEVER));
-}
-
-// Coin Control: copy label "Bytes" to clipboard
-void SendCoinsDialog::coinControlClipboardBytes()
-{
-    GUIUtil::setClipboard(ui->labelCoinControlBytes->text().replace(ASYMP_UTF8, ""));
 }
 
 // Coin Control: copy label "Change" to clipboard
@@ -1383,8 +1313,7 @@ void SendCoinsDialog::createTransferSummary()
     body->addWidget(m_transfer_note);
     body->addWidget(note_hint);
 
-    // The rule belongs to the inputs line, and hides with it when coin
-    // control features are off.
+    // The rule belongs to the inputs line.
     auto* rule = new QFrame(ui->frameCoinControl);
     rule->setObjectName(QStringLiteral("benchRule"));
     rule->setFixedHeight(1);

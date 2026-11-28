@@ -6,7 +6,11 @@
 #ifndef QUICKSILVER_COMPAT_STDIN_H
 #define QUICKSILVER_COMPAT_STDIN_H
 
+#include <memory>
+
 struct NoechoInst {
+    struct RestoreState;
+    std::unique_ptr<RestoreState> m_state;
     NoechoInst();
     ~NoechoInst();
 };

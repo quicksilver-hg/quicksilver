@@ -11,6 +11,7 @@
 #include <interfaces/chain.h>
 #include <key_io.h>
 #include <merkleblock.h>
+#include <random.h>
 #include <rpc/util.h>
 #include <script/descriptor.h>
 #include <script/script.h>
@@ -19,6 +20,7 @@
 #include <uint256.h>
 #include <util/bip32.h>
 #include <util/fs.h>
+#include <util/fs_helpers.h>
 #include <util/time.h>
 #include <util/translation.h>
 #include <vault/archive.h>
@@ -273,6 +275,12 @@ static UniValue ProcessDescriptorImport(CVault& vault, const UniValue& data, con
     } catch (const UniValue& e) {
         result.pushKV("success", UniValue(false));
         result.pushKV("error", e);
+    } catch (const std::runtime_error& e) {
+        // UniValue::get_str()/get_bool()/getInt() throw std::runtime_error on a wrongly
+        // typed field. Report it for this request only, so one bad entry does not abort
+        // the whole batch (S0200-A-04).
+        result.pushKV("success", UniValue(false));
+        result.pushKV("error", JSONRPCError(RPC_TYPE_ERROR, e.what()));
     }
     PushWarnings(warnings, result);
     return result;
@@ -680,15 +688,18 @@ static std::string BackupCheckFailureReason(BackupCheckResult result)
 RPCHelpMan backupvault()
 {
     return RPCHelpMan{"backupvault",
-                "\nSafely copies the current vault file to the specified destination, which can either be a directory or a path with a filename.\n"
-                "Then reopens the saved file and checks that it is a readable copy of this vault, with the keys and encryption the vault uses now.\n"
+                "\nCopies the current vault to a file at the given path, then reopens the copy and checks that it is a readable copy of this vault, with the keys and encryption the vault uses now.\n"
+                "The copy is written under a temporary name and takes the given name only after it passes that check, so a failed backup never changes a file already at the path.\n"
+                "If the path exists, the call fails unless overwrite is true.\n"
                 "It never asks for the passphrase and does not test it; the GUI backup can.\n",
                 {
-                    {"destination", RPCArg::Type::STR, RPCArg::Optional::NO, "The destination directory or file"},
+                    {"destination", RPCArg::Type::STR, RPCArg::Optional::NO, "The backup file path"},
+                    {"overwrite", RPCArg::Type::BOOL, RPCArg::Default{false}, "Replace a file that already exists at the destination. It is replaced only after the new backup passes its check."},
                 },
-                RPCResult{RPCResult::Type::NONE, "", ""},
+                RPCResult{RPCResult::Type::STR, "path", "The absolute path of the saved backup file"},
                 RPCExamples{
                     HelpExampleCli("backupvault", "\"backup.dat\"")
+            + HelpExampleCli("backupvault", "\"backup.dat\" true")
             + HelpExampleRpc("backupvault", "\"backup.dat\"")
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
@@ -700,29 +711,26 @@ RPCHelpMan backupvault()
     // the user could have gotten from another RPC command prior to now
     pvault->BlockUntilSyncedToCurrentChain();
 
-    std::string strDest = request.params[0].get_str();
-    {
-        LOCK(pvault->cs_vault);
-        if (!pvault->BackupVault(strDest)) {
-            throw JSONRPCError(RPC_VAULT_ERROR, "Error: Vault backup failed!");
-        }
-    }
-
+    const bool overwrite{self.Arg<bool>("overwrite")};
     const VaultContext& context{EnsureVaultContext(request.context)};
-    if (context.args && HasTestOption(*context.args, "corruptbackup")) {
-        // Test only: stand in for a medium that does not keep what was written, so the check below is what fails.
-        std::fstream saved{fs::PathFromString(strDest), std::ios::binary | std::ios::in | std::ios::out};
-        const std::string zeros(100, '\0');
-        saved.write(zeros.data(), zeros.size());
-    }
+    const bool corrupt_for_test{context.args && HasTestOption(*context.args, "corruptbackup")};
 
-    const BackupCheck check{pvault->VerifyBackup(fs::PathFromString(strDest), /*passphrase=*/nullptr)};
-    pvault->RecordBackupCheck(check);
-    if (!check.StepsPassed()) {
-        throw JSONRPCError(RPC_VAULT_ERROR, strprintf("Error: The backup was saved, but checking it failed: %s", BackupCheckFailureReason(check.result)));
+    const SavedBackup saved{pvault->SaveCheckedBackup(request.params[0].get_str(), overwrite, corrupt_for_test)};
+    switch (saved.step) {
+    case BackupStep::DONE:
+        return saved.path;
+    case BackupStep::EXISTS:
+        throw JSONRPCError(RPC_VAULT_ERROR, "Error: Vault backup failed! Destination already exists. Pass overwrite=true to replace it.");
+    case BackupStep::OWN_FILE:
+        throw JSONRPCError(RPC_VAULT_ERROR, "Error: Vault backup failed! The destination is this vault's own database file.");
+    case BackupStep::COPY:
+        throw JSONRPCError(RPC_VAULT_ERROR, "Error: Vault backup failed!");
+    case BackupStep::CHECK:
+        throw JSONRPCError(RPC_VAULT_ERROR, strprintf("Error: Vault backup failed verification: %s", BackupCheckFailureReason(saved.check.result)));
+    case BackupStep::RENAME:
+        throw JSONRPCError(RPC_VAULT_ERROR, "Error: Vault backup failed! The backup passed its check but could not be moved to the destination. Any file already there is unchanged.");
     }
-
-    return UniValue::VNULL;
+    NONFATAL_UNREACHABLE();
 },
     };
 }
@@ -764,6 +772,9 @@ RPCHelpMan restorevault()
     auto backup_file = fs::u8path(request.params[1].get_str());
 
     std::string vault_name = request.params[0].get_str();
+    if (vault_name.empty() || vault_name == "." || vault_name == ".." || vault_name.find_first_of("/\\:") != std::string::npos) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Vault name must be a single directory name.");
+    }
 
     std::optional<bool> load_on_start = request.params[2].isNull() ? std::nullopt : std::optional<bool>(request.params[2].get_bool());
 

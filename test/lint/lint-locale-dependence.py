@@ -57,49 +57,7 @@ KNOWN_VIOLATIONS = [
     # with %s/%u/%zu only, so no LC_NUMERIC surface. lint-cuckatoo-source-policy
     # forbids iostream and stringstream under src/crypto/cuckatoo/.
     "src/crypto/cuckatoo/bench/qscalibrate.cpp:.*std::fprintf",
-    # --- CUDA sources, in scope since 2026-08-25 (F-35) -----------------------
-    # The glob was "*.cpp" and "*.h" only, so nothing under a .cu/.cuh extension
-    # had ever been examined. Widening it surfaced one real defect --
-    # qsgpucalibrate printed its CSV "seconds" column with %.6f while its CPU
-    # twin qscalibrate.cpp deliberately avoids that via Seconds6() -- which is
-    # now fixed rather than exempted. Everything below is a genuine exemption.
-    #
-    # The three GPU tools are standalone nvcc binaries. They are never linked
-    # into quicksilver-daemon or quicksilver and never call setlocale, so they run
-    # in the classic "C" locale by construction, which is the same guarantee the
-    # header comment above says quicksilver-daemon relies on. Their stdout contracts
-    # (nonce=/cycle=, and the CSV) now use only %u/%s/%llx plus Seconds6, so no
-    # LC_NUMERIC surface remains; the entries below are stderr diagnostics,
-    # argument parsing, and integer formatting.
-    "src/crypto/cuckatoo/gpu/qsgpusolve-cuda.cu:.*std::fprintf",
-    "src/crypto/cuckatoo/gpu/qsgpusolve-cuda.cu:.*std::printf",
-    "src/crypto/cuckatoo/gpu/qsgpusolve-cuda.cu:.*std::atoi",
-    "src/crypto/cuckatoo/gpu/qsgpusolve-cuda.cu:.*std::sscanf",
-    "src/crypto/cuckatoo/gpu/qsgpusolve-cuda.cu:.*std::strtoul",
-    "src/crypto/cuckatoo/gpu/qsgpucalibrate.cu:.*std::fprintf",
-    "src/crypto/cuckatoo/gpu/qsgpucalibrate.cu:.*std::printf",
-    "src/crypto/cuckatoo/gpu/qsgpucalibrate.cu:.*std::snprintf",
-    "src/crypto/cuckatoo/gpu/qsgpucalibrate.cu:.*std::strtoul",
-    "src/crypto/cuckatoo/gpu/device_health.cuh:.*std::fprintf",
-    # This matches PROSE, not code: the comment explains why edgetrimmer::trim()
-    # is a name collision, and saying so requires naming it. Anchored to a
-    # comment marker so a real boost trim in the file is still caught -- verified
-    # by mutation. The sibling case (a comment naming the locale-install call in
-    # qsgpucalibrate) needed no entry: lint-cuckatoo-source-policy.py bans that
-    # token in cuckatoo sources outright, so the comment was reworded instead of
-    # exempted twice.
-    "src/crypto/cuckatoo/gpu/device_health.cuh:\\s*//.*trim",
-    # Vendored upstream CUDA solver, same treatment as vendor/lean.cpp and
-    # vendor/cuckatoo.h above. The atoi/sscanf calls are in its own main(), which
-    # we compile out with CUCKATOO_NO_MAIN; the snprintf is gpuAssert's error
-    # buffer. "trim" is a name collision with edgetrimmer::trim(), not the
-    # locale-dependent boost algorithm.
-    "src/crypto/cuckatoo/vendor/lean.cu:.*atoi",
-    "src/crypto/cuckatoo/vendor/lean.cu:.*sscanf",
-    "src/crypto/cuckatoo/vendor/lean.cu:.*snprintf",
-    "src/crypto/cuckatoo/vendor/lean.cu:.*trim",
-    # OpenCL helper (F-469). Same standing as the CUDA tools above: a standalone
-    # binary, never linked into the daemon, and it never calls setlocale. Its
+    # OpenCL helper (F-469). A standalone binary, never linked into the daemon, and it never calls setlocale. Its
     # stdout is the helper contract (listing lines, progress=, nonce=/cycle=)
     # with %s/%u/%llx only. The snprintf calls format integers or a fixed error
     # token. The parity test parses that contract back.

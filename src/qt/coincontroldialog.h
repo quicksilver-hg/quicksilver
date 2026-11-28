@@ -28,8 +28,6 @@ namespace Ui {
     class CoinControlDialog;
 }
 
-#define ASYMP_UTF8 "\xE2\x89\x88"
-
 class CCoinControlWidgetItem : public QTreeWidgetItem
 {
 public:
@@ -108,7 +106,6 @@ private Q_SLOTS:
     void unlockCoin();
     void clipboardQuantity();
     void clipboardAmount();
-    void clipboardBytes();
     void clipboardChange();
     void radioTreeMode(bool);
     void radioListMode(bool);

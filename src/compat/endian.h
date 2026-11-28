@@ -11,6 +11,9 @@
 #include <bit>
 #include <cstdint>
 
+static_assert(std::endian::native == std::endian::little || std::endian::native == std::endian::big,
+              "Mixed-endian targets are unsupported");
+
 inline BSWAP_CONSTEXPR uint16_t htobe16_internal(uint16_t host_16bits)
 {
     if constexpr (std::endian::native == std::endian::little) return internal_bswap_16(host_16bits);

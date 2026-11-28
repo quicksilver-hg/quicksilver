@@ -1,8 +1,9 @@
 # Who Stores the Chain
 
-> Status: **decided** (2026-08-04). Consensus nodes prune by default; keeping the full
-> chain is a deliberate opt-in. The maintainer runs one archival node at launch, and
-> this document says what happens if it disappears.
+> Status: **decided** (2026-08-04), **reversed for the desktop** (2026-11-21, F-705).
+> Consensus nodes keep the full chain by default, on the desktop as on the daemon;
+> pruning is one checkbox away, with its cost shown. The maintainer runs one archival
+> node at launch, and this document says what happens if it disappears.
 
 ## 1. The measured cost
 
@@ -69,37 +70,54 @@ removes roughly five sixths of the cost for an ordinary operator.
 removes only about a quarter. `chain-growth.md` §3 quotes those percentages and reads
 as though they were general; they describe the 2,300-output shape specifically. Both
 statements are true of the shape each was measured on. The honest shape is the one an
-operator will actually experience, which is why it governs the default.
+operator will actually experience, which is why it governs the pruning trade-off.
 
 A pruned node validates every block fully. Nothing about its consensus judgement is
 weaker. What it loses is the ability to serve history to somebody else.
 
 ## 3. The decision
 
-**Pruning is the default for the consensus capability. Archival storage is the
-documented opt-in.**
+**Keeping the full chain is the default for the consensus capability, on the desktop as
+on the daemon. Pruning is one checkbox away, with its disk cost shown.**
 
-Upstream's answer — volunteers keep full history, because it is cheap enough — rests on
-upstream's roughly 60 GB/year. At 152 GB/year the same assumption is not safe to make
-silently. An operator who wants to serve history should choose to, and should see what
-it costs at the moment they choose.
+This reverses the decision of 2026-08-04, which made pruning the desktop default. The
+reversal is dated 2026-11-21 (F-705). Two facts decided it:
 
-The daemon is deliberately **not** changed. `quicksilver-daemon` still defaults to
-`-prune=0`, so an operator who runs the node directly gets full history unless they ask
-otherwise. The default that changed is the desktop's, because the desktop is what an
-ordinary user runs without reading the manual.
+- **A pruned node does not help a new node sync.** It never advertises `NODE_NETWORK`
+  (`src/init.cpp`), and it refuses requests for blocks deeper than its keep window even
+  while it still holds every block, so peers looking for history pass it by. With pruning
+  as the desktop default, the desktops a new node met could not give it the chain, which
+  made the failure in §4 the likely outcome rather than an edge case.
+- **The cost the default guarded against is not what the chain carries.** 152 GB/year is
+  the full-traffic figure; the measured chain grows by about 0.07 GB/year (F-601, measured
+  2026-11-10). That is the divergence from the design shape that §5 named as the trigger
+  for revisiting.
+
+The original reasoning stands as the case for turning pruning back on. Upstream's answer —
+volunteers keep full history, because it is cheap enough — rests on upstream's roughly
+60 GB/year, and at 152 GB/year the same assumption would not be safe to make silently.
+Until traffic approaches that figure, an archival default costs a desktop operator very
+little and gives the network the history it needs. Either way, the operator sees both
+costs at the moment they choose.
+
+`quicksilver-daemon` has always defaulted to `-prune=0`, and still does. The desktop now
+matches it.
 
 ### What ships
 
-- `Intro` checks the pruning box by default (`src/qt/intro.cpp`), and no longer
-  re-derives that choice from how much free disk the machine happens to have.
+- `Intro` leaves the pruning box unchecked by default (`src/qt/intro.cpp`), so a new
+  desktop keeps the full chain. It does not re-derive that choice from how much free disk
+  the machine happens to have; the free-space line says when the full chain will not fit.
+  Ticking the box prunes to the default target below. A data directory set up before
+  this change keeps the choice it made then; nothing is migrated.
 - The dialog fires on whether this desktop has ever been set up, not on whether a data
   directory happens to exist (`Intro::IsNeeded`). Existence was the wrong question: any
   directory that was already there — an empty one, or one `quicksilver-daemon` had created —
   skipped the welcome screen, the storage figures and the data directory choice, and
-  wrote no prune setting at all, which left that operator **archival by silence**. That
-  is the outcome this section exists to prevent, and it was reachable by following
-  [getting-started.md](../getting-started.md), which leads with `quicksilver-daemon` (F-123).
+  wrote no prune setting at all, which left that operator **archival by silence**. An
+  operator should see the cost and the choice before taking either on, and this failure
+  was reachable by following [getting-started.md](../getting-started.md), which leads
+  with `quicksilver-daemon` (F-123).
 - **The pruning choice is offered only where it is still free to make.** A data
   directory that already holds a chain has a settled storage policy, so the dialog
   discloses that rather than defaulting it: checking the box would delete history the
@@ -108,21 +126,29 @@ ordinary user runs without reading the manual.
   (`Intro::getPruneMiB` returns nothing), so what the operator chose when they first ran
   the node stands, and Options is where they change it. This is the daemon-first
   operator, whose archival default §3 deliberately leaves alone.
-- The consensus review screen states both numbers, defaulted and archival, before the
+- The consensus review screen states both numbers, pruned and archival, before the
   control that accepts the cost (`src/qt/consensusreviewpage.cpp`).
 - `m_assumed_blockchain_size` / `m_assumed_chain_state_size` are 1 / 1 GB on `main`
   and `publictest` (`src/kernel/chainparams.cpp`): an estimate from the measured chain
   plus a margin (F-601, measured 2026-11-10 at about 0.07 GB/year). The 128 / 26 GB
   first-year capacity figures above remain the design ceiling.
-- `MIN_DISK_SPACE_FOR_BLOCK_FILES` stays at 550 MiB, but its derivation comment in
-  `src/validation.h` was rebuilt from Quicksilver's block size and spacing rather than
-  the inherited ones. The re-derivation lands at 575.0 MB required against 576.7 MB allowed —
-  0.3% of headroom, where upstream had 5.5%.
+- A pruned node keeps the last 2016 blocks, one week at 300 s spacing, and serves them to
+  peers (F-703; upstream's 288 blocks are only one day here). It still asks a pruned peer
+  only for blocks within 288 of that peer's tip, the depth older nodes serve, so old and
+  new nodes work together; a later release raises that once the network has upgraded.
+- The desktop keeps the full chain by default. If pruning is selected, its
+  whole-GB control has a 4 GB minimum, rounded up from the 2,956 MiB floor.
+- `MIN_DISK_SPACE_FOR_BLOCK_FILES` is 2,956 MiB on main and publictest. Its
+  derivation in `src/validation.h` uses 2016 kept blocks, measured block and undo
+  size, a 20% orphan margin and a block-file chunk. Sandbox retains a separate
+  550 MiB floor because its blocks are smaller.
 
 ## 4. Who keeps history, and what happens if they stop
 
 A chain where nobody keeps history cannot bootstrap a new node. Pruning by default
-makes that failure mode more likely, so it has to be answered rather than assumed away.
+made that failure mode more likely, which is part of why the desktop default was
+reversed (§3). It still has to be answered rather than assumed away, because any
+operator can tick the box.
 
 **At launch, the maintainer runs one archival node**, alongside the onion seed
 described in [bootstrapping.md](../bootstrapping.md). That is an operational
@@ -137,8 +163,8 @@ If that node disappears and no other archival node exists:
   those headers commit to.
 
 The recovery from that state is not automatic: it needs somebody to restore an archival
-copy. Anyone running `quicksilver-daemon` without `-prune` is holding one, which is a further
-reason the daemon default was left alone.
+copy. Anyone running a node without pruning — the default on both the daemon and the
+desktop — is holding one.
 
 This is a real single point of failure and it is stated rather than mitigated. The
 mitigations that would remove it — several independent archival operators, or a
@@ -147,12 +173,16 @@ v1 can manufacture. v1 does not ship UTXO-snapshot bootstrap.
 
 ## 5. Trigger for revisiting
 
-- **The archival default should be reconsidered** if the number of known archival nodes
-  falls to one — that is, if the maintainer's node becomes the only copy in existence.
-  At that point the correct response is recruiting operators, not changing the default.
-- **The pruning default should be reconsidered** if measured honest traffic diverges
-  from the 2-output shape enough to move the 26 GB/year figure materially, since the
-  whole case for the default rests on that split.
+- **Pruning should be turned back on by default** if measured honest growth approaches
+  the design figures in §1 (128 GB of block data and 26 GB of chain state a year at full
+  traffic). The full-chain default rests on the chain carrying far less than that; it
+  was restored on 2026-11-21 at about 0.07 GB/year measured. Check the traffic shape at
+  the same time: the case for pruning rests on its removing about five sixths of the
+  cost at the 2-output shape (§2), and less under UTXO-heavy traffic.
+- **If the known archival nodes fall to one** — the maintainer's node becomes the only
+  copy in existence — the correct response is recruiting operators. Find out why
+  desktops are pruning before changing anything else; the default already keeps the
+  full chain.
 
 ## 6. Related
 

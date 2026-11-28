@@ -197,35 +197,3 @@ function(add_windows_deploy_target)
   )
   add_custom_target(deploy DEPENDS ${PROJECT_BINARY_DIR}/quicksilver-win64-setup.exe)
 endfunction()
-
-function(add_macos_deploy_target)
-  if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND TARGET quicksilver)
-    set(macos_app "Quicksilver.app")
-    # Populate Contents subdirectory.
-    configure_file(${PROJECT_SOURCE_DIR}/share/qt/Info.plist.in ${macos_app}/Contents/Info.plist NO_SOURCE_PERMISSIONS)
-    file(CONFIGURE OUTPUT ${macos_app}/Contents/PkgInfo CONTENT "APPL????")
-    # Populate Contents/Resources subdirectory.
-    file(CONFIGURE OUTPUT ${macos_app}/Contents/Resources/empty.lproj CONTENT "")
-    configure_file(${PROJECT_SOURCE_DIR}/src/qt/res/icons/quicksilver.icns ${macos_app}/Contents/Resources/quicksilver.icns NO_SOURCE_PERMISSIONS COPYONLY)
-    file(CONFIGURE OUTPUT ${macos_app}/Contents/Resources/Base.lproj/InfoPlist.strings
-      CONTENT "{ CFBundleDisplayName = \"@CLIENT_NAME@\"; CFBundleName = \"@CLIENT_NAME@\"; }"
-    )
-
-    add_custom_command(
-      OUTPUT ${PROJECT_BINARY_DIR}/${macos_app}/Contents/MacOS/Quicksilver
-      COMMAND ${CMAKE_COMMAND} --install ${PROJECT_BINARY_DIR} --config $<CONFIG> --component quicksilver --prefix ${macos_app}/Contents/MacOS --strip
-      COMMAND ${CMAKE_COMMAND} -E rename ${macos_app}/Contents/MacOS/bin/$<TARGET_FILE_NAME:quicksilver> ${macos_app}/Contents/MacOS/Quicksilver
-      COMMAND ${CMAKE_COMMAND} -E rm -rf ${macos_app}/Contents/MacOS/bin
-      COMMAND ${CMAKE_COMMAND} -E rm -rf ${macos_app}/Contents/MacOS/share
-      VERBATIM
-    )
-
-    add_custom_target(deploydir
-      DEPENDS ${PROJECT_BINARY_DIR}/${macos_app}/Contents/MacOS/Quicksilver
-    )
-    add_custom_target(deploy
-      DEPENDS deploydir
-    )
-    add_dependencies(deploydir quicksilver)
-  endif()
-endfunction()

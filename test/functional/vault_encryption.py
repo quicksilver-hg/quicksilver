@@ -89,6 +89,15 @@ class VaultEncryptionTest(QuicksilverTestFramework):
         with VaultUnlock(self.nodes[0], passphrase2):
             assert_can_sign()
 
+        self.log.info("A wrong old passphrase leaves an unlocked vault unlocked (S0201-B-01)")
+        self.nodes[0].vaultpassphrase(passphrase2, 600)
+        unlocked_until = self.nodes[0].getvaultinfo()['unlocked_until']
+        assert_raises_rpc_error(-14, "vault passphrase entered was incorrect", self.nodes[0].vaultpassphrasechange, passphrase2 + "wrong", passphrase)
+        assert_equal(self.nodes[0].getvaultinfo()['unlocked_until'], unlocked_until)
+        assert_can_sign()
+        self.nodes[0].vaultlock()
+        assert_locked()
+
         # Test timeout bounds
         assert_raises_rpc_error(-8, "Timeout cannot be negative.", self.nodes[0].vaultpassphrase, passphrase2, -10)
 

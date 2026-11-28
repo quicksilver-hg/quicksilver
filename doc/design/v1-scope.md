@@ -39,7 +39,7 @@ The 2026-07-29 repositioning described a gateway with six components. Measured a
 
 | component | status | what actually exists |
 | --- | --- | --- |
-| policy engine | **partial** | `CheckAllotmentSpend` applies a funding limit and a daily limit (`allotmentpolicy.cpp`) through the `checkpolicy`, `checkbundle` and `signbundle` commands. It is the agent's own check; the vault does not enforce a numeric limit |
+| policy engine | **partial** | `CheckAllotmentSpend` applies a funding limit and a daily limit (`allotmentpolicy.cpp`) through the `checkpolicy`, `checkbundle` and `signbundle` commands. It is the agent's own check, and the vault enforces the daily limit too: `CVault::CosignAgentAllotmentSpend` refuses a co-signature that would take what it has co-signed for the allotment in the UTC day over the limit (F-661). The funding limit is not checked at co-signing |
 | capability issuance | **partial** | the allotment is a taproot output, `tr(V,multi_a(2,A,C))`. The vault keeps the reclaim key V and the cosigner key C, and its bundle (`CVault::ExportAgentAllotmentPolicyBundle`) gives the agent only A, which cannot spend alone. This is not a capability token |
 | revocation | **shipped** | Stop (`CVault::StopAgentAllotment`) makes the vault refuse every later co-signature, so the agent can produce no new spend. A spend the vault has already co-signed and broadcast still confirms. The vault takes the remaining coins back alone, by key path with V, at the cost of one proof |
 | durable job queue | **absent** | nothing |
@@ -57,7 +57,7 @@ cannot alter or steal the payment. This is backed by existing code — see
 [delegation.md](delegation.md) §1.
 
 **Must never be said: that limits are guarantees.** The script does not contain a limit,
-and the vault does not enforce one: it co-signs any request for an active allotment that
+and the vault also refuses a co-signature over the daily limit: it co-signs any request for an active allotment that
 passes its checks. A limit is the agent's own check, applied by its own software, and an
 agent that ignores it is stopped only when the user stops the allotment. Stop binds only
 spends the vault has not already signed. Do not call it a protocol guarantee either. The
@@ -135,6 +135,6 @@ not the feature request.
 | decision | where |
 | --- | --- |
 | a GPU is the practical transfer path; no grind market | [delegation.md](delegation.md) |
-| consensus nodes prune by default; maintainer runs one archival node | [chain-storage.md](chain-storage.md) |
+| consensus nodes keep the full chain by default, desktop included (reversed 2026-11-21); pruning is one checkbox away; maintainer runs one archival node | [chain-storage.md](chain-storage.md) |
 | encrypted history export ships; automatic backup does not | [vault-backup.md](vault-backup.md) |
 | the vault locks an agent's funding outputs at export | [agent-client.md](agent-client.md) |

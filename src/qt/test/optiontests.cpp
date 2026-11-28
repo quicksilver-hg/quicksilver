@@ -3,8 +3,6 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <quicksilver-build-config.h> // IWYU pragma: keep
-
 #include <common/args.h>
 #include <util/fs.h>
 #include <crypto/cuckatoo/gpu_devices.h>
@@ -20,8 +18,11 @@
 #include <qt/gpudevicelist.h>
 #include <qt/gpusituation.h>
 #include <qt/platformstyle.h>
+#include <qt/qvalidatedlineedit.h>
 #include <qt/quicksilverunits.h>
 #include <qt/quicksilverstyle.h>
+#include <qt/receiverequestdialog.h>
+#include <qt/sendcoinsdialog.h>
 #include <qt/test/optiontests.h>
 #include <qt/test/util.h>
 #include <qt/vaultmodel.h>
@@ -53,6 +54,7 @@
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSignalSpy>
 #include <QSpinBox>
 #include <QStringList>
 #include <QTest>
@@ -66,6 +68,7 @@
 
 #include <fstream>
 #include <system_error>
+#include <tuple>
 #include <utility>
 
 void ShieldOptionsDialogFromBundledHelper()
@@ -478,6 +481,43 @@ void OptionTests::gpuCardsListAndModes()
     QCOMPARE(options.getGpuDeviceNames().value(QStringLiteral("pci:0000:04:00.0")), QStringLiteral("AMD Radeon RX 480"));
 }
 
+void OptionTests::choosingCardsRequiresASelection()
+{
+    QVERIFY_SOLVER_PROBE_STUB();
+    const QString id{QStringLiteral("pci:0000:04:00.0")};
+    PointDiscoveryAtStub(WriteListing({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=Discrete Card")}));
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, true);
+    dialog.setModel(&options);
+    auto* choose = dialog.findChild<QRadioButton*>(QStringLiteral("gpuModeChoose"));
+    auto* automatic = dialog.findChild<QRadioButton*>(QStringLiteral("gpuModeAutomatic"));
+    auto* cpu = dialog.findChild<QRadioButton*>(QStringLiteral("gpuModeCpu"));
+    auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("okButton"));
+    QVERIFY(choose && automatic && cpu && ok);
+    QCheckBox* card{nullptr};
+    QTRY_VERIFY((card = dialog.findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_04_00_0"))));
+    choose->click();
+    card->setChecked(false);
+    QVERIFY(!ok->isEnabled());
+    automatic->click();
+    QVERIFY(ok->isEnabled());
+    cpu->click();
+    QVERIFY(ok->isEnabled());
+    choose->click();
+    card->setChecked(true);
+    QVERIFY(ok->isEnabled());
+    ok->click();
+    QCOMPARE(options.getOption(OptionsModel::GpuDevices).toStringList(), QStringList{id});
+
+    OptionsDialog reopened(nullptr, true);
+    reopened.setModel(&options);
+    QVERIFY(reopened.findChild<QRadioButton*>(QStringLiteral("gpuModeChoose"))->isChecked());
+    QTRY_VERIFY((card = reopened.findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_04_00_0"))));
+    QVERIFY(card->isChecked());
+}
+
 void OptionTests::commandLineGraphicsHelperIsShown()
 {
     const QString path{QStringLiteral("/opt/quicksilver/custom-helper")};
@@ -808,6 +848,72 @@ void OptionTests::missingChosenCardKeepsItsName()
     QCOMPARE(options.getOption(OptionsModel::GpuDevices).toStringList(), QStringList{QStringLiteral("pci:0000:04:00.0")});
 }
 
+//! S0222-C-01: the only chosen card, missing from discovery, used to be dropped on OK.
+//! Choose mode then saved an empty list, which reopens as Automatic: every card mined.
+void OptionTests::onlyChosenCardMissingStaysChosen()
+{
+    QVERIFY_SOLVER_PROBE_STUB();
+    PointDiscoveryAtStub(WriteListing({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")}));
+    OptionsModel options{m_node}; bilingual_str error; QVERIFY(options.Init(error));
+    QVERIFY(options.setOption(OptionsModel::GpuDevices, QStringList{QStringLiteral("pci:0000:09:00.0")}));
+    options.setGpuDeviceNames({{QStringLiteral("pci:0000:09:00.0"), QStringLiteral("NVIDIA P106-100")}});
+    OptionsDialog dialog(nullptr, true); dialog.setModel(&options);
+    auto* list = dialog.findChild<QWidget*>(QStringLiteral("gpuDeviceList"));
+    QTRY_VERIFY_WITH_TIMEOUT(list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_09_00_0")), 30000);
+    auto* gone = list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_09_00_0"));
+    QVERIFY(gone->isChecked());
+    QVERIFY(gone->isEnabled()); // the operator can still untick it
+    QTest::mouseClick(dialog.findChild<QPushButton*>(QStringLiteral("okButton")), Qt::LeftButton);
+    QCOMPARE(options.getOption(OptionsModel::GpuDevices).toStringList(), QStringList{QStringLiteral("pci:0000:09:00.0")});
+    QCOMPARE(options.getGpuDeviceNames().value(QStringLiteral("pci:0000:09:00.0")), QStringLiteral("NVIDIA P106-100"));
+}
+
+//! S0223-A-01: a card id that is not a PCI address has no slot. The fault line named
+//! it "(slot )"; it is named by its id instead.
+void OptionTests::faultedCardWithoutSlotIsNamedById()
+{
+    cuckatoo::GpuDiscovery discovery;
+    discovery.situation = cuckatoo::GpuSituation::kReady;
+    cuckatoo::GpuDevice pci; pci.id = "pci:0000:04:00.0"; pci.name = "Radeon RX 580"; pci.type = "gpu"; pci.status = cuckatoo::DeviceStatus::kOk;
+    cuckatoo::GpuDevice other; other.id = "opencl:1:0"; other.name = "Other card"; other.type = "gpu"; other.status = cuckatoo::DeviceStatus::kOk;
+    discovery.selection.use = {pci, other};
+    cuckatoo::SetGpuDeviceStatsForTesting({
+        {"pci:0000:04:00.0", cuckatoo::GpuDeviceState::kFaulted, cuckatoo::GpuSolveStatus::kDeviceFault, 0, 0.0},
+        {"opencl:1:0", cuckatoo::GpuDeviceState::kFaulted, cuckatoo::GpuSolveStatus::kDeviceFault, 0, 0.0},
+    });
+    const QString fault{QString::fromStdString(cuckatoo::SolverFault(cuckatoo::GpuSolveStatus::kDeviceFault, false).value())};
+    const QString details{gpusituation::FaultedCardDetails(discovery)};
+    cuckatoo::ResetGpuDeviceStatsForTesting();
+    QCOMPARE(details, QStringLiteral("Radeon RX 580 (slot 04:00.0): %1\nOther card (opencl:1:0): %1").arg(fault));
+    QVERIFY(!details.contains(QStringLiteral("(slot )")));
+}
+
+//! S0222-C-04: Automatic mode's rows are the cards cuckatoo::SelectDevices picks, the
+//! rule the miner uses, so the list cannot show a card in use that the miner skips.
+void OptionTests::automaticRowsFollowTheMinersSelection()
+{
+    cuckatoo::GpuDiscovery discovery;
+    discovery.listing.outcome = cuckatoo::ListOutcome::kListed;
+    discovery.listing.devices = cuckatoo::ParseDeviceListing(
+        "device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=Radeon RX 580\n"
+        "device backend=opencl id=pci:0000:00:02.0 type=gpu integrated=1 mem=0 status=ok name=Intel HD\n"
+        "device backend=opencl id=pci:0000:05:00.0 type=gpu integrated=0 mem=0 status=compile-failed name=Old Card\n");
+    GpuDeviceList list;
+    list.setMode(GpuDeviceList::Mode::kAutomatic);
+    list.setDevices(discovery, {}, {});
+    QStringList shown;
+    for (const char* id : {"pci_0000_04_00_0", "pci_0000_00_02_0", "pci_0000_05_00_0"}) {
+        if (list.findChild<QLabel*>(QStringLiteral("gpuDevice_%1_state").arg(QLatin1String(id)))->text() == QStringLiteral("Chosen")) shown.push_back(QLatin1String(id));
+    }
+    QStringList picked;
+    for (const auto& device : cuckatoo::SelectDevices(discovery.listing.devices, cuckatoo::DeviceChoice{}).use) {
+        picked.push_back(QString::fromStdString(device.id).replace(QLatin1Char(':'), QLatin1Char('_')).replace(QLatin1Char('.'), QLatin1Char('_')));
+    }
+    QCOMPARE(shown, picked);
+    QCOMPARE(shown, QStringList{QStringLiteral("pci_0000_04_00_0")});
+    QCOMPARE(list.tickedIds(), QStringList{QStringLiteral("pci:0000:04:00.0")});
+}
+
 void OptionTests::cpuOnlyHidesTheList()
 {
     QVERIFY_SOLVER_PROBE_STUB();
@@ -914,42 +1020,28 @@ void OptionTests::gpuSolverDialogRejectsInvalidPath()
     QCOMPARE(options.getOption(OptionsModel::GpuSolverPath).toString(), original);
 }
 
-void OptionTests::externalSignerSurfacesAreHiddenNotGreyedOut()
+void OptionTests::externalSignerSurfacesAreAbsent()
 {
-    // F-64: external signing ships post-launch, and the v1 decision was that its
-    // surface be absent rather than inert. A permanently disabled control with a
-    // "compiled without external signing support" tooltip is exactly the
-    // placeholder that decision ruled out -- it advertises a feature to a v1 user
-    // who has no way to obtain it. Both surfaces are pinned here because they
-    // live in different dialogs and a change to one would not touch the other.
+    // F-64 ruled that v1 shows no external-signer surface, absent rather than
+    // inert; F-679 then removed the code until the adapter work. Each dialog
+    // that carried a signer control is pinned here, because they are separate
+    // forms and restoring one would not touch the others.
     OptionsModel options{m_node};
     bilingual_str error;
     QVERIFY(options.Init(error));
     OptionsDialog options_dialog(nullptr, /*enableVault=*/true);
     options_dialog.setModel(&options);
-
-    auto* signer_group = options_dialog.findChild<QGroupBox*>(QStringLiteral("groupBoxHww"));
-    QVERIFY(signer_group);
-    // F-485: the signer group moves with the other hardware rows, and stays hidden.
-    auto* hardware = options_dialog.findChild<QWidget*>(QStringLiteral("tabHardware"));
-    QVERIFY2(hardware && hardware->isAncestorOf(signer_group), "groupBoxHww belongs on the Hardware tab");
+    QVERIFY(options_dialog.findChild<QWidget*>(QStringLiteral("tabHardware")));
+    QVERIFY(!options_dialog.findChild<QGroupBox*>(QStringLiteral("groupBoxHww")));
+    QVERIFY(!options_dialog.findChild<QLineEdit*>(QStringLiteral("externalSignerPath")));
 
     CreateVaultDialog create_dialog(nullptr);
-    auto* signer_checkbox = create_dialog.findChild<QCheckBox*>(QStringLiteral("external_signer_checkbox"));
-    QVERIFY(signer_checkbox);
+    QVERIFY(create_dialog.findChild<QLineEdit*>(QStringLiteral("vault_name_line_edit")));
+    QVERIFY(!create_dialog.findChild<QCheckBox*>(QStringLiteral("external_signer_checkbox")));
 
-#ifdef ENABLE_EXTERNAL_SIGNER
-    QVERIFY(!signer_group->isHidden());
-    QVERIFY(!signer_checkbox->isHidden());
-#else
-    QVERIFY(signer_group->isHidden());
-    QVERIFY(signer_checkbox->isHidden());
-    // Still inert as well as invisible, so setSigners() and
-    // isExternalSignerChecked() cannot resurrect it.
-    QVERIFY(!signer_checkbox->isEnabled());
-    QVERIFY(!signer_checkbox->isChecked());
-    QVERIFY(!create_dialog.isExternalSignerChecked());
-#endif
+    ReceiveRequestDialog receive_dialog(nullptr);
+    QVERIFY(receive_dialog.findChild<QPushButton*>(QStringLiteral("btnSaveAs")));
+    QVERIFY(!receive_dialog.findChild<QPushButton*>(QStringLiteral("btnVerify")));
 }
 
 void OptionTests::cpuFallbackWarningPreferencePersists()
@@ -1103,9 +1195,9 @@ void OptionTests::hardwareTabFitsAtTheOpeningSize()
         const auto widgets = tab->findChildren<QWidget*>();
         for (QWidget* widget : widgets) {
             const bool tracked = qobject_cast<QLabel*>(widget) || qobject_cast<QCheckBox*>(widget) || qobject_cast<QSpinBox*>(widget);
-            // isVisibleTo, not isHidden: a row inside a hidden box (the
-            // external signer group, absent from v1) is not hidden itself,
-            // but it is never laid out, so its geometry means nothing (F-586).
+            // isVisibleTo, not isHidden: a row inside a hidden box is not
+            // hidden itself, but it is never laid out, so its geometry means
+            // nothing (F-586).
             if (!tracked || !widget->isVisibleTo(tab)) continue;
             // A word-wrapped label's sizeHint height is the height at its
             // preferred width. At the width it actually has, the height it
@@ -1454,7 +1546,6 @@ void OptionTests::displayTabHasNoDeadFontChoiceAndAlignsItsFields()
     settle_log.settled_ms = settle_log.timer.elapsed();
 
     QVERIFY2(!dialog.findChild<QWidget*>(QStringLiteral("tabWindow")), "the Window tab was merged into Display");
-#ifndef Q_OS_MACOS
     for (const char* name : {"showTrayIcon", "minimizeToTray", "minimizeOnClose"}) {
         QWidget* box = dialog.findChild<QWidget*>(QString::fromLatin1(name));
         QVERIFY2(box, name);
@@ -1462,41 +1553,376 @@ void OptionTests::displayTabHasNoDeadFontChoiceAndAlignsItsFields()
     }
     QWidget* tray = dialog.findChild<QWidget*>(QStringLiteral("showTrayIcon"));
     QTRY_VERIFY(tray->mapTo(display, QPoint{}).y() < unit->mapTo(display, QPoint{}).y());
-#endif
 }
 
-void OptionTests::coinControlSettingIsNamedCoinControl()
+namespace {
+//! Opens Transfer on a test vault with these options. Empty when its coin control
+//! line and button show; otherwise what is wrong. Also returns the coin control
+//! dialog's title through `title`.
+QString TransferCoinControlProblem(interfaces::Node& node, OptionsModel& options, QString& title)
+{
+    TestChain100Setup test;
+    // Put the context back before `test` is destroyed, on every exit.
+    const ScopedNodeContext scoped_context(node, test.m_node);
+    QString problem;
+    vault::VaultContext context;
+    context.args = &test.m_args;
+    std::shared_ptr<vault::CVault> raw_vault = vault::TestLoadVault(context);
+    {
+        std::unique_ptr<interfaces::Vault> vault = interfaces::MakeVault(context, raw_vault);
+        std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate("other")};
+        VaultModel vault_model(std::move(vault), node, &options, style.get());
+        SendCoinsDialog transfer(style.get());
+        transfer.setModel(&vault_model);
+        auto* frame = transfer.findChild<QWidget*>(QStringLiteral("frameCoinControl"));
+        auto* button = transfer.findChild<QPushButton*>(QStringLiteral("pushButtonCoinControl"));
+        if (!frame || !button) {
+            problem = QStringLiteral("missing frameCoinControl or pushButtonCoinControl");
+        } else if (!button->isVisibleTo(&transfer)) {
+            problem = QStringLiteral("the coin control button is hidden");
+        }
+        vault::CCoinControl coin_control;
+        CoinControlDialog coin_control_dialog(coin_control, &vault_model, style.get());
+        title = coin_control_dialog.windowTitle();
+    }
+    // The model holding the vault is gone; wait for the vault itself to be
+    // released before `test` removes its data dir. Windows cannot remove
+    // the database file while the vault still holds it open.
+    vault::WaitForDeleteVault(std::move(raw_vault));
+    return problem;
+}
+} // namespace
+
+//! Owner, 2026-11-22: coin control is always available. The "Enable coin control"
+//! option only showed the Transfer page's button, which opens coin control in a
+//! modal dialog, so the option is gone and the button shows with fresh settings.
+void OptionTests::coinControlIsAlwaysOnTransfer()
+{
+    QSettings().remove(QStringLiteral("fCoinControlFeatures")); // fresh settings
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+
+    QString coin_control_title;
+    const QString problem{TransferCoinControlProblem(m_node, options, coin_control_title)};
+    QVERIFY2(problem.isEmpty(), qPrintable(problem));
+    QCOMPARE(coin_control_title, QStringLiteral("Coin Control"));
+
+    OptionsDialog options_dialog(nullptr, /*enableVault=*/true);
+    options_dialog.setModel(&options);
+    QVERIFY(!options_dialog.findChild<QCheckBox*>(QStringLiteral("coinControlFeatures")));
+}
+
+//! A settings file written while the option existed still holds its key, often
+//! false. It loads, the button shows anyway, and the key is gone once saved.
+void OptionTests::storedCoinControlSettingIsDropped()
+{
+    {
+        QSettings settings;
+        settings.setValue("fCoinControlFeatures", false);
+        settings.sync();
+    }
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+
+    QString coin_control_title;
+    const QString problem{TransferCoinControlProblem(m_node, options, coin_control_title)};
+    QVERIFY2(problem.isEmpty(), qPrintable(problem));
+
+    QSettings settings;
+    settings.sync();
+    QVERIFY(!settings.contains("fCoinControlFeatures"));
+}
+
+//! The Settings minimum was `(a / GB) + (a % GB) ? 1 : 0`, which is always 1 because
+//! `+` binds tighter than `?:`. It is the block-file floor rounded up to whole GB:
+//! 2,956 MiB is 3.1e9 bytes, so 4 GB (owner, 2026-11-22).
+void OptionTests::settingsPruneMinimumIsTheBlockFileFloor()
 {
     OptionsModel options{m_node};
     bilingual_str error;
     QVERIFY(options.Init(error));
-    OptionsDialog options_dialog(nullptr, /*enableVault=*/true);
-    options_dialog.setModel(&options);
-    auto* setting = options_dialog.findChild<QCheckBox*>(QStringLiteral("coinControlFeatures"));
-    QVERIFY(setting);
-    QCOMPARE(setting->text(), QStringLiteral("Enable &coin control"));
-    QCOMPARE(setting->toolTip(), QStringLiteral("Show the Coin control… button on Transfer, so you can choose which coins a transfer spends."));
+    OptionsDialog dialog(nullptr, /*enableVault=*/true);
+    dialog.setModel(&options);
+    auto* prune_size = dialog.findChild<QSpinBox*>(QStringLiteral("pruneSize"));
+    QVERIFY(prune_size);
+    QCOMPARE(prune_size->minimum(), 4);
+    prune_size->setValue(1);
+    QCOMPARE(prune_size->value(), 4);
+}
 
-    TestChain100Setup test;
-    // Put the context back before `test` is destroyed, on every exit.
-    const ScopedNodeContext scoped_context(m_node, test.m_node);
-    QString coin_control_title;
+//! A stored prune size below the Settings minimum, such as the old 2 GB default, is
+//! raised to it and saved on load, so the node does not warn about it on every start.
+//! Only the size moves: whether pruning is on is never migrated (F-705).
+void OptionTests::storedPruneSizeBelowTheFloorIsRaised()
+{
+    const fs::path settings_path{gArgs.GetDataDirNet() / "settings.json"};
+    const auto stored_prune = [] {
+        common::SettingsValue value;
+        gArgs.LockSettings([&](const common::Settings& settings) {
+            if (auto it{settings.rw_settings.find("prune")}; it != settings.rw_settings.end()) value = it->second;
+        });
+        return value;
+    };
+
+    // Pruning on at 2 GB (1907 MiB) loads as 4 GB (3814 MiB) and is saved as 4 GB.
+    gArgs.LockSettings([&](common::Settings& settings) {
+        settings.forced_settings.erase("prune");
+        settings.rw_settings["prune"] = 1907;
+    });
+    QVERIFY(gArgs.WriteSettingsFile());
     {
-        vault::VaultContext context;
-        context.args = &test.m_args;
-        std::shared_ptr<vault::CVault> raw_vault = vault::TestLoadVault(context);
-        {
-            std::unique_ptr<interfaces::Vault> vault = interfaces::MakeVault(context, raw_vault);
-            std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate("other")};
-            VaultModel vault_model(std::move(vault), m_node, &options, style.get());
-            vault::CCoinControl coin_control;
-            CoinControlDialog coin_control_dialog(coin_control, &vault_model, style.get());
-            coin_control_title = coin_control_dialog.windowTitle();
-        }
-        // The model holding the vault is gone; wait for the vault itself to be
-        // released before `test` removes its data dir. Windows cannot remove
-        // the database file while the vault still holds it open.
-        vault::WaitForDeleteVault(std::move(raw_vault));
+        OptionsModel options{m_node};
+        bilingual_str error;
+        QVERIFY(options.Init(error));
+        QCOMPARE(options.getOption(OptionsModel::Prune).toBool(), true);
+        QCOMPARE(options.getOption(OptionsModel::PruneSize).toInt(), 4);
     }
-    QCOMPARE(coin_control_title, QStringLiteral("Coin Control"));
+    QCOMPARE(stored_prune().getInt<int64_t>(), int64_t{3814});
+    const auto read_file = [&] {
+        std::ifstream file(settings_path);
+        return std::string{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    };
+    const std::string first_contents{read_file()};
+    QVERIFY2(first_contents.find("\"prune\": 3814") != std::string::npos, first_contents.c_str());
+
+    // A second Init changes nothing the first one wrote.
+    const auto rw_text = [] {
+        std::string text;
+        gArgs.LockSettings([&](const common::Settings& settings) {
+            for (const auto& [name, value] : settings.rw_settings) text += name + "=" + value.write() + "\n";
+        });
+        return text;
+    };
+    const std::string first_rw{rw_text()};
+    {
+        OptionsModel options{m_node};
+        bilingual_str error;
+        QVERIFY(options.Init(error));
+        QCOMPARE(options.getOption(OptionsModel::Prune).toBool(), true);
+        QCOMPARE(options.getOption(OptionsModel::PruneSize).toInt(), 4);
+    }
+    QCOMPARE(rw_text(), first_rw);
+    QCOMPARE(read_file(), first_contents);
+
+    // Pruning off stays off: nothing is written.
+    gArgs.LockSettings([&](common::Settings& settings) { settings.rw_settings.erase("prune"); });
+    QVERIFY(gArgs.WriteSettingsFile());
+    {
+        OptionsModel options{m_node};
+        bilingual_str error;
+        QVERIFY(options.Init(error));
+        QCOMPARE(options.getOption(OptionsModel::Prune).toBool(), false);
+    }
+    QVERIFY(stored_prune().isNull());
+}
+
+//! A prune size below the floor that comes from quicksilver.conf is the user's, and
+//! settings.json outranks the conf file: copying it there would shadow every later
+//! edit of the conf line. Init leaves settings.json alone (review of e0a4b8f2); the
+//! node raises the conf value with its own warning.
+void OptionTests::confPruneSizeBelowTheFloorIsNotWritten()
+{
+    const fs::path settings_path{gArgs.GetDataDirNet() / "settings.json"};
+    const std::string network{gArgs.GetChainTypeString()};
+    gArgs.LockSettings([&](common::Settings& settings) {
+        settings.forced_settings.erase("prune");
+        settings.rw_settings.erase("prune");
+        settings.rw_settings.erase("prune-prev");
+        settings.ro_config[""]["prune"] = {2000};
+        settings.ro_config[network]["prune"] = {2000};
+    });
+    QVERIFY(gArgs.WriteSettingsFile());
+    {
+        OptionsModel options{m_node};
+        bilingual_str error;
+        QVERIFY(options.Init(error));
+        QCOMPARE(options.getOption(OptionsModel::Prune).toBool(), true);
+    }
+    bool rw_has_prune{true};
+    gArgs.LockSettings([&](const common::Settings& settings) {
+        rw_has_prune = settings.rw_settings.contains("prune") || settings.rw_settings.contains("prune-prev");
+    });
+    QVERIFY(!rw_has_prune);
+    std::ifstream file(settings_path);
+    const std::string contents{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    QVERIFY2(contents.find("\"prune") == std::string::npos, contents.c_str());
+}
+
+//! The size kept while pruning is off ("prune-prev") is raised the same way, so
+//! turning pruning back on stores 4 GB, not the old 2 GB the next start would warn
+//! about. Pruning stays off (F-705).
+void OptionTests::storedPrevPruneSizeBelowTheFloorIsRaised()
+{
+    const auto stored = [](const std::string& name) {
+        common::SettingsValue value;
+        gArgs.LockSettings([&](const common::Settings& settings) {
+            if (auto it{settings.rw_settings.find(name)}; it != settings.rw_settings.end()) value = it->second;
+        });
+        return value;
+    };
+    gArgs.LockSettings([&](common::Settings& settings) {
+        settings.forced_settings.erase("prune");
+        settings.rw_settings.erase("prune");
+        settings.rw_settings["prune-prev"] = 1907;
+    });
+    QVERIFY(gArgs.WriteSettingsFile());
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    QCOMPARE(options.getOption(OptionsModel::Prune).toBool(), false);
+    QVERIFY(stored("prune").isNull());
+    QCOMPARE(stored("prune-prev").getInt<int64_t>(), int64_t{3814});
+    QCOMPARE(options.getOption(OptionsModel::PruneSize).toInt(), 4);
+
+    QVERIFY(options.setOption(OptionsModel::Prune, true));
+    QCOMPARE(stored("prune").getInt<int64_t>(), int64_t{3814});
+}
+
+void OptionTests::savedGpuModeOpensWithoutARestartWarning()
+{
+    // Opening Settings applies the saved mode; it is not a change (S0230-B-01).
+    QVERIFY_SOLVER_PROBE_STUB();
+    PointDiscoveryAtStub(WriteListing({QStringLiteral("device backend=opencl id=pci:0000:04:00.0 type=gpu integrated=0 mem=0 status=ok name=AMD Radeon RX 480")}));
+    for (const QStringList& devices : {QStringList{QStringLiteral("cpu")}, QStringList{QStringLiteral("pci:0000:04:00.0")}}) {
+        OptionsModel options{m_node};
+        bilingual_str error;
+        QVERIFY(options.Init(error));
+        QVERIFY(options.setOption(OptionsModel::GpuDevices, devices));
+        options.setRestartRequired(false); // saved before this session, not changed in it
+        OptionsDialog dialog(nullptr, true);
+        dialog.setModel(&options);
+        auto* list = dialog.findChild<QWidget*>(QStringLiteral("gpuDeviceList"));
+        QTRY_VERIFY_WITH_TIMEOUT(list->findChild<QCheckBox*>(QStringLiteral("gpuDevice_pci_0000_04_00_0")), 30000);
+        QCOMPARE(dialog.findChild<QLabel*>(QStringLiteral("statusLabel"))->text(), QString{});
+        // A mode the user picks still warns.
+        dialog.findChild<QRadioButton*>(QStringLiteral("gpuModeAutomatic"))->click();
+        QVERIFY(dialog.findChild<QLabel*>(QStringLiteral("statusLabel"))->text().contains(QStringLiteral("restart")));
+    }
+}
+
+void OptionTests::switchedOffInvalidProxyLeavesOkEnabled()
+{
+    // A proxy the user switches off is not checked, whatever its host says
+    // (S0230-B-02, S0239-B-01). Both the default and the Tor proxy.
+    for (const auto& [use_name, host_name] : {std::pair{"connectSocks", "proxyIp"}, std::pair{"connectSocksTor", "proxyIpTor"}}) {
+        OptionsModel options{m_node};
+        bilingual_str error;
+        QVERIFY(options.Init(error));
+        OptionsDialog dialog(nullptr, true);
+        dialog.setModel(&options);
+        auto* use = dialog.findChild<QCheckBox*>(QString::fromLatin1(use_name));
+        auto* host = dialog.findChild<QValidatedLineEdit*>(QString::fromLatin1(host_name));
+        auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("okButton"));
+        QVERIFY(use && host && ok);
+        use->setChecked(true);
+        host->setText(QStringLiteral("not an address"));
+        QVERIFY2(!ok->isEnabled(), use_name);
+        use->setChecked(false);
+        QVERIFY2(ok->isEnabled(), use_name);
+        QVERIFY2(host->isValid(), use_name);
+    }
+}
+
+void OptionTests::emptyProxyHostBlocksOk()
+{
+    // A proxy switched on with no host would be saved as ":9050" (S0239-B-03).
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, true);
+    dialog.setModel(&options);
+    auto* ok = dialog.findChild<QPushButton*>(QStringLiteral("okButton"));
+    dialog.findChild<QCheckBox*>(QStringLiteral("connectSocks"))->setChecked(true);
+    QVERIFY(ok->isEnabled());
+    dialog.findChild<QValidatedLineEdit*>(QStringLiteral("proxyIp"))->setText(QString{});
+    QVERIFY(!ok->isEnabled());
+    QCOMPARE(dialog.findChild<QLabel*>(QStringLiteral("statusLabel"))->text(), QStringLiteral("The supplied proxy address is invalid."));
+}
+
+void OptionTests::loadedInvalidProxyHostIsChecked()
+{
+    // The mapper loads the host past QValidatedLineEdit::setText, so a saved host the
+    // field rejects was neither marked nor kept from being saved (S0239-B-02). The
+    // host is one the node refuses too: a name with a space cannot be looked up.
+    gArgs.LockSettings([](common::Settings& settings) { settings.rw_settings["proxy"] = "bad host:9050"; });
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    OptionsDialog dialog(nullptr, true);
+    dialog.setModel(&options);
+    QVERIFY(dialog.findChild<QCheckBox*>(QStringLiteral("connectSocks"))->isChecked());
+    auto* host = dialog.findChild<QValidatedLineEdit*>(QStringLiteral("proxyIp"));
+    QCOMPARE(host->text(), QStringLiteral("bad host"));
+    QVERIFY(!host->isValid());
+    QVERIFY(!dialog.findChild<QPushButton*>(QStringLiteral("okButton"))->isEnabled());
+}
+
+void OptionTests::ipv6ProxyHostRoundTrips()
+{
+    // A bare IPv6 host is stored bracketed, so it reads back with its port
+    // (S0231-A-01). Both the default and the Tor proxy.
+    const struct {
+        OptionsModel::OptionID use, ip, port;
+        const char* setting;
+    } proxies[]{
+        {OptionsModel::ProxyUse, OptionsModel::ProxyIP, OptionsModel::ProxyPort, "proxy"},
+        {OptionsModel::ProxyUseTor, OptionsModel::ProxyIPTor, OptionsModel::ProxyPortTor, "onion"},
+    };
+    for (const auto& proxy : proxies) {
+        OptionsModel options{m_node};
+        bilingual_str error;
+        QVERIFY(options.Init(error));
+        QVERIFY(options.setOption(proxy.use, true));
+        QVERIFY(options.setOption(proxy.ip, QStringLiteral("::1")));
+        QVERIFY(options.setOption(proxy.port, QStringLiteral("9150")));
+        QCOMPARE(QString::fromStdString(m_node.getPersistentSetting(proxy.setting).get_str()), QStringLiteral("[::1]:9150"));
+        QCOMPARE(options.getOption(proxy.ip).toString(), QStringLiteral("[::1]"));
+        QCOMPARE(options.getOption(proxy.port).toString(), QStringLiteral("9150"));
+    }
+}
+
+void OptionTests::optionsModelIsAFlatEditOnlyList()
+{
+    // A flat list stores only the edit role of its own rows (S0231-B-01).
+    OptionsModel options{m_node};
+    bilingual_str error;
+    QVERIFY(options.Init(error));
+    const QModelIndex row{options.index(OptionsModel::ThirdPartyTxUrls)};
+    QVERIFY(row.isValid());
+    QCOMPARE(options.rowCount(row), 0);
+    QCOMPARE(options.rowCount(), int{OptionsModel::OptionIDRowCount});
+    QVERIFY(!options.data(QModelIndex{}, Qt::EditRole).isValid());
+    QSignalSpy changed{&options, &OptionsModel::dataChanged};
+    QVERIFY(!options.setData(row, QStringLiteral("https://example.invalid/%s"), Qt::DisplayRole));
+    QVERIFY(!options.setData(QModelIndex{}, QStringLiteral("https://example.invalid/%s"), Qt::EditRole));
+    QCOMPARE(changed.count(), 0);
+    QVERIFY(options.setData(row, QStringLiteral("https://example.invalid/%s"), Qt::EditRole));
+    QCOMPARE(changed.count(), 1);
+}
+
+void OptionTests::loadedHostNameProxyIsValid()
+{
+    // The node looks a -proxy host name up at startup, so a saved name is a working
+    // setting: it shows as valid and OK stays enabled (c05a-15 review fix). Both the
+    // default and the Tor proxy.
+    for (const auto& [setting, use_name, host_name, host] : {
+             std::tuple{"proxy", "connectSocks", "proxyIp", "localhost"},
+             std::tuple{"proxy", "connectSocks", "proxyIp", "tor_proxy"},
+             std::tuple{"onion", "connectSocksTor", "proxyIpTor", "torhost.example"},
+             std::tuple{"onion", "connectSocksTor", "proxyIpTor", "torhost.example."}}) {
+        gArgs.LockSettings([&](common::Settings& settings) { settings.rw_settings[setting] = std::string{host} + ":9050"; });
+        OptionsModel options{m_node};
+        bilingual_str error;
+        QVERIFY(options.Init(error));
+        OptionsDialog dialog(nullptr, true);
+        dialog.setModel(&options);
+        QVERIFY2(dialog.findChild<QCheckBox*>(QString::fromLatin1(use_name))->isChecked(), setting);
+        auto* field = dialog.findChild<QValidatedLineEdit*>(QString::fromLatin1(host_name));
+        QCOMPARE(field->text(), QString::fromLatin1(host));
+        QVERIFY2(field->isValid(), host);
+        QVERIFY2(dialog.findChild<QPushButton*>(QStringLiteral("okButton"))->isEnabled(), host);
+        gArgs.LockSettings([&](common::Settings& settings) { settings.rw_settings.erase(setting); });
+    }
 }

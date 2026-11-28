@@ -483,8 +483,6 @@ private:
 //! When check is false, this assumes that overwrites are only possible for coinbase transactions.
 //! When check is true, the underlying view may be queried to determine whether an addition is
 //! an overwrite.
-// TODO: pass in a boolean to limit these possible overwrites to known
-// (pre-BIP34) cases.
 void AddCoins(CCoinsViewCache& cache, const CTransaction& tx, int nHeight, bool check = false);
 
 //! Utility function to find any unspent output with a given txid.

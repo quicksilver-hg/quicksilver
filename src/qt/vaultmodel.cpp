@@ -370,6 +370,9 @@ bool VaultModel::setVaultLocked(bool locked, const SecureString& passPhrase)
 
 bool VaultModel::changePassphrase(const SecureString& oldPass, const SecureString& newPass)
 {
+    // Check the old passphrase before locking: a mistyped one must leave an unlocked
+    // vault unlocked (S0217-A-07). unlock() with a wrong passphrase changes nothing.
+    if (!m_vault->unlock(oldPass)) return false;
     m_vault->lock(); // Make sure vault is locked before attempting pass change
     // The lock status is Locked before and after, so updateStatus() would not notice. The vault itself
     // reports the master-key write (F-613), so Home hears of it as it does of an RPC change.
@@ -551,25 +554,6 @@ void VaultModel::requestProofOfWorkCancel()
 {
     LOCK(m_proof_mutex);
     for (ProofOfWorkAttempt* attempt : m_proof_attempts) attempt->cancel();
-}
-
-void VaultModel::displayAddress(std::string sAddress) const
-{
-    CTxDestination dest = DecodeDestination(sAddress);
-    try {
-        util::Result<void> result = m_vault->displayAddress(dest);
-        if (!result) {
-            auto* box = new QMessageBox(QMessageBox::Warning, tr("Signer error"),
-                QString::fromStdString(util::ErrorString(result).translated), QMessageBox::Ok, nullptr);
-            box->setObjectName(QStringLiteral("signerError"));
-            GUIUtil::ShowModalDialogAsynchronously(box);
-        }
-    } catch (const std::runtime_error& e) {
-        auto* box = new QMessageBox(QMessageBox::Critical, tr("Can't display address"),
-            e.what(), QMessageBox::Ok, nullptr);
-        box->setObjectName(QStringLiteral("displayAddressFailed"));
-        GUIUtil::ShowModalDialogAsynchronously(box);
-    }
 }
 
 bool VaultModel::isVaultEnabled()

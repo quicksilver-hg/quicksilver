@@ -3,10 +3,13 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php.
 
+#include <vault/context.h>
+#include <vault/db.h>
 #include <vault/test/util.h>
 #include <vault/transaction.h>
 #include <vault/vault.h>
 #include <vault/vaultdb.h>
+#include <vault/vaultutil.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <streams.h>
@@ -15,7 +18,11 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <algorithm>
+#include <map>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vault {
@@ -144,6 +151,62 @@ BOOST_FIXTURE_TEST_CASE(vault_load_rejects_an_unknown_address_type, TestingSetup
     BOOST_CHECK(logged);
 }
 
+// S0197-A-04: a descriptor cache record whose xpub is not BIP32_EXTKEY_SIZE bytes
+// must be rejected, never decoded (CExtPubKey::Decode reads 78 bytes unchecked).
+BOOST_FIXTURE_TEST_CASE(vault_load_rejects_a_short_xpub_cache_record, TestingSetup)
+{
+    MockableData base_records;
+    uint256 spkm_id;
+    {
+        CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+        LOCK(vault.cs_vault);
+        vault.SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
+        vault.SetupDescriptorScriptPubKeyMans();
+        ScriptPubKeyMan* spkm{vault.GetScriptPubKeyMan(OutputType::BECH32, /*internal=*/false)};
+        BOOST_REQUIRE(spkm);
+        spkm_id = spkm->GetID();
+        base_records = GetMockableDatabase(vault).m_records;
+    }
+
+    const auto with_record = [&](const std::string& type, const auto& key_tail, const std::vector<unsigned char>& xpub_bytes, bool claim_full_size) {
+        MockableData records{base_records};
+        DataStream key;
+        key << type << spkm_id << key_tail;
+        DataStream value;
+        if (claim_full_size) {
+            // Compact size says 78 but only xpub_bytes.size() bytes follow.
+            WriteCompactSize(value, BIP32_EXTKEY_SIZE);
+            value.write(MakeByteSpan(xpub_bytes));
+        } else {
+            value << xpub_bytes;
+        }
+        records[SerializeData(key.begin(), key.end())] = SerializeData(value.begin(), value.end());
+        return records;
+    };
+
+    const std::vector<unsigned char> short_xpub(10, 0x01);
+    const std::vector<unsigned char> full_xpub(BIP32_EXTKEY_SIZE, 0x00);
+    const auto load = [&](MockableData records) {
+        CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase(std::move(records)));
+        return vault.LoadVault();
+    };
+
+    // Control: the unmodified records load, so a rejection below comes from the injected record.
+    BOOST_REQUIRE(load(base_records) != DBErrors::CORRUPT);
+
+    // A record of the wrong size (valid encoding) for each of the three cache record kinds.
+    BOOST_CHECK_EQUAL(load(with_record("vaultdescriptorcache", uint32_t{0}, short_xpub, false)), DBErrors::CORRUPT);
+    BOOST_CHECK_EQUAL(load(with_record("vaultdescriptorcache", std::make_pair(uint32_t{0}, uint32_t{1}), short_xpub, false)), DBErrors::CORRUPT);
+    BOOST_CHECK_EQUAL(load(with_record("vaultdescriptorlhcache", uint32_t{0}, short_xpub, false)), DBErrors::CORRUPT);
+    // A record that claims the full size and is cut short.
+    BOOST_CHECK_EQUAL(load(with_record("vaultdescriptorcache", uint32_t{0}, short_xpub, true)), DBErrors::CORRUPT);
+    BOOST_CHECK_EQUAL(load(with_record("vaultdescriptorlhcache", uint32_t{0}, short_xpub, true)), DBErrors::CORRUPT);
+    // A record one byte too long is not accepted either.
+    std::vector<unsigned char> long_xpub{full_xpub};
+    long_xpub.push_back(0);
+    BOOST_CHECK_EQUAL(load(with_record("vaultdescriptorcache", uint32_t{0}, long_xpub, false)), DBErrors::CORRUPT);
+}
+
 BOOST_FIXTURE_TEST_CASE(vault_load_rejects_a_transaction_without_an_order_position, TestingSetup)
 {
     std::unique_ptr<VaultDatabase> database = CreateMockableVaultDatabase();
@@ -213,6 +276,48 @@ BOOST_FIXTURE_TEST_CASE(load_rejects_minversion_newer_than_latest, TestingSetup)
 
     CVault vault(m_node.chain.get(), "", std::move(database));
     BOOST_CHECK_EQUAL(vault.LoadVault(), DBErrors::TOO_NEW);
+}
+
+// F-679 removed the external signer, but VAULT_FLAG_EXTERNAL_SIGNER stays known:
+// a vault that carries it is recognised and refused with the existing error,
+// never opened as an ordinary vault that has lost its signing device.
+BOOST_FIXTURE_TEST_CASE(load_refuses_external_signer_vault, TestingSetup)
+{
+    std::unique_ptr<VaultDatabase> database = CreateMockableVaultDatabase();
+    {
+        VaultBatch batch(*database, false);
+        BOOST_CHECK(batch.WriteVaultFlags(VAULT_FLAG_DESCRIPTORS | VAULT_FLAG_DISABLE_PRIVATE_KEYS | VAULT_FLAG_EXTERNAL_SIGNER));
+    }
+
+    VaultContext context;
+    context.args = &m_args;
+    context.chain = m_node.chain.get();
+    bilingual_str error;
+    std::vector<bilingual_str> warnings;
+    const auto vault = CVault::Create(context, "signer-vault", std::move(database), /*vault_creation_flags=*/0, error, warnings);
+    BOOST_CHECK(!vault);
+    // The message names the database file; the mock database is "mockable".
+    BOOST_CHECK_EQUAL(error.original, "Error loading mockable: External signer vault being loaded without external signer support compiled");
+}
+
+// Nothing in the tree can create a signer vault any more, so a request carrying
+// the flag is a bug: it fails before any file is made, instead of writing a
+// vault the loader above would then refuse.
+BOOST_FIXTURE_TEST_CASE(create_refuses_external_signer_flag, TestingSetup)
+{
+    VaultContext context;
+    context.args = &m_args;
+    context.chain = m_node.chain.get();
+    DatabaseOptions options;
+    options.create_flags = VAULT_FLAG_DISABLE_PRIVATE_KEYS | VAULT_FLAG_EXTERNAL_SIGNER;
+    DatabaseStatus status{DatabaseStatus::SUCCESS};
+    bilingual_str error;
+    std::vector<bilingual_str> warnings;
+    const auto vault = CreateVault(context, "signer-create", /*load_on_start=*/std::nullopt, options, status, error, warnings);
+    BOOST_CHECK(!vault);
+    BOOST_CHECK(status == DatabaseStatus::FAILED_CREATE);
+    BOOST_CHECK_MESSAGE(error.original.find("Internal bug detected") != std::string::npos, error.original);
+    BOOST_CHECK(!fs::exists(GetVaultDir() / fs::u8path("signer-create")));
 }
 
 BOOST_FIXTURE_TEST_CASE(load_rejects_pre_quicksilver_master_key, TestingSetup)
@@ -285,6 +390,56 @@ BOOST_FIXTURE_TEST_CASE(load_rejects_pre_quicksilver_master_key, TestingSetup)
         BOOST_CHECK(current_layout.LoadVault() != DBErrors::CORRUPT);
         BOOST_CHECK_EQUAL(WITH_LOCK(current_layout.cs_vault, return current_layout.mapMasterKeys.count(1)), 1U);
     }
+}
+
+BOOST_FIXTURE_TEST_CASE(transaction_record_in_the_base_layout_keeps_its_keys, TestingSetup)
+{
+    // F-698 adds a "revived" mapValue key and F-678 keeps vOrderForm, which holds a transfer's
+    // Message. Neither changes the record: a transaction written in the layout of b1a45281
+    // (tx, block hash, index, mapValue, vOrderForm, time received, from me) still loads, with
+    // every mapValue key and the Message intact. The bytes are assembled field by field here,
+    // not with CVaultTx::Serialize, so a change to the serializer cannot hide behind itself.
+    CMutableTransaction mtx;
+    mtx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+    mtx.vout.emplace_back(COIN, CScript{} << OP_TRUE);
+    const CTransactionRef tx{MakeTransactionRef(mtx)};
+    const std::map<std::string, std::string> map_value{
+        {"comment", "rent"},
+        {"n", "7"},
+        {"revived", "4"},
+        {"timesmart", "1700000000"},
+        {"to", "landlord"},
+    };
+    const std::vector<std::pair<std::string, std::string>> order_form{{"Message", "for November"}};
+
+    DataStream key{};
+    key << std::make_pair(DBKeys::TX, tx->GetHash());
+    DataStream value{};
+    value << TX_WITH_WITNESS(*tx) << uint256::ZERO << int{0} << map_value << order_form << static_cast<unsigned int>(1700000001) << true;
+    MockableData records;
+    records.emplace(SerializeData(key.begin(), key.end()), SerializeData(value.begin(), value.end()));
+
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase(records));
+    BOOST_CHECK(vault.LoadVault() != DBErrors::CORRUPT);
+    LOCK(vault.cs_vault);
+    BOOST_REQUIRE_EQUAL(vault.mapVault.count(tx->GetHash()), 1U);
+    const CVaultTx& wtx{vault.mapVault.at(tx->GetHash())};
+    BOOST_CHECK(wtx.isInactive() && !wtx.isAbandoned());
+    BOOST_CHECK_EQUAL(wtx.nOrderPos, 7);
+    BOOST_CHECK_EQUAL(wtx.nTimeSmart, 1700000000U);
+    BOOST_CHECK_EQUAL(wtx.nTimeReceived, 1700000001U);
+    BOOST_CHECK(wtx.fFromMe);
+    const std::map<std::string, std::string> kept{{"comment", "rent"}, {"revived", "4"}, {"to", "landlord"}};
+    BOOST_CHECK(wtx.mapValue == kept);
+    BOOST_CHECK(wtx.vOrderForm == order_form);
+    BOOST_CHECK(wtx.GetRevivalSequence() == std::optional<int64_t>{4});
+    // The next disconnect order continues past the stored one.
+    BOOST_CHECK_EQUAL(vault.m_next_revival_sequence, 5);
+
+    // Written back, the record is the same bytes as the base layout.
+    DataStream rewritten{};
+    rewritten << wtx;
+    BOOST_CHECK(std::ranges::equal(rewritten, value));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -17,8 +17,9 @@
 #include <qt/recentrequeststablemodel.h>
 #include <qt/vaultmodel.h>
 
+#include <algorithm>
+
 #include <QAction>
-#include <QCursor>
 #include <QMessageBox>
 #include <QPointer>
 #include <QScrollBar>
@@ -132,8 +133,11 @@ void ReceiveCoinsDialog::setModel(VaultModel *_model)
 
 ReceiveCoinsDialog::~ReceiveCoinsDialog()
 {
-    QSettings settings;
-    settings.setValue("RecentRequestsViewHeaderState", ui->recentRequestsView->horizontalHeader()->saveState());
+    // Only a page that had a model laid the columns out (S0240-A-05).
+    if (model) {
+        QSettings settings;
+        settings.setValue("RecentRequestsViewHeaderState", ui->recentRequestsView->horizontalHeader()->saveState());
+    }
     delete ui;
 }
 
@@ -206,7 +210,15 @@ void ReceiveCoinsDialog::finishReceiveRequest(const QString& address, const QStr
         dialog->show();
 
         /* Store request for later reference */
-        model->getRecentRequestsTableModel()->addNewRequest(info);
+        if (!model->getRecentRequestsTableModel()->addNewRequest(info)) {
+            // S0240-A-07: the request still works, but it was not saved.
+            auto* box = new QMessageBox(QMessageBox::Warning, windowTitle(),
+                tr("This request could not be saved to the vault, so it will not be listed under Recent requests."),
+                QMessageBox::Ok, this);
+            box->setObjectName(QStringLiteral("receiveRequestNotSaved"));
+            box->setTextFormat(Qt::PlainText);
+            GUIUtil::ShowModalDialogAsynchronously(box);
+        }
         break;
     }
     case AddressTableModel::EditStatus::VAULT_UNLOCK_FAILURE: {
@@ -270,27 +282,27 @@ void ReceiveCoinsDialog::on_removeRequestButton_clicked()
     QModelIndexList selection = ui->recentRequestsView->selectionModel()->selectedRows();
     if(selection.empty())
         return;
-    // correct for selection mode ContiguousSelection
-    QModelIndex firstIndex = selection.at(0);
-    model->getRecentRequestsTableModel()->removeRows(firstIndex.row(), selection.length(), firstIndex.parent());
+    // ContiguousSelection: the block starts at the lowest selected row, which
+    // need not be the first index the selection model returns.
+    int first_row = selection.at(0).row();
+    for (const QModelIndex& index : selection) first_row = std::min(first_row, index.row());
+    if (!model->getRecentRequestsTableModel()->removeRows(first_row, selection.length())) {
+        // S0240-C-02: say so; the requests the vault kept are still listed.
+        QMessageBox::warning(this, windowTitle(),
+            tr("Some requests could not be removed from the vault. The ones still listed are kept."));
+    }
 }
 
-QModelIndex ReceiveCoinsDialog::selectedRow()
+QModelIndex ReceiveCoinsDialog::menuRow() const
 {
-    if(!model || !model->getRecentRequestsTableModel() || !ui->recentRequestsView->selectionModel())
-        return QModelIndex();
-    QModelIndexList selection = ui->recentRequestsView->selectionModel()->selectedRows();
-    if(selection.empty())
-        return QModelIndex();
-    // correct for selection mode ContiguousSelection
-    QModelIndex firstIndex = selection.at(0);
-    return firstIndex;
+    if (!model || !model->getRecentRequestsTableModel() || !m_menu_row.isValid()) return {};
+    return QModelIndex(m_menu_row);
 }
 
 // copy column of selected row to clipboard
 void ReceiveCoinsDialog::copyColumnToClipboard(int column)
 {
-    QModelIndex firstIndex = selectedRow();
+    QModelIndex firstIndex = menuRow();
     if (!firstIndex.isValid()) {
         return;
     }
@@ -300,10 +312,13 @@ void ReceiveCoinsDialog::copyColumnToClipboard(int column)
 // context menu
 void ReceiveCoinsDialog::showMenu(const QPoint &point)
 {
-    const QModelIndex sel = selectedRow();
+    // The row under the cursor, not the first selected one; nothing on empty space (S0240-C-06, -A-06).
+    if (!model || !model->getRecentRequestsTableModel()) return;
+    const QModelIndex sel = ui->recentRequestsView->indexAt(point);
     if (!sel.isValid()) {
         return;
     }
+    m_menu_row = sel.siblingAtColumn(0);
 
     // disable context menu actions when appropriate
     const RecentRequestsTableModel* const submodel = model->getRecentRequestsTableModel();
@@ -312,13 +327,13 @@ void ReceiveCoinsDialog::showMenu(const QPoint &point)
     copyMessageAction->setDisabled(req.recipient.message.isEmpty());
     copyAmountAction->setDisabled(req.recipient.amount == 0);
 
-    contextMenu->exec(QCursor::pos());
+    contextMenu->exec(ui->recentRequestsView->viewport()->mapToGlobal(point));
 }
 
 // context menu action: copy URI
 void ReceiveCoinsDialog::copyURI()
 {
-    QModelIndex sel = selectedRow();
+    const QModelIndex sel = menuRow();
     if (!sel.isValid()) {
         return;
     }
@@ -331,7 +346,7 @@ void ReceiveCoinsDialog::copyURI()
 // context menu action: copy address
 void ReceiveCoinsDialog::copyAddress()
 {
-    const QModelIndex sel = selectedRow();
+    const QModelIndex sel = menuRow();
     if (!sel.isValid()) {
         return;
     }

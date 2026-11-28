@@ -54,7 +54,6 @@ compilerbug_tests  tests  msvc  The only case is compiled under __GNUC__; MSVC h
 compress_tests  tests  never  -
 contained_child_tests  tests  never  -
 crypto_tests  tests  never  -
-cuckatoo_bench_gpu_csv_tests  tests  never  -
 cuckatoo_bench_registry_tests  tests  never  -
 cuckatoo_bench_solve_tests  tests  never  -
 cuckatoo_f265_capture_tests  tests  never  -
@@ -72,7 +71,7 @@ getarg_tests  tests  never  -
 gpu_devices_tests  tests  never  -
 gpu_helper_config_tests  tests  never  -
 gpu_kernel_limit_tests  tests  never  -
-gpu_parity_tests  tests  gpu-unset  CUCKATOO_GPU_SOLVER is unset; set it to a qsgpusolve-cuda binary to run parity.
+gpu_parity_tests  tests  gpu-unset  CUCKATOO_GPU_SOLVER is unset; set it to a qsgpusolve-opencl binary to run parity.
 gpu_solver_tests  tests  never  -
 multi_device_tests  tests  never  -
 group_outputs_tests  tests,vault  never  -
@@ -118,7 +117,6 @@ raii_event_tests  tests  never  -
 random_tests  tests  never  -
 relaypool_tests  tests  never  -
 replacement_tests  tests  never  -
-rest_tests  tests  never  -
 result_tests  tests  never  -
 reverselock_tests  tests  never  -
 rpc_tests  tests  never  -
@@ -144,7 +142,6 @@ span_tests  tests  never  -
 spend_tests  tests,vault  never  -
 streams_tests  tests  never  -
 sync_tests  tests  never  -
-system_tests  tests  never  -
 test_quicksilver-qt  tests,gui,gui-tests  never  -
 timeoffsets_tests  tests  never  -
 torcontrol_tests  tests  never  -

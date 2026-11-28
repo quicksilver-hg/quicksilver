@@ -5,7 +5,6 @@
 
 #include <policy/replacement.h>
 
-#include <consensus/amount.h>
 #include <kernel/relaypool_entry.h>
 #include <primitives/transaction.h>
 #include <sync.h>
@@ -13,7 +12,6 @@
 #include <txrelaypool.h>
 #include <uint256.h>
 #include <util/check.h>
-#include <util/moneystr.h>
 
 #include <limits>
 #include <vector>
@@ -96,17 +94,19 @@ std::optional<std::string> EntriesAndTxidsDisjoint(const CTxRelayPool::setEntrie
 }
 
 std::optional<std::string> PaysMoreWorkThanConflicts(const CTxRelayPool::setEntries& iters_conflicting,
-                                                     double replacement_work_rate,
+                                                     const arith_uint256& replacement_surplus,
+                                                     int64_t replacement_vsize,
                                                      const uint256& txid)
 {
+    assert(replacement_vsize > 0 && replacement_vsize <= std::numeric_limits<uint32_t>::max());
     for (const auto& mi : iters_conflicting) {
         // #6: the replacement must out-rank every direct conflict in surplus-work rate
         // (surplus/vsize), the same key 5c-2 uses for eviction/mining — so replacement
         // can never admit a tx that eviction would immediately drop below a conflict.
-        const double original_rate = mi->GetTxWorkRate();
-        if (replacement_work_rate <= original_rate) {
+        // Compared exactly: the doubles below are for the message only.
+        if (mi->CompareTxWorkRateTo(replacement_surplus, static_cast<uint32_t>(replacement_vsize)) >= 0) {
             return strprintf("rejecting replacement %s; new work-rate %f <= old work-rate %f",
-                             txid.ToString(), replacement_work_rate, original_rate);
+                             txid.ToString(), replacement_surplus.getdouble() / replacement_vsize, mi->GetTxWorkRate());
         }
     }
     return std::nullopt;

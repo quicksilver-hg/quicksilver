@@ -5,6 +5,7 @@
 #include <agent/txpeer.h>
 
 #include <protocol.h>
+#include <util/time.h>
 
 #include <cassert>
 #include <utility>
@@ -24,8 +25,12 @@ const char* TxPeerResultCodeString(TxPeerResultCode code)
         return "tx-not-found";
     case TxPeerResultCode::INV_ALREADY_KNOWN:
         return "inv-already-known";
+    case TxPeerResultCode::INV_NO_TRANSACTIONS:
+        return "inv-no-transactions";
     case TxPeerResultCode::TX_RECEIVED:
         return "tx-received";
+    case TxPeerResultCode::NOTFOUND_RECEIVED:
+        return "notfound-received";
     case TxPeerResultCode::IGNORED_MESSAGE:
         return "ignored-message";
     case TxPeerResultCode::DECODE_FAILED:
@@ -48,7 +53,8 @@ TxPeerResult TxPeer::Result(TxPeerResultCode code,
                             std::vector<CInv> served_inventory,
                             std::vector<CInv> matched_requests,
                             size_t duplicate_count,
-                            size_t missing_count) const
+                            size_t missing_count,
+                            size_t over_limit_count) const
 {
     return {code,
             std::move(inventory_message),
@@ -58,7 +64,8 @@ TxPeerResult TxPeer::Result(TxPeerResultCode code,
             std::move(served_inventory),
             std::move(matched_requests),
             duplicate_count,
-            missing_count};
+            missing_count,
+            over_limit_count};
 }
 
 TxPeerAction TxPeer::QueueResult(TxPeerResult result, std::optional<CSerializedNetMsg> outbound_message)
@@ -115,14 +122,25 @@ TxPeerAction TxPeer::ProcessMessage(const CSerializedNetMsg& message)
             return QueueResult(Result(TxPeerResultCode::DECODE_FAILED, std::move(decoded)));
         }
 
+        if (decoded.inventory.empty()) {
+            return QueueResult(Result(TxPeerResultCode::INV_NO_TRANSACTIONS, std::move(decoded)));
+        }
+
+        ExpireRequests();
+        const auto now{GetTime<std::chrono::seconds>()};
         std::vector<CInv> requested_inventory;
         size_t duplicate_count{0};
+        size_t over_limit_count{0};
         for (const CInv& inv : decoded.inventory) {
             if (m_known_inventory.contains(inv) || m_requested_inventory.contains(inv)) {
                 ++duplicate_count;
                 continue;
             }
-            m_requested_inventory.insert(inv);
+            if (m_requested_inventory.size() >= m_max_tx_inventory) {
+                ++over_limit_count;
+                continue;
+            }
+            m_requested_inventory.emplace(inv, now);
             requested_inventory.push_back(inv);
         }
 
@@ -134,7 +152,9 @@ TxPeerAction TxPeer::ProcessMessage(const CSerializedNetMsg& message)
                                       {},
                                       {},
                                       {},
-                                      duplicate_count));
+                                      duplicate_count,
+                                      0,
+                                      over_limit_count));
         }
 
         CSerializedNetMsg getdata{MakeTxGetDataMessage(requested_inventory)};
@@ -145,7 +165,9 @@ TxPeerAction TxPeer::ProcessMessage(const CSerializedNetMsg& message)
                                   std::move(requested_inventory),
                                   {},
                                   {},
-                                  duplicate_count),
+                                  duplicate_count,
+                                  0,
+                                  over_limit_count),
                            std::move(getdata));
     }
 
@@ -156,25 +178,35 @@ TxPeerAction TxPeer::ProcessMessage(const CSerializedNetMsg& message)
         }
 
         std::vector<CInv> served_inventory;
-        size_t missing_count{0};
+        std::vector<CInv> missing_inventory;
+        size_t duplicate_count{0};
         std::set<uint256> served_txids;
         for (const CInv& inv : decoded.inventory) {
             const auto transaction_it{m_relay_transactions.find(inv)};
             if (transaction_it == m_relay_transactions.end()) {
-                ++missing_count;
+                missing_inventory.push_back(inv);
                 continue;
             }
             const uint256 txid{transaction_it->second->GetHash().ToUint256()};
             if (!served_txids.insert(txid).second) {
+                ++duplicate_count;
                 continue;
             }
             served_inventory.push_back(inv);
+            // Always the witness form, even for MSG_TX: a Quicksilver transaction
+            // without its witness fails validation, and the node reads every tx
+            // message with witness.
             m_outbound_messages.push_back(MakeTxMessage(*transaction_it->second));
+        }
+        // As the node does: say which entries will not come, so the peer can ask
+        // someone else instead of waiting out its own request timeout.
+        if (!missing_inventory.empty()) {
+            m_outbound_messages.push_back(MakeTxNotFoundMessage(missing_inventory));
         }
 
         const TxPeerResultCode code{
             served_inventory.empty() ? TxPeerResultCode::TX_NOT_FOUND : TxPeerResultCode::TX_SENT};
-        const bool queued_outbound_message{!served_inventory.empty()};
+        const bool queued_outbound_message{!served_inventory.empty() || !missing_inventory.empty()};
         return {Result(code,
                        std::move(decoded),
                        std::nullopt,
@@ -182,9 +214,30 @@ TxPeerAction TxPeer::ProcessMessage(const CSerializedNetMsg& message)
                        {},
                        std::move(served_inventory),
                        {},
-                       0,
-                       missing_count),
+                       duplicate_count,
+                       missing_inventory.size()),
                 queued_outbound_message};
+    }
+
+    if (message.m_type == NetMsgType::NOTFOUND) {
+        TxInventoryMessageDecodeResult decoded{DecodeTxNotFoundMessage(message, m_max_tx_inventory)};
+        if (!decoded.ok()) {
+            return QueueResult(Result(TxPeerResultCode::DECODE_FAILED, std::move(decoded)));
+        }
+
+        std::vector<CInv> matched_requests;
+        for (const CInv& inv : decoded.inventory) {
+            if (m_requested_inventory.erase(inv) > 0) {
+                matched_requests.push_back(inv);
+            }
+        }
+        return QueueResult(Result(TxPeerResultCode::NOTFOUND_RECEIVED,
+                                  std::move(decoded),
+                                  std::nullopt,
+                                  {},
+                                  {},
+                                  {},
+                                  std::move(matched_requests)));
     }
 
     if (message.m_type == NetMsgType::TX) {
@@ -219,12 +272,33 @@ std::vector<CInv> TxPeer::MarkTransactionKnown(const CTransaction& transaction)
 
     std::vector<CInv> matched_requests;
     for (const CInv& inv : known_inventory) {
-        m_known_inventory.insert(inv);
+        MarkInventoryKnown(inv);
         if (m_requested_inventory.erase(inv) > 0) {
             matched_requests.push_back(inv);
         }
     }
     return matched_requests;
+}
+
+void TxPeer::MarkInventoryKnown(const CInv& inv)
+{
+    if (!m_known_inventory.insert(inv).second) return;
+    m_known_order.push_back(inv);
+    // Three forms per transaction (txid, witness txid, wtxid). Evicting the oldest
+    // only means a long-gone transaction could be requested once more.
+    const size_t max_known{3 * m_max_tx_inventory};
+    while (m_known_order.size() > max_known) {
+        m_known_inventory.erase(m_known_order.front());
+        m_known_order.pop_front();
+    }
+}
+
+void TxPeer::ExpireRequests()
+{
+    const auto now{GetTime<std::chrono::seconds>()};
+    std::erase_if(m_requested_inventory, [&](const auto& request) {
+        return now - request.second >= TX_REQUEST_EXPIRY;
+    });
 }
 
 void TxPeer::StoreRelayTransaction(CTransactionRef transaction)

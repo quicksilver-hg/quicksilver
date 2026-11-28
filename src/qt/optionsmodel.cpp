@@ -12,6 +12,7 @@
 #include <qt/guiutil.h>
 
 #include <common/args.h>
+#include <common/settings.h>
 #include <interfaces/node.h>
 #include <mapport.h>
 #include <net.h>
@@ -19,7 +20,7 @@
 #include <node/caches.h>
 #include <node/chainstatemanager_args.h>
 #include <util/string.h>
-#include <validation.h>    // For DEFAULT_SCRIPTCHECK_THREADS
+#include <validation.h>    // For DEFAULT_SCRIPTCHECK_THREADS, MIN_DISK_SPACE_FOR_BLOCK_FILES
 #include <vault/vault.h> // For DEFAULT_SPEND_ZEROCONF_CHANGE
 
 #include <QDebug>
@@ -29,6 +30,8 @@
 #include <QVariant>
 
 #include <univalue.h>
+
+#include <cassert>
 
 const char *DEFAULT_GUI_PROXY_HOST = "127.0.0.1";
 
@@ -100,7 +103,6 @@ static const char* SettingName(OptionsModel::OptionID option)
     case OptionsModel::AllowCpuBlockMining: return "allowcpumining";
     case OptionsModel::ThreadsScriptVerif: return "par";
     case OptionsModel::SpendZeroConfChange: return "spendzeroconfchange";
-    case OptionsModel::ExternalSignerPath: return "signer";
     case OptionsModel::MapPortNatpmp: return "natpmp";
     case OptionsModel::Listen: return "listen";
     case OptionsModel::Server: return "server";
@@ -137,7 +139,8 @@ static bool PruneEnabled(const common::SettingsValue& prune_setting)
 }
 
 //! Get pruning size value to show in GUI from Quicksilver -prune setting. If
-//! pruning is not enabled, just show default recommended pruning size (2GB).
+//! pruning is not enabled, just show default recommended pruning size
+//! (DEFAULT_PRUNE_TARGET_GB).
 static int PruneSizeGB(const common::SettingsValue& prune_setting)
 {
     int value = SettingToInt(prune_setting, 0);
@@ -178,7 +181,6 @@ void OptionsModel::addOverriddenOption(const std::string &option)
 bool OptionsModel::Init(bilingual_str& error)
 {
     // Initialize display settings from stored settings.
-    language = QString::fromStdString(SettingToString(node().getPersistentSetting("lang"), ""));
 
     QSettings settings;
 
@@ -216,9 +218,9 @@ bool OptionsModel::Init(bilingual_str& error)
         settings.setValue("strThirdPartyTxUrls", "");
     strThirdPartyTxUrls = settings.value("strThirdPartyTxUrls", "").toString();
 
-    if (!settings.contains("fCoinControlFeatures"))
-        settings.setValue("fCoinControlFeatures", false);
-    fCoinControlFeatures = settings.value("fCoinControlFeatures", false).toBool();
+    // "Enable coin control" is gone: coin control is always available (owner,
+    // 2026-11-22). Drop the key a settings file written before then still holds.
+    settings.remove("fCoinControlFeatures");
 
     if (!settings.contains("enable_psqt_controls")) {
         settings.setValue("enable_psqt_controls", false);
@@ -227,7 +229,7 @@ bool OptionsModel::Init(bilingual_str& error)
 
     // These are shared with the core or have a command-line parameter
     // and we want command-line parameters to overwrite the GUI settings.
-    for (OptionID option : {DatabaseCache, ThreadsScriptVerif, SpendZeroConfChange, GpuSolverPath, GpuDevices, AllowCpuBlockMining, ExternalSignerPath,
+    for (OptionID option : {DatabaseCache, ThreadsScriptVerif, SpendZeroConfChange, GpuSolverPath, GpuDevices, AllowCpuBlockMining,
                             MapPortNatpmp, Listen, Server, Prune, ProxyUse, ProxyUseTor, Language}) {
         std::string setting = SettingName(option);
         if (node().isSettingIgnored(setting)) addOverriddenOption("-" + setting);
@@ -239,6 +241,24 @@ bool OptionsModel::Init(bilingual_str& error)
             error.original = strprintf("Could not read setting \"%s\", %s.", setting, e.what());
             error.translated = tr("Could not read setting \"%1\", %2.").arg(QString::fromStdString(setting), e.what()).toStdString();
             return false;
+        }
+    }
+
+    // A prune size settings.json holds below the Settings minimum, such as the old
+    // 2 GB default, is raised to it and saved, so the node does not warn about it on
+    // every start. The size kept for when pruning is turned back on ("prune-prev")
+    // moves the same way. Only the size moves: whether pruning is on is never
+    // migrated (F-705). Only settings.json is read: a value from quicksilver.conf or
+    // the command line belongs to the user and is never copied into settings.json,
+    // which would outrank every later edit of it.
+    for (const char* suffix : {"", "-prev"}) {
+        const std::string name{std::string{SettingName(Prune)} + suffix};
+        common::SettingsValue stored;
+        gArgs.LockSettings([&](const common::Settings& settings) {
+            if (const common::SettingsValue* value{common::FindKey(settings.rw_settings, name)}) stored = *value;
+        });
+        if (PruneEnabled(stored) && SettingToInt(stored, 0) < PruneGBtoMiB(MinPruneTargetGB())) {
+            UpdateRwSetting(node(), Prune, suffix, PruneSetting(true, MinPruneTargetGB()));
         }
     }
 
@@ -302,7 +322,8 @@ void OptionsModel::Reset()
 
 int OptionsModel::rowCount(const QModelIndex & parent) const
 {
-    return OptionIDRowCount;
+    // A flat list: only the invisible root has rows (S0231-B-01).
+    return parent.isValid() ? 0 : OptionIDRowCount;
 }
 
 static ProxySetting ParseProxyString(const QString& proxy)
@@ -333,12 +354,21 @@ static ProxySetting ParseProxyString(const std::string& proxy)
 
 static std::string ProxyString(bool is_set, QString ip, QString port)
 {
-    return is_set ? QString(ip + ":" + port).toStdString() : "";
+    if (!is_set) return "";
+    // The dialog accepts a bare IPv6 host such as ::1. Bracket it, or "::1:9050"
+    // reads back as a host with no port (S0231-A-01).
+    if (ip.contains(QLatin1Char(':')) && !ip.startsWith(QLatin1Char('['))) ip = QLatin1Char('[') + ip + QLatin1Char(']');
+    return QString(ip + ":" + port).toStdString();
 }
 
 static QString GetDefaultProxyAddress()
 {
     return QString("%1:%2").arg(DEFAULT_GUI_PROXY_HOST).arg(DEFAULT_GUI_PROXY_PORT);
+}
+
+int OptionsModel::MinPruneTargetGB()
+{
+    return static_cast<int>((MIN_DISK_SPACE_FOR_BLOCK_FILES + GB_BYTES - 1) / GB_BYTES);
 }
 
 void OptionsModel::SetPruneTargetGB(int prune_target_gb)
@@ -370,21 +400,17 @@ void OptionsModel::SetPruneTargetGB(int prune_target_gb)
 // read QSettings values and return them
 QVariant OptionsModel::data(const QModelIndex & index, int role) const
 {
-    if(role == Qt::EditRole)
-    {
-        return getOption(OptionID(index.row()));
-    }
-    return QVariant();
+    if (role != Qt::EditRole || !checkIndex(index, CheckIndexOption::IndexIsValid | CheckIndexOption::ParentIsInvalid)) return QVariant();
+    return getOption(OptionID(index.row()));
 }
 
 // write QSettings values
 bool OptionsModel::setData(const QModelIndex & index, const QVariant & value, int role)
 {
-    bool successful = true; /* set to false on parse error */
-    if(role == Qt::EditRole)
-    {
-        successful = setOption(OptionID(index.row()), value);
-    }
+    // Only the edit role of a row of this model is stored, and nothing else is
+    // reported as written (S0231-B-01).
+    if (role != Qt::EditRole || !checkIndex(index, CheckIndexOption::IndexIsValid | CheckIndexOption::ParentIsInvalid)) return false;
+    const bool successful = setOption(OptionID(index.row()), value); /* false on parse error */
 
     Q_EMIT dataChanged(index, index);
 
@@ -439,8 +465,6 @@ QVariant OptionsModel::getOption(OptionID option, const std::string& suffix) con
 #ifdef ENABLE_VAULT
     case SpendZeroConfChange:
         return SettingToBool(setting(), vault::DEFAULT_SPEND_ZEROCONF_CHANGE);
-    case ExternalSignerPath:
-        return QString::fromStdString(SettingToString(setting(), ""));
 #endif
     case DisplayUnit:
         return QVariant::fromValue(m_display_quicksilver_unit);
@@ -448,8 +472,6 @@ QVariant OptionsModel::getOption(OptionID option, const std::string& suffix) con
         return strThirdPartyTxUrls;
     case Language:
         return QString::fromStdString(SettingToString(setting(), ""));
-    case CoinControlFeatures:
-        return fCoinControlFeatures;
     case EnablePSQTControls:
         return settings.value("enable_psqt_controls");
     case Prune:
@@ -589,12 +611,6 @@ bool OptionsModel::setOption(OptionID option, const QVariant& value, const std::
             setRestartRequired(true);
         }
         break;
-    case ExternalSignerPath:
-        if (changed()) {
-            update(value.toString().toStdString());
-            setRestartRequired(true);
-        }
-        break;
 #endif
     case DisplayUnit:
         setDisplayUnit(value);
@@ -611,11 +627,6 @@ bool OptionsModel::setOption(OptionID option, const QVariant& value, const std::
             update(value.toString().toStdString());
             setRestartRequired(true);
         }
-        break;
-    case CoinControlFeatures:
-        fCoinControlFeatures = value.toBool();
-        settings.setValue("fCoinControlFeatures", fCoinControlFeatures);
-        Q_EMIT coinControlFeaturesChanged(fCoinControlFeatures);
         break;
     case EnablePSQTControls:
         m_enable_psqt_controls = value.toBool();
@@ -739,7 +750,3 @@ bool OptionsModel::isRestartRequired() const
     return settings.value("fRestartRequired", false).toBool();
 }
 
-bool OptionsModel::hasSigner()
-{
-    return gArgs.GetArg("-signer", "") != "";
-}

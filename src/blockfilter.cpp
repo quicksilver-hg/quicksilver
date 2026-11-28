@@ -14,6 +14,7 @@
 #include <script/script.h>
 #include <streams.h>
 #include <undo.h>
+#include <util/fastrange.h>
 #include <util/golombrice.h>
 #include <util/string.h>
 

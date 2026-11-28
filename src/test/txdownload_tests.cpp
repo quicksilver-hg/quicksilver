@@ -83,7 +83,6 @@ static std::map<TxValidationResult, Behaviors> expected_behaviors{
     {TxValidationResult::TX_RELAYPOOL_POLICY,          {                0,                 1,              0,               0,        1,            0,             1}},
     {TxValidationResult::TX_NO_RELAYPOOL,              {                0,                 1,              0,               0,        1,            0,             1}},
     {TxValidationResult::TX_RECONSIDERABLE,          {                0,                 0,              0,               1,        1,            0,             1}},
-    {TxValidationResult::TX_UNKNOWN,                 {                0,                 1,              0,               0,        1,            0,             1}},
 };
 
 static bool CheckOrphanBehavior(node::TxDownloadManagerImpl& txdownload_impl, const CTransactionRef& tx, const node::RejectedTxTodo& ret, std::string& err_msg,

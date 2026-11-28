@@ -11,7 +11,10 @@
 #include <util/overflow.h>
 #include <util/time.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
+#include <vector>
 
 std::vector<uint8_t> ConstructPubKeyBytes(FuzzedDataProvider& fuzzed_data_provider, Span<const uint8_t> byte_data, const bool compressed) noexcept
 {
@@ -282,10 +285,32 @@ FILE* FuzzedFileProvider::open()
         FuzzedFileProvider::seek,
         FuzzedFileProvider::close,
     };
-    return fopencookie(this, mode.c_str(), io_hooks);
+    FILE* file{fopencookie(this, mode.c_str(), io_hooks)};
+    // S0391-A-01: a null here would make every caller test nothing. Fail loudly.
+    if (file == nullptr) {
+        std::fputs("FuzzedFileProvider: fopencookie failed\n", stderr);
+        std::abort();
+    }
+    return file;
 #else
-    (void)mode;
-    return nullptr;
+    // S0391-A-01: no fopencookie on this platform. Instead of returning null
+    // (which made autofile, buffered_file, load_external_block_file and
+    // validation_load_relaypool test nothing), back the stream with a real
+    // temporary file holding fuzzed contents. This keeps real reads, writes and
+    // seeks, though without the fault injection of the read/write/seek hooks.
+    FILE* file{std::tmpfile()};
+    if (file == nullptr) {
+        std::fputs("FuzzedFileProvider: tmpfile failed\n", stderr);
+        std::abort();
+    }
+    const std::vector<uint8_t> contents{ConsumeRandomLengthByteVector(m_fuzzed_data_provider, 4096)};
+    if (!contents.empty() && std::fwrite(contents.data(), 1, contents.size(), file) != contents.size()) {
+        std::fputs("FuzzedFileProvider: tmpfile write failed\n", stderr);
+        std::abort();
+    }
+    // Mode only chooses where the stream starts: append modes at the end.
+    if (mode[0] != 'a') std::rewind(file);
+    return file;
 #endif
 }
 

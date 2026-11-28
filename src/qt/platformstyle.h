@@ -10,17 +10,15 @@
 #include <QPixmap>
 #include <QString>
 
-/* Coin network-specific GUI style information */
+/* Platform identity and icon recoloring. */
 class PlatformStyle
 {
 public:
-    /** Get style associated with provided platform name, or 0 if not known */
+    /** Get style associated with provided platform name, or nullptr for an unknown platform */
     static const PlatformStyle *instantiate(const QString &platformId);
 
     const QString &getName() const { return name; }
 
-    bool getImagesOnButtons() const { return imagesOnButtons; }
-    bool getUseExtraSpacing() const { return useExtraSpacing; }
 
     QColor TextColor() const;
     QColor SingleColor() const;
@@ -31,9 +29,6 @@ public:
     /** Colorize an icon (given filename) with the icon color */
     QIcon SingleColorIcon(const QString& filename) const;
 
-    /** Colorize an icon (given object) with the icon color */
-    QIcon SingleColorIcon(const QIcon& icon) const;
-
     /** Colorize an icon (given object) with the text color */
     QIcon TextColorIcon(const QIcon& icon) const;
 
@@ -41,12 +36,9 @@ public:
     QIcon ColorIcon(const QString& filename, const QColor& color) const;
 
 private:
-    PlatformStyle(const QString &name, bool imagesOnButtons, bool colorizeIcons, bool useExtraSpacing);
+    explicit PlatformStyle(const QString& platform_name);
 
     QString name;
-    bool imagesOnButtons;
-    bool colorizeIcons;
-    bool useExtraSpacing;
 };
 
 #endif // QUICKSILVER_QT_PLATFORMSTYLE_H

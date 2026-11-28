@@ -1,11 +1,6 @@
 Sample init scripts and service configuration for quicksilver-daemon
 ==========================================================
 
-macOS is not a supported platform. The macOS sections below only record
-runtime paths and launch-agent setup for an experimental self-built
-binary; they are not a supported build or deployment recipe. See the
-[macOS support status](build-osx.md).
-
 Sample scripts and configuration files for systemd, Upstart and OpenRC
 can be found in the contrib/init folder.
 
@@ -20,7 +15,6 @@ Service User
 
 All three Linux startup configurations assume the existence of a "quicksilver" user
 and group.  They must be created before attempting to use these scripts.
-The macOS configuration assumes quicksilver-daemon will be set up for the current user.
 
 Configuration
 ---------------------------------
@@ -89,13 +83,6 @@ configuration mechanisms that would allow for overriding the command line
 options specified in the init files (e.g. setting `QUICKSILVER_DAEMON_DATADIR` for
 OpenRC).
 
-### macOS
-
-    Binary:              /usr/local/bin/quicksilver-daemon
-    Configuration file:  ~/Library/Application Support/Quicksilver/quicksilver.conf
-    Data directory:      ~/Library/Application Support/Quicksilver
-    Lock file:           ~/Library/Application Support/Quicksilver/.lock
-
 Installing Service Configuration
 -----------------------------------
 
@@ -134,17 +121,6 @@ Copy quicksilver-daemon.init to /etc/init.d/quicksilver-daemon. Test by running 
 Using this script, you can adjust the path and flags to the quicksilver-daemon program by
 setting the `QUICKSILVER_DAEMON_BIN` and `QUICKSILVER_DAEMON_OPTS` environment variables in the file
 /etc/sysconfig/quicksilver-daemon. You can also use the DAEMONOPTS environment variable here.
-
-### macOS
-
-Copy io.github.quicksilver-hg.quicksilver-daemon.plist into ~/Library/LaunchAgents. Load the launch agent by
-running `launchctl load ~/Library/LaunchAgents/io.github.quicksilver-hg.quicksilver-daemon.plist`.
-
-This Launch Agent will cause quicksilver-daemon to start whenever the user logs in.
-
-NOTE: This approach is intended for those wanting to run quicksilver-daemon as the current user.
-You will need to modify io.github.quicksilver-hg.quicksilver-daemon.plist if you intend to use it as a
-Launch Daemon with a dedicated quicksilver user.
 
 Auto-respawn
 -----------------------------------

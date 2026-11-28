@@ -11,9 +11,14 @@
 #include <string_view>
 #include <vector>
 
+namespace util { class ContainedChild; }
+
 namespace cuckatoo {
 inline constexpr uint8_t kBundledHelperEdgeBits{28};
 inline constexpr std::chrono::milliseconds kListingLimit{15000};
+//! How long a helper may live on after closing its stdout. A healthy helper exits
+//! as it closes the pipe, so this only ever runs out on one that is broken.
+inline constexpr std::chrono::milliseconds kReapLimit{5000};
 enum class DeviceStatus { kOk, kNoDriver, kCompileFailed, kProbeFailed, kOther };
 struct GpuDevice {
     std::string backend, id, alias, type;
@@ -32,7 +37,17 @@ struct DeviceChoice {
     std::vector<std::string> ids;
 };
 std::optional<DeviceChoice> ParseDeviceChoice(const std::vector<std::string>& values, std::string& error);
+//! The choice the node installed in CUCKATOO_GPU_DEVICES. A value ParseDeviceChoice
+//! refuses (only possible when someone sets the variable by hand) is not read as
+//! "automatic": that would let every card mine past a CPU-only setting. It comes
+//! back as kChosen naming the raw value, which no listed card matches, so it
+//! reports as a chosen card that is missing and no card is used.
 DeviceChoice DeviceChoiceFromEnv();
+//! Reap a helper that has closed its stdout. Waits up to the reap limit for it to
+//! exit; one still running then is killed with everything it started, so a helper
+//! that closes the pipe and keeps going cannot hang the caller in Wait(). Returns
+//! the exit code as ContainedChild::Wait does (a killed helper is never 4 or 5).
+int ReapClosedHelper(util::ContainedChild& child);
 enum class ListOutcome { kListed, kNoHelper, kNoLoader, kFailed, kTimedOut };
 struct DeviceListing {
     ListOutcome outcome{ListOutcome::kNoHelper};
@@ -65,6 +80,9 @@ void ResetGpuDiscoveryForTesting();
 //! reach kTimedOut without sleeping out kListingLimit. ResetGpuDiscoveryForTesting
 //! restores the default.
 void SetListingLimitForTesting(std::chrono::milliseconds limit);
+//! Shorten the reap limit so a test of a helper that outlives its stdout need not
+//! sleep out kReapLimit. ResetGpuDiscoveryForTesting restores the default.
+void SetReapLimitForTesting(std::chrono::milliseconds limit);
 //! Kill every listing child still running and refuse new ones. Registered with atexit the first time a
 //! listing starts, so every normal exit of the daemon and the GUI (return from main, exit()) runs it; call it
 //! directly only from a test. Does not take the discovery lock (a listing holds it for up to 15 s).

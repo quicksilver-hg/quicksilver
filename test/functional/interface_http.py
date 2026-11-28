@@ -49,7 +49,7 @@ class HTTPBasicsTest (QuicksilverTestFramework):
         with open(self.nodes[0].debug_log_path, encoding="utf-8") as dl:
             log = dl.read()
         assert "http thread start" in log, "HTTP event-loop thread is not wrapped by util::TraceThread"
-        assert "httpworker.0 thread start" in log, "HTTP worker threads are not wrapped by util::TraceThread"
+        assert "httpw.0 thread start" in log, "HTTP worker threads are not wrapped by util::TraceThread"
 
     def run_test(self):
 

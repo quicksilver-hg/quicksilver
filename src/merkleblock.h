@@ -96,7 +96,7 @@ public:
         SER_READ(obj, obj.fBad = false);
     }
 
-    /** Construct a partial merkle tree from a list of transaction ids, and a mask that selects a subset of them */
+    /** Construct a partial merkle tree from nonempty transaction IDs and an equally sized match mask. */
     CPartialMerkleTree(const std::vector<uint256> &vTxid, const std::vector<bool> &vMatch);
 
     CPartialMerkleTree();
@@ -104,7 +104,7 @@ public:
     /**
      * extract the matching txid's represented by this partial merkle tree
      * and their respective indices within the partial tree.
-     * returns the merkle root, or 0 in case of failure
+     * Returns the merkle root. On failure, returns zero and leaves both output vectors empty.
      */
     uint256 ExtractMatches(std::vector<uint256> &vMatch, std::vector<unsigned int> &vnIndex);
 

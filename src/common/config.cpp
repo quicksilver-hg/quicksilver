@@ -12,6 +12,7 @@
 #include <univalue.h>
 #include <util/chaintype.h>
 #include <util/fs.h>
+#include <util/strencodings.h>
 #include <util/string.h>
 
 #include <algorithm>
@@ -77,12 +78,12 @@ static bool GetConfigOptions(std::istream& stream, const std::string& filepath, 
     return true;
 }
 
-bool IsConfSupported(KeyInfo& key, std::string& error) {
+bool IsConfSupported(KeyInfo& key, const std::string& value, std::string& error) {
     if (key.name == "conf") {
         error = "conf cannot be set in the configuration file; use includeconf= if you want to include additional config files";
         return false;
     }
-    if (key.name == "reindex") {
+    if (key.name == "reindex" && (value.empty() || LocaleIndependentAtoi<int>(value) != 0)) {
         // reindex can be set in a config file but it is strongly discouraged as this will cause the node to reindex on
         // every restart. Allow the config but throw a warning
         LogInfo(HgLog::INIT, "Warning: reindex=1 is set in the configuration file, which will significantly slow down startup. Consider removing or commenting out this option for better performance, unless there is currently a condition which makes rebuilding the indexes necessary\n");
@@ -101,7 +102,7 @@ bool ArgsManager::ReadConfigStream(std::istream& stream, const std::string& file
     for (const std::pair<std::string, std::string>& option : options) {
         KeyInfo key = InterpretKey(option.first);
         std::optional<unsigned int> flags = GetArgFlags('-' + key.name);
-        if (!IsConfSupported(key, error)) return false;
+        if (!IsConfSupported(key, option.second, error)) return false;
         if (flags) {
             std::optional<common::SettingsValue> value = InterpretValue(key, &option.second, *flags, error);
             if (!value) {

@@ -26,7 +26,13 @@ AgentMessageDecodeResult DecodeResult(AgentMessageIoResultCode code, CSerialized
 bool ValidMessageType(std::string_view message_type)
 {
     const std::string_view trimmed{util::TrimStringView(message_type)};
-    return !trimmed.empty() && trimmed.size() <= CMessageHeader::MESSAGE_TYPE_SIZE;
+    if (trimmed.empty() || trimmed.size() > CMessageHeader::MESSAGE_TYPE_SIZE) return false;
+    // A NUL would end the type early on the wire; the header check below would then
+    // see only the part before it.
+    if (trimmed.find('\0') != std::string_view::npos) return false;
+    // Same rule the node applies to a received header: printable ASCII only.
+    const std::string type{trimmed};
+    return CMessageHeader{MessageStartChars{}, type.c_str(), 0}.IsMessageTypeValid();
 }
 
 } // namespace

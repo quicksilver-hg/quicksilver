@@ -52,8 +52,21 @@ static int FileWriteStr(std::string_view str, FILE *fp)
     return fwrite(str.data(), 1, str.size(), fp);
 }
 
+thread_local bool HgLog::Logger::m_invoking_callback{false};
+
+void HgLog::Logger::NotifyPrintCallbacks(const std::string& message)
+{
+    if (m_print_callbacks.empty()) return;
+    struct CallbackScope {
+        CallbackScope() { m_invoking_callback = true; }
+        ~CallbackScope() { m_invoking_callback = false; }
+    } scope;
+    for (const auto& callback : m_print_callbacks) callback(message);
+}
+
 bool HgLog::Logger::StartLogging()
 {
+    CHECK_NONFATAL(!m_invoking_callback);
     StdLockGuard scoped_lock(m_cs);
 
     assert(m_buffering);
@@ -86,9 +99,7 @@ bool HgLog::Logger::StartLogging()
 
         if (m_print_to_file) FileWriteStr(s, m_fileout);
         if (m_print_to_console) fwrite(s.data(), 1, s.size(), stdout);
-        for (const auto& cb : m_print_callbacks) {
-            cb(s);
-        }
+        NotifyPrintCallbacks(s);
     }
     m_cur_buffer_memusage = 0;
     if (m_print_to_console) fflush(stdout);
@@ -98,6 +109,7 @@ bool HgLog::Logger::StartLogging()
 
 void HgLog::Logger::DisconnectTestLogger()
 {
+    CHECK_NONFATAL(!m_invoking_callback);
     StdLockGuard scoped_lock(m_cs);
     m_buffering = true;
     if (m_fileout != nullptr) fclose(m_fileout);
@@ -112,6 +124,7 @@ void HgLog::Logger::DisconnectTestLogger()
 void HgLog::Logger::DisableLogging()
 {
     {
+        CHECK_NONFATAL(!m_invoking_callback);
         StdLockGuard scoped_lock(m_cs);
         assert(m_buffering);
         assert(m_print_callbacks.empty());
@@ -160,6 +173,7 @@ bool HgLog::Logger::WillLogCategoryLevel(HgLog::LogFlags category, HgLog::Level 
 
     if (!WillLogCategory(category)) return false;
 
+    CHECK_NONFATAL(!m_invoking_callback);
     StdLockGuard scoped_lock(m_cs);
     const auto it{m_category_log_levels.find(category)};
     return level >= (it == m_category_log_levels.end() ? LogLevel() : it->second);
@@ -181,7 +195,6 @@ static const std::map<std::string, HgLog::LogFlags, std::less<>> LOG_CATEGORIES_
     {"rpc", HgLog::RPC},
     {"forge", HgLog::FORGE},
     {"peerbook", HgLog::PEERBOOK},
-    {"selectinputs", HgLog::SELECTINPUTS},
     {"reindex", HgLog::REINDEX},
     {"cmpctblock", HgLog::CMPCTBLOCK},
     {"rand", HgLog::RAND},
@@ -394,13 +407,8 @@ HgLog::LogRateLimiter::Status HgLog::LogRateLimiter::Consume(
 {
     StdLockGuard scoped_lock(m_mutex);
     auto& stats{m_source_locations.try_emplace(source_loc, m_max_bytes).first->second};
-    Status status{stats.m_dropped_bytes > 0 ? Status::STILL_SUPPRESSED : Status::UNSUPPRESSED};
-
-    if (!stats.Consume(str.size()) && status == Status::UNSUPPRESSED) {
-        status = Status::NEWLY_SUPPRESSED;
-        m_suppression_active = true;
-    }
-
+    const Status status{stats.Consume(str.size())};
+    if (status == Status::NEWLY_SUPPRESSED) m_suppression_active = true;
     return status;
 }
 
@@ -423,6 +431,7 @@ void HgLog::Logger::FormatLogStrInPlace(std::string& str, HgLog::LogFlags catego
 
 void HgLog::Logger::LogPrintStr(std::string_view str, std::source_location&& source_loc, HgLog::LogFlags category, HgLog::Level level, bool should_ratelimit)
 {
+    CHECK_NONFATAL(!m_invoking_callback);
     StdLockGuard scoped_lock(m_cs);
     return LogPrintStr_(str, std::move(source_loc), category, level, should_ratelimit);
 }
@@ -491,9 +500,7 @@ void HgLog::Logger::LogPrintStr_(std::string_view str, std::source_location&& so
         fwrite(str_prefixed.data(), 1, str_prefixed.size(), stdout);
         fflush(stdout);
     }
-    for (const auto& cb : m_print_callbacks) {
-        cb(str_prefixed);
-    }
+    NotifyPrintCallbacks(str_prefixed);
     if (m_print_to_file && !ratelimit) {
         assert(m_fileout != nullptr);
 
@@ -561,7 +568,7 @@ void HgLog::LogRateLimiter::Reset()
         m_suppression_active = false;
     }
     for (const auto& [source_loc, stats] : source_locations) {
-        if (stats.m_dropped_bytes == 0) continue;
+        if (!stats.m_suppressed) continue;
         LogPrintLevel_(
             LogFlags::ALL, Level::Warning, /*should_ratelimit=*/false,
             "Restarting logging from %s:%d (%s): %d bytes were dropped during the last %ss.",
@@ -570,16 +577,20 @@ void HgLog::LogRateLimiter::Reset()
     }
 }
 
-bool HgLog::LogRateLimiter::Stats::Consume(uint64_t bytes)
+HgLog::LogRateLimiter::Status HgLog::LogRateLimiter::Stats::Consume(uint64_t bytes)
 {
-    if (bytes > m_available_bytes) {
+    if (m_suppressed) {
         m_dropped_bytes += bytes;
+        return Status::STILL_SUPPRESSED;
+    }
+    if (bytes > m_available_bytes) {
         m_available_bytes = 0;
-        return false;
+        m_suppressed = true;
+        return Status::NEWLY_SUPPRESSED;
     }
 
     m_available_bytes -= bytes;
-    return true;
+    return Status::UNSUPPRESSED;
 }
 
 bool HgLog::Logger::SetLogLevel(std::string_view level_str)
@@ -598,6 +609,7 @@ bool HgLog::Logger::SetCategoryLogLevel(std::string_view category_str, std::stri
     const auto level = GetLogLevel(level_str);
     if (!level.has_value() || level.value() > MAX_USER_SETABLE_SEVERITY_LEVEL) return false;
 
+    CHECK_NONFATAL(!m_invoking_callback);
     StdLockGuard scoped_lock(m_cs);
     m_category_log_levels[flag] = level.value();
     return true;

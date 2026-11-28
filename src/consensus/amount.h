@@ -20,8 +20,7 @@ inline const std::string CURRENCY_UNIT{"Hg"}; // One formatted unit (Quicksilver
 
 /** Quicksilver: NOT an economic supply cap. Quicksilver has no hard cap — a
  *  perpetual ~1-coin tail subsidy plus the Frame-B mint C issue coins forever
- *  (economics spec §7), so cumulative supply grows without bound and passes the
- *  old 21M mark within ~10 years. This constant is purely a per-value OVERFLOW
+ *  as described in doc/design/economics-consensus.md. This constant is a per-value OVERFLOW
  *  GUARD: MoneyRange bounds every individual CAmount so that summing values
  *  cannot overflow int64 (CAmount maxes at INT64_MAX ≈ 92.2e9 COIN). 1e9 COIN is
  *  ~3000 years above realistic supply at maximum emission and leaves 2*MAX_MONEY

@@ -10,12 +10,10 @@
 
 #include <QApplication>
 #include <QByteArray>
-#include <QImageWriter>
 #include <QMessageBox>
 #include <QMetaType>
 #include <QStyle>
 #include <QSystemTrayIcon>
-#include <QTemporaryFile>
 #include <QVariant>
 
 #include <algorithm>
@@ -23,9 +21,6 @@
 #include <QDBusMetaType>
 #include <QtDBus>
 #include <stdint.h>
-#endif
-#ifdef Q_OS_MACOS
-#include <qt/macnotificationhandler.h>
 #endif
 
 void NotificationBurst::begin(int64_t now_millis)
@@ -100,12 +95,6 @@ Notificator::Notificator(const QString &_programName, QSystemTrayIcon *_trayIcon
     if(interface->isValid())
     {
         mode = Freedesktop;
-    }
-#endif
-#ifdef Q_OS_MACOS
-    // check if users OS has support for NSUserNotification
-    if( MacNotificationHandler::instance()->hasUserNotificationCenterSupport()) {
-        mode = UserNotificationCenter;
     }
 #endif
 }
@@ -267,14 +256,6 @@ void Notificator::notifySystray(Class cls, const QString &title, const QString &
     trayIcon->showMessage(title, text, sicon, millisTimeout);
 }
 
-#ifdef Q_OS_MACOS
-void Notificator::notifyMacUserNotificationCenter(const QString &title, const QString &text)
-{
-    // icon is not supported by the user notification center yet. OSX will use the app icon.
-    MacNotificationHandler::instance()->showNotification(title, text);
-}
-#endif
-
 void Notificator::notify(Class cls, const QString &title, const QString &text, const QIcon &icon, int millisTimeout)
 {
     Q_EMIT notified(cls, title, text);
@@ -288,11 +269,6 @@ void Notificator::notify(Class cls, const QString &title, const QString &text, c
     case QSystemTray:
         notifySystray(cls, title, text, millisTimeout);
         break;
-#ifdef Q_OS_MACOS
-    case UserNotificationCenter:
-        notifyMacUserNotificationCenter(title, text);
-        break;
-#endif
     default:
         if(cls == Critical)
         {

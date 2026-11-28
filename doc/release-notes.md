@@ -49,6 +49,29 @@ Notable changes
   node that cannot reach Tor needs an explicit peer configured with `-addnode`,
   `-connect`, or `-seednode`; see `doc/bootstrapping.md`.
 
+Unreleased changes
+==================
+
+- The REST interface is removed. Every REST answer had an authenticated RPC
+  equivalent, and no Quicksilver component used it. The `-rest` option is still
+  accepted so that existing configurations start, but it is ignored: the node
+  logs that once and serves no `/rest/` path (each answers 404). Use these RPCs
+  instead:
+
+  | Removed REST endpoint | RPC |
+  |---|---|
+  | `/rest/tx/<txid>` | `getrawtransaction` |
+  | `/rest/block/<hash>`, `/rest/block/notxdetails/<hash>` | `getblock` (verbosity 0, 1 or 2) |
+  | `/rest/headers/<hash>?count=N` | `getblockheader`, then `getblockhash` for each following height |
+  | `/rest/blockfilter/<type>/<hash>` | `getblockfilter` |
+  | `/rest/blockfilterheaders/<type>/<hash>` | `getblockfilter` (its `header` field) |
+  | `/rest/blockhashbyheight/<height>` | `getblockhash` |
+  | `/rest/chaininfo.json` | `getblockchaininfo` |
+  | `/rest/deploymentinfo.json`, `/rest/deploymentinfo/<hash>.json` | `getdeploymentinfo` |
+  | `/rest/getutxos/...` | `gettxout`, one output per call (`include_relaypool` for the `checkrelaypool` form) |
+  | `/rest/relaypool/info.json` | `getrelaypoolinfo` |
+  | `/rest/relaypool/contents.json` | `getrawrelaypool` |
+
 Changes in 0.1.9
 ================
 
@@ -437,11 +460,6 @@ so the cost is one repopulation cycle.
 `mempool_sequence` is `relaypool_sequence`, `mempoolconflicts` is
 `relaypoolconflicts`, and the `include_mempool` argument to `gettxout` and
 `getdescriptoractivity` is `include_relaypool`.
-
-**REST.** `/rest/mempool/info.json` and `/rest/mempool/contents.json` are
-`/rest/relaypool/…`; the `mempool_sequence` query parameter renames with its
-JSON counterpart; and the `/rest/getutxos/checkmempool/…` path component is
-`checkrelaypool`.
 
 **Network permission.** `-whitelist=mempool@…` is `-whitelist=relaypool@…`. The
 permission's whole meaning is "may send the wire command renamed above", so it

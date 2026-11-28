@@ -25,8 +25,6 @@ Common `host-platform-triplet`s for cross compilation are:
 - `i686-pc-linux-gnu` for Linux x86 32 bit
 - `x86_64-pc-linux-gnu` for Linux x86 64 bit
 - `x86_64-w64-mingw32` for Win64
-- `x86_64-apple-darwin` for macOS
-- `arm64-apple-darwin` for ARM macOS
 - `arm-linux-gnueabihf` for Linux ARM 32 bit
 - `aarch64-linux-gnu` for Linux ARM 64 bit
 - `powerpc64-linux-gnu` for Linux POWER 64 bit (big endian)
@@ -48,14 +46,6 @@ The paths are automatically configured and no other options are needed.
 Skip the following packages if you don't intend to use the GUI and will build with [`NO_QT=1`](#dependency-options):
 
     apt install bison g++ pkgconf python3 xz-utils
-
-#### For macOS cross compilation
-
-    apt install clang lld llvm zip
-
-Clang 18 or later is required. You must also obtain the macOS SDK before
-proceeding with a cross-compile. Under the depends directory, create a
-subdirectory named `SDKs`. Then, place the extracted SDK under this new directory.
 
 #### For Win64 cross compilation
 
@@ -105,7 +95,6 @@ The following can be set when running make: `make FOO=bar`
 
 - `SOURCES_PATH`: Downloaded sources will be placed here
 - `BASE_CACHE`: Built packages will be placed here
-- `SDK_PATH`: Path where SDKs can be found (used by macOS)
 - `FALLBACK_DOWNLOAD_PATH`: If a source file can't be fetched, try here before giving up
 - `C_STANDARD`: Set the C standard version used. Defaults to `c11`.
 - `CXX_STANDARD`: Set the C++ standard version used. Defaults to `c++20`.
@@ -132,7 +121,6 @@ variables will be set when generating the Quicksilver buildsystem. In this case,
 ### Additional targets
 
     download: run 'make download' to fetch all sources without building them
-    download-osx: run 'make download-osx' to fetch all sources needed for macOS builds
     download-win: run 'make download-win' to fetch all sources needed for win builds
     download-linux: run 'make download-linux' to fetch all sources needed for linux builds
 

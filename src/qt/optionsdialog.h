@@ -93,6 +93,7 @@ private Q_SLOTS:
     void stopGpuSolverProbe();
     void updateGpuMode();
     void populateGpuDevices();
+    bool hasListedGpuCards() const;
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -111,11 +112,11 @@ private:
     OptionsModel* model{nullptr};
     QDataWidgetMapper* mapper{nullptr};
     QProcess* m_gpu_solver_probe{nullptr};
-    enum class HelperCheck { kUnchecked, kChecking, kWorks, kFailed };
-    HelperCheck m_gpu_solver_check{HelperCheck::kUnchecked};
     GpuDeviceList* m_gpu_device_list{nullptr};
     std::optional<cuckatoo::GpuDiscovery> m_gpu_discovery;
     bool m_proxy_valid{true};
+    QLabel* m_gpu_choice_hint{nullptr};
+    bool m_gpu_choice_valid{true};
     bool m_gpu_solver_valid{true};
     bool m_gpu_solver_command_line{false};
     //! What the node is doing now. The checkbox itself shows the saved setting.

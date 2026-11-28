@@ -79,6 +79,8 @@ HeaderSyncDriverResult HeaderSyncDriver::ProcessMessage(const CSerializedNetMsg&
 
     HeaderMessageProcessResult processed{ProcessHeadersMessage(m_sync, message, m_sync.MaxHeadersResult())};
     if (!processed.decode.ok()) {
+        // The session still counts its request as in flight: a peer that sends an
+        // undecodable headers message is dropped by every caller, so nothing waits on it.
         return Result(HeaderSyncDriverResultCode::DECODE_FAILED, std::nullopt, std::move(processed));
     }
 
@@ -95,6 +97,8 @@ HeaderSyncDriverResult HeaderSyncDriver::ProcessMessage(const CSerializedNetMsg&
         return Result(HeaderSyncDriverResultCode::PEER_SYNCED, std::nullopt, std::move(processed));
     }
 
+    // Unreachable today: HeaderSyncSession sets peer_synced whenever it does not set
+    // request_more. Kept so a future session result cannot fall off the end.
     return Result(HeaderSyncDriverResultCode::HEADERS_ACCEPTED, std::nullopt, std::move(processed));
 }
 

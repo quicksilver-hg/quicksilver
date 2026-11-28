@@ -14,7 +14,6 @@
 #include <consensus/amount.h>
 #include <cuckoocache.h>
 #include <deploymentstatus.h>
-#include <kernel/chain.h>
 #include <kernel/chainparams.h>
 #include <kernel/chainstatemanager_opts.h>
 #include <kernel/cs_main.h> // IWYU pragma: export
@@ -59,26 +58,27 @@ namespace util {
 class SignalInterrupt;
 } // namespace util
 
-/** Block files containing a block-height within MIN_BLOCKS_TO_KEEP of ActiveChain().Tip() will not be pruned. */
-static const unsigned int MIN_BLOCKS_TO_KEEP = 288;
+/** Block files containing a block-height within MIN_BLOCKS_TO_KEEP of ActiveChain().Tip() will not be pruned.
+ *  2016 blocks is one week at 300 s spacing (F-703); upstream's 288 was two days at 600 s. */
+static const unsigned int MIN_BLOCKS_TO_KEEP = 2016;
 static const signed int DEFAULT_CHECKBLOCKS = 6;
 static constexpr int DEFAULT_CHECKLEVEL{3};
-// Require that user allocate at least 550 MiB for block & undo files (blk???.dat and rev???.dat)
-// Re-derived for Quicksilver's parameters, which differ from upstream's on both terms:
-// blocks are larger and arrive twice as often (300 s spacing), so the daily figure is not
-// upstream's. MIN_BLOCKS_TO_KEEP is 288 blocks, which is 24 hours here rather than 48.
+// Require at least 2,956 MiB for main and publictest block and undo files.
+// The derivation below now rests on MIN_BLOCKS_TO_KEEP = 2016 (F-703, one week at 300 s
+// spacing). A configured target below this floor is raised to it with a warning.
+// Sandbox retains a separate 550 MiB floor because its blocks are smaller.
 // At 1,217,399 bytes of block + undo data per block (M5 honest 2-output shape, measured in
-// tools/calibration/m5-disk-cost), 288 blocks = 350.6MB. Undo is already included in that
+// tools/calibration/m5-disk-cost), 2016 blocks = 2,454.3MB. Undo is already included in that
 // measurement, so it is not added again.
-// Add 20% for Orphan block rate = 420.7MB
-// We want the low water mark after pruning to be at least 420.7 MB and since we prune in
+// Add 20% for Orphan block rate = 2,945.1MB
+// We want the low water mark after pruning to be at least 2,945.1 MB and since we prune in
 // full block file chunks, we need the high water mark which triggers the prune to be
-// one 128MiB block file + added 15% undo data = 154.3MB greater for a total of 575.0MB
-// Setting the target to >= 550 MiB (576.7 MB) will make it likely we can respect the target.
-// NOTE: that leaves only 0.3% of headroom, against 5.5% upstream, and it holds only for the
-// honest traffic shape — a sustained many-output period stores more per block. A pruned node
-// at exactly the minimum may briefly exceed its target. See doc/design/chain-storage.md.
-static const uint64_t MIN_DISK_SPACE_FOR_BLOCK_FILES = 550 * 1024 * 1024;
+// one 128MiB block file + added 15% undo data = 154.3MB greater for a total of 3,099.4MB
+// (2,955.8 MiB). A target of >= 2,956 MiB (3,099.6 MB) would make it likely we can respect
+// it; the 550 MiB (576.7 MB) floor was derived the same way from the earlier 288 blocks.
+// NOTE: the method holds only for the honest traffic shape — a sustained many-output period
+// stores more per block. See doc/design/chain-storage.md.
+static const uint64_t MIN_DISK_SPACE_FOR_BLOCK_FILES = 2956ULL * 1024 * 1024;
 
 /** Maximum number of dedicated script-checking threads allowed */
 static constexpr int MAX_SCRIPTCHECK_THREADS{15};
@@ -216,7 +216,7 @@ struct PackageRelayPoolAcceptResult
 };
 
 /**
- * Try to add a transaction to the relaypool. This is an internal function and is exposed only for testing.
+ * Try to add a transaction to the relay pool. Used by relay-pool restore, reorg recovery and tests.
  * Client code should use ChainstateManager::ProcessTransaction()
  *
  * @param[in]  active_chainstate  Reference to the active chainstate.
@@ -1037,7 +1037,7 @@ public:
     void ReceivedBlockTransactions(const CBlock& block, CBlockIndex* pindexNew, const FlatFilePos& pos) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /**
-     * Try to add a transaction to the memory pool.
+     * Try to add a transaction to the relay pool.
      *
      * @param[in]  tx              The transaction to submit for relaypool acceptance.
      * @param[in]  test_accept     When true, run validation checks but don't submit to relaypool.

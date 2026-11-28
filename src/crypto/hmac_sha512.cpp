@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <crypto/hmac_sha512.h>
+#include <support/cleanse.h>
 
 #include <string.h>
 
@@ -25,6 +26,13 @@ CHMAC_SHA512::CHMAC_SHA512(const unsigned char* key, size_t keylen)
     for (int n = 0; n < 128; n++)
         rkey[n] ^= 0x5c ^ 0x36;
     inner.Write(rkey, 128);
+    memory_cleanse(rkey, sizeof(rkey));
+}
+
+CHMAC_SHA512::~CHMAC_SHA512()
+{
+    memory_cleanse(&outer, sizeof(outer));
+    memory_cleanse(&inner, sizeof(inner));
 }
 
 void CHMAC_SHA512::Finalize(unsigned char hash[OUTPUT_SIZE])
@@ -32,4 +40,5 @@ void CHMAC_SHA512::Finalize(unsigned char hash[OUTPUT_SIZE])
     unsigned char temp[64];
     inner.Finalize(temp);
     outer.Write(temp, 64).Finalize(hash);
+    memory_cleanse(temp, sizeof(temp));
 }

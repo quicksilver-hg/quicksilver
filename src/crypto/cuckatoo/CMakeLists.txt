@@ -2,13 +2,10 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #
-# Quicksilver Cuckatoo PoW unit: runtime-EDGEBITS verify + lean CPU solver,
-# vendored verbatim from Tromp's reference (third_party/cuckoo).
-#
-# The per-EDGEBITS verify/solve translation units (verify_19.cpp, solve_19.cpp, ...)
-# are added by later plan tasks. The vendored cuckatoo.h has no include guard and
-# defines file-scope symbols by design, so each EDGEBITS instantiation lives in its
-# own translation unit wrapped in a distinct namespace — never included twice per TU.
+# Instantiate the vendored verifier and lean CPU solver for each supported
+# graph size. Each translation unit gives the instantiation its own namespace
+# because vendor/cuckatoo.h defines file-scope symbols.
+
 add_library(quicksilver_cuckatoo STATIC EXCLUDE_FROM_ALL
   proofhash.cpp
   keys.cpp

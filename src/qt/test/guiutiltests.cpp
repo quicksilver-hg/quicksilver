@@ -13,7 +13,26 @@
 #ifdef USE_DBUS
 #include <QDBusConnection>
 #endif
+#include <QAbstractButton>
+#include <QApplication>
+#include <QByteArray>
+#include <QCoreApplication>
+#include <QDialog>
+#include <QDir>
+#include <QEvent>
+#include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QMessageBox>
+#include <QPointer>
+#include <QPushButton>
 #include <QString>
+#include <QStringList>
+#include <QTemporaryDir>
+#include <QTimer>
+#include <QWidget>
+
+#include <string>
 
 //! formatNiceTimeOffset() feeds the Home Node card's last-block age. It used to
 //! compose that text with Qt's "%n unit(s)" numerus idiom, which only a translation
@@ -98,6 +117,150 @@ void GUIUtilTests::timeOffsetBoundariesPickTheIntendedUnit()
     QCOMPARE(GUIUtil::formatNiceTimeOffset(31556951), QStringLiteral("52 weeks"));
     QCOMPARE(GUIUtil::formatNiceTimeOffset(31556952), QStringLiteral("1 year"));
 }
+
+//! A save dialog asks before replacing the file it will write. Typing "name" where "name.dat" exists must raise the
+//! dialog's own "replace it?" question, and the name handed back is "name.dat". The filter's suffix used to be
+//! appended after the dialog had accepted, so the dialog checked "name", found nothing, and the caller then wrote
+//! over "name.dat" without asking (found in GX send-back 1, for the vault backup).
+//! The question checked here is Qt's own, which only Qt's widget dialog asks: on a native dialog (the "windows"
+//! platform the Windows tests run on) QFileDialog::accept() hands back the selection without asking, and the system
+//! dialog asks instead (Qt sets FOS_OVERWRITEPROMPT and passes the default suffix to SetDefaultExtension). A test
+//! cannot answer a system dialog, so it uses Qt's dialog on every platform.
+void GUIUtilTests::saveDialogAsksBeforeReplacingTheSuffixedFile()
+{
+    const bool native_was_off{QCoreApplication::testAttribute(Qt::AA_DontUseNativeDialogs)};
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
+    struct RestoreNative {
+        bool off;
+        ~RestoreNative() { QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs, off); }
+    } restore_native{native_was_off};
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString existing{dir.filePath(QStringLiteral("name.dat"))};
+    {
+        QFile file(existing);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write("old"), qint64{3});
+    }
+    QWidget parent;
+    QString chosen;
+    bool done{false};
+    GUIUtil::getSaveFileName(&parent, QStringLiteral("Save"), dir.path(), QStringLiteral("Data (*.dat)"),
+        [&](const QString& filename) {
+            chosen = filename;
+            done = true;
+        });
+    QFileDialog* save{nullptr};
+    for (QFileDialog* child : parent.findChildren<QFileDialog*>(QStringLiteral("saveFileDialog"))) {
+        if (child->isVisible()) save = child;
+    }
+    QVERIFY(save);
+    save->selectFile(dir.filePath(QStringLiteral("name")));
+    bool asked{false};
+    QTimer::singleShot(0, save, [&asked]() {
+        auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+        if (!box) return;
+        if (QAbstractButton* yes = box->button(QMessageBox::Yes)) {
+            asked = true;
+            yes->click();
+        }
+    });
+    static_cast<QDialog*>(save)->accept();
+    QTRY_VERIFY(done);
+    QVERIFY(asked);
+    QCOMPARE(chosen, QDir::toNativeSeparators(existing));
+}
+
+//! A message box's answer is handed over while the box, and so the clicked button, still exists. The box used to be
+//! deleted on close before the deferred callback ran, so the button it received could already be freed.
+void GUIUtilTests::messageBoxHandsOverALiveButton()
+{
+    auto* box = new QMessageBox(QMessageBox::Question, QStringLiteral("Question"), QStringLiteral("Proceed?"), QMessageBox::NoButton);
+    QPushButton* proceed{box->addButton(QStringLiteral("Proceed"), QMessageBox::AcceptRole)};
+    box->addButton(QMessageBox::Cancel);
+    const QPointer<QPushButton> watch{proceed};
+    bool done{false};
+    bool alive{false};
+    QAbstractButton* clicked_button{nullptr};
+    GUIUtil::ShowModalMessageBoxAsynchronously(box, [&](int, QAbstractButton* clicked) {
+        done = true;
+        alive = !watch.isNull();
+        clicked_button = clicked;
+    });
+    proceed->click();
+    // Whether a pending delete-on-close runs before the deferred callback is up to the event loop. Run it first,
+    // the order in which the button dangled.
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QTRY_VERIFY(done);
+    QVERIFY(alive);
+    QCOMPARE(clicked_button, static_cast<QAbstractButton*>(proceed));
+    // And the box is still freed once the answer is in.
+    QTRY_VERIFY(watch.isNull());
+}
+
+#if defined(Q_OS_LINUX)
+//! Each character the desktop-entry spec reserves is escaped in the autostart Exec argument: the path is quoted
+//! (a space stays inside one argument), '"', '`' and '$' get a backslash that the string rule then doubles, a
+//! backslash becomes four, and '%' is doubled because Exec reads it as a field code.
+void GUIUtilTests::autostartExecArgumentEscapesReservedCharacters_data()
+{
+    QTest::addColumn<QString>("path");
+    QTest::addColumn<QString>("expected");
+    QTest::newRow("space") << QStringLiteral("/opt/my apps/qs") << QStringLiteral(R"("/opt/my apps/qs")");
+    QTest::newRow("double quote") << QStringLiteral(R"(/opt/a"b/qs)") << QStringLiteral(R"("/opt/a\\"b/qs")");
+    QTest::newRow("backtick") << QStringLiteral("/opt/a`b/qs") << QStringLiteral(R"("/opt/a\\`b/qs")");
+    QTest::newRow("dollar") << QStringLiteral("/opt/a$b/qs") << QStringLiteral(R"("/opt/a\\$b/qs")");
+    QTest::newRow("backslash") << QStringLiteral(R"(/opt/a\b/qs)") << QStringLiteral(R"("/opt/a\\\\b/qs")");
+    QTest::newRow("percent") << QStringLiteral("/opt/a%b/qs") << QStringLiteral(R"("/opt/a%%b/qs")");
+}
+
+void GUIUtilTests::autostartExecArgumentEscapesReservedCharacters()
+{
+    QFETCH(QString, path);
+    QFETCH(QString, expected);
+    QCOMPARE(QString::fromStdString(GUIUtil::DesktopExecArgument(path.toStdString())), expected);
+}
+
+//! The Linux autostart entry quotes the executable, so an install path with a space stays one argument.
+void GUIUtilTests::autostartEntryQuotesTheExecutable()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const bool had_config_home{qEnvironmentVariableIsSet("XDG_CONFIG_HOME")};
+    const QByteArray old_config_home{qgetenv("XDG_CONFIG_HOME")};
+    struct RestoreConfigHome {
+        bool had;
+        QByteArray value;
+        ~RestoreConfigHome()
+        {
+            if (had) {
+                qputenv("XDG_CONFIG_HOME", value);
+            } else {
+                qunsetenv("XDG_CONFIG_HOME");
+            }
+        }
+    } restore{had_config_home, old_config_home};
+    qputenv("XDG_CONFIG_HOME", QFile::encodeName(dir.path()));
+
+    QVERIFY(GUIUtil::SetStartOnSystemStartup(true));
+    QVERIFY(GUIUtil::GetStartOnSystemStartup());
+    const QDir autostart{dir.filePath(QStringLiteral("autostart"))};
+    const QStringList entries{autostart.entryList({QStringLiteral("*.desktop")}, QDir::Files)};
+    QCOMPARE(entries.size(), 1);
+    QFile entry{autostart.filePath(entries.front())};
+    QVERIFY(entry.open(QIODevice::ReadOnly | QIODevice::Text));
+    QString exec;
+    for (const QString& line : QString::fromUtf8(entry.readAll()).split(QLatin1Char('\n'))) {
+        if (line.startsWith(QStringLiteral("Exec="))) exec = line;
+    }
+    const QString exe{QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget()};
+    QVERIFY(!exe.isEmpty());
+    QVERIFY2(exec.startsWith(QStringLiteral("Exec=\"%1\" -min -chain=").arg(exe)), qPrintable(exec));
+
+    QVERIFY(GUIUtil::SetStartOnSystemStartup(false));
+    QVERIFY(!GUIUtil::GetStartOnSystemStartup());
+}
+#endif
 
 #ifdef USE_DBUS
 //! The first desktop notification on a Linux session bus makes Qt compute the

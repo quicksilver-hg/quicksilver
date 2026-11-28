@@ -25,7 +25,7 @@ enum class HeaderSyncDriverResultCode {
 };
 
 struct HeaderSyncDriverResult {
-    HeaderSyncDriverResultCode code;
+    HeaderSyncDriverResultCode code{HeaderSyncDriverResultCode::IGNORED_MESSAGE};
     std::optional<CSerializedNetMsg> outbound_message;
     std::optional<HeaderMessageProcessResult> header_message;
 
@@ -41,6 +41,8 @@ struct HeaderSyncDriverResult {
 
 const char* HeaderSyncDriverResultCodeString(HeaderSyncDriverResultCode code);
 
+//! Holds a reference to its session, so it must not outlive or be copied away from
+//! it; HeaderSyncPeer owns both and is neither copyable nor movable.
 class HeaderSyncDriver
 {
 public:

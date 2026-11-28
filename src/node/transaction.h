@@ -7,21 +7,20 @@
 #define QUICKSILVER_NODE_TRANSACTION_H
 
 #include <common/messages.h>
+#include <node/types.h>
 #include <primitives/transaction.h>
+
+#include <string>
 
 class CBlockIndex;
 class CTxRelayPool;
-namespace Consensus {
-struct Params;
-}
 
 namespace node {
 class BlockManager;
 struct NodeContext;
 
-/** Maximum burn value for sendrawtransaction, submitpackage, and testrelaypoolaccept RPC calls.
- * By default, a transaction with a burn value higher than this will be rejected
- * by these RPCs and the GUI. This can be overridden with the maxburnamount argument.
+/** Default burn limit for sendrawtransaction and submitpackage.
+ * Both RPCs accept a maxburnamount override.
  */
 static const CAmount DEFAULT_MAX_BURN_AMOUNT{0};
 
@@ -31,7 +30,7 @@ static const CAmount DEFAULT_MAX_BURN_AMOUNT{0};
  * RelayPool submission can be synchronous (will await relaypool entry notification
  * over the CValidationInterface) or asynchronous (will submit and not wait for
  * notification), depending on the value of wait_callback. wait_callback MUST
- * NOT be set while cs_main, cs_relaypool or cs_vault are held to avoid
+ * NOT be set while cs_main, the relaypool mutex or cs_vault are held to avoid
  * deadlock.
  *
  * @param[in]  node reference to node context
@@ -39,7 +38,7 @@ static const CAmount DEFAULT_MAX_BURN_AMOUNT{0};
  * @param[out] err_string reference to std::string to fill with error string if available
  * @param[in]  relay flag if both relaypool insertion and p2p relay are requested
  * @param[in]  wait_callback wait until callbacks have been processed to avoid stale result due to a sequentially RPC.
- * return error
+ * @returns The submission status.
  */
 [[nodiscard]] TransactionError BroadcastTransaction(NodeContext& node, CTransactionRef tx, std::string& err_string, bool relay, bool wait_callback);
 

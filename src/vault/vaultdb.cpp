@@ -4,8 +4,6 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <quicksilver-build-config.h> // IWYU pragma: keep
-
 #include <vault/vaultdb.h>
 
 #include <common/system.h>
@@ -14,18 +12,16 @@
 #include <protocol.h>
 #include <script/script.h>
 #include <serialize.h>
+#include <support/cleanse.h>
 #include <sync.h>
 #include <util/bip32.h>
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/time.h>
 #include <util/translation.h>
-#ifdef USE_SQLITE
 #include <vault/sqlite.h>
-#endif
 #include <vault/vault.h>
 
-#include <atomic>
 #include <optional>
 #include <string>
 
@@ -164,6 +160,7 @@ static bool ForEachRecord(DatabaseBatch& batch, const std::string& type, Visit v
 
 bool ReadBackupIdentity(DatabaseBatch& batch, BackupIdentity& identity)
 {
+    identity.ClearSensitive();
     identity = BackupIdentity{};
     try {
         if (!ForEachRecord(batch, DBKeys::VAULTDESCRIPTOR, [&](DataStream& key, DataStream&) {
@@ -280,8 +277,10 @@ bool VaultBatch::WriteDescriptorKey(const uint256& desc_id, const CPubKey& pubke
     key.reserve(pubkey.size() + privkey.size());
     key.insert(key.end(), pubkey.begin(), pubkey.end());
     key.insert(key.end(), privkey.begin(), privkey.end());
+    const uint256 checksum{Hash(key)};
+    memory_cleanse(key.data(), key.size());
 
-    return WriteIC(std::make_pair(DBKeys::VAULTDESCRIPTORKEY, std::make_pair(desc_id, pubkey)), std::make_pair(privkey, Hash(key)), false);
+    return WriteIC(std::make_pair(DBKeys::VAULTDESCRIPTORKEY, std::make_pair(desc_id, pubkey)), std::make_pair(privkey, checksum), false);
 }
 
 bool VaultBatch::WriteCryptedDescriptorKey(const uint256& desc_id, const CPubKey& pubkey, const std::vector<unsigned char>& secret)
@@ -422,7 +421,10 @@ static LoadResult LoadRecords(CVault* pvault, DatabaseBatch& batch, const std::s
         }
         std::string type;
         ssKey >> type;
-        assert(type == key);
+        if (type != key) {
+            result.m_result = DBErrors::CORRUPT;
+            return result;
+        }
         std::string error;
         DBErrors record_res = load_func(pvault, ssKey, ssValue, error);
         if (record_res != DBErrors::LOAD_OK) {
@@ -493,7 +495,7 @@ static DBErrors LoadDescriptorVaultRecords(CVault* pvault, DatabaseBatch& batch,
             uint32_t key_exp_index;
             uint32_t der_index;
             key >> desc_id;
-            assert(desc_id == id);
+            if (desc_id != id) return DBErrors::CORRUPT;
             key >> key_exp_index;
 
             // if the der_index exists, it's a derived xpub
@@ -506,6 +508,7 @@ static DBErrors LoadDescriptorVaultRecords(CVault* pvault, DatabaseBatch& batch,
 
             std::vector<unsigned char> ser_xpub(BIP32_EXTKEY_SIZE);
             value >> ser_xpub;
+            if (ser_xpub.size() != BIP32_EXTKEY_SIZE) return DBErrors::CORRUPT;
             CExtPubKey xpub;
             xpub.Decode(ser_xpub.data());
             if (parent) {
@@ -524,11 +527,12 @@ static DBErrors LoadDescriptorVaultRecords(CVault* pvault, DatabaseBatch& batch,
             uint256 desc_id;
             uint32_t key_exp_index;
             key >> desc_id;
-            assert(desc_id == id);
+            if (desc_id != id) return DBErrors::CORRUPT;
             key >> key_exp_index;
 
             std::vector<unsigned char> ser_xpub(BIP32_EXTKEY_SIZE);
             value >> ser_xpub;
+            if (ser_xpub.size() != BIP32_EXTKEY_SIZE) return DBErrors::CORRUPT;
             CExtPubKey xpub;
             xpub.Decode(ser_xpub.data());
             cache.CacheLastHardenedExtPubKey(key_exp_index, xpub);
@@ -538,7 +542,7 @@ static DBErrors LoadDescriptorVaultRecords(CVault* pvault, DatabaseBatch& batch,
 
         // Set the cache for this descriptor
         auto spk_man = (DescriptorScriptPubKeyMan*)pvault->GetScriptPubKeyMan(id);
-        assert(spk_man);
+        if (!spk_man) return DBErrors::CORRUPT;
         spk_man->SetCache(cache);
 
         // Get unencrypted keys
@@ -557,6 +561,10 @@ static DBErrors LoadDescriptorVaultRecords(CVault* pvault, DatabaseBatch& batch,
             }
             CKey privkey;
             CPrivKey pkey;
+            struct CleansePrivKey {
+                CPrivKey& bytes;
+                ~CleansePrivKey() { memory_cleanse(bytes.data(), bytes.size()); }
+            } cleanse_privkey{pkey};
             uint256 hash;
 
             value >> pkey;
@@ -564,6 +572,10 @@ static DBErrors LoadDescriptorVaultRecords(CVault* pvault, DatabaseBatch& batch,
 
             // hash pubkey/privkey to accelerate vault load
             std::vector<unsigned char> to_hash;
+            struct CleanseHashInput {
+                std::vector<unsigned char>& bytes;
+                ~CleanseHashInput() { memory_cleanse(bytes.data(), bytes.size()); }
+            } cleanse_hash_input{to_hash};
             to_hash.reserve(pubkey.size() + pkey.size());
             to_hash.insert(to_hash.end(), pubkey.begin(), pubkey.end());
             to_hash.insert(to_hash.end(), pkey.begin(), pkey.end());
@@ -849,12 +861,10 @@ DBErrors VaultBatch::LoadVault(CVault* pvault)
         // The FLAGS key is absent during vault creation.
         if ((result = LoadVaultFlags(pvault, *m_batch)) != DBErrors::LOAD_OK) return result;
 
-#ifndef ENABLE_EXTERNAL_SIGNER
         if (pvault->IsVaultFlagSet(VAULT_FLAG_EXTERNAL_SIGNER)) {
             pvault->VaultLogPrintf("loaded ok=0 reason=external-signer-support-not-compiled");
             return DBErrors::EXTERNAL_SIGNER_SUPPORT_REQUIRED;
         }
-#endif
 
         // Load descriptors
         result = std::max(LoadDescriptorVaultRecords(pvault, *m_batch, last_client), result);
@@ -874,6 +884,10 @@ DBErrors VaultBatch::LoadVault(CVault* pvault)
 
         // Load decryption keys
         result = std::max(LoadDecryptionKeys(pvault, *m_batch), result);
+    } catch (const std::exception& e) {
+        // S0197-A-05: say what failed, rather than only that the vault is corrupt.
+        pvault->VaultLogPrintf("loaded ok=0 reason=exception what=%s", e.what());
+        result = DBErrors::CORRUPT;
     } catch (...) {
         // Exceptions that can be ignored or treated as non-critical are handled by the individual loading functions.
         // Any uncaught exceptions will be caught here and treated as critical.
@@ -890,8 +904,11 @@ DBErrors VaultBatch::LoadVault(CVault* pvault)
         return DBErrors::CORRUPT;
     }
 
-    if (!has_last_client || last_client != CLIENT_VERSION) // Update
-        m_batch->Write(DBKeys::VERSION, CLIENT_VERSION);
+    // The version record is advisory. A read-only open (quicksilver-vault info) cannot
+    // write it, and a vault last written by another client must still load there.
+    if ((!has_last_client || last_client != CLIENT_VERSION) && !m_batch->Write(DBKeys::VERSION, CLIENT_VERSION)) {
+        pvault->VaultLogPrintf("loaded version_record_written=0");
+    }
 
     return result;
 }
@@ -903,15 +920,23 @@ static bool RunWithinTxn(VaultBatch& batch, std::string_view process_desc, const
         return false;
     }
 
-    // Run procedure
-    if (!func(batch)) {
+    bool succeeded{false};
+    try {
+        succeeded = func(batch);
+    } catch (const std::exception& e) {
+        LogDebug(HgLog::VAULTDB, "Error: %s threw: %s\n", process_desc, e.what());
+    } catch (...) {
+        LogDebug(HgLog::VAULTDB, "Error: %s threw\n", process_desc);
+    }
+    if (!succeeded) {
         LogDebug(HgLog::VAULTDB, "Error: %s failed\n", process_desc);
-        batch.TxnAbort();
+        if (!batch.TxnAbort()) LogDebug(HgLog::VAULTDB, "Error: cannot abort db txn for %s\n", process_desc);
         return false;
     }
 
     if (!batch.TxnCommit()) {
         LogDebug(HgLog::VAULTDB, "Error: cannot commit db txn for %s\n", process_desc);
+        if (!batch.TxnAbort()) LogDebug(HgLog::VAULTDB, "Error: cannot abort db txn for %s\n", process_desc);
         return false;
     }
 
@@ -923,33 +948,6 @@ bool RunWithinTxn(VaultDatabase& database, std::string_view process_desc, const 
 {
     VaultBatch batch(database);
     return RunWithinTxn(batch, process_desc, func);
-}
-
-void MaybeCompactVaultDB(VaultContext& context)
-{
-    static std::atomic<bool> fOneThread(false);
-    if (fOneThread.exchange(true)) {
-        return;
-    }
-
-    for (const std::shared_ptr<CVault>& pvault : GetVaults(context)) {
-        VaultDatabase& dbh = pvault->GetDatabase();
-
-        unsigned int nUpdateCounter = dbh.nUpdateCounter;
-
-        if (dbh.nLastSeen != nUpdateCounter) {
-            dbh.nLastSeen = nUpdateCounter;
-            dbh.nLastVaultUpdate = GetTime();
-        }
-
-        if (dbh.nLastFlushed != nUpdateCounter && GetTime() - dbh.nLastVaultUpdate >= 2) {
-            if (dbh.PeriodicFlush()) {
-                dbh.nLastFlushed = nUpdateCounter;
-            }
-        }
-    }
-
-    fOneThread = false;
 }
 
 bool VaultBatch::WriteAddressPreviouslySpent(const CTxDestination& dest, bool previously_spent)
@@ -990,7 +988,7 @@ bool VaultBatch::TxnCommit()
     bool res = m_batch->TxnCommit();
     if (res) {
         for (const auto& listener : m_txn_listeners) {
-            listener.on_commit();
+            if (listener.on_commit) listener.on_commit();
         }
         // txn finished, clear listeners
         m_txn_listeners.clear();
@@ -1003,7 +1001,7 @@ bool VaultBatch::TxnAbort()
     bool res = m_batch->TxnAbort();
     if (res) {
         for (const auto& listener : m_txn_listeners) {
-            listener.on_abort();
+            if (listener.on_abort) listener.on_abort();
         }
         // txn finished, clear listeners
         m_txn_listeners.clear();
@@ -1068,23 +1066,10 @@ std::unique_ptr<VaultDatabase> MakeDatabase(const fs::path& path, const Database
     if (!format && options.require_format) format = options.require_format;
 
     // If the format is not specified or detected, choose the only supported vault format.
-    if (!format) {
-#ifdef USE_SQLITE
-        format = DatabaseFormat::SQLITE;
-#endif
-    }
+    if (!format) format = DatabaseFormat::SQLITE;
 
     if (format == DatabaseFormat::SQLITE) {
-#ifdef USE_SQLITE
-        if constexpr (true) {
-            return MakeSQLiteDatabase(path, options, status, error);
-        } else
-#endif
-        {
-            error = Untranslated(strprintf("Failed to open database path '%s'. Build does not support SQLite database format.", fs::PathToString(path)));
-            status = DatabaseStatus::FAILED_BAD_FORMAT;
-            return nullptr;
-        }
+        return MakeSQLiteDatabase(path, options, status, error);
     }
 
     error = Untranslated(strprintf("Failed to open database path '%s'. Data is not in supported SQLite vault format.", fs::PathToString(path)));

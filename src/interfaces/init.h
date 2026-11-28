@@ -22,16 +22,16 @@ namespace interfaces {
 //! and get access to other interfaces (Node, Chain, Vault, etc).
 //!
 //! There is a different Init interface implementation for each executable
-//! (quicksilver-daemon, quicksilver) and each implementation can implement the make
-//! methods for interfaces it supports. The default make methods all return null.
+//! (quicksilver-daemon, quicksilver). Both supply the chain, mining and vault loader interfaces.
+//! The desktop also supplies the Node interface.
 class Init
 {
 public:
     virtual ~Init() = default;
     virtual std::unique_ptr<Node> makeNode() { return nullptr; }
-    virtual std::unique_ptr<Chain> makeChain() { return nullptr; }
-    virtual std::unique_ptr<Mining> makeMining() { return nullptr; }
-    virtual std::unique_ptr<VaultLoader> makeVaultLoader(Chain& chain) { return nullptr; }
+    virtual std::unique_ptr<Chain> makeChain() = 0;
+    virtual std::unique_ptr<Mining> makeMining() = 0;
+    virtual std::unique_ptr<VaultLoader> makeVaultLoader(Chain& chain) = 0;
 };
 
 //! Return implementation of Init interface for the daemon.

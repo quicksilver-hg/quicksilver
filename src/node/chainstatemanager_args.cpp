@@ -8,18 +8,17 @@
 #include <arith_uint256.h>
 #include <common/args.h>
 #include <common/system.h>
-#include <logging.h>
 #include <node/coins_view_args.h>
 #include <node/database_args.h>
 #include <tinyformat.h>
 #include <uint256.h>
 #include <util/result.h>
-#include <util/strencodings.h>
 #include <util/translation.h>
 #include <validation.h>
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 #include <string>
 
 namespace node {
@@ -27,7 +26,11 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& args, ChainstateManage
 {
     if (auto value{args.GetIntArg("-checkblockindex")}) {
         // Interpret bare -checkblockindex argument as 1 instead of 0.
-        opts.check_block_index = args.GetArg("-checkblockindex")->empty() ? 1 : *value;
+        const int64_t interval{args.GetArg("-checkblockindex")->empty() ? 1 : *value};
+        if (interval < 0 || interval > std::numeric_limits<int32_t>::max()) {
+            return util::Error{Untranslated("-checkblockindex must be between 0 and 2147483647")};
+        }
+        opts.check_block_index = static_cast<int32_t>(interval);
     }
 
     if (auto value{args.GetArg("-minimumchainwork")}) {
@@ -46,12 +49,20 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& args, ChainstateManage
         }
     }
 
-    if (auto value{args.GetIntArg("-maxtipage")}) opts.max_tip_age = std::chrono::seconds{*value};
+    if (auto value{args.GetIntArg("-maxtipage")}) {
+        if (*value < 0) return util::Error{Untranslated("-maxtipage cannot be negative")};
+        opts.max_tip_age = std::chrono::seconds{*value};
+    }
 
     ReadDatabaseArgs(args, opts.coins_db);
-    ReadCoinsViewArgs(args, opts.coins_view);
+    if (auto result{ReadCoinsViewArgs(args, opts.coins_view)}; !result) return result;
 
-    int script_threads = args.GetIntArg("-par", DEFAULT_SCRIPTCHECK_THREADS);
+    const int64_t requested_threads{args.GetIntArg("-par", DEFAULT_SCRIPTCHECK_THREADS)};
+    if (requested_threads < std::numeric_limits<int>::min() + GetNumCores() + 1 ||
+        requested_threads > std::numeric_limits<int>::max()) {
+        return util::Error{Untranslated("-par is outside the supported range")};
+    }
+    int script_threads = static_cast<int>(requested_threads);
     if (script_threads <= 0) {
         // -par=0 means autodetect (number of cores - 1 script threads)
         // -par=-n means "leave n cores free" (number of cores - n - 1 script threads)
@@ -61,6 +72,10 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& args, ChainstateManage
     opts.worker_threads_num = script_threads - 1;
 
     if (auto max_size = args.GetIntArg("-maxsigcachesize")) {
+        if (*max_size < 0 || *max_size > std::numeric_limits<int64_t>::max() / (1 << 20) ||
+            static_cast<uint64_t>(*max_size) > std::numeric_limits<size_t>::max() / (1 << 20)) {
+            return util::Error{Untranslated("-maxsigcachesize is outside the supported range")};
+        }
         // 1. When supplied with a max_size of 0, both the signature cache and
         //    script execution cache create the minimum possible cache (2
         //    elements). Therefore, we can use 0 as a floor here.

@@ -258,6 +258,15 @@ static fs::path HeaderStorePath(const ArgsManager& args)
     return fsbridge::AbsPathJoin(args.GetDataDirNet(), configured_path);
 }
 
+//! Every command that saves the header store creates its directory first, so the
+//! offline requestheaders/processheaders pipeline works in a fresh data directory.
+static void CreateHeaderStoreParent(const fs::path& header_store_path)
+{
+    if (header_store_path.has_parent_path()) {
+        fs::create_directories(header_store_path.parent_path());
+    }
+}
+
 static fs::path ReceiptStorePath(const ArgsManager& args)
 {
     const fs::path configured_path{args.GetPathArg("-receiptstore", fs::path{"agent"} / "payment-receipts.dat")};
@@ -298,7 +307,6 @@ static int PrintStatus(const ArgsManager& args)
     }
     tfm::format(std::cout, "header_height=%d\n", client.HeaderHeight());
     tfm::format(std::cout, "header_tip=%s\n", client.HeaderTip().GetBlockHash().ToString());
-    tfm::format(std::cout, "peer_count=%s\n", util::ToString(client.PeerCount()));
     return load_result.ok() ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
@@ -314,9 +322,7 @@ static int InitHeaders(const ArgsManager& args)
         return EXIT_FAILURE;
     }
 
-    if (header_store_path.has_parent_path()) {
-        fs::create_directories(header_store_path.parent_path());
-    }
+    CreateHeaderStoreParent(header_store_path);
 
     const agent::HeaderStoreResult save_result{client.SaveHeaders()};
     if (save_result != agent::HeaderStoreResult::OK) {
@@ -676,7 +682,7 @@ static util::Result<std::vector<agent::AllotmentPaymentReceiptArtifact>> DecodeS
     const CScript funding_script{GetScriptForDestination(DecodeDestination(funding_address))};
     const std::string funding_script_hex{HexStr(funding_script)};
 
-    const int64_t import_time{GetTime()};
+    const int64_t import_time{TicksSinceEpoch<std::chrono::seconds>(NodeClock::now())};
     std::vector<agent::AllotmentPaymentReceiptArtifact> receipts;
     receipts.reserve(unspents.size());
     for (const UniValue& unspent : unspents.get_array().getValues()) {
@@ -788,7 +794,7 @@ static std::optional<CAmount> ResolveSpentToday(const ArgsManager& args,
         return ParseCinnabarArg(args, "-spenttoday", 0, /*required=*/false);
     }
     if (store == nullptr) return CAmount{0};
-    auto spent_today{agent::SpentTodayFromActivities(store->activities, funding_address, GetTime())};
+    auto spent_today{agent::SpentTodayFromActivities(store->activities, funding_address, TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()))};
     if (!spent_today) {
         tfm::format(std::cerr, "Error: %s\n", util::ErrorString(spent_today).original);
         return std::nullopt;
@@ -1135,7 +1141,10 @@ static int SignBundle(const ArgsManager& args)
     // Only when the processor is about to be used. Sandbox never needs the opt-in,
     // a configured graphics helper is tried first, and -prove=0 does not grind at all.
     // Printed before the call: the message is useless once the minutes are gone.
-    if (allow_cpu_txpow && prove && Params().GetConsensus().nTxEdgeBits == 28 && !cuckatoo::GpuHelperConfigured(Params().GetConsensus().nTxEdgeBits)) {
+    const uint8_t tx_edgebits{Params().GetConsensus().nTxEdgeBits};
+    const bool cpu_needs_opt_in{agent::AllowsAllotmentCpuFallback(tx_edgebits, /*allow_cpu_txpow=*/true) &&
+                                !agent::AllowsAllotmentCpuFallback(tx_edgebits, /*allow_cpu_txpow=*/false)};
+    if (allow_cpu_txpow && prove && cpu_needs_opt_in && !cuckatoo::GpuHelperConfigured(tx_edgebits)) {
         tfm::format(std::cerr, "Notice: no graphics card is in use, so this spend will be proved on the processor. This takes many minutes and will use every core.\n");
     }
 
@@ -1143,8 +1152,12 @@ static int SignBundle(const ArgsManager& args)
     // running with the card pinned: the solver sits in its own process group, so
     // the terminal's SIGINT never reached it. Catching it here lets the prove
     // loop stop between attempts and the solver bridge kill its own child.
-    const agent::InterruptHandler interrupt;
-    const cuckatoo::SolverCancelCallback cancel{interrupt.Cancel()};
+    // Installed only when there is a grind to stop, and dropped as soon as signing
+    // returns: past that point Ctrl-C must stop the agent at once, as it does
+    // everywhere else, not be swallowed by a flag nothing polls any more.
+    std::optional<agent::InterruptHandler> interrupt;
+    if (prove) interrupt.emplace();
+    const cuckatoo::SolverCancelCallback cancel{interrupt.has_value() ? interrupt->Cancel() : cuckatoo::SolverCancelCallback{}};
 
     const bool has_prev_txid{args.IsArgSet("-prevtxid")};
     const bool has_prevout{args.IsArgSet("-prevout")};
@@ -1190,6 +1203,7 @@ static int SignBundle(const ArgsManager& args)
             },
             Params().GetConsensus());
     }()};
+    interrupt.reset();
     if (!signed_spend) {
         tfm::format(std::cerr, "Error: %s\n", util::ErrorString(signed_spend).original);
         return EXIT_FAILURE;
@@ -1204,7 +1218,7 @@ static int SignBundle(const ArgsManager& args)
         tfm::format(std::cerr, "Error: %s\n", util::ErrorString(store).original);
         return EXIT_FAILURE;
     }
-    const int64_t activity_time{GetTime()};
+    const int64_t activity_time{TicksSinceEpoch<std::chrono::seconds>(NodeClock::now())};
     const std::string spend_txid{signed_spend->transaction.GetHash().ToUint256().ToString()};
     std::vector<agent::AllotmentPaymentReceiptArtifact> spent_receipts;
     const std::vector<agent::AllotmentFundingOutputArtifact> spent_outputs{FundingOutputsFromSpendInputs(signed_spend->inputs)};
@@ -1378,15 +1392,28 @@ static util::Result<std::vector<CService>> LoadRelayPeers(const ArgsManager& arg
         return util::Error{Untranslated(strprintf("Relay peer store %s must be a JSON object.", fs::PathToString(peer_store_path)))};
     }
 
+    // Every field the writer emits is required: a store missing its type, version or
+    // network binding is not one this agent wrote, and must not supply peers.
+    const UniValue& type{root.find_value("type")};
+    if (!type.isStr() || type.get_str() != "quicksilver.agent_relay_peers") {
+        return util::Error{Untranslated(strprintf("Relay peer store %s is not a relay peer store.", fs::PathToString(peer_store_path)))};
+    }
+    const UniValue& version{root.find_value("version")};
+    if (!version.isNum() || version.getValStr() != "1") {
+        return util::Error{Untranslated(strprintf("Relay peer store %s has an unsupported version.", fs::PathToString(peer_store_path)))};
+    }
     const UniValue& chain{root.find_value("chain")};
-    if (chain.isStr() && chain.get_str() != Params().GetChainTypeString()) {
+    if (!chain.isStr() || !root.find_value("genesis_hash").isStr()) {
+        return util::Error{Untranslated(strprintf("Relay peer store %s does not name its chain and genesis hash.", fs::PathToString(peer_store_path)))};
+    }
+    if (chain.get_str() != Params().GetChainTypeString()) {
         return util::Error{Untranslated(strprintf("Relay peer store %s is for chain %s, not %s.",
                                                   fs::PathToString(peer_store_path),
                                                   chain.get_str(),
                                                   Params().GetChainTypeString()))};
     }
     const UniValue& genesis_hash{root.find_value("genesis_hash")};
-    if (genesis_hash.isStr() && genesis_hash.get_str() != Params().GenesisBlock().GetHash().ToString()) {
+    if (genesis_hash.get_str() != Params().GenesisBlock().GetHash().ToString()) {
         return util::Error{Untranslated(strprintf("Relay peer store %s is for a different genesis hash.", fs::PathToString(peer_store_path)))};
     }
 
@@ -1436,7 +1463,17 @@ static util::Result<void> SaveRelayPeers(const ArgsManager& args, const std::vec
     root.pushKV("genesis_hash", Params().GenesisBlock().GetHash().ToString());
     root.pushKV("peers", std::move(peer_values));
 
-    if (!WriteBinaryFile(peer_store_path, root.write(2) + "\n")) {
+    // LoadRelayPeers reads at most MAX_AGENT_PEER_STORE_FILE_SIZE bytes. A larger file
+    // would save and then fail every later peer command, with no CLI way to repair
+    // it, so refuse it here and keep the store as it was.
+    const std::string contents{root.write(2) + "\n"};
+    if (contents.size() > MAX_AGENT_PEER_STORE_FILE_SIZE) {
+        return util::Error{Untranslated(strprintf("Relay peer store %s would hold %u peers, more than fit in %u bytes; nothing was saved. Remove peers first.",
+                                                  fs::PathToString(peer_store_path),
+                                                  peers.size(),
+                                                  MAX_AGENT_PEER_STORE_FILE_SIZE))};
+    }
+    if (!WriteBinaryFile(peer_store_path, contents)) {
         return util::Error{Untranslated(strprintf("Could not write relay peer store %s.", fs::PathToString(peer_store_path)))};
     }
     return {};
@@ -1659,111 +1696,6 @@ static int ImportNodeAddressPeers(const ArgsManager& args)
     return ImportDecodedRelayPeers(args, *decoded_peers, "node_address_peer_count");
 }
 
-static std::vector<unsigned char> FrameWireMessage(const CSerializedNetMsg& message)
-{
-    const uint256 payload_hash{Hash(message.data)};
-    CMessageHeader header{Params().MessageStart(), message.m_type.c_str(), static_cast<unsigned int>(message.data.size())};
-    std::memcpy(header.pchChecksum, payload_hash.begin(), CMessageHeader::CHECKSUM_SIZE);
-
-    std::vector<unsigned char> bytes;
-    bytes.reserve(CMessageHeader::HEADER_SIZE + message.data.size());
-    VectorWriter{bytes, 0, header};
-    bytes.insert(bytes.end(), message.data.begin(), message.data.end());
-    return bytes;
-}
-
-static util::Result<size_t> SendWireMessage(const Sock& sock,
-                                            const CSerializedNetMsg& message,
-                                            std::chrono::milliseconds timeout)
-{
-    const std::vector<unsigned char> bytes{FrameWireMessage(message)};
-    CThreadInterrupt interrupt;
-    try {
-        sock.SendComplete(bytes, timeout, interrupt);
-    } catch (const std::exception& e) {
-        return util::Error{Untranslated(strprintf("Could not send %s message: %s", message.m_type, e.what()))};
-    }
-    return bytes.size();
-}
-
-static util::Result<std::vector<unsigned char>> ReceiveBytes(const Sock& sock,
-                                                             size_t byte_count,
-                                                             std::chrono::milliseconds timeout)
-{
-    std::vector<unsigned char> bytes(byte_count);
-    size_t received{0};
-    const auto deadline{GetTime<std::chrono::milliseconds>() + timeout};
-    while (received < byte_count) {
-        const auto now{GetTime<std::chrono::milliseconds>()};
-        if (now >= deadline) {
-            return util::Error{Untranslated(strprintf("Timed out waiting for %s bytes from peer", util::ToString(byte_count - received)))};
-        }
-
-        Sock::Event occurred{};
-        const auto wait_time{std::min(deadline - now, std::chrono::milliseconds{250})};
-        if (!sock.Wait(wait_time, Sock::RECV, &occurred)) {
-            return util::Error{Untranslated(strprintf("Peer socket wait failed: %s", NetworkErrorString(WSAGetLastError())))};
-        }
-        if (occurred == 0) {
-            continue;
-        }
-        if (occurred & Sock::ERR) {
-            return util::Error{Untranslated("Peer socket reported an error")};
-        }
-
-        const ssize_t read_count{sock.Recv(bytes.data() + received, byte_count - received, MSG_DONTWAIT)};
-        if (read_count > 0) {
-            received += static_cast<size_t>(read_count);
-            continue;
-        }
-        if (read_count == 0) {
-            return util::Error{Untranslated("Peer closed connection")};
-        }
-        const int error{WSAGetLastError()};
-        if (error != WSAEAGAIN && error != WSAEINTR && error != WSAEWOULDBLOCK && error != WSAEINPROGRESS) {
-            return util::Error{Untranslated(strprintf("Could not receive from peer: %s", NetworkErrorString(error)))};
-        }
-    }
-    return bytes;
-}
-
-static util::Result<CSerializedNetMsg> ReceiveWireMessage(const Sock& sock, std::chrono::milliseconds timeout)
-{
-    auto header_bytes{ReceiveBytes(sock, CMessageHeader::HEADER_SIZE, timeout)};
-    if (!header_bytes) return util::Error{util::ErrorString(header_bytes)};
-
-    CMessageHeader header;
-    try {
-        DataStream stream{Span<const unsigned char>{header_bytes->data(), header_bytes->size()}};
-        stream >> header;
-    } catch (const std::exception& e) {
-        return util::Error{Untranslated(strprintf("Could not decode peer message header: %s", e.what()))};
-    }
-
-    if (header.pchMessageStart != Params().MessageStart()) {
-        return util::Error{Untranslated("Peer sent a message for a different network")};
-    }
-    if (!header.IsMessageTypeValid()) {
-        return util::Error{Untranslated("Peer sent an invalid message type")};
-    }
-    if (header.nMessageSize > MAX_PROTOCOL_MESSAGE_LENGTH) {
-        return util::Error{Untranslated(strprintf("Peer message %s is too large: %s bytes", header.GetMessageType(), util::ToString(header.nMessageSize)))};
-    }
-
-    auto payload{ReceiveBytes(sock, header.nMessageSize, timeout)};
-    if (!payload) return util::Error{util::ErrorString(payload)};
-
-    const uint256 payload_hash{Hash(*payload)};
-    if (std::memcmp(payload_hash.begin(), header.pchChecksum, CMessageHeader::CHECKSUM_SIZE) != 0) {
-        return util::Error{Untranslated(strprintf("Peer message %s has an invalid checksum", header.GetMessageType()))};
-    }
-
-    CSerializedNetMsg message;
-    message.m_type = header.GetMessageType();
-    message.data = std::move(*payload);
-    return message;
-}
-
 static void PrintPeerTransactionRelayResult(const agent::PeerTransactionRelayResult& result, std::optional<size_t> index = std::nullopt)
 {
     const std::string prefix{index.has_value() ? strprintf("peer_%s_", util::ToString(*index)) : ""};
@@ -1849,7 +1781,7 @@ static PeerDiscoveryResult DiscoverPeersFromOnePeer(const CService& peer, std::c
         return result;
     }
 
-    auto sent_getaddr{SendWireMessage(*sock, NetMsg::Make(NetMsgType::GETADDR), timeout)};
+    auto sent_getaddr{agent::SendWireMessage(*sock, NetMsg::Make(NetMsgType::GETADDR), timeout)};
     if (!sent_getaddr) {
         result.error = util::ErrorString(sent_getaddr).original;
         return result;
@@ -1857,7 +1789,7 @@ static PeerDiscoveryResult DiscoverPeersFromOnePeer(const CService& peer, std::c
     result.getaddr_sent = true;
 
     for (int message_count{0}; message_count < MAX_AGENT_PEER_DISCOVERY_MESSAGES; ++message_count) {
-        auto peer_message{ReceiveWireMessage(*sock, timeout)};
+        auto peer_message{agent::ReceiveWireMessage(*sock, timeout)};
         if (!peer_message) {
             result.error = util::ErrorString(peer_message).original;
             return result;
@@ -1875,7 +1807,7 @@ static PeerDiscoveryResult DiscoverPeersFromOnePeer(const CService& peer, std::c
             CSerializedNetMsg pong;
             pong.m_type = NetMsgType::PONG;
             pong.data = peer_message->data;
-            auto sent_pong{SendWireMessage(*sock, pong, timeout)};
+            auto sent_pong{agent::SendWireMessage(*sock, pong, timeout)};
             if (!sent_pong) {
                 result.error = util::ErrorString(sent_pong).original;
                 return result;
@@ -1988,7 +1920,7 @@ static util::Result<size_t> SendAgentClientOutboundMessages(const Sock& sock,
 {
     size_t sent_count{0};
     for (CSerializedNetMsg& outbound : client.DrainOutboundMessages()) {
-        auto sent{SendWireMessage(sock, outbound, timeout)};
+        auto sent{agent::SendWireMessage(sock, outbound, timeout)};
         if (!sent) return util::Error{util::ErrorString(sent)};
         if (sent_getheaders && outbound.m_type == NetMsgType::GETHEADERS) {
             *sent_getheaders = true;
@@ -2053,7 +1985,7 @@ static PeerHeaderSyncResult SyncHeadersFromOnePeer(const ArgsManager& args,
     }
 
     for (int message_count{0}; message_count < MAX_AGENT_PEER_HEADER_SYNC_MESSAGES && !result.peer_synced; ++message_count) {
-        auto peer_message{ReceiveWireMessage(*sock, timeout)};
+        auto peer_message{agent::ReceiveWireMessage(*sock, timeout)};
         if (!peer_message) {
             result.error = util::ErrorString(peer_message).original;
             break;
@@ -2062,7 +1994,7 @@ static PeerHeaderSyncResult SyncHeadersFromOnePeer(const ArgsManager& args,
             CSerializedNetMsg pong;
             pong.m_type = NetMsgType::PONG;
             pong.data = peer_message->data;
-            auto sent_pong{SendWireMessage(*sock, pong, timeout)};
+            auto sent_pong{agent::SendWireMessage(*sock, pong, timeout)};
             if (!sent_pong) {
                 result.error = util::ErrorString(sent_pong).original;
                 break;
@@ -2087,9 +2019,7 @@ static PeerHeaderSyncResult SyncHeadersFromOnePeer(const ArgsManager& args,
     result.header_height = client.HeaderHeight();
     result.header_tip = client.HeaderTip().GetBlockHash();
     if (result.accepted_headers > 0 || result.peer_synced) {
-        if (header_store_path.has_parent_path()) {
-            fs::create_directories(header_store_path.parent_path());
-        }
+        CreateHeaderStoreParent(header_store_path);
         result.save_status = client.SaveHeaders();
         result.header_store_saved = result.save_status == agent::HeaderStoreResult::OK;
         if (!result.header_store_saved && result.error.empty()) {
@@ -2216,6 +2146,7 @@ static void PrintTxPeerAction(const agent::TxPeerAction& tx_action)
         tfm::format(std::cout, "inventory_decode_result=%s\n", agent::TxMessageResultCodeString(inventory_message.code));
         tfm::format(std::cout, "announced_inventory=%s\n", util::ToString(inventory_message.announced_count));
         tfm::format(std::cout, "decoded_inventory=%s\n", util::ToString(inventory_message.decoded_count));
+        tfm::format(std::cout, "skipped_inventory=%s\n", util::ToString(inventory_message.skipped_count));
     }
     if (result.tx_message.has_value()) {
         const agent::TxMessageDecodeResult& tx_message{*result.tx_message};
@@ -2229,6 +2160,7 @@ static void PrintTxPeerAction(const agent::TxPeerAction& tx_action)
     tfm::format(std::cout, "matched_requests=%s\n", util::ToString(result.matched_requests.size()));
     tfm::format(std::cout, "duplicate_inventory=%s\n", util::ToString(result.duplicate_count));
     tfm::format(std::cout, "missing_inventory=%s\n", util::ToString(result.missing_count));
+    tfm::format(std::cout, "over_limit_inventory=%s\n", util::ToString(result.over_limit_count));
 }
 
 static void PrintTransactionAction(const agent::AgentPeerAction& action, const agent::AgentClient& client)
@@ -2286,6 +2218,7 @@ static int ProcessHeaders(const ArgsManager& args)
         return EXIT_FAILURE;
     }
 
+    CreateHeaderStoreParent(header_store_path);
     const agent::HeaderStoreResult save_result{client.SaveHeaders()};
     if (save_result != agent::HeaderStoreResult::OK) {
         tfm::format(std::cerr, "Error: could not write header store %s: %s\n",

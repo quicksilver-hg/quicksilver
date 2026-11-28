@@ -10,14 +10,17 @@
 
 #include <qt/clientmodel.h>
 #include <qt/guiutil.h>
-#include <qt/peertablemodel.h>
 
-#include <net.h>
 
 #include <QByteArray>
 #include <QCompleter>
 #include <QThread>
 #include <QWidget>
+
+#include <chrono>
+#include <cstdint>
+#include <string>
+#include <vector>
 
 class PlatformStyle;
 class RPCExecutor;
@@ -35,7 +38,6 @@ namespace Ui {
 QT_BEGIN_NAMESPACE
 class QDateTime;
 class QMenu;
-class QItemSelection;
 QT_END_NAMESPACE
 
 /** Local Quicksilver RPC console. */
@@ -145,6 +147,7 @@ private:
     } const ts;
 
     void startExecutor();
+    void stopExecutor();
     void setTrafficGraphRange(int mins);
 
     enum ColumnWidths
@@ -171,6 +174,7 @@ private:
     QCompleter *autoCompleter = nullptr;
     QThread thread;
     RPCExecutor* m_executor{nullptr};
+    uint64_t m_executor_generation{0};
     VaultModel* m_last_vault_model{nullptr};
     bool m_is_executing{false};
     QByteArray m_peer_widget_header_state;

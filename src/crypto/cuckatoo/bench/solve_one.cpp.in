@@ -15,7 +15,6 @@
 #define NSIPHASH 1        // scalar siphash (compiles out the AVX paths)
 #define ATOMIC            // atomic edge bitmap (matches the validated lean build)
 #define SQUASH_OUTPUT 1   // silence the solver's stdout chatter
-#define CUCKATOO_NO_MAIN  // drop the standalone CLI main()
 namespace cuckatoo_bench_e@QS_EDGEBITS@ {
 #include "vendor/lean.cpp"  // run_solver/create_solver_ctx/... + verify/setheader
 }
@@ -24,7 +23,6 @@ namespace cuckatoo_bench_e@QS_EDGEBITS@ {
 #undef NSIPHASH
 #undef ATOMIC
 #undef SQUASH_OUTPUT
-#undef CUCKATOO_NO_MAIN
 
 #include <vector>
 
@@ -68,7 +66,7 @@ bool BenchSolveOne(void* ctx, const unsigned char* prepow, size_t len,
     E::SolverSolutions sols{};
     // range=1: exactly one graph. This is the whole point of the harness.
     E::run_solver(static_cast<E::SolverCtx*>(ctx), buf.data(), (E::u32)len, nonce,
-                  /*range=*/1, &sols, nullptr);
+                  /*range=*/1, &sols);
     if (sols.num_sols <= 0) return false;
     for (int j = 0; j < cuckatoo::PROOFSIZE; ++j) {
         out[j] = static_cast<uint32_t>(sols.sols[0].proof[j]);

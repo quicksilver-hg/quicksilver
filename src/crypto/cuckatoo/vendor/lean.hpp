@@ -19,19 +19,7 @@
 #define MAXSOLS 4
 #endif
 
-typedef uint64_t u64; // save some typing
-
-#ifdef ATOMIC
-typedef std::atomic<u32> au32;
-typedef std::atomic<u64> au64;
-#else
-typedef u32 au32;
-typedef u64 au64;
-#endif
-
 // algorithm/performance parameters; assume EDGEBITS < 31
-
-const u32 NODEBITS = EDGEBITS + 1;
 
 #ifndef PART_BITS
 // #bits used to partition edge set processing to save memory
@@ -131,7 +119,9 @@ public:
     f265_hdr = headernonce;
     f265_len = len;
     if (mutatenonce) {
-      ((u32 *)headernonce)[len/sizeof(u32)-1] = htole32_internal(nonce); // place nonce at end
+      const u32 nonce_le = htole32_internal(nonce);
+      const size_t offset = (len / sizeof(u32) - 1) * sizeof(u32);
+      memcpy(headernonce + offset, &nonce_le, sizeof(nonce_le));
     }
     setheader(headernonce, len, &sip_keys);
     alive.clear(); // set all edges to be alive
@@ -140,19 +130,8 @@ public:
   ~cuckoo_ctx() {
     delete[] sols;
   }
-  bool barrier() {
-    return barry.wait();
-  }
-  void abort() {
-    barry.abort();
-  }
-  void prefetch(const u64 *hashes, const u32 part) const {
-    for (u32 i=0; i < NSIPHASH; i++) {
-      u64 u = hashes[i] & NODEMASK;
-      if ((u >> NONPART_BITS) == part) {
-        nonleaf.prefetch(u & NONPART_MASK);
-      }
-    }
+  void barrier() {
+    barry.wait();
   }
   void node_deg(const u64 *hashes, const u32 nsiphash, const u32 part) {
     for (u32 i=0; i < nsiphash; i++) {
@@ -186,7 +165,6 @@ public:
         if (nidx % NSIPHASH == 0) {
           node_deg(hashes+nidx-NSIPHASH, NSIPHASH, part);
           siphash24xN(&sip_keys, indices, hashes+nidx-NSIPHASH);
-          prefetch(hashes+nidx-NSIPHASH, part);
           nidx %= NPREFETCH;
         }
         if (ffs & 64) break; // can't shift by 64
@@ -214,7 +192,6 @@ public:
         indices[nidx++] = 2*(u64)nonce + uorv;
         if (nidx % NSIPHASH == 0) {
           siphash24xN(&sip_keys, indices+nidx-NSIPHASH, hashes+nidx-NSIPHASH);
-          prefetch(hashes+nidx-NSIPHASH, part);
           nidx %= NPREFETCH;
           kill(hashes+nidx, indices+nidx, NSIPHASH, part, id);
         }
@@ -253,14 +230,14 @@ void *worker(void *vp) {
     for (u32 part = 0; part <= PART_MASK; part++) {
       if (tp->id == 0)
         ctx->nonleaf.clear(); // clear all counts
-      if (ctx->barrier()) return nullptr;  // barrier aborted -> stop this worker
+      ctx->barrier();
       ctx->count_node_deg(tp->id,round&1,part);
-      if (ctx->barrier()) return nullptr;  // barrier aborted -> stop this worker
+      ctx->barrier();
       ctx->kill_leaf_edges(tp->id,round&1,part);
 #ifdef VERBOSE
       if (tp->id == 0) print_log(" %c%d %llu", "UV"[round&1], part, alive.count());
 #endif
-      if (ctx->barrier()) return nullptr;  // barrier aborted -> stop this worker
+      ctx->barrier();
     }
 #ifdef VERBOSE
     if (tp->id == 0) print_log("\n");

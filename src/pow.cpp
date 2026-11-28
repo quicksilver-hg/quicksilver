@@ -239,6 +239,10 @@ arith_uint256 BaseTxWork(const CBlockIndex* anchor, const Consensus::Params& par
     if (anchor == nullptr) return arith_uint256(1);
 
     // base_coupled = average blockwork over the MA window back from the anchor, / K.
+    // The sum below wraps only if the average proof reaches 2^256 / nBaseWorkMAWindow,
+    // i.e. a target below about 144: no reachable difficulty. Pinned by
+    // pow_tests/base_tx_work_sum_cannot_wrap_at_reachable_targets; a change here is a
+    // consensus change that needs a chain restart, not a patch.
     arith_uint256 sum{0};
     int n = 0;
     for (const CBlockIndex* p = anchor; p != nullptr && n < params.nBaseWorkMAWindow;

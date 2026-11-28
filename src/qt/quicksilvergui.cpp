@@ -33,9 +33,6 @@
 #endif // ENABLE_VAULT
 
 #include <chainparams.h>
-#ifdef Q_OS_MACOS
-#include <qt/macdockiconhandler.h>
-#endif
 
 #include <common/system.h>
 #include <interfaces/handler.h>
@@ -45,6 +42,7 @@
 #include <validation.h>
 
 #include <functional>
+#include <atomic>
 #include <memory>
 
 #include <QAbstractButton>
@@ -93,9 +91,7 @@
 
 
 const std::string QuicksilverGUI::DEFAULT_UIPLATFORM =
-#if defined(Q_OS_MACOS)
-        "macosx"
-#elif defined(Q_OS_WIN)
+#if defined(Q_OS_WIN)
         "windows"
 #else
         "other"
@@ -188,7 +184,7 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
     // Accept D&D of URIs
     setAcceptDrops(true);
 
-    // Create actions for the toolbar, menu bar and tray/dock icon
+    // Create actions for the toolbar, menu bar and tray icon
     // Needs vaultFrame to be initialized
     createActions();
     connectBenchCommands();
@@ -251,17 +247,14 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
     unitDisplayControl = new UnitDisplayStatusBarControl(platformStyle);
     unitDisplayControl->setParent(m_bench_status_strip);
     labelVaultEncryptionIcon = new GUIUtil::ThemedLabel(platformStyle, m_bench_status_strip);
-    labelVaultHDStatusIcon = new GUIUtil::ThemedLabel(platformStyle, m_bench_status_strip);
     labelProxyIcon = new GUIUtil::ClickableLabel(platformStyle, m_bench_status_strip);
     connectionsControl = new GUIUtil::ClickableLabel(platformStyle, m_bench_status_strip);
     labelVaultEncryptionIcon->hide();
-    labelVaultHDStatusIcon->hide();
 
     strip_layout->addWidget(connectionsControl);
     strip_layout->addWidget(labelProxyIcon);
     if (enableVault) {
         strip_layout->addWidget(labelVaultEncryptionIcon);
-        strip_layout->addWidget(labelVaultHDStatusIcon);
     }
     strip_layout->addStretch();
     // Hover tips land here. A QStatusBar message would hide the whole strip.
@@ -288,9 +281,6 @@ QuicksilverGUI::QuicksilverGUI(interfaces::Node& node, const PlatformStyle *_pla
     });
 
 
-#ifdef Q_OS_MACOS
-    m_app_nap_inhibitor = new CAppNapInhibitor;
-#endif
 
     GUIUtil::handleCloseWindowShortcut(this);
 }
@@ -304,10 +294,6 @@ QuicksilverGUI::~QuicksilverGUI()
     settings.setValue("MainWindowGeometry", saveGeometry());
     if(trayIcon) // Hide tray icon, as deleting will let it linger until quit (on Ubuntu)
         trayIcon->hide();
-#ifdef Q_OS_MACOS
-    delete m_app_nap_inhibitor;
-    MacDockIconHandler::cleanup();
-#endif
 
     delete rpcConsole;
 }
@@ -701,31 +687,8 @@ void QuicksilverGUI::createMenuBar()
         minimize_action->setEnabled(window != nullptr && (window->flags() & Qt::Dialog) != Qt::Dialog && window->windowState() != Qt::WindowMinimized);
     });
 
-#ifdef Q_OS_MACOS
-    QAction* zoom_action = window_menu->addAction(tr("Zoom"));
-    connect(zoom_action, &QAction::triggered, [] {
-        QWindow* window = qApp->focusWindow();
-        if (!window) return;
-        if (window->windowState() != Qt::WindowMaximized) {
-            window->showMaximized();
-        } else {
-            window->showNormal();
-        }
-    });
-
-    connect(qApp, &QApplication::focusWindowChanged, this, [zoom_action] (QWindow* window) {
-        zoom_action->setEnabled(window != nullptr);
-    });
-#endif
 
     if (vaultFrame) {
-#ifdef Q_OS_MACOS
-        window_menu->addSeparator();
-        QAction* main_window_action = window_menu->addAction(tr("Main Window"));
-        connect(main_window_action, &QAction::triggered, [this] {
-            GUIUtil::bringToFront(this);
-        });
-#endif
         window_menu->addSeparator();
         window_menu->addAction(usedSendingAddressesAction);
         window_menu->addAction(usedReceivingAddressesAction);
@@ -986,6 +949,10 @@ void QuicksilverGUI::refreshTicker()
             QObject::disconnect(m_ticker_balance_connection);
             m_ticker_balance_connection = {};
         }
+        if (m_ticker_unit_connection) {
+            QObject::disconnect(m_ticker_unit_connection);
+            m_ticker_unit_connection = {};
+        }
         m_ticker_model = nullptr;
         m_ticker_figures->hide();
         m_ticker_empty->show();
@@ -994,12 +961,14 @@ void QuicksilverGUI::refreshTicker()
 
     if (model != m_ticker_model) {
         if (m_ticker_balance_connection) QObject::disconnect(m_ticker_balance_connection);
+        if (m_ticker_unit_connection) QObject::disconnect(m_ticker_unit_connection);
+        m_ticker_unit_connection = {};
         m_ticker_model = model;
         m_ticker_balance_connection = connect(model, &VaultModel::balanceChanged, this, [this](const interfaces::VaultBalances&) {
             refreshTicker();
         });
         if (OptionsModel* options = model->getOptionsModel()) {
-            connect(options, &OptionsModel::displayUnitChanged, this, [this](QuicksilverUnit) { refreshTicker(); }, Qt::UniqueConnection);
+            m_ticker_unit_connection = connect(options, &OptionsModel::displayUnitChanged, this, [this](QuicksilverUnit) { refreshTicker(); });
         }
     }
 
@@ -1127,7 +1096,7 @@ void QuicksilverGUI::setClientModel(ClientModel *_clientModel, interfaces::Block
     this->clientModel = _clientModel;
     if(_clientModel)
     {
-        // Create system tray menu (or setup the dock menu) that late to prevent users from calling actions,
+        // Create the system tray menu that late to prevent users from calling actions,
         // while the client has not yet fully loaded
         createTrayIconMenu();
 
@@ -1145,11 +1114,6 @@ void QuicksilverGUI::setClientModel(ClientModel *_clientModel, interfaces::Block
         setKnownBestHeight(tip_info->header_height, /*presync=*/false);
         setNumBlocks(tip_info->block_height, QDateTime::fromSecsSinceEpoch(tip_info->block_time), tip_info->verification_progress, SyncType::BLOCK_SYNC, SynchronizationState::INIT_DOWNLOAD);
         connect(_clientModel, &ClientModel::numBlocksChanged, this, &QuicksilverGUI::setNumBlocks);
-
-        // Receive and report messages from client model
-        connect(_clientModel, &ClientModel::message, [this](const QString &title, const QString &message, unsigned int style){
-            this->message(title, message, style);
-        });
 
         // Show progress dialog
         connect(_clientModel, &ClientModel::showProgress, this, &QuicksilverGUI::showProgress);
@@ -1226,6 +1190,7 @@ void QuicksilverGUI::setVaultController(VaultController* vault_controller, bool 
 
     GUIUtil::ExceptionSafeConnect(vault_controller, &VaultController::vaultAdded, this, &QuicksilverGUI::addVault);
     connect(vault_controller, &VaultController::vaultRemoved, this, &QuicksilverGUI::removeVault);
+    connect(vault_controller, &VaultController::thinHeaderNoticeChanged, this, [this](const QString& notice) { if (!notice.isEmpty()) message(tr("Header store"), notice, CClientUIInterface::MSG_WARNING); });
     connect(vault_controller, &VaultController::destroyed, this, [this] {
         // vault_controller gets destroyed manually, but it leaves our member copy dangling
         m_vault_controller = nullptr;
@@ -1251,7 +1216,11 @@ void QuicksilverGUI::addVault(VaultModel* vaultModel)
     if (!vaultFrame || !m_vault_controller) return;
 
     VaultView* vault_view = new VaultView(vaultModel, platformStyle, vaultFrame);
-    if (!vaultFrame->addView(vault_view)) return;
+    if (!vaultFrame->addView(vault_view)) {
+        // The frame already shows this model. Don't leave the refused view behind as a stray child of the frame.
+        vault_view->deleteLater();
+        return;
+    }
 
     rpcConsole->addVault(vaultModel);
     if (m_vault_selector->count() == 0) {
@@ -1282,7 +1251,6 @@ void QuicksilverGUI::removeVault(VaultModel* vaultModel)
 {
     if (!vaultFrame) return;
 
-    labelVaultHDStatusIcon->hide();
     labelVaultEncryptionIcon->hide();
 
     int index = m_vault_selector->findData(QVariant::fromValue(vaultModel));
@@ -1317,15 +1285,6 @@ void QuicksilverGUI::setCurrentVaultBySelectorIndex(int index)
 {
     VaultModel* vault_model = m_vault_selector->itemData(index).value<VaultModel*>();
     if (vault_model) setCurrentVault(vault_model);
-}
-
-void QuicksilverGUI::removeAllVaults()
-{
-    if(!vaultFrame)
-        return;
-    setVaultActionsEnabled(false);
-    vaultFrame->removeAllVaults();
-    gotoHomePage();
 }
 
 void QuicksilverGUI::markConsensusInitializationFailed()
@@ -1375,6 +1334,15 @@ void QuicksilverGUI::setVaultActionsEnabled(bool enabled)
     openAction->setEnabled(enabled);
     m_close_vault_action->setEnabled(enabled);
     m_close_all_vaults_action->setEnabled(enabled);
+#ifdef ENABLE_VAULT
+    // The flag only says a vault is open. Mask values decides the Ledger and the encryption state decides Encrypt
+    // Vault and Change Passphrase, so apply those rules again rather than leave the flag's answer standing.
+    if (enabled && vaultFrame && vaultFrame->currentVaultModel()) {
+        // Not enableHistoryAction: that also leaves an open Ledger page, which this resync must not do.
+        historyAction->setEnabled(!isPrivacyModeActivated());
+        updateVaultStatus();
+    }
+#endif
 }
 
 void QuicksilverGUI::setConsensusEnabled(bool enabled)
@@ -1485,28 +1453,21 @@ void QuicksilverGUI::createTrayIcon()
 {
     assert(QSystemTrayIcon::isSystemTrayAvailable());
 
-#ifndef Q_OS_MACOS
     if (QSystemTrayIcon::isSystemTrayAvailable()) {
         trayIcon = new QSystemTrayIcon(m_network_style->getTrayAndWindowIcon(), this);
         QString toolTip = tr("%1 client").arg(CLIENT_NAME) + " " + m_network_style->getTitleAddText();
         trayIcon->setToolTip(toolTip);
     }
-#endif
 }
 
 void QuicksilverGUI::createTrayIconMenu()
 {
-#ifndef Q_OS_MACOS
     if (!trayIcon) return;
-#endif // Q_OS_MACOS
 
-    // Configuration of the tray icon (or Dock icon) menu.
+    // Configuration of the tray icon menu.
     QAction* show_hide_action{nullptr};
-#ifndef Q_OS_MACOS
-    // Note: On macOS, the Dock icon's menu already has Show / Hide action.
     show_hide_action = trayIconMenu->addAction(QString(), this, &QuicksilverGUI::toggleHidden);
     trayIconMenu->addSeparator();
-#endif // Q_OS_MACOS
 
     QAction* send_action{nullptr};
     QAction* receive_action{nullptr};
@@ -1524,8 +1485,6 @@ void QuicksilverGUI::createTrayIconMenu()
     options_action->setMenuRole(QAction::PreferencesRole);
     QAction* node_window_action = trayIconMenu->addAction(openRPCConsoleAction->text(), openRPCConsoleAction, &QAction::trigger);
     QAction* quit_action{nullptr};
-#ifndef Q_OS_MACOS
-    // Note: On macOS, the Dock icon's menu already has Quit action.
     trayIconMenu->addSeparator();
     quit_action = trayIconMenu->addAction(quitAction->text(), quitAction, &QAction::trigger);
 
@@ -1536,16 +1495,6 @@ void QuicksilverGUI::createTrayIconMenu()
             toggleHidden();
         }
     });
-#else
-    // Note: On macOS, the Dock icon is used to provide the tray's functionality.
-    MacDockIconHandler* dockIconHandler = MacDockIconHandler::instance();
-    connect(dockIconHandler, &MacDockIconHandler::dockIconClicked, [this] {
-        if (m_node.shutdownRequested()) return; // nothing to show, node is shutting down.
-        show();
-        activateWindow();
-    });
-    trayIconMenu->setAsDockMenu();
-#endif // Q_OS_MACOS
 
     connect(
         // Using QSystemTrayIcon::Context is not reliable.
@@ -1781,6 +1730,12 @@ void QuicksilverGUI::setOptionsModel(OptionsModel* options_model)
 {
     m_options_model = options_model;
     unitDisplayControl->setOptionsModel(options_model);
+    // Restored here, not only with the client model: with consensus off a vault opens without one, and addVault
+    // hands the action's state to the vault, which saves it. An unrestored action saved "unmasked" over the user's
+    // mask_values=true.
+    if (options_model && m_mask_values_action) {
+        m_mask_values_action->setChecked(options_model->getOption(OptionsModel::OptionID::MaskValues).toBool());
+    }
 }
 
 void QuicksilverGUI::openOptionsDialogWithTab(OptionsDialog::Tab tab)
@@ -1803,15 +1758,6 @@ void QuicksilverGUI::openOptionsDialogWithTab(OptionsDialog::Tab tab)
 
 void QuicksilverGUI::setNumBlocks(int count, const QDateTime& blockDate, double, SyncType synctype, SynchronizationState sync_state)
 {
-// Disabling macOS App Nap on initial sync, disk and reindex operations.
-#ifdef Q_OS_MACOS
-    if (sync_state == SynchronizationState::POST_INIT) {
-        m_app_nap_inhibitor->enableAppNap();
-    } else {
-        m_app_nap_inhibitor->disableAppNap();
-    }
-#endif
-
     if (synctype != SyncType::BLOCK_SYNC) {
         setKnownBestHeight(count, synctype == SyncType::HEADER_PRESYNC);
     }
@@ -1871,7 +1817,7 @@ void QuicksilverGUI::openVault()
 
 void QuicksilverGUI::message(const QString& title, QString message, unsigned int style, bool* ret, const QString& detailed_message)
 {
-    // Default title. On macOS, the window title is ignored (as required by the macOS Guidelines).
+    // Default title.
     QString strTitle{CLIENT_NAME};
     // Default to information icon
     int nMBoxIcon = QMessageBox::Information;
@@ -1917,7 +1863,7 @@ void QuicksilverGUI::message(const QString& title, QString message, unsigned int
         if (!(buttons = (QMessageBox::StandardButton)(style & CClientUIInterface::BTN_MASK)))
             buttons = QMessageBox::Ok;
 
-        showNormalIfMinimized();
+        GUIUtil::bringToFront(this);
         auto* box = new QMessageBox(static_cast<QMessageBox::Icon>(nMBoxIcon), strTitle, message, buttons, this);
         box->setObjectName(QStringLiteral("clientMessageBox"));
         box->setTextFormat(Qt::PlainText);
@@ -1944,7 +1890,6 @@ void QuicksilverGUI::changeEvent(QEvent *e)
 
     QMainWindow::changeEvent(e);
 
-#ifndef Q_OS_MACOS // Ignored on Mac
     if(e->type() == QEvent::WindowStateChange)
     {
         if(clientModel && clientModel->getOptionsModel() && clientModel->getOptionsModel()->getMinimizeToTray())
@@ -1962,12 +1907,10 @@ void QuicksilverGUI::changeEvent(QEvent *e)
             }
         }
     }
-#endif
 }
 
 void QuicksilverGUI::closeEvent(QCloseEvent *event)
 {
-#ifndef Q_OS_MACOS // Ignored on Mac
     if(!clientModel)
     {
         rpcConsole->close();
@@ -1988,9 +1931,6 @@ void QuicksilverGUI::closeEvent(QCloseEvent *event)
             event->ignore();
         }
     }
-#else
-    QMainWindow::closeEvent(event);
-#endif
 }
 
 void QuicksilverGUI::showEvent(QShowEvent *event)
@@ -2096,13 +2036,6 @@ bool QuicksilverGUI::handlePaymentRequest(const SendCoinsRecipient& recipient)
     return false;
 }
 
-void QuicksilverGUI::setHDStatus(bool privkeyDisabled, int hdEnabled)
-{
-    labelVaultHDStatusIcon->setThemedPixmap(privkeyDisabled ? QStringLiteral(":/icons/eye") : hdEnabled ? QStringLiteral(":/icons/hd_enabled") : QStringLiteral(":/icons/hd_disabled"), STATUSBAR_ICONSIZE, STATUSBAR_ICONSIZE);
-    labelVaultHDStatusIcon->setToolTip(privkeyDisabled ? tr("Private key <b>disabled</b>") : hdEnabled ? tr("HD key generation is <b>enabled</b>") : tr("HD key generation is <b>disabled</b>"));
-    labelVaultHDStatusIcon->show();
-}
-
 void QuicksilverGUI::setEncryptionStatus(int status)
 {
     switch(status)
@@ -2149,7 +2082,6 @@ void QuicksilverGUI::updateVaultStatus()
     }
     VaultModel * const vaultModel = vaultView->getVaultModel();
     setEncryptionStatus(vaultModel->getEncryptionStatus());
-    setHDStatus(vaultModel->vault().privateKeysDisabled(), vaultModel->vault().hdEnabled());
 }
 #endif // ENABLE_VAULT
 
@@ -2263,44 +2195,50 @@ static bool ThreadSafeMessageBox(QuicksilverGUI* gui, const bilingual_str& messa
     // Node callers still need the bool on this stack. Wait off the GUI thread
     // when possible so the GUI is not in QDialog::exec(). A GUI-thread caller
     // (startup InitError) still nested-waits with QEventLoop.
+    //
+    // The waiter is released once: by the answer, or when the last copy of
+    // `release` goes. That is the queued call dropped unrun (the window deleted,
+    // or the application torn down first) or the box destroyed without an answer, either of
+    // which would otherwise leave a node thread waiting for good (S0236-A-04).
+    struct Dismissal {
+        QSemaphore semaphore{0};
+        std::atomic<bool> released{false};
+        void release() { if (!released.exchange(true)) semaphore.release(); }
+    };
     auto result = std::make_shared<bool>(false);
-    auto dismissed = std::make_shared<QSemaphore>(0);
+    auto dismissal = std::make_shared<Dismissal>();
+    std::shared_ptr<void> release{nullptr, [dismissal](void*) { dismissal->release(); }};
     QPointer<QuicksilverGUI> gui_ptr(gui);
 
-    auto present = [gui_ptr, qcaption, qmessage, style, detailed_message, result, dismissed]() {
-        if (!gui_ptr) {
-            dismissed->release();
-            return;
-        }
+    auto present = [gui_ptr, qcaption, qmessage, style, detailed_message, result, dismissal, release = std::move(release)]() {
+        if (!gui_ptr) return;
         gui_ptr->message(qcaption, qmessage, style, nullptr, detailed_message);
         const QList<QMessageBox*> boxes = gui_ptr->findChildren<QMessageBox*>(QStringLiteral("clientMessageBox"));
         QMessageBox* box = boxes.isEmpty() ? nullptr : boxes.constLast();
-        if (!box) {
-            dismissed->release();
-            return;
-        }
-        QObject::connect(box, &QMessageBox::finished, [result, dismissed](int r) {
+        if (!box) return;
+        QObject::connect(box, &QMessageBox::finished, [result, dismissal, release](int r) {
             *result = (r == QMessageBox::Ok);
-            dismissed->release();
+            dismissal->release();
         });
     };
 
     if (QThread::currentThread() == qApp->thread()) {
         present();
-        if (!dismissed->tryAcquire()) {
+        if (!dismissal->semaphore.tryAcquire()) {
             QEventLoop loop;
             const QList<QMessageBox*> boxes = gui->findChildren<QMessageBox*>(QStringLiteral("clientMessageBox"));
             if (QMessageBox* box = boxes.isEmpty() ? nullptr : boxes.constLast()) {
                 QObject::connect(box, &QMessageBox::finished, &loop, &QEventLoop::quit);
+                QObject::connect(box, &QObject::destroyed, &loop, &QEventLoop::quit);
                 loop.exec();
             }
         }
         return *result;
     }
 
-    bool invoked = QMetaObject::invokeMethod(gui, present, Qt::QueuedConnection);
+    bool invoked = QMetaObject::invokeMethod(gui, std::move(present), Qt::QueuedConnection);
     assert(invoked);
-    dismissed->acquire();
+    dismissal->semaphore.acquire();
     return *result;
 }
 

@@ -1,14 +1,16 @@
 # GPU Solver
 
-The release packages now include `qsgpusolve-opencl`, which runs on any card with an OpenCL driver. This page is rewritten for it in a later change; the CUDA instructions below still apply to building `qsgpusolve-cuda` yourself.
+`qsgpusolve-opencl`, Quicksilver's graphics helper, accelerates Cuckatoo
+proof-of-work for transfers and mining on any card with an OpenCL driver: AMD,
+NVIDIA and Intel. It is not part of consensus validation: every proof the
+helper returns is checked by the node before use.
 
-Quicksilver's external `qsgpusolve-cuda` helper accelerates Cuckatoo proof-of-work
-for transfers and mining. It is not part of consensus validation: every proof
-returned by the helper is checked by the node before use.
-
-The helper currently uses CUDA and therefore requires a supported NVIDIA GPU
-and CUDA toolkit. It is built separately so CUDA does not become a dependency
-of the node or vault build.
+The helper comes with the release packages (on Ubuntu, the `quicksilver-gpu`
+package) and is built with the project; see [Building Quicksilver](../INSTALL.md).
+The desktop, the daemon and the agent find it on their own, in
+`../libexec/quicksilver` from their own directory or beside their own
+executable. It loads the OpenCL driver when it runs, so it needs no OpenCL SDK
+to build, and a computer with no OpenCL driver simply reports no usable card.
 
 ## When it is needed
 
@@ -41,121 +43,34 @@ computer's processor to mine blocks.
 The measured times are calibration results, not performance guarantees. GPU,
 CPU, driver, and current network work requirements all affect completion time.
 
-## Choosing the compute capability
+## Checking the cards
 
-`GPU_ARCH` (Linux) and `-GpuArch` (Windows) must match the card the helper will
-run on. The examples below use `sm_61`; that is a value to replace, not a
-default to copy. A helper built for the wrong architecture fails to load and
-reports **exit status 4**, which is the same status as "no CUDA device found" —
-so an architecture mismatch looks exactly like missing hardware.
-
-| Card family | Example cards | Value |
-| --- | --- | --- |
-| Maxwell | GTX 950, GTX 960, GTX 970, GTX 980 | `sm_52` |
-| Pascal | GTX 1050 Ti, GTX 1060, GTX 1080, P104-100 | `sm_61` |
-| Turing | GTX 1660, RTX 2060, RTX 2080 | `sm_75` |
-| Ampere | RTX 3060, RTX 3090, A100 | `sm_86` (`sm_80` for A100) |
-| Ada | RTX 4070, RTX 4090, L40S | `sm_89` |
-
-Read the value straight off the card rather than inferring it:
+List the cards the helper can use:
 
 ```bash
-nvidia-smi --query-gpu=name,compute_cap --format=csv
+qsgpusolve-opencl --list-devices
 ```
 
-A reported compute capability of `5.2` means `sm_52`, `6.1` means `sm_61`, and
-so on.
+Each line names a card by an id such as `pci:0000:04:00.0`, with its status.
+By default every graphics card except built-in graphics is used. Choose cards
+with `-cuckatoodevice=<id>` (repeat it for several), or use
+`-cuckatoodevice=cpu` to prepare proofs on the processor only.
 
-**CUDA 13.0 removed support for Maxwell, Pascal and Volta.** Building for
-`sm_52`, `sm_61` or `sm_70` requires a **CUDA 12.x** toolkit; CUDA 13.x cannot
-target those cards at all. CUDA 12.x emits a deprecation warning for these
-architectures, which is expected and not an error. Install a 12.x toolkit when
-the target card predates Turing.
-
-## Linux and other Unix-like systems
-
-### Getting a CUDA toolkit
-
-The helper needs `nvcc`, from NVIDIA's CUDA toolkit. It is not part of the
-graphics driver and is not in this project's dependency list, because CUDA is
-deliberately not a build dependency of Quicksilver itself. Two ways to get it:
-
-- **Your distribution's package**, if it has one — `nvidia-cuda-toolkit` on
-  Debian, Ubuntu and their derivatives, `cuda` on Arch. This is the least
-  trouble, but you get whatever version the distribution shipped, and some
-  distributions ship none.
-- **NVIDIA's own repository**, from
-  <https://developer.nvidia.com/cuda-downloads>, which covers every supported
-  distribution and lets you choose the version — in particular a 12.x toolkit
-  for a pre-Turing card, per the note above.
-
-Check what you ended up with before building, because the version decides which
-cards you can target at all:
-
-```bash
-nvcc --version
-```
-
-A `release 12.x` line can build for every architecture in the table above. A
-`release 13.x` line cannot build for `sm_52`, `sm_61` or `sm_70`; `nvcc`
-rejects those targets at build time.
-
-### Building
-
-Choose the compute capability for the target GPU (see above), and build the
-helper with its own Makefile:
-
-```bash
-make -C src/crypto/cuckatoo/gpu GPU_ARCH=sm_61   # replace sm_61 with your card's value
-```
-
-The output is `src/crypto/cuckatoo/gpu/qsgpusolve-cuda`. The default graph size is
-28, which matches `main` and `publictest`. A helper built for another graph size
-is rejected at runtime.
-
-Probe the executable and CUDA device without starting a solve:
-
-```bash
-src/crypto/cuckatoo/gpu/qsgpusolve-cuda 28 00000000 0 0; echo "exit=$?"
-```
-
-**A successful probe prints nothing.** Silence is the success signal, not a
-missing CUDA toolkit or a broken build, so read the exit status rather than the
-output: `exit=0` means the helper ran and found a usable CUDA device. Any other
-status is explained in the table below.
-
-**Building on a machine with no GPU works; probing it does not.** `nvcc` needs
-no device to compile, so a helper can be built on one machine for a card in
-another. Two consequences:
-
-- `nvidia-smi` cannot tell you the compute capability of a card that is not
-  there. Read it on the target machine, or take the value from the table above
-  and confirm it once the helper is in place.
-- The probe above returns **exit status 4** on a machine with no CUDA device.
-  That is the correct answer, not a build failure — and it is the same status
-  an architecture mismatch gives, so it proves nothing about whether you picked
-  `GPU_ARCH` correctly. Only a probe on the target card does that.
-
-The project's own `gpu_parity_tests` is skipped whenever `CUCKATOO_GPU_SOLVER`
-is unset, whether or not the machine has a card. With it set but no usable
-device, the solver exits 4 and the test fails; it does not skip.
+The helper's exit status says what happened:
 
 | Status | Meaning |
 | --- | --- |
-| 0 | Ran to completion. A cycle was found, or the nonce window closed without one — the two are told apart by the presence of `nonce=` and `cycle=` on stdout, not by the status |
+| 0 | Ran to completion. A cycle was found, or the nonce window closed without one — the two are told apart by the presence of `nonce=` and `cycle=` on stdout, not by the status. For `--list-devices`, the OpenCL driver loaded, even if it lists no card |
 | 2 | Bad invocation: wrong argument count, or a malformed preimage |
 | 3 | The helper was built for a different graph size than the one requested |
-| 4 | No usable CUDA device — no device at all, or a binary built for the wrong compute capability |
-| 5 | The device faulted mid-solve. The helper stops at the first fault and prints the CUDA error and a platform-specific first thing to check |
+| 4 | No usable card: no OpenCL driver, a `--device` that is not present, a kernel that does not compile, or a failed start-up check |
+| 5 | The card faulted mid-solve: an enqueue, read or finish failed. The helper stops at the first fault and prints the OpenCL error and a platform-specific first thing to check |
 
-Status 5 exists because a faulted card is otherwise silent: the vendored
-`gpuAssert()` consumes the CUDA error and resets the device, so the remaining
-graphs in the run search stale host memory and find nothing, which is
-indistinguishable from an unlucky nonce window. The helper therefore arms
-before each call and tests independent signals after it, rather than trusting
-the solver's return value.
+The project's own `gpu_parity_tests` is skipped whenever `CUCKATOO_GPU_SOLVER`
+is unset, whether or not the machine has a card. With it set but no usable
+card, the helper exits 4 and the test fails; it does not skip.
 
-### AMD cards on Linux kernel 7.0
+## AMD cards on Linux kernel 7.0
 
 On Linux kernel 7.0 the `amdgpu` driver's default limit for a compute job is 2000 ms (kernel 6.17 uses 10000 ms). A Cuckatoo solve
 job can run longer than that. When it does, the kernel logs a line like `ring comp_1.3.0 timeout` and resets the GPU, and
@@ -176,89 +91,24 @@ The first command prints a value only if one was set. It is four numbers in mill
 3. Read the parameter again. It must show `2000,60000,2000,2000`.
 
 On the tested machine, this removed the timeout lines (none in a 2 hour 24 minute mining run). This has been checked on one machine and one card
-family; other cards and kernels may behave differently. Nvidia cards and the CUDA solver are not affected.
+family; other cards and kernels may behave differently. Nvidia cards are not affected.
 
-## Windows
-
-### Getting a CUDA 12.x toolkit
-
-The helper needs `nvcc` from a **CUDA 12.x** toolkit. CUDA 13.x cannot target
-`sm_52`, `sm_61` or `sm_70`, as above. NVIDIA's current download page offers a
-13.x toolkit, so take a 12.x release from the toolkit archive:
-
-<https://developer.nvidia.com/cuda-toolkit-archive>
-
-Choose a 12.x Windows installer. When a newer display driver is already
-installed, install the toolkit components only and leave the bundled display
-driver unselected, so the installer does not replace that driver. The toolkit
-is installed under
-
-`C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.<n>`
-
-which is the path `-CudaPath` takes. Check the compiler before building:
-
-```powershell
-& "$CudaPath\bin\nvcc.exe" --version
-```
-
-A `release 12.x` line can build for every architecture in the table above.
-
-### Building
-
-Use the maintained PowerShell wrapper from a Developer PowerShell prompt. Pass
-paths and versions that match the installed Visual Studio and CUDA toolchains:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass `
-  -File .\contrib\windows\build-qsgpusolve-cuda-windows.ps1 `
-  -VsInstallPath "C:\Program Files\Microsoft Visual Studio\2022\Community" `
-  -VcVarsVersion "14.39" `
-  -CudaPath "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9" `
-  -GpuArch sm_61
-```
-
-The default output is
-`src\crypto\cuckatoo\gpu\qsgpusolve-cuda.exe`. The script's default
-`-VsInstallPath` is Visual Studio 2022 Community, the same path as the example
-and the one the Windows build guide requires. Omit `-VcVarsVersion` to enter
-the developer shell with Visual Studio's own default toolset. The example
-passes `14.39` because the fleet builds with that toolset; it is not a default
-to copy. When you do pass `-VcVarsVersion`, that version must exist under
-`<VsInstallPath>\VC\Tools\MSVC` or the wrapper stops. Set `-CudaPath` to the
-12.x toolkit you installed and `-GpuArch` to the target card.
-
-`-Target qsgpucalibrate` builds the calibration twin instead, the Windows
-equivalent of `make -C src/crypto/cuckatoo/gpu qsgpucalibrate`. That binary is a
-measurement tool, not a miner: it times every graph rather than stopping at the
-first cycle, and it is never on a validation path.
-
-Probe it before configuring Quicksilver:
-
-```powershell
-.\src\crypto\cuckatoo\gpu\qsgpusolve-cuda.exe 28 00000000 0 0
-```
-
-### Raise the GPU watchdog before solving
+## Windows: raise the GPU watchdog before solving
 
 Windows runs a **Timeout Detection and Recovery** watchdog that resets the
 display driver when a GPU operation runs longer than `TdrDelay`, which defaults
 to **2 seconds**. A single Cuckatoo graph at the shipped size takes **several
-seconds**, so a device on which that limit applies can be reset mid-solve.
+seconds**, so the card can be reset mid-solve.
 
 The helper detects a fault mid-solve and stops: it returns **exit status 5**,
-names the CUDA error, and points at `TdrDelay`. It also warns at startup, before
-any solving, when the device it is about to use reports that a kernel run-time
-limit applies and `TdrDelay` is below 10 seconds or is unset — unset means
-Windows applies its 2-second default. CUDA reports that as
-`cudaDevAttrKernelExecTimeout`: 1 when a limit applies, 0 when it does not. A
-reported 0 prints nothing. If the query fails, the helper still warns on a
-short or unset value, so a failed query does not hide the warning. That warning
-is advisory: TDR bounds how long a single kernel may occupy the adapter, not
-total graph time, so a low value is a strong suspicion rather than a proof.
+names the OpenCL error, and points at `TdrDelay`. It also warns at startup,
+before any solving, when `TdrDelay` is below 10 seconds or is unset — unset
+means Windows applies its 2-second default. That warning is advisory: TDR
+bounds how long a single kernel may occupy the adapter, not total graph time,
+so a low value is a strong suspicion rather than a proof.
 
-Neither signal replaces the event log. The exit-5 path has not been exercised
-on genuinely faulting hardware, and a reset that lands between kernels can leave
-nothing sticky behind, so confirm against Event ID 4101 as below rather than
+Neither signal replaces the event log. A reset that lands between kernels can
+leave nothing behind, so confirm against Event ID 4101 as below rather than
 concluding from a clean exit that the watchdog is not firing.
 
 Raise the limit from an **elevated** PowerShell, then **reboot**:
@@ -284,33 +134,25 @@ Get-WinEvent -FilterHashtable @{LogName='System'; Id=4101} -MaxEvents 5 |
   Select-Object TimeCreated, Message
 ```
 
-Event ID 4101 from source `Display` — *"Display driver nvlddmkm stopped
-responding and has successfully recovered"* — timestamped during a solve is the
+Event ID 4101 from source `Display` — for example *"Display driver nvlddmkm
+stopped responding and has successfully recovered"* — timestamped during a solve is the
 signature of this problem. A solve that appears to succeed is not sufficient
 evidence on its own, because the reset does not occur on every graph.
 
-Whether the startup warning was printed is the helper's own answer for the
-device it is using. To see the driver model of the card:
+## Using a helper you built yourself
 
-```text
-nvidia-smi --query-gpu=name,driver_model.current --format=csv
-```
-
-`nvidia-smi -q` prints the same fact under **Driver Model** / **Current**. On
-Windows that value is TCC, WDDM, or MCDM. On Linux it is `N/A`, and the helper
-does not print this warning. The warning follows the device query above. It
-does not follow this column, and it does not follow whether a monitor is
-attached.
-
-## Configure Quicksilver
-
-Pass an absolute path at startup:
+To use a different helper instead of `qsgpusolve-opencl`, such as a CUDA or
+ROCm build of your own, pass its absolute path at startup:
 
 ```bash
-quicksilver -cuckatoosolver=/absolute/path/to/qsgpusolve-cuda
-quicksilver-daemon -cuckatoosolver=/absolute/path/to/qsgpusolve-cuda
-quicksilver-agent -cuckatoosolver=/absolute/path/to/qsgpusolve-cuda <command>
+quicksilver -cuckatoosolver=/absolute/path/to/helper
+quicksilver-daemon -cuckatoosolver=/absolute/path/to/helper
+quicksilver-agent -cuckatoosolver=/absolute/path/to/helper <command>
 ```
+
+It must keep the bundled helper's contract: the same arguments, the
+`--list-devices` lines, `progress=`, `nonce=` and `cycle=` on stdout, and the
+exit statuses above. Quicksilver does not ship or build any other helper.
 
 The desktop also exposes the helper path in Settings → Options → Hardware and probes
 the selected executable before reporting acceleration as ready. Restart after
@@ -322,6 +164,6 @@ carry no special meaning. It may be a wrapper script rather than the solver
 binary — `test/testrun/qs-solver-dispatch.sh` is one — provided the script is
 executable and takes the same arguments.
 
-Use `-cuckatoosolvertimeout=<seconds>` only when the default no-progress
-watchdog is unsuitable for the target hardware. A missing, failed, malformed,
+Use `-cuckatoosolvertimeout=<seconds>`, from 1 to 86400, only when the default
+30-second no-progress watchdog is unsuitable for the target hardware. A missing, failed, malformed,
 or timed-out helper result is never trusted.

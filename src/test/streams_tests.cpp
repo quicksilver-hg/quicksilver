@@ -11,9 +11,21 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <array>
+
 using namespace std::string_literals;
 
 BOOST_FIXTURE_TEST_SUITE(streams_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(span_reader_ignore_bounds)
+{
+    const std::array<unsigned char, 2> bytes{1, 2};
+    SpanReader reader{Span{bytes}};
+    BOOST_CHECK_THROW(reader.ignore(3), std::ios_base::failure);
+    BOOST_CHECK_EQUAL(reader.size(), 2U);
+    reader.ignore(2);
+    BOOST_CHECK(reader.empty());
+}
 
 BOOST_AUTO_TEST_CASE(xor_file)
 {

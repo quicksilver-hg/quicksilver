@@ -19,7 +19,7 @@ BEGIN
             VALUE "FileVersion",        CLIENT_VERSION_STRING
             VALUE "InternalName",       "quicksilver-agent"
             VALUE "LegalCopyright",     COPYRIGHT_STR
-            VALUE "LegalTrademarks1",   "Distributed under the MIT software license, see the accompanying file COPYING or http://www.opensource.org/licenses/mit-license.php."
+            VALUE "LegalTrademarks1",   "Distributed under the MIT software license, see the accompanying file COPYING or https://opensource.org/license/mit/."
             VALUE "OriginalFilename",   "quicksilver-agent.exe"
             VALUE "ProductName",        "quicksilver-agent"
             VALUE "ProductVersion",     CLIENT_VERSION_STRING
@@ -28,6 +28,6 @@ BEGIN
 
     BLOCK "VarFileInfo"
     BEGIN
-        VALUE "Translation", 0x0, 1252 // language neutral - multilingual (decimal)
+        VALUE "Translation", 0x409, 1252 // U.S. English, Windows-1252: matches the 040904E4 block
     END
 END

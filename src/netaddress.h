@@ -126,6 +126,13 @@ protected:
     /**
      * Scope id if scoped/link-local IPV6 address.
      * See https://tools.ietf.org/html/rfc4007
+     *
+     * The scope is local routing state only: it picks the interface for a
+     * link-local socket and is rendered as "%zone". It is never serialized
+     * (neither ADDRv1 nor ADDRv2 carries it, and both decoders reset it to 0),
+     * and it is deliberately left out of operator==, operator< and every key or
+     * hash, because peers and AddrMan cannot see it: two addresses that differ
+     * only in scope are the same address. SetIP() copies it with the address.
      */
     uint32_t m_scope_id{0};
 
@@ -162,6 +169,7 @@ public:
     bool IsRFC6598() const; // IPv4 ISP-level NAT (100.64.0.0/10)
     bool IsRFC5737() const; // IPv4 documentation addresses (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24)
     bool IsRFC3849() const; // IPv6 documentation address (2001:0DB8::/32)
+    bool IsRFC9637() const; // IPv6 documentation address (3FFF::/20)
     bool IsRFC3927() const; // IPv4 autoconfig (169.254.0.0/16)
     bool IsRFC3964() const; // IPv6 6to4 tunnelling (2002::/16)
     bool IsRFC4193() const; // IPv6 unique local (FC00::/7)
@@ -543,7 +551,7 @@ public:
      * Set CService from a network sockaddr.
      * @param[in] paddr Pointer to sockaddr structure
      * @param[in] addrlen Length of sockaddr structure in bytes. This will be checked to exactly match the length of
-     * a socket address of the provided family, unless std::nullopt is passed
+     * a socket address of the provided family.
      * @returns true on success
      */
     bool SetSockAddr(const struct sockaddr* paddr, socklen_t addrlen);

@@ -10,7 +10,6 @@
 #include <consensus/amount.h>
 #include <core_io.h>
 #include <key_io.h>
-#include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <rpc/request.h>
 #include <rpc/util.h>
@@ -20,6 +19,9 @@
 #include <univalue.h>
 #include <util/strencodings.h>
 #include <util/translation.h>
+
+#include <set>
+#include <vector>
 
 void AddInputs(CMutableTransaction& rawTx, const UniValue& inputs_in)
 {

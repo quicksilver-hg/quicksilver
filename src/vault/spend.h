@@ -59,11 +59,10 @@ FinalTxPow GetFinalTxPow(CVault& vault, const CTransaction& tx, int anchor_heigh
 /** Log a complete, signed transaction's final proof inputs and result. */
 void LogFinalTxPow(CVault& vault, const CTransaction& tx, int anchor_height);
 
-/** Whether this shipped graph size may fall back to built-in CPU solving. */
-constexpr bool AllowsTxPowCpuFallback(uint8_t edgebits)
-{
-    return edgebits == 19 || edgebits == 28;
-}
+/** Whether this shipped graph size may fall back to built-in CPU solving: the
+ * sandbox and main transfer graphs (publictest uses main's), taken from the chain
+ * params as agent::AllowsAllotmentCpuFallback does (S0193-A-05). */
+bool AllowsTxPowCpuFallback(uint8_t edgebits);
 
 //! The transfer failure that directs the user to configure a graphics card.
 bilingual_str TxProofNeedsGraphicsCardError();
@@ -81,9 +80,13 @@ bilingual_str TxProofNeedsGraphicsCardError();
  * reported success.
  *
  * `cancel` is polled from inside the solve loops, not merely between them. A grind
- * holds cs_vault for its whole duration and can run for minutes, so a caller that
- * wants to stop one -- a user abandoning a transfer, or a close that must not delete
- * the vault under a running worker -- has no other way to be let go of.
+ * can run for minutes, so a caller that wants to stop one -- a user abandoning a
+ * transfer, or a close that must not delete the vault under a running worker -- has
+ * no other way to be let go of.
+ *
+ * Callers run it without cs_vault: it reads the chain and writes the proof fields of
+ * a local transaction, nothing in the vault. It, TxPowAnchorHeight, GetFinalTxPow and
+ * LogFinalTxPow carry no lock annotation for that reason (S0193-A-04).
  */
 std::optional<bilingual_str> GrindTransactionPow(CVault& vault, CMutableTransaction& txNew,
                                                  uint64_t bytes, int anchor_height,
@@ -91,7 +94,7 @@ std::optional<bilingual_str> GrindTransactionPow(CVault& vault, CMutableTransact
                                                  const cuckatoo::SolverCancelCallback& cancel = {});
 
 struct TxSize {
-    int64_t vsize{-1};
+    //! Feeds the standard-weight size cap (MAX_STANDARD_TX_WEIGHT).
     int64_t weight{-1};
     //! Upper bound on the WITH-witness serialized size once signed. Distinct from
     //! weight, which is 3*base + total and so overstates bytes by up to 4x. The
@@ -202,7 +205,7 @@ util::Result<SelectionResult> AttemptSelection(const CAmount& nTargetValue, Outp
  * Exact raw-value matches are tried before largest-first fallback with change.
  *
  * @param[in]  nTargetValue              The target value
- * @param[in]  groups                    The struct containing the outputs grouped by script and divided by (1) positive only outputs and (2) all outputs (positive + negative).
+ * @param[in]  groups                    The outputs grouped by script; only the positive-value group (`positive_group`) is searched.
  * @param[in]  coin_selection_params     Parameters for the coin selection
  * returns                               If successful, a SelectionResult containing the input set
  *                                       If failed, returns (1) an empty error message if the target was not reached (general "Insufficient funds")

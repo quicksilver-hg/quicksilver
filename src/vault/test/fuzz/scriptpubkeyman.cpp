@@ -6,6 +6,7 @@
 #include <addresstype.h>
 #include <chainparams.h>
 #include <coins.h>
+#include <common/signmessage.h>
 #include <key.h>
 #include <primitives/transaction.h>
 #include <psqt.h>
@@ -118,6 +119,15 @@ FUZZ_TARGET(scriptpubkeyman, .init = initialize_spkm)
         }
     }
 
+    // S0212-C-03: also run against an encrypted, locked vault. Encryption is
+    // after the descriptors are added, as a user would encrypt an existing vault.
+    const bool locked{fuzzed_data_provider.ConsumeBool()};
+    if (locked) {
+        assert(vault.EncryptVault("fuzz passphrase"));
+        if (!vault.IsLocked()) assert(vault.Lock());
+        assert(vault.IsLocked());
+    }
+
     bool good_data{true};
     LIMITED_WHILE(good_data && fuzzed_data_provider.ConsumeBool(), 20) {
         CallOneOf(
@@ -141,7 +151,9 @@ FUZZ_TARGET(scriptpubkeyman, .init = initialize_spkm)
                                            *std::get_if<PKHash>(&dest) :
                                            PKHash{ConsumeUInt160(fuzzed_data_provider)}};
                         std::string str_sig;
-                        (void)spk_manager->SignMessage(msg, pk_hash, str_sig);
+                        const SigningResult signed_msg{spk_manager->SignMessage(msg, pk_hash, str_sig)};
+                        // No private key is reachable while the vault is locked.
+                        if (locked) assert(signed_msg != SigningResult::OK);
                         (void)spk_manager->GetMetadata(dest);
                     }
                 }
@@ -199,7 +211,10 @@ FUZZ_TARGET(scriptpubkeyman, .init = initialize_spkm)
     }
 
     std::string descriptor;
-    (void)spk_manager->GetDescriptorString(descriptor, /*priv=*/fuzzed_data_provider.ConsumeBool());
+    const bool priv{fuzzed_data_provider.ConsumeBool()};
+    const bool described{spk_manager->GetDescriptorString(descriptor, priv)};
+    // A locked vault cannot write out a private descriptor that holds keys.
+    if (locked && priv && spk_manager->HavePrivateKeys()) assert(!described);
     (void)spk_manager->GetEndRange();
     (void)spk_manager->GetKeyPoolSize();
 }

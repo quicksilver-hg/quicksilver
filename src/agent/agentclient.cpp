@@ -4,7 +4,6 @@
 
 #include <agent/agentclient.h>
 
-#include <cassert>
 #include <utility>
 
 namespace agent {
@@ -23,7 +22,7 @@ AgentClient::AgentClient(AgentClientOptions options, LoadedHeaders loaded)
     : m_options{std::move(options)},
       m_last_load_result{loaded.result},
       m_chain{std::move(loaded.chain)},
-      m_peers{*m_chain, m_options.header_stop_hash, m_options.max_headers_result, m_options.max_tx_inventory}
+      m_peer{*m_chain, m_options.header_stop_hash, m_options.max_headers_result, m_options.max_tx_inventory}
 {
 }
 
@@ -37,27 +36,27 @@ HeaderStoreResult AgentClient::SaveHeaders() const
 
 AgentPeerAction AgentClient::StartHeaders()
 {
-    return DefaultPeerAction(m_peers.StartHeaders(DEFAULT_AGENT_PEER_ID));
+    return m_peer.StartHeaders();
 }
 
 AgentPeerAction AgentClient::StartHeaders(const uint256& stop_hash)
 {
-    return DefaultPeerAction(m_peers.StartHeaders(DEFAULT_AGENT_PEER_ID, stop_hash));
+    return m_peer.StartHeaders(stop_hash);
 }
 
 AgentPeerAction AgentClient::AnnounceTransaction(const CTransaction& transaction, bool prefer_wtxid)
 {
-    return DefaultPeerAction(m_peers.AnnounceTransaction(DEFAULT_AGENT_PEER_ID, transaction, prefer_wtxid));
+    return m_peer.AnnounceTransaction(transaction, prefer_wtxid);
 }
 
 AgentPeerAction AgentClient::SendTransaction(const CTransaction& transaction)
 {
-    return DefaultPeerAction(m_peers.SendTransaction(DEFAULT_AGENT_PEER_ID, transaction));
+    return m_peer.SendTransaction(transaction);
 }
 
 AgentPeerAction AgentClient::ProcessMessage(const CSerializedNetMsg& message)
 {
-    return DefaultPeerAction(m_peers.ProcessMessage(DEFAULT_AGENT_PEER_ID, message));
+    return m_peer.ProcessMessage(message);
 }
 
 AgentClient::LoadedHeaders AgentClient::LoadHeaders(const Consensus::Params& params,
@@ -76,12 +75,6 @@ AgentClient::LoadedHeaders AgentClient::LoadHeaders(const Consensus::Params& par
 AgentClientLoadResult AgentClient::FreshLoadResult(const CBlockHeader& genesis)
 {
     return {HeaderStoreResult::FILE_NOT_FOUND, {HeaderAcceptCode::DUPLICATE, genesis.GetHash(), 0}};
-}
-
-AgentPeerAction AgentClient::DefaultPeerAction(AgentPeerSetAction action)
-{
-    assert(action.peer_action.has_value());
-    return std::move(*action.peer_action);
 }
 
 } // namespace agent

@@ -311,7 +311,7 @@ struct EllSwiftPubKey
 {
 private:
     static constexpr size_t SIZE = 64;
-    std::array<std::byte, SIZE> m_pubkey;
+    std::array<std::byte, SIZE> m_pubkey{};
 
 public:
     /** Default constructor creates all-zero pubkey (which is valid). */
@@ -341,16 +341,17 @@ public:
 };
 
 struct CExtPubKey {
-    unsigned char version[4];
-    unsigned char nDepth;
-    unsigned char vchFingerprint[4];
-    unsigned int nChild;
+    unsigned char version[4]{};
+    unsigned char nDepth{};
+    unsigned char vchFingerprint[4]{};
+    unsigned int nChild{};
     ChainCode chaincode;
     CPubKey pubkey;
 
     friend bool operator==(const CExtPubKey &a, const CExtPubKey &b)
     {
-        return a.nDepth == b.nDepth &&
+        return memcmp(a.version, b.version, sizeof(a.version)) == 0 &&
+            a.nDepth == b.nDepth &&
             memcmp(a.vchFingerprint, b.vchFingerprint, sizeof(vchFingerprint)) == 0 &&
             a.nChild == b.nChild &&
             a.chaincode == b.chaincode &&
@@ -369,7 +370,13 @@ struct CExtPubKey {
         } else if (a.pubkey > b.pubkey) {
             return false;
         }
-        return a.chaincode < b.chaincode;
+        if (a.chaincode != b.chaincode) return a.chaincode < b.chaincode;
+        const int version_order = memcmp(a.version, b.version, sizeof(a.version));
+        if (version_order != 0) return version_order < 0;
+        if (a.nDepth != b.nDepth) return a.nDepth < b.nDepth;
+        const int fingerprint_order = memcmp(a.vchFingerprint, b.vchFingerprint, sizeof(a.vchFingerprint));
+        if (fingerprint_order != 0) return fingerprint_order < 0;
+        return a.nChild < b.nChild;
     }
 
     void Encode(unsigned char code[BIP32_EXTKEY_SIZE]) const;

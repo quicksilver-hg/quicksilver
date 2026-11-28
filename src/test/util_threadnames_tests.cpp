@@ -56,11 +56,24 @@ BOOST_AUTO_TEST_CASE(util_threadnames_test_rename_threaded)
 
     BOOST_CHECK_EQUAL(names.size(), 100U);
 
-    // Names "test_thread.[n]" should exist for n = [0, 99]
+    // Internal names retain the full name, including the worker index.
     for (int i = 0; i < 100; ++i) {
         BOOST_CHECK(names.find(TEST_THREAD_NAME_BASE + ToString(i)) != names.end());
     }
 
+}
+
+BOOST_AUTO_TEST_CASE(util_threadnames_test_os_name)
+{
+    BOOST_CHECK_EQUAL(util::OsThreadName("httpw.0"), "qs-httpw.0");
+    BOOST_CHECK_EQUAL(util::OsThreadName("abcdefghijkl"), "qs-abcdefghijkl");
+    const auto worker0{util::OsThreadName("test_thread.0")};
+    const auto worker1{util::OsThreadName("test_thread.1")};
+    BOOST_CHECK_NE(worker0, worker1);
+    BOOST_CHECK_LE(worker0.size(), 15U);
+    BOOST_CHECK_LE(worker1.size(), 15U);
+    BOOST_CHECK_EQUAL(worker0.back(), '0');
+    BOOST_CHECK_EQUAL(worker1.back(), '1');
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -4,7 +4,6 @@
 
 #include <qt/maturity.h>
 
-#include <QCoreApplication>
 #include <QObject>
 
 #include <algorithm>

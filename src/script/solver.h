@@ -4,7 +4,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-// The Solver functions are used by policy and the vault, but not consensus.
+// Classify output scripts for relay policy, signing, descriptors and RPC reporting.
 
 #ifndef QUICKSILVER_SCRIPT_SOLVER_H
 #define QUICKSILVER_SCRIPT_SOLVER_H

@@ -35,18 +35,28 @@ const QString VAULT_WITHOUT_CONSENSUS{QStringLiteral("Without consensus, the vau
 //! which contradicted VAULT_WITHOUT_CONSENSUS two lines above it.
 const QString VAULT_REQUIREMENT_COPY{QStringLiteral("Needed to see incoming payments and to send. Not needed to keep keys or give out addresses.")};
 
+//! F-705 (owner, 2026-11-21): the desktop keeps the full chain by default, and pruning
+//! is the option. These sentences used to say "Default pruning caps the block data at
+//! 3 GB" and, with no published estimate, "records up to 3 GB", both of which described
+//! pruning as the default. Owner, 2026-11-22: the target is 4 GB, because 3 GB (2,861 MiB)
+//! is below the 2,956 MiB block-file floor.
+const QString FULL_CHAIN_DEFAULT{QStringLiteral("The full chain is kept by default. Pruning is an option that caps the block data at 4 GB.")};
+
 //! The signed sentences, written out rather than computed: a test that repeats the
 //! implementation's arithmetic is not an oracle. If chainparams moves, these must fail
 //! and be re-read.
-const QString UNMEASURED_COPY{QStringLiteral("Transfers require proof-of-work. Enabling consensus records up to 2 GB of blockchain data. ") + VAULT_WITHOUT_CONSENSUS};
-const QString LAUNCH_MEASURED_COPY{QStringLiteral("Transfers spend proof-of-work. Consensus storage is estimated at up to about 2 GB a year: 1 GB of block data and 1 GB of chain state. Default pruning caps the block data at 2 GB. ") + VAULT_WITHOUT_CONSENSUS};
-const QString REVIEW_MEASURED_COPY{QStringLiteral("Storage is estimated at up to about 2 GB a year: 1 GB of block data and 1 GB of chain state. Default pruning caps the block data at 2 GB.")};
+const QString UNMEASURED_COPY{QStringLiteral("Transfers require proof-of-work. Enabling consensus keeps the full chain by default. Pruning is an option that caps the block data at 4 GB. ") + VAULT_WITHOUT_CONSENSUS};
+const QString LAUNCH_MEASURED_COPY{QStringLiteral("Transfers spend proof-of-work. Consensus storage is estimated at up to about 2 GB a year: 1 GB of block data and 1 GB of chain state. ") + FULL_CHAIN_DEFAULT + QStringLiteral(" ") + VAULT_WITHOUT_CONSENSUS};
+const QString REVIEW_MEASURED_COPY{QStringLiteral("Storage is estimated at up to about 2 GB a year: 1 GB of block data and 1 GB of chain state. ") + FULL_CHAIN_DEFAULT};
 
 //! At 1 / 1 the block-data and chain-state figures are the same number, so the real
-//! figures cannot show that each argument lands in its own place. Distinct figures can.
-constexpr uint64_t DISTINCT_BLOCKCHAIN_GB{3};
+//! figures cannot show that each argument lands in its own place. Distinct figures can,
+//! and they must differ from the 4 GB default prune limit too (F-703), or a match could
+//! come from the wrong argument. The block-data figure was 4 until the target moved
+//! to 4 GB (owner, 2026-11-22).
+constexpr uint64_t DISTINCT_BLOCKCHAIN_GB{6};
 constexpr uint64_t DISTINCT_CHAIN_STATE_GB{5};
-const QString DISTINCT_SPLIT{QStringLiteral("estimated at up to about 8 GB a year: 3 GB of block data and 5 GB of chain state. Default pruning caps the block data at 2 GB.")};
+const QString DISTINCT_SPLIT{QStringLiteral("estimated at up to about 11 GB a year: 6 GB of block data and 5 GB of chain state. ") + FULL_CHAIN_DEFAULT};
 } // namespace
 
 void StorageCostsTests::launchPageUsesUnmeasuredNetworkCopy()
@@ -115,24 +125,47 @@ void StorageCostsTests::bothScreensAgreeWithIntroOnTheArchivalTotal()
 {
     const std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate(QStringLiteral("other"))};
     // Distinct injected figures: at the real 1 / 1 the total is 2 GB, the same number as
-    // the default prune limit, so a match could come from the wrong figure.
+    // the old 2 GB default prune limit, so a match could come from the wrong figure.
     DesktopLaunchPage launch(style.get(), DISTINCT_BLOCKCHAIN_GB, DISTINCT_CHAIN_STATE_GB, nullptr);
     ConsensusReviewPage review(DISTINCT_BLOCKCHAIN_GB, DISTINCT_CHAIN_STATE_GB, nullptr);
     Intro intro(nullptr, DISTINCT_BLOCKCHAIN_GB, DISTINCT_CHAIN_STATE_GB);
 
-    // The intro ships prune checked (intro.cpp), so by default it quotes the pruned
-    // requirement. Unchecking it is what makes it state the archival total, the same
-    // quantity the two desktop screens describe as a yearly growth figure.
+    // The intro ships prune unchecked since F-705 (intro.cpp), so by default it already
+    // states the archival total, the same quantity the two desktop screens describe as a
+    // yearly growth figure. Unchecking it here pins that state rather than relying on
+    // the default, so this test keeps comparing the archival figure if the default moves.
     QCheckBox* prune = intro.findChild<QCheckBox*>(QStringLiteral("prune"));
     QVERIFY(prune);
     prune->setChecked(false);
     QLabel* intro_storage = intro.findChild<QLabel*>(QStringLiteral("sizeWarningLabel"));
     QVERIFY(intro_storage);
 
-    const QString total{QStringLiteral("8 GB")};
+    const QString total{QStringLiteral("11 GB")};
     QVERIFY(launch.findChild<QLabel*>(QStringLiteral("desktopLaunchCostCopy"))->text().contains(total));
     QVERIFY(review.findChild<QLabel*>(QStringLiteral("consensusStorageCostValue"))->text().contains(total));
     QVERIFY(intro_storage->text().contains(total));
+}
+
+//! F-705: on both screens and in both variants, the storage text names the full chain as
+//! the default and pruning as the option, and never calls pruning the default. The
+//! exact sentences are pinned above; this states the rule they must keep if reworded.
+void StorageCostsTests::storageCopyNamesTheFullChainAsTheDefault()
+{
+    const std::unique_ptr<const PlatformStyle> style{PlatformStyle::instantiate(QStringLiteral("other"))};
+    for (const auto& [blockchain_gb, chain_state_gb] : {std::pair<uint64_t, uint64_t>{0, 0}, {BLOCKCHAIN_SIZE_GB, CHAIN_STATE_SIZE_GB}}) {
+        DesktopLaunchPage launch(style.get(), blockchain_gb, chain_state_gb, nullptr);
+        ConsensusReviewPage review(blockchain_gb, chain_state_gb, nullptr);
+        auto* launch_cost = launch.findChild<QLabel*>(QStringLiteral("desktopLaunchCostCopy"));
+        auto* review_cost = review.findChild<QLabel*>(QStringLiteral("consensusStorageCostValue"));
+        QVERIFY(launch_cost);
+        QVERIFY(review_cost);
+        for (const QString& text : {launch_cost->text(), review_cost->text()}) {
+            QVERIFY2(text.contains(QStringLiteral("full chain")) && text.contains(QStringLiteral("by default")), qPrintable(text));
+            QVERIFY2(text.contains(QStringLiteral("Pruning is an option")), qPrintable(text));
+            QVERIFY2(!text.contains(QStringLiteral("Default pruning"), Qt::CaseInsensitive), qPrintable(text));
+            QVERIFY2(!text.contains(QStringLiteral("records up to")), qPrintable(text));
+        }
+    }
 }
 
 //! F-611: the row is the same on every chain, so check it at the unmeasured (sandbox,

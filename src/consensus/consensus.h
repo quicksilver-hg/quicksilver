@@ -10,7 +10,7 @@
 #include <cstdlib>
 #include <stdint.h>
 
-/** The maximum allowed size for a serialized block, in bytes (only for buffer size limits) */
+/** Maximum serialized block size in bytes, used for buffering and size checks. */
 static const unsigned int MAX_BLOCK_SERIALIZED_SIZE = 4000000;
 /** The maximum allowed weight for a block, see BIP 141 (network rule) */
 static const unsigned int MAX_BLOCK_WEIGHT = 4000000;

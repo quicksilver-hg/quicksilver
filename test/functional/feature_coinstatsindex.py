@@ -83,8 +83,10 @@ class CoinStatsIndexTest(QuicksilverTestFramework):
 
         for hash_option in index_hash_options:
             res1 = index_node.gettxoutsetinfo(hash_option)
+            assert res1['total_subsidy'] > 0
             # The fields 'block_info' and 'total_unspendable_amount' only exist on the index
-            del res1['block_info'], res1['total_unspendable_amount']
+            del res1['total_mint_allowance']
+            del res1['block_info'], res1['total_unspendable_amount'], res1['total_subsidy']
             res1.pop('muhash', None)
 
             # Everything left should be the same
@@ -98,13 +100,15 @@ class CoinStatsIndexTest(QuicksilverTestFramework):
         for hash_option in index_hash_options:
             # Fetch old stats by height
             res2 = index_node.gettxoutsetinfo(hash_option, 102)
-            del res2['block_info'], res2['total_unspendable_amount']
+            del res2['total_mint_allowance']
+            del res2['block_info'], res2['total_unspendable_amount'], res2['total_subsidy']
             res2.pop('muhash', None)
             assert_equal(res0, res2)
 
             # Fetch old stats by hash
             res3 = index_node.gettxoutsetinfo(hash_option, res0['bestblock'])
-            del res3['block_info'], res3['total_unspendable_amount']
+            del res3['total_mint_allowance']
+            del res3['block_info'], res3['total_unspendable_amount'], res3['total_subsidy']
             res3.pop('muhash', None)
             assert_equal(res0, res3)
 
@@ -171,6 +175,12 @@ class CoinStatsIndexTest(QuicksilverTestFramework):
             # Check all amounts were registered correctly
             res6 = index_node.gettxoutsetinfo(hash_option, 108)
             assert_equal(res6['total_unspendable_amount'], Decimal('71.00000000'))
+            before_mint = index_node.gettxoutsetinfo(hash_option, 107)
+            assert_equal(res6['total_mint_allowance'] - before_mint['total_mint_allowance'], 2)
+            assert_equal(
+                res6['total_amount'] + res6['total_unspendable_amount'],
+                res6['total_subsidy'] + res6['total_mint_allowance'],
+            )
             assert_equal(res6['block_info'], {
                 'unspendable': Decimal('21.00000000'),
                 'prevout_spent': Decimal('70.67333334'),

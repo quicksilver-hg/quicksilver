@@ -33,7 +33,6 @@ See [/doc/fuzzing.md](../doc/fuzzing.md)
 The ZMQ functional test requires a python ZMQ library. To install it:
 
 - on Unix, run `sudo apt-get install python3-zmq`
-- on mac OS, run `pip3 install pyzmq`
 
 
 On Windows the `PYTHONUTF8` environment variable must be set to 1:
@@ -136,27 +135,6 @@ Once finished with the tests and the disk, and to free the RAM, simply unmount t
 
 ```bash
 sudo umount /mnt/tmp
-```
-
-**macOS**
-
-To create a 4 GiB RAM disk named "ramdisk" at `/Volumes/ramdisk/`:
-
-```bash
-diskutil erasevolume HFS+ ramdisk $(hdiutil attach -nomount ram://8388608)
-```
-
-Configure the RAM disk size, expressed as the number of blocks, at the end of the command
-(`4096 MiB * 2048 blocks/MiB = 8388608 blocks` for 4 GiB). To run the tests using the RAM disk:
-
-```bash
-build/test/functional/test_runner.py --cachedir=/Volumes/ramdisk/cache --tmpdir=/Volumes/ramdisk/tmp
-```
-
-To unmount:
-
-```bash
-umount /Volumes/ramdisk
 ```
 
 #### Troubleshooting and debugging test failures
@@ -262,7 +240,7 @@ call methods that interact with the quicksilver-daemon nodes-under-test.
 If further introspection of the quicksilver-daemon instances themselves becomes
 necessary, this can be accomplished by first setting a pdb breakpoint
 at an appropriate location, running the test to that point, then using
-`gdb` (or `lldb` on macOS) to attach to the process and debug.
+`gdb` to attach to the process and debug.
 
 For instance, to attach to `self.node[1]` during a run you can get
 the pid of the node within `pdb`.

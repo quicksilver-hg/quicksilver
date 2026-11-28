@@ -107,10 +107,19 @@ public:
      * reads that list, and the vault a user created last session simply never
      * reappeared -- the desktop offered to create one, as though theirs were gone.
      */
-    void openVaultsRecordedForStartup();
+    //! Returns one entry per vault that would not open, naming it and its error,
+    //! for the single startup notice (S0250-A-11).
+    std::vector<bilingual_str> openVaultsRecordedForStartup();
+    //! Plain text listing the startup vaults that did not open; empty when none failed.
+    static QString startupLoadNotice(const std::vector<bilingual_str>& failures);
+
+    //! Plain text describing why the thin header store is refused; empty when it is not.
+    QString thinHeaderNotice() const { return m_thin_header_notice; }
 
 Q_SIGNALS:
     void vaultAdded(VaultModel* vault_model);
+    //! The thin header notice changed; empty when the store recovered.
+    void thinHeaderNoticeChanged(const QString& notice);
     void vaultRemoved(VaultModel* vault_model);
 
     void coinsSent(VaultModel* vault_model, SendCoinsRecipient recipient, QByteArray transaction);
@@ -128,9 +137,12 @@ private:
     std::unique_ptr<ThinVaultHeaderSource> m_thin_header_source;
     QTimer* m_thin_header_timer{nullptr};
     std::string m_last_thin_header_error;
+    QString m_thin_header_notice;
+    QString m_announced_thin_header_notice;
 
     friend class VaultControllerActivity;
     void refreshThinHeaderSource();
+    void setThinHeaderNotice(const QString& notice);
     //! Starts the vault closure procedure
     void removeVault(VaultModel* vault_model);
     void closeVaultAfterConfirm(VaultModel* vault_model, QWidget* parent);

@@ -12,6 +12,8 @@
 #include <vault/transaction.h>
 #include <vault/vault.h>
 
+#include <map>
+
 namespace vault {
 isminetype InputIsMine(const CVault& vault, const CTxIn& txin)
 {
@@ -120,6 +122,7 @@ CAmount CachedTxGetCredit(const CVault& vault, const CVaultTx& wtx, const ismine
 
 CAmount CachedTxGetDebit(const CVault& vault, const CVaultTx& wtx, const isminefilter& filter)
 {
+    AssertLockHeld(vault.cs_vault);
     if (wtx.tx->vin.empty())
         return 0;
 
@@ -133,6 +136,7 @@ CAmount CachedTxGetDebit(const CVault& vault, const CVaultTx& wtx, const isminef
 
 CAmount CachedTxGetChange(const CVault& vault, const CVaultTx& wtx)
 {
+    AssertLockHeld(vault.cs_vault);
     if (wtx.fChangeCached)
         return wtx.nChangeCached;
     wtx.nChangeCached = TxGetChange(vault, *wtx.tx);
@@ -191,12 +195,12 @@ void CachedTxGetAmounts(const CVault& vault, const CVaultTx& wtx,
                   std::list<COutputEntry>& listSent, const isminefilter& filter,
                   bool include_change)
 {
+    AssertLockHeld(vault.cs_vault);
     listReceived.clear();
     listSent.clear();
 
     CAmount nDebit = CachedTxGetDebit(vault, wtx, filter);
 
-    LOCK(vault.cs_vault);
     // Sent/received.
     for (unsigned int i = 0; i < wtx.tx->vout.size(); ++i)
     {
@@ -238,6 +242,7 @@ void CachedTxGetAmounts(const CVault& vault, const CVaultTx& wtx,
 
 bool CachedTxIsFromMe(const CVault& vault, const CVaultTx& wtx, const isminefilter& filter)
 {
+    AssertLockHeld(vault.cs_vault);
     return (CachedTxGetDebit(vault, wtx, filter) > 0);
 }
 
@@ -318,6 +323,34 @@ static CAmount TxGetDelegatedCredit(const CVault& vault, const CVaultTx& wtx, co
     return delegated;
 }
 
+//! F-698: a revived transaction that spends the same coins as one from a more recently
+//! disconnected block, directly or through a parent in the vault, is not counted as pending.
+//! Only transactions that are inactive and not abandoned compete; one with no stamp is oldest.
+static bool IsSupersededRevival(const CVault& vault, const CVaultTx& wtx, std::map<uint256, bool>& memo) EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault)
+{
+    AssertLockHeld(vault.cs_vault);
+    if (const auto it{memo.find(wtx.GetHash())}; it != memo.end()) return it->second;
+    const auto competes{[](const CVaultTx& tx) { return tx.isInactive() && tx.isUnconfirmed(); }};
+    bool superseded{false};
+    const int64_t own{wtx.GetRevivalSequence().value_or(0)};
+    for (const uint256& rival_id : vault.GetTxConflicts(wtx)) {
+        const auto rival{vault.mapVault.find(rival_id)};
+        if (rival == vault.mapVault.end() || !competes(rival->second)) continue;
+        if (rival->second.GetRevivalSequence().value_or(0) > own) {
+            superseded = true;
+            break;
+        }
+    }
+    for (size_t i{0}; !superseded && i < wtx.tx->vin.size(); ++i) {
+        const auto parent{vault.mapVault.find(wtx.tx->vin[i].prevout.hash)};
+        if (parent != vault.mapVault.end() && competes(parent->second)) {
+            superseded = IsSupersededRevival(vault, parent->second, memo);
+        }
+    }
+    memo.emplace(wtx.GetHash(), superseded);
+    return superseded;
+}
+
 Balance GetBalance(const CVault& vault, const int min_depth, bool avoid_reuse)
 {
     Balance ret;
@@ -332,6 +365,7 @@ Balance GetBalance(const CVault& vault, const int min_depth, bool avoid_reuse)
         const std::set<CScript> funding_scripts{locked_outpoints.empty() ? std::set<CScript>{} : AgentFundingScripts(vault)};
 
         std::set<uint256> trusted_parents;
+        std::map<uint256, bool> superseded_revivals;
         for (const auto& entry : vault.mapVault)
         {
             const CVaultTx& wtx = entry.second;
@@ -352,8 +386,10 @@ Balance GetBalance(const CVault& vault, const int min_depth, bool avoid_reuse)
             // inputs as spent. Its change must count here, or the balance drops by the
             // whole change the moment it is kept (F-579). The conditions are IsSpent's,
             // so an abandoned or conflicted one frees its inputs instead. Others'
-            // transactions still need the pool.
-            const bool kept{wtx.isUnconfirmed() && !wtx.InRelayPool() && CachedTxIsFromMe(vault, wtx, ISMINE_SPENDABLE)};
+            // transactions still need the pool. Among revived transactions that spend the
+            // same coins, only the set from the most recently disconnected block is kept (F-698).
+            const bool kept{wtx.isUnconfirmed() && !wtx.InRelayPool() && CachedTxIsFromMe(vault, wtx, ISMINE_SPENDABLE) &&
+                            !IsSupersededRevival(vault, wtx, superseded_revivals)};
             if (!is_trusted && tx_depth == 0 && (wtx.InRelayPool() || kept)) {
                 ret.m_mine_untrusted_pending += tx_credit_mine;
             }

@@ -32,14 +32,6 @@ static const std::map<uint64_t, std::string> VAULT_FLAG_CAVEATS{
      "be considered unused, even if the opposite is the case."},
 };
 
-/** Checks if a CKey is in the given CVault compressed or otherwise*/
-bool HaveKey(const SigningProvider& vault, const CKey& key)
-{
-    CKey key2;
-    key2.Set(key.begin(), key.end(), !key.IsCompressed());
-    return vault.HaveKey(key.GetPubKey().GetID()) || vault.HaveKey(key2.GetPubKey().GetID());
-}
-
 static RPCHelpMan getvaultinfo()
 {
     return RPCHelpMan{"getvaultinfo",
@@ -52,7 +44,6 @@ static RPCHelpMan getvaultinfo()
                         {RPCResult::Type::STR, "vaultname", "the vault name"},
                         {RPCResult::Type::NUM, "vaultversion", "the vault version"},
                         {RPCResult::Type::NUM, "txcount", "the total number of transactions in the vault"},
-                        {RPCResult::Type::NUM_TIME, "keypoololdest", /*optional=*/true, "the " + UNIX_EPOCH_TIME + " of the oldest pre-generated key in the key pool."},
                         {RPCResult::Type::NUM, "keypoolsize", "how many new keys are pre-generated (only counts external keys)"},
                         {RPCResult::Type::NUM, "keypoolsize_hd_internal", "how many new keys are pre-generated for internal use (used for change outputs)"},
                         {RPCResult::Type::NUM_TIME, "unlocked_until", /*optional=*/true, "the " + UNIX_EPOCH_TIME + " until which the vault is unlocked for transfers, or 0 if the vault is locked (only present for passphrase-encrypted vaults)"},
@@ -63,7 +54,6 @@ static RPCHelpMan getvaultinfo()
                             {RPCResult::Type::NUM, "duration", "elapsed seconds since scan start"},
                             {RPCResult::Type::NUM, "progress", "scanning progress percentage [0.0, 1.0]"},
                         }, /*skip_type_check=*/true},
-                        {RPCResult::Type::BOOL, "external_signer", "whether this vault is configured to use an external signer such as a hardware signer"},
                         {RPCResult::Type::BOOL, "blank", "Whether this vault intentionally does not contain any keys, scripts, or descriptors"},
                         {RPCResult::Type::NUM_TIME, "birthtime", /*optional=*/true, "The start time for blocks scanning. It could be modified by (re)importing any descriptor with an earlier timestamp."},
                         RESULT_LAST_PROCESSED_BLOCK,
@@ -90,10 +80,6 @@ static RPCHelpMan getvaultinfo()
     obj.pushKV("vaultname", pvault->GetName());
     obj.pushKV("vaultversion", pvault->GetVersion());
     obj.pushKV("txcount",       (int)pvault->mapVault.size());
-    const auto kp_oldest = pvault->GetOldestKeyPoolTime();
-    if (kp_oldest.has_value()) {
-        obj.pushKV("keypoololdest", kp_oldest.value());
-    }
     obj.pushKV("keypoolsize", (int64_t)kpExternalSize);
     obj.pushKV("keypoolsize_hd_internal", (int64_t)(pvault->GetKeyPoolSize() - kpExternalSize));
     if (pvault->IsCrypted()) {
@@ -109,7 +95,6 @@ static RPCHelpMan getvaultinfo()
     } else {
         obj.pushKV("scanning", false);
     }
-    obj.pushKV("external_signer", pvault->IsVaultFlagSet(VAULT_FLAG_EXTERNAL_SIGNER));
     obj.pushKV("blank", pvault->IsVaultFlagSet(VAULT_FLAG_BLANK_VAULT));
     if (int64_t birthtime = pvault->GetBirthTime(); birthtime != UNKNOWN_TIME) {
         obj.pushKV("birthtime", birthtime);
@@ -332,7 +317,6 @@ static RPCHelpMan createvault()
             {"passphrase", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Encrypt the vault with this passphrase."},
             {"avoid_reuse", RPCArg::Type::BOOL, RPCArg::Default{false}, "Keep track of coin reuse, and treat dirty and clean coins differently with privacy considerations in mind."},
             {"load_on_startup", RPCArg::Type::BOOL, RPCArg::Optional::OMITTED, "Save vault name to persistent settings and load on startup. True to add vault to startup list, false to remove, null to leave unchanged."},
-            {"external_signer", RPCArg::Type::BOOL, RPCArg::Default{false}, "Use an external signer such as a hardware signer. Requires -signer to be configured. Vault creation will fail if keys cannot be fetched. Requires disable_private_keys set to true."},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
@@ -379,13 +363,6 @@ static RPCHelpMan createvault()
     throw JSONRPCError(RPC_VAULT_ERROR, "Compiled without sqlite support (required for vaults)");
 #endif
     flags |= VAULT_FLAG_DESCRIPTORS;
-    if (!request.params[6].isNull() && request.params[6].get_bool()) {
-#ifdef ENABLE_EXTERNAL_SIGNER
-        flags |= VAULT_FLAG_EXTERNAL_SIGNER;
-#else
-        throw JSONRPCError(RPC_VAULT_ERROR, "Compiled without external signing support (required for external signing)");
-#endif
-    }
 
     DatabaseOptions options;
     DatabaseStatus status;
@@ -654,8 +631,11 @@ RPCHelpMan gethdkeys()
                 UniValue xpub_info(UniValue::VOBJ);
                 xpub_info.pushKV("qpub", EncodeExtPubKey(xpub));
                 xpub_info.pushKV("has_private", has_xprv);
+                // A watch-only key has no entry: omit qprv for it (has_private is false), S0204-A-01.
                 if (priv) {
-                    xpub_info.pushKV("qprv", EncodeExtKey(vault_xprvs.at(xpub)));
+                    if (const auto xprv{vault_xprvs.find(xpub)}; xprv != vault_xprvs.end()) {
+                        xpub_info.pushKV("qprv", EncodeExtKey(xprv->second));
+                    }
                 }
                 xpub_info.pushKV("descriptors", std::move(descriptors));
 
@@ -776,9 +756,6 @@ RPCHelpMan listaddressgroupings();
 RPCHelpMan keypoolrefill();
 RPCHelpMan getaddressesbylabel();
 RPCHelpMan listlabels();
-#ifdef ENABLE_EXTERNAL_SIGNER
-RPCHelpMan vaultdisplayaddress();
-#endif // ENABLE_EXTERNAL_SIGNER
 
 // backup and descriptor imports
 RPCHelpMan importprunedfunds();
@@ -824,7 +801,6 @@ RPCHelpMan listreceivedbylabel();
 RPCHelpMan listtransactions();
 RPCHelpMan listsinceblock();
 RPCHelpMan gettransaction();
-RPCHelpMan abandontransaction();
 RPCHelpMan rescanblockchain();
 RPCHelpMan abortrescan();
 
@@ -832,7 +808,6 @@ Span<const CRPCCommand> GetVaultRPCCommands()
 {
     static const CRPCCommand commands[]{
         {"rawtransactions", &fundrawtransaction},
-        {"vault", &abandontransaction},
         {"vault", &abortrescan},
         {"vault", &backupvault},
         {"vault", &createvault},
@@ -881,9 +856,6 @@ Span<const CRPCCommand> GetVaultRPCCommands()
         {"vault", &sendall},
         {"vault", &unloadvault},
         {"vault", &vaultcreatefundedpsqt},
-#ifdef ENABLE_EXTERNAL_SIGNER
-        {"vault", &vaultdisplayaddress},
-#endif // ENABLE_EXTERNAL_SIGNER
         {"vault", &vaultlock},
         {"vault", &vaultpassphrase},
         {"vault", &vaultpassphrasechange},

@@ -33,6 +33,12 @@ public:
                             uint256 stop_hash = uint256{},
                             size_t max_headers_result = DEFAULT_MAX_HEADERS_RESULTS);
 
+    // m_driver refers to m_sync; a copy or move would leave it pointing at the old one.
+    HeaderSyncPeer(const HeaderSyncPeer&) = delete;
+    HeaderSyncPeer& operator=(const HeaderSyncPeer&) = delete;
+    HeaderSyncPeer(HeaderSyncPeer&&) = delete;
+    HeaderSyncPeer& operator=(HeaderSyncPeer&&) = delete;
+
     HeaderSyncPeerAction StartHeaders();
     HeaderSyncPeerAction StartHeaders(const uint256& stop_hash);
     HeaderSyncPeerAction ProcessMessage(const CSerializedNetMsg& message);

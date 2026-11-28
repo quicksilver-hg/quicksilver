@@ -28,8 +28,8 @@ Node1 is unused in tests 3-7:
    Node0 should process the second block but be stuck on the shorter chain,
    because it's missing an intermediate block.
 
-4c.Send 288 more blocks on the longer chain (the number of blocks ahead
-   we currently store).
+4c.Send MIN_BLOCKS_TO_KEEP (2016) more blocks on the longer chain (the number
+   of blocks ahead we currently store; upstream's 288).
    Node0 should process all but the last block (too far ahead in height).
 
 5. Send a duplicate of the block in #3 to Node0.
@@ -54,7 +54,7 @@ Node1 is unused in tests 3-7:
 
 import time
 
-from test_framework.blocktools import create_block, create_coinbase, create_tx_with_script
+from test_framework.blocktools import MIN_BLOCKS_TO_KEEP, create_block, create_coinbase, create_tx_with_script
 from test_framework.messages import CBlockHeader, CInv, MSG_BLOCK, msg_block, msg_headers, msg_inv
 from test_framework.p2p import p2p_lock, P2PInterface
 from test_framework.test_framework import QuicksilverTestFramework
@@ -160,11 +160,14 @@ class AcceptBlockTest(QuicksilverTestFramework):
         self.nodes[0].getblock(block_h3.hash)
         self.log.info("Unrequested more-work block accepted")
 
-        # 4c. Now mine 288 more blocks and deliver; all should be processed but
-        # the last (height-too-high) on node (as long as it is not missing any headers)
+        # 4c. Now mine MIN_BLOCKS_TO_KEEP more blocks and deliver; all should be processed but
+        # the last (height-too-high) on node (as long as it is not missing any headers).
+        # all_blocks[i] is at height i + 4, so the last is at N + 3, one past the node's
+        # height (2) plus the window N.
+        N = MIN_BLOCKS_TO_KEEP
         tip = block_h3
         all_blocks = []
-        for i in range(288):
+        for i in range(N):
             next_block = create_block(tip.sha256, create_coinbase(i + 4), tip.nTime+1)
             next_block.solve()
             all_blocks.append(next_block)
@@ -185,11 +188,11 @@ class AcceptBlockTest(QuicksilverTestFramework):
         self.nodes[0].getblock(all_blocks[1].hash)
 
         # Now send the blocks in all_blocks
-        for i in range(288):
+        for i in range(N):
             test_node.send_message(msg_block(all_blocks[i]))
         test_node.sync_with_ping()
 
-        # Blocks 1-287 should be accepted, block 288 should be ignored because it's too far ahead
+        # Blocks 1 to N-1 should be accepted, block N should be ignored because it's too far ahead
         for x in all_blocks[:-1]:
             self.nodes[0].getblock(x.hash)
         assert_raises_rpc_error(-1, "Block not available (not fully downloaded)", self.nodes[0].getblock, all_blocks[-1].hash)
@@ -228,48 +231,49 @@ class AcceptBlockTest(QuicksilverTestFramework):
 
         # 7. Send the missing block for the third time (now it is requested)
         test_node.send_and_ping(msg_block(block_h1f))
-        assert_equal(self.nodes[0].getblockcount(), 290)
-        self.nodes[0].getblock(all_blocks[286].hash)
-        assert_equal(self.nodes[0].getbestblockhash(), all_blocks[286].hash)
-        assert_raises_rpc_error(-1, "Block not available (not fully downloaded)", self.nodes[0].getblock, all_blocks[287].hash)
+        assert_equal(self.nodes[0].getblockcount(), N + 2)
+        self.nodes[0].getblock(all_blocks[N - 2].hash)
+        assert_equal(self.nodes[0].getbestblockhash(), all_blocks[N - 2].hash)
+        assert_raises_rpc_error(-1, "Block not available (not fully downloaded)", self.nodes[0].getblock, all_blocks[N - 1].hash)
         self.log.info("Successfully reorged to longer chain")
 
         # 8. Create a chain which is invalid at a height longer than the
-        # current chain, but which has more blocks on top of that
-        block_289f = create_block(all_blocks[284].sha256, create_coinbase(289), all_blocks[284].nTime+1)
-        block_289f.solve()
-        block_290f = create_block(block_289f.sha256, create_coinbase(290), block_289f.nTime+1)
-        block_290f.solve()
-        # block_291 spends a coinbase below maturity!
-        tx_to_add = create_tx_with_script(block_290f.vtx[0], 0, script_sig=b"42", amount=1)
-        block_291 = create_block(block_290f.sha256, create_coinbase(291), block_290f.nTime+1, txlist=[tx_to_add])
-        block_291.solve()
-        block_292 = create_block(block_291.sha256, create_coinbase(292), block_291.nTime+1)
-        block_292.solve()
+        # current chain, but which has more blocks on top of that. The fork leaves the
+        # chain at all_blocks[N - 4] (height N); block_nKf is at height N + K.
+        block_n1f = create_block(all_blocks[N - 4].sha256, create_coinbase(N + 1), all_blocks[N - 4].nTime+1)
+        block_n1f.solve()
+        block_n2f = create_block(block_n1f.sha256, create_coinbase(N + 2), block_n1f.nTime+1)
+        block_n2f.solve()
+        # block_n3 spends a coinbase below maturity!
+        tx_to_add = create_tx_with_script(block_n2f.vtx[0], 0, script_sig=b"42", amount=1)
+        block_n3 = create_block(block_n2f.sha256, create_coinbase(N + 3), block_n2f.nTime+1, txlist=[tx_to_add])
+        block_n3.solve()
+        block_n4 = create_block(block_n3.sha256, create_coinbase(N + 4), block_n3.nTime+1)
+        block_n4.solve()
 
         # Now send all the headers on the chain and enough blocks to trigger reorg
         headers_message = msg_headers()
-        headers_message.headers.append(CBlockHeader(block_289f))
-        headers_message.headers.append(CBlockHeader(block_290f))
-        headers_message.headers.append(CBlockHeader(block_291))
-        headers_message.headers.append(CBlockHeader(block_292))
+        headers_message.headers.append(CBlockHeader(block_n1f))
+        headers_message.headers.append(CBlockHeader(block_n2f))
+        headers_message.headers.append(CBlockHeader(block_n3))
+        headers_message.headers.append(CBlockHeader(block_n4))
         test_node.send_and_ping(headers_message)
 
         tip_entry_found = False
         for x in self.nodes[0].getchaintips():
-            if x['hash'] == block_292.hash:
+            if x['hash'] == block_n4.hash:
                 assert_equal(x['status'], "headers-only")
                 tip_entry_found = True
         assert tip_entry_found
-        assert_raises_rpc_error(-1, "Block not available (not fully downloaded)", self.nodes[0].getblock, block_292.hash)
+        assert_raises_rpc_error(-1, "Block not available (not fully downloaded)", self.nodes[0].getblock, block_n4.hash)
 
-        test_node.send_message(msg_block(block_289f))
-        test_node.send_and_ping(msg_block(block_290f))
+        test_node.send_message(msg_block(block_n1f))
+        test_node.send_and_ping(msg_block(block_n2f))
 
-        self.nodes[0].getblock(block_289f.hash)
-        self.nodes[0].getblock(block_290f.hash)
+        self.nodes[0].getblock(block_n1f.hash)
+        self.nodes[0].getblock(block_n2f.hash)
 
-        test_node.send_message(msg_block(block_291))
+        test_node.send_message(msg_block(block_n3))
 
         # At this point we've sent an obviously-bogus block, wait for full processing
         # and assume disconnection
@@ -278,16 +282,16 @@ class AcceptBlockTest(QuicksilverTestFramework):
         self.nodes[0].disconnect_p2ps()
         test_node = self.nodes[0].add_p2p_connection(P2PInterface())
 
-        # We should have failed reorg and switched back to 290 (but have block 291)
-        assert_equal(self.nodes[0].getblockcount(), 290)
-        assert_equal(self.nodes[0].getbestblockhash(), all_blocks[286].hash)
-        assert_equal(self.nodes[0].getblock(block_291.hash)["confirmations"], -1)
+        # We should have failed reorg and switched back to N + 2 (but have block N + 3)
+        assert_equal(self.nodes[0].getblockcount(), N + 2)
+        assert_equal(self.nodes[0].getbestblockhash(), all_blocks[N - 2].hash)
+        assert_equal(self.nodes[0].getblock(block_n3.hash)["confirmations"], -1)
 
         # Now send a new header on the invalid chain, indicating we're forked off, and expect to get disconnected
-        block_293 = create_block(block_292.sha256, create_coinbase(293), block_292.nTime+1)
-        block_293.solve()
+        block_n5 = create_block(block_n4.sha256, create_coinbase(N + 5), block_n4.nTime+1)
+        block_n5.solve()
         headers_message = msg_headers()
-        headers_message.headers.append(CBlockHeader(block_293))
+        headers_message.headers.append(CBlockHeader(block_n5))
         test_node.send_message(headers_message)
         test_node.wait_for_disconnect()
 

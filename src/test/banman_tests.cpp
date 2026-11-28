@@ -6,6 +6,7 @@
 #include <banman.h>
 #include <chainparams.h>
 #include <netbase.h>
+#include <node/interface_ui.h>
 #include <streams.h>
 #include <test/util/logging.h>
 #include <test/util/setup_common.h>
@@ -13,6 +14,7 @@
 
 
 #include <boost/test/unit_test.hpp>
+#include <boost/signals2/connection.hpp>
 
 BOOST_FIXTURE_TEST_SUITE(banman_tests, BasicTestingSetup)
 
@@ -39,6 +41,28 @@ BOOST_AUTO_TEST_CASE(file)
             BOOST_CHECK_EQUAL(entries_read.size(), 1);
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(expiry_notification_allows_reentrant_read)
+{
+    SetMockTime(777s);
+    CClientUIInterface ui;
+    BanMan banman{m_args.GetDataDirBase() / "banlist_reentry", &ui, /*default_ban_time=*/60};
+    unsigned notifications{0};
+    auto connection = ui.BannedListChanged_connect([&] {
+        banmap_t snapshot;
+        banman.GetBanned(snapshot);
+        ++notifications;
+    });
+
+    banman.Ban(LookupHost("192.0.2.1", false).value(), 1);
+    SetMockTime(779s);
+    banmap_t expired;
+    banman.GetBanned(expired);
+    BOOST_CHECK(expired.empty());
+    BOOST_CHECK_EQUAL(notifications, 2);
+    connection.disconnect();
+    SetMockTime(0s);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

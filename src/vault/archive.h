@@ -36,7 +36,9 @@ class CVault;
  */
 
 //! Bumped when the archive body's layout changes.
-static constexpr uint32_t VAULT_ARCHIVE_VERSION{1};
+static constexpr uint32_t VAULT_ARCHIVE_VERSION{2};
+
+enum class VaultArchiveTxState : uint8_t { PENDING = 0, ABANDONED = 1, CONFLICTED = 2 };
 
 /** One historical transaction and the chain position it was last seen at. */
 struct VaultArchiveTx {
@@ -50,6 +52,8 @@ struct VaultArchiveTx {
     int32_t block_height{0};
     int32_t block_index{0};
     bool confirmed{false};
+    //! In v2, distinguishes non-confirmed transactions. V1 imports as pending.
+    VaultArchiveTxState state{VaultArchiveTxState::PENDING};
     std::vector<std::pair<std::string, std::string>> value_map;
 };
 

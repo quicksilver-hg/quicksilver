@@ -9,7 +9,6 @@
 #include <policy/policy.h>
 
 #include <coins.h>
-#include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/validation.h>
 #include <primitives/transaction.h>
@@ -23,7 +22,7 @@
 #include <cstddef>
 #include <vector>
 
-// Quicksilver has no dust threshold; any positive-value standard output is relayable.
+// Quicksilver has no dust threshold; relay policy allows standard outputs with a value of zero.
 
 bool IsStandard(const CScript& scriptPubKey, const std::optional<unsigned>& max_datacarrier_bytes, TxoutType& whichType)
 {

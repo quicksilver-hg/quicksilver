@@ -46,6 +46,7 @@ private Q_SLOTS:
     void commandLineGraphicsHelperIsShown();
     void gpuDevicesSettingRoundTrips();
     void gpuCardsListAndModes();
+    void choosingCardsRequiresASelection();
     void sameNamedCardsShowTheirIds();
     void gpuCardStatsRefresh();
     void amdgpuAdvisoryFollowsTheKernelLimit();
@@ -56,9 +57,12 @@ private Q_SLOTS:
     void cardsHintNeedsACard();
     void tickingBuiltInGraphicsAsksFirst();
     void missingChosenCardKeepsItsName();
+    void onlyChosenCardMissingStaysChosen();
+    void faultedCardWithoutSlotIsNamedById();
+    void automaticRowsFollowTheMinersSelection();
     void cpuOnlyHidesTheList();
     void savedGpuDevicesSelectTheMatchingRadio();
-    void externalSignerSurfacesAreHiddenNotGreyedOut();
+    void externalSignerSurfacesAreAbsent();
     void cpuFallbackWarningPreferencePersists();
     void allowCpuBlockMiningPersistsWithoutRestart();
     void hardwareTabFitsAtTheOpeningSize();
@@ -71,7 +75,19 @@ private Q_SLOTS:
     void resetDoesNotNestEventLoop();
     void gpuSolverBrowseDoesNotNestEventLoop();
     void displayTabHasNoDeadFontChoiceAndAlignsItsFields();
-    void coinControlSettingIsNamedCoinControl();
+    void coinControlIsAlwaysOnTransfer();
+    void storedCoinControlSettingIsDropped();
+    void settingsPruneMinimumIsTheBlockFileFloor();
+    void storedPruneSizeBelowTheFloorIsRaised();
+    void confPruneSizeBelowTheFloorIsNotWritten();
+    void storedPrevPruneSizeBelowTheFloorIsRaised();
+    void savedGpuModeOpensWithoutARestartWarning();
+    void switchedOffInvalidProxyLeavesOkEnabled();
+    void emptyProxyHostBlocksOk();
+    void loadedInvalidProxyHostIsChecked();
+    void loadedHostNameProxyIsValid();
+    void ipv6ProxyHostRoundTrips();
+    void optionsModelIsAFlatEditOnlyList();
 
 private:
     interfaces::Node& m_node;

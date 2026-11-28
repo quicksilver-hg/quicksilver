@@ -169,15 +169,6 @@ private:
     void confirmCpuFallbackIfNeededAndPrepare(std::unique_ptr<VaultModelTransaction> transaction, vault::CCoinControl coin_control, std::shared_ptr<VaultModel::UnlockContext> unlock);
     void startAsyncSendPrepare(std::unique_ptr<VaultModelTransaction> transaction, vault::CCoinControl coin_control, std::shared_ptr<VaultModel::UnlockContext> unlock);
     static bool cpuFallbackWarningRequired(bool slow_network, bool card_will_work, bool warning_enabled);
-    /* Sign PSQT using external signer.
-     *
-     * @param[in,out] psqtx the PSQT to sign
-     * @param[in,out] mtx needed to attempt to finalize
-     * @param[in,out] complete whether the PSQT is complete (a successfully signed multisig transaction may not be complete)
-     *
-     * @returns false if any failure occurred, which may include the user rejection of a transaction on the device.
-     */
-    bool signWithExternalSigner(PartiallySignedQuicksilverTransaction& psqt, CMutableTransaction& mtx, bool& complete);
 
 private Q_SLOTS:
     void sendButtonClicked(bool checked);
@@ -194,7 +185,6 @@ private Q_SLOTS:
     void createTransferSummary();
     void coinControlClipboardQuantity();
     void coinControlClipboardAmount();
-    void coinControlClipboardBytes();
     void coinControlClipboardChange();
     void updateNumberOfBlocks(int count, const QDateTime& blockDate, double nVerificationProgress, SyncType synctype, SynchronizationState sync_state);
 

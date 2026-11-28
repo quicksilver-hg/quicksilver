@@ -31,25 +31,23 @@ namespace Consensus {
 /** Auxiliary functions for transaction validation (ideally should not be exposed) */
 
 /**
- * Count ECDSA signature operations the old-fashioned (pre-0.6) way
+ * Count legacy ECDSA signature operations
  * @return number of sigops this transaction's outputs will produce when spent
- * @see CTransaction::FetchInputs
  */
 unsigned int GetLegacySigOpCount(const CTransaction& tx);
 
 /**
  * Count ECDSA signature operations in pay-to-script-hash inputs.
  *
- * @param[in] mapInputs Map of previous transactions that have outputs we're spending
+ * @param[in] mapInputs View of the prevouts spent by the transaction
  * @return maximum number of sigops required to validate this transaction's inputs
- * @see CTransaction::FetchInputs
  */
 unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& mapInputs);
 
 /**
  * Compute total signature operation cost of a transaction.
  * @param[in] tx     Transaction for which we are computing the cost
- * @param[in] inputs Map of previous transactions that have outputs we're spending
+ * @param[in] inputs View of the prevouts spent by the transaction
  * @param[in] flags Script verification flags
  * @return Total signature operation cost of tx
  */

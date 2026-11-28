@@ -26,6 +26,7 @@
 #include <unistd.h>    // getpid
 #endif
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -37,6 +38,13 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+// The CPU solvers' own entry points, which dispatch.cpp declares the same way:
+// short_preimage_is_refused_before_any_attempt calls them directly.
+namespace cuckatoo {
+bool Solve19Bytes(const unsigned char*, size_t, uint32_t, uint32_t, Cycle&, uint32_t&, const SolverProgressCallback&, const SolverCancelCallback&);
+bool Solve28Bytes(const unsigned char*, size_t, uint32_t, uint32_t, Cycle&, uint32_t&, const SolverProgressCallback&, const SolverCancelCallback&);
+} // namespace cuckatoo
 
 BOOST_FIXTURE_TEST_SUITE(gpu_solver_tests, GpuCardTablesTestSetup)
 
@@ -1095,6 +1103,21 @@ BOOST_AUTO_TEST_CASE(solver_fault_missing_solver_depends_on_fallback)
     BOOST_CHECK_EQUAL(*fault, "No graphics card is in use; install the quicksilver-gpu package, set -cuckatoodevice, or allow processor mining with -allowcpumining");
 }
 
+// S0322-A-01: the no-solver sentence names the caller's own CPU option. The agent
+// reads -allowcputxpow, not -allowcpumining; the node's text is the default.
+BOOST_AUTO_TEST_CASE(solver_fault_names_the_callers_cpu_option)
+{
+    const auto agent = SolverFault(GpuSolveStatus::kNoSolver, /*cpu_fallback=*/false, "-allowcputxpow");
+    BOOST_REQUIRE(agent.has_value());
+    BOOST_CHECK_EQUAL(*agent, "No graphics card is in use; install the quicksilver-gpu package, set -cuckatoodevice, or allow processor mining with -allowcputxpow");
+    BOOST_CHECK(agent->find("-allowcpumining") == std::string::npos);
+    BOOST_CHECK_EQUAL(*SolverFault(GpuSolveStatus::kNoSolver, false, cuckatoo::kNodeCpuOption),
+                      *SolverFault(GpuSolveStatus::kNoSolver, false));
+    // Only the no-solver sentence names an option; the others are unchanged by it.
+    BOOST_CHECK_EQUAL(*SolverFault(GpuSolveStatus::kNoGpuDevice, false, "-allowcputxpow"),
+                      *SolverFault(GpuSolveStatus::kNoGpuDevice, false));
+}
+
 BOOST_AUTO_TEST_CASE(solver_missing_names_only_the_unconfigured_case)
 {
     // The GUI substitutes its own wording on this one outcome, so it is the one
@@ -1150,6 +1173,109 @@ BOOST_AUTO_TEST_CASE(solver_fault_hardware_and_process_failures)
     BOOST_CHECK_EQUAL(*SolverFault(GpuSolveStatus::kSolverError, false), "The graphics helper exited with an error; see the debug log");
     BOOST_CHECK_EQUAL(*SolverFault(GpuSolveStatus::kTimedOut, false), "The graphics helper stopped reporting progress and was killed; see the debug log");
     BOOST_CHECK(*device_fault != *SolverFault(GpuSolveStatus::kNoGpuDevice, false));
+}
+
+// S0118-C-02: a helper that closes its stdout and keeps running used to hang the
+// bridge in Wait() for as long as it lived. The reap is bounded: past the reap limit
+// the helper is killed, and the outcome is the solver error a killed helper is.
+// The stub lives 20 s, so on the unbounded bridge this case fails its time check
+// instead of passing.
+BOOST_AUTO_TEST_CASE(helper_that_outlives_its_stdout_is_reaped, *boost::unit_test::timeout(60))
+{
+    EnvGuard g;
+    set_solver(write_script("qs_stub_closeout", echo_stmt("progress=1") + "closeout\n" + sleep_stmt(20), 0));
+    cuckatoo::SetReapLimitForTesting(std::chrono::milliseconds{300});
+    unsigned char pre[96] = {0};
+    cuckatoo::Cycle out{}; uint32_t nonce = 0;
+    cuckatoo::GpuSolveStatus status{};
+    const auto start = std::chrono::steady_clock::now();
+    BOOST_CHECK(!cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, kStubDevice, 0, 1, out, nonce, {}, {}, &status));
+    const auto took = std::chrono::steady_clock::now() - start;
+    BOOST_CHECK_MESSAGE(took < std::chrono::seconds{10}, "the bridge waited "
+                        << std::chrono::duration_cast<std::chrono::milliseconds>(took).count() << " ms for the helper");
+    BOOST_CHECK(status == cuckatoo::GpuSolveStatus::kSolverError);
+}
+
+// S0118-C-09: the helper counts its nonce in 32 bits, so a window that crosses 2^32
+// wraps, and a nonce after the wrap is inside the window it was given.
+BOOST_AUTO_TEST_CASE(nonce_after_a_wrapped_window_is_inside_it)
+{
+    EnvGuard g;
+    unsigned char pre[96] = {0};
+    cuckatoo::Cycle out{}; uint32_t nonce = 0;
+    cuckatoo::GpuSolveStatus status{};
+    constexpr uint32_t start{0xFFFFFFF0U};  // 16 nonces before the wrap, 16 after it
+    set_solver(write_scripted_stub("qs_stub_wrapped_inside", {"nonce=5", cycle_line(1)}, 0));
+    BOOST_CHECK(cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, kStubDevice, start, 32, out, nonce, {}, {}, &status));
+    BOOST_CHECK_EQUAL(nonce, 5u);
+    BOOST_CHECK(status == cuckatoo::GpuSolveStatus::kSolved);
+    set_solver(write_scripted_stub("qs_stub_wrapped_outside", {"nonce=16", cycle_line(1)}, 0));
+    BOOST_CHECK(!cuckatoo::GpuSolveBytes(pre, sizeof(pre), 29, kStubDevice, start, 32, out, nonce, {}, {}, &status));
+    BOOST_CHECK(status == cuckatoo::GpuSolveStatus::kSolverError);
+}
+
+// S0118-A-01: a cancel that ends the CPU sweep, or stops it before it starts, is
+// reported as kCancelled, not as the GPU attempt's kNoSolver. The agent tells a
+// cancelled grind apart from a failed one by this status alone.
+BOOST_AUTO_TEST_CASE(cancelled_cpu_sweep_reports_cancelled)
+{
+    EnvGuard g;
+    std::vector<unsigned char> pre(64, 0xCD);
+    cuckatoo::Cycle out{}; uint32_t nonce = 0;
+    const auto reject_all = [](const cuckatoo::Cycle&, uint32_t) { return false; };
+    {
+        auto status{cuckatoo::GpuSolveStatus::kNoCycle};
+        bool progressed{false};
+        BOOST_CHECK(!cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), 19, 0, 1u << 20, out, nonce,
+                                                  /*cpu_fallback=*/true, [&](uint32_t) { progressed = true; },
+                                                  [&] { return progressed; }, &status, nullptr, reject_all));
+        BOOST_CHECK(progressed);
+        BOOST_CHECK_EQUAL(cuckatoo::GpuSolveStatusName(status), "cancelled");
+    }
+    {
+        auto status{cuckatoo::GpuSolveStatus::kNoCycle};
+        BOOST_CHECK(!cuckatoo::CuckatooSolveBytes(pre.data(), pre.size(), 19, 0, 1u << 20, out, nonce,
+                                                  /*cpu_fallback=*/true, {}, [] { return true; }, &status));
+        BOOST_CHECK_EQUAL(cuckatoo::GpuSolveStatusName(status), "cancelled");
+    }
+    {
+        std::array<unsigned char, cuckatoo::PREPOW_BYTES> header{};
+        header.fill(0xCD);
+        auto status{cuckatoo::GpuSolveStatus::kNoCycle};
+        bool progressed{false};
+        BOOST_CHECK(!cuckatoo::CuckatooSolve(header, 19, 0, 1u << 20, out, nonce, /*cpu_fallback=*/true,
+                                             [&](uint32_t) { progressed = true; }, [&] { return progressed; },
+                                             &status, nullptr, reject_all));
+        BOOST_CHECK_EQUAL(cuckatoo::GpuSolveStatusName(status), "cancelled");
+    }
+}
+
+// S0118-A-03, S0120-B-01, S0120-C-05: the CPU solvers write the nonce into the last
+// four bytes. A shorter pre-image is refused before any graph is attempted, at the
+// dispatch entry point and at each solver's own.
+BOOST_AUTO_TEST_CASE(short_preimage_is_refused_before_any_attempt)
+{
+    EnvGuard g;
+    // A helper is configured, and its listing leaves a mark: the refusal comes before
+    // discovery, so not even the listing runs.
+    const std::string mark{tmp_path("short-preimage-listed")};
+    std::remove(mark.c_str());
+    const std::string listing{tmp_path("short-preimage-listing.stub")};
+    write_file(listing, "append " + mark + "\nexit 0\n");
+    set_env("QS_SOLVER_STUB_LISTING", listing);
+    set_solver(SOLVER_STUB_PATH);
+    const unsigned char pre[3] = {1, 2, 3};
+    cuckatoo::Cycle out{}; uint32_t nonce = 0;
+    int attempts{0};
+    const auto count = [&](uint32_t) { ++attempts; };
+    auto status{cuckatoo::GpuSolveStatus::kSolved};
+    BOOST_CHECK(!cuckatoo::CuckatooSolveBytes(pre, sizeof(pre), 19, 0, 1, out, nonce, /*cpu_fallback=*/true, count, {}, &status));
+    BOOST_CHECK(status == cuckatoo::GpuSolveStatus::kNoSolver);
+    BOOST_CHECK_EQUAL(marker_size(mark), -1L);
+    std::remove(listing.c_str());
+    BOOST_CHECK(!cuckatoo::Solve19Bytes(pre, sizeof(pre), 0, 1, out, nonce, count, {}));
+    BOOST_CHECK(!cuckatoo::Solve28Bytes(pre, sizeof(pre), 0, 1, out, nonce, count, {}));
+    BOOST_CHECK_EQUAL(attempts, 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

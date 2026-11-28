@@ -6,6 +6,7 @@
 #define QUICKSILVER_AGENT_ALLOTMENTPOLICY_H
 
 #include <consensus/amount.h>
+#include <support/cleanse.h>
 #include <util/result.h>
 
 #include <cstdint>
@@ -56,9 +57,17 @@ struct AllotmentPolicyBundleArtifact {
     AllotmentPolicyArtifact policy_request;
     std::string policy_request_json;
     std::string funding_address;
+    //! Key A's WIF; every copy is wiped when it is destroyed (c04-21).
     std::string agent_secret;
     std::string funding_descriptor;
     std::vector<AllotmentFundingOutputArtifact> funding_outputs;
+
+    AllotmentPolicyBundleArtifact() = default;
+    AllotmentPolicyBundleArtifact(const AllotmentPolicyBundleArtifact&) = default;
+    AllotmentPolicyBundleArtifact(AllotmentPolicyBundleArtifact&&) = default;
+    AllotmentPolicyBundleArtifact& operator=(const AllotmentPolicyBundleArtifact&) = default;
+    AllotmentPolicyBundleArtifact& operator=(AllotmentPolicyBundleArtifact&&) = default;
+    ~AllotmentPolicyBundleArtifact() { memory_cleanse(agent_secret.data(), agent_secret.size()); }
 };
 
 struct AllotmentPaymentReceiptArtifact {

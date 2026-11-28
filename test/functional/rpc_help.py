@@ -108,9 +108,6 @@ class HelpRpcTest(QuicksilverTestFramework):
         if self.is_vault_compiled():
             components.append('Vault')
 
-        if self.is_external_signer_compiled():
-            components.append('Signer')
-
         if self.is_zmq_compiled():
             components.append('Zmq')
 

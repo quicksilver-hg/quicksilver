@@ -6,17 +6,15 @@
 
 #include <crypto/cuckatoo/gpu_devices.h>
 
-#include <QMetaType>
 #include <QMap>
 #include <QString>
 
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
 
 class QObject;
-
-Q_DECLARE_METATYPE(cuckatoo::GpuDiscovery)
 
 namespace gpusituation {
 void RunDiscovery(uint8_t edgebits, QObject* receiver, std::function<void(const cuckatoo::GpuDiscovery&)> done);
@@ -24,7 +22,7 @@ QString ReasonClause(const cuckatoo::GpuDevice& device);
 enum class RowMode { kAutomatic, kChoose };
 QString RowState(const cuckatoo::GpuDevice& device, RowMode mode, bool ticked);
 QString MissingRowState();
-struct StartupNotice { QString headline; QString informative; bool offer_settings; };
+struct StartupNotice { QString headline; QString informative; bool offer_settings{false}; };
 std::optional<StartupNotice> StartupNoticeFor(const cuckatoo::GpuDiscovery& discovery, bool windows,
                                               const QMap<QString, QString>& names);
 struct SendNote { QString text; bool processor_fallback; };

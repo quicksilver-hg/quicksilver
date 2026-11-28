@@ -46,6 +46,14 @@ SET_ARG_READ_INDIRECTLY = set([
     '-includeconf',
 ])
 
+# Args still accepted so an existing configuration starts, but deliberately not read.
+# Each entry names its registration and why it stays.
+SET_ARG_ACCEPTED_UNREAD = set([
+    # src/vault/init.cpp AddHiddenArgs: the periodic vault flush is gone (F-678), but an
+    # unregistered argument on the command line would stop the node from starting.
+    '-flushvault',
+])
+
 
 def get_hidden_args():
     """Return args registered through AddHiddenArgs({...}) literal lists.
@@ -76,6 +84,7 @@ def lint_missing_argument_documentation():
     args_used = set(re.findall(re.compile(REGEX_ARG), used))
     args_used |= set(re.findall(re.compile(REGEX_ARG_HELPER), used_helper))
     args_used |= SET_ARG_READ_INDIRECTLY
+    args_used |= SET_ARG_ACCEPTED_UNREAD
     args_docd = set(re.findall(re.compile(REGEX_DOC), docd)).union(SET_DOC_OPTIONAL).union(get_hidden_args())
     args_need_doc = args_used.difference(args_docd)
     args_unknown = args_docd.difference(args_used)

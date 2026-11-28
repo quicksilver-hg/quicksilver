@@ -65,6 +65,8 @@ class VaultTest(QuicksilverTestFramework):
         vaultinfo = self.nodes[0].getvaultinfo()
         assert all(field not in vaultinfo for field in ['balance', 'unconfirmed_balance', 'immature_balance', 'hdseedid', 'format', 'descriptors'])
         assert_raises_rpc_error(-32601, 'Method not found', self.nodes[0].getunconfirmedbalance)
+        # F-678 (S0279-A-02): the inherited abandontransaction RPC is removed.
+        assert_raises_rpc_error(-32601, 'Method not found', self.nodes[0].abandontransaction, '00' * 32)
         balances = self.nodes[0].getbalances()['mine']
         node0_first_reward = balances['immature']
         assert node0_first_reward > 0

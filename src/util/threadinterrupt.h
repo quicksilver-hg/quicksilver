@@ -31,7 +31,9 @@ public:
     CThreadInterrupt();
     explicit operator bool() const;
     void operator()() EXCLUSIVE_LOCKS_REQUIRED(!mut);
+    //! Clear the flag after possible interrupt senders and the sleeping thread are quiescent.
     void reset();
+    //! Return true when the full duration elapses, or false after an interrupt.
     bool sleep_for(Clock::duration rel_time) EXCLUSIVE_LOCKS_REQUIRED(!mut);
 
 private:

@@ -380,7 +380,9 @@ class VaultMiniscriptTest(QuicksilverTestFramework):
         # Test we can sign for a max-size TapMiniscript. Recompute the maximum accepted size
         # for a TapMiniscript (see cpp file for details). Then pad a simple pubkey check up
         # to the maximum size. Make sure we can import and spend this script.
-        leeway_weight = (4 + 4 + 1 + 36 + 4 + 1 + 1 + 8 + 1 + 1 + 33) * 4 + 2
+        # The leeway counts the 176-byte per-transaction PoW tail (nAnchorHeight, nPowNonce,
+        # 42 nCycle edges), which is non-witness data.
+        leeway_weight = (4 + 4 + 176 + 1 + 36 + 4 + 1 + 1 + 8 + 1 + 1 + 33) * 4 + 2
         max_tapmini_size = 400_000 - 3 - (1 + 65) * 1_000 - 3 - (33 + 32 * 128) - leeway_weight - 5
         padding = max_tapmini_size - 33 - 1
         ms = f"pk({TPRVS[0]}/*)"

@@ -9,7 +9,6 @@
 #include <util/result.h>
 #include <util/translation.h>
 
-#include <memory>
 
 namespace kernel {
 

@@ -15,8 +15,7 @@ class NetworkStyle;
 namespace interfaces {
 class Handler;
 class Node;
-class Vault;
-};
+} // namespace interfaces
 
 /** Class for the splashscreen with information of the running client.
  *
@@ -41,9 +40,6 @@ public Q_SLOTS:
     /** Show message and progress */
     void showMessage(const QString &message, int alignment, const QColor &color);
 
-    /** Handle vault load notifications. */
-    void handleLoadVault();
-
 protected:
     bool eventFilter(QObject * obj, QEvent * ev) override;
 
@@ -65,9 +61,8 @@ private:
     std::unique_ptr<interfaces::Handler> m_handler_init_message;
     std::unique_ptr<interfaces::Handler> m_handler_show_progress;
     std::unique_ptr<interfaces::Handler> m_handler_init_vault;
-    std::unique_ptr<interfaces::Handler> m_handler_load_vault;
-    std::list<std::unique_ptr<interfaces::Vault>> m_connected_vaults;
-    std::list<std::unique_ptr<interfaces::Handler>> m_connected_vault_handlers;
+    struct CoreSignalState;
+    std::shared_ptr<CoreSignalState> m_core_signals;
 };
 
 #endif // QUICKSILVER_QT_SPLASHSCREEN_H

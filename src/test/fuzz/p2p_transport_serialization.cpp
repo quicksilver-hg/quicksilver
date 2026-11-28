@@ -6,6 +6,7 @@
 #include <chainparams.h>
 #include <hash.h>
 #include <net.h>
+#include <node/connection_types.h>
 #include <netmessagemaker.h>
 #include <protocol.h>
 #include <test/fuzz/FuzzedDataProvider.h>
@@ -106,7 +107,8 @@ FUZZ_TARGET(p2p_transport_serialization, .init = initialize_p2p_transport_serial
 namespace {
 
 template<RandomNumberGenerator R>
-void SimulationTest(Transport& initiator, Transport& responder, R& rng, FuzzedDataProvider& provider)
+void SimulationTest(Transport& initiator, Transport& responder, R& rng, FuzzedDataProvider& provider,
+                    std::optional<TransportProtocolType> expected_type)
 {
     // Simulation test with two Transport objects, which send messages to each other, with
     // sending and receiving fragmented into multiple pieces that may be interleaved. It primarily
@@ -118,6 +120,8 @@ void SimulationTest(Transport& initiator, Transport& responder, R& rng, FuzzedDa
 
     // Two vectors representing in-flight bytes. inflight[i] is from transport[i] to transport[!i].
     std::array<std::vector<uint8_t>, 2> in_flight;
+    // Complete messages received by transports[side].
+    std::array<size_t, 2> messages_received{0, 0};
 
     // Two queues with expected messages. expected[i] is expected to arrive in transport[!i].
     std::array<std::deque<CSerializedNetMsg>, 2> expected;
@@ -282,6 +286,7 @@ void SimulationTest(Transport& initiator, Transport& responder, R& rng, FuzzedDa
                 // The data must match what is expected.
                 assert(std::ranges::equal(received.m_recv, MakeByteSpan(expected[side].front().data)));
                 expected[side].pop_front();
+                ++messages_received[!side];
                 progress = true;
             }
             // Progress must be made (by processing incoming bytes and/or returning complete
@@ -328,8 +333,29 @@ void SimulationTest(Transport& initiator, Transport& responder, R& rng, FuzzedDa
     assert(expected[0].empty());
     assert(expected[1].empty());
 
+    // S0399-A-01: the handshake completed (or fell back to V1), not merely
+    // "session ids equal", which two unfinished V2 handshakes also satisfy.
+    const auto info0{transports[0]->GetInfo()};
+    const auto info1{transports[1]->GetInfo()};
+    for (int side = 0; side < 2; ++side) {
+        // A side that received a message has finished detecting.
+        if (messages_received[side] > 0) {
+            assert((side == 0 ? info0 : info1).transport_type != TransportProtocolType::DETECTING);
+        }
+    }
+    if (expected_type) {
+        // Two V1 or two V2 transports always finish: V2 sends its key, garbage
+        // and version packet without any application message.
+        assert(info0.transport_type == *expected_type);
+        assert(info1.transport_type == *expected_type);
+    }
+    if (info0.transport_type != TransportProtocolType::DETECTING &&
+        info1.transport_type != TransportProtocolType::DETECTING) {
+        assert(info0.transport_type == info1.transport_type);
+        assert(info0.session_id.has_value() == (info0.transport_type == TransportProtocolType::V2));
+    }
     // Compare session IDs.
-    assert(transports[0]->GetInfo().session_id == transports[1]->GetInfo().session_id);
+    assert(info0.session_id == info1.session_id);
 }
 
 std::unique_ptr<Transport> MakeV1Transport(NodeId nodeid) noexcept
@@ -381,7 +407,7 @@ FUZZ_TARGET(p2p_transport_bidirectional, .init = initialize_p2p_transport_serial
     auto t1 = MakeV1Transport(NodeId{0});
     auto t2 = MakeV1Transport(NodeId{1});
     if (!t1 || !t2) return;
-    SimulationTest(*t1, *t2, rng, provider);
+    SimulationTest(*t1, *t2, rng, provider, TransportProtocolType::V1);
 }
 
 FUZZ_TARGET(p2p_transport_bidirectional_v2, .init = initialize_p2p_transport_serialization)
@@ -392,7 +418,7 @@ FUZZ_TARGET(p2p_transport_bidirectional_v2, .init = initialize_p2p_transport_ser
     auto t1 = MakeV2Transport(NodeId{0}, true, rng, provider);
     auto t2 = MakeV2Transport(NodeId{1}, false, rng, provider);
     if (!t1 || !t2) return;
-    SimulationTest(*t1, *t2, rng, provider);
+    SimulationTest(*t1, *t2, rng, provider, TransportProtocolType::V2);
 }
 
 FUZZ_TARGET(p2p_transport_bidirectional_v1v2, .init = initialize_p2p_transport_serialization)
@@ -403,5 +429,7 @@ FUZZ_TARGET(p2p_transport_bidirectional_v1v2, .init = initialize_p2p_transport_s
     auto t1 = MakeV1Transport(NodeId{0});
     auto t2 = MakeV2Transport(NodeId{1}, false, rng, provider);
     if (!t1 || !t2) return;
-    SimulationTest(*t1, *t2, rng, provider);
+    // A V1 initiator with nothing to send never resolves the responder's
+    // detection, so no final type is required here.
+    SimulationTest(*t1, *t2, rng, provider, /*expected_type=*/std::nullopt);
 }

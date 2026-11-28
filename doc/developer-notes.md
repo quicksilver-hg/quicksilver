@@ -346,8 +346,6 @@ Before building the `docs` target, you'll need to install these dependencies:
 
 Linux: `sudo apt install doxygen graphviz`
 
-MacOS: `brew install doxygen graphviz`
-
 Development tips and tricks
 ---------------------------
 
@@ -531,7 +529,7 @@ invocation of `perf record` like this:
 ```sh
 $ perf record \
     -g --call-graph dwarf --per-thread -F 140 \
-    -p `pgrep quicksilver-daemon` -- sleep 60
+    -p `pgrep -f '^([^ ]*/)?quicksilver-daemon([[:space:]]|$)' | head -n 1` -- sleep 60
 ```
 
 You could then analyze the results by running:
@@ -631,13 +629,14 @@ Threads
   : Parallel script validation threads for transactions in blocks.
 
 - [ThreadHTTP (`qs-http`)](../src/httpserver.cpp)
-  : Libevent thread to listen for RPC and REST connections.
+  : Libevent thread to listen for RPC connections.
 
-- [HTTP worker threads(`qs-httpworker.x`)](../src/httpserver.cpp)
-  : Threads to service RPC and REST requests.
+- [HTTP worker threads (`qs-httpw.x`)](../src/httpserver.cpp)
+  : Threads to service RPC requests.
 
 - [Indexer threads (`qs-txindex`, etc)](../src/index/base.cpp)
-  : One thread per indexer.
+  : One thread per indexer. OS names longer than 15 bytes retain the `qs-` prefix and a shortened head and tail.
+  The coin statistics index uses `qs-coinst~index`. Log messages show the full names.
 
 - [SchedulerThread (`qs-scheduler`)](../src/scheduler.cpp)
   : Does asynchronous background tasks like dumping vault contents, dumping

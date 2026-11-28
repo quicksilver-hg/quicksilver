@@ -10,7 +10,6 @@
 #include <banman.h>
 #include <chainparams.h>
 #include <clientversion.h>
-#include <core_io.h>
 #include <net_permissions.h>
 #include <net_processing.h>
 #include <net_types.h> // For banmap_t
@@ -18,9 +17,7 @@
 #include <node/context.h>
 #include <node/protocol_version.h>
 #include <node/warnings.h>
-#include <policy/settings.h>
 #include <protocol.h>
-#include <rpc/blockchain.h>
 #include <rpc/protocol.h>
 #include <rpc/server_util.h>
 #include <rpc/util.h>
@@ -149,7 +146,7 @@ static RPCHelpMan getpeerinfo()
                     {RPCResult::Type::NUM, "pingtime", /*optional=*/true, "The last ping time in seconds, if any"},
                     {RPCResult::Type::NUM, "minping", /*optional=*/true, "The minimum observed ping time in seconds, if any"},
                     {RPCResult::Type::NUM, "pingwait", /*optional=*/true, "The duration in seconds of an outstanding ping (if non-zero)"},
-                    {RPCResult::Type::NUM, "version", "The peer version, such as 70001"},
+                    {RPCResult::Type::NUM, "version", "The peer protocol version"},
                     {RPCResult::Type::STR, "subver", "The string version"},
                     {RPCResult::Type::BOOL, "inbound", "Inbound (true) or Outbound (false)"},
                     {RPCResult::Type::BOOL, "bip152_hb_to", "Whether we selected peer as (compact blocks) high-bandwidth peer"},
@@ -317,7 +314,7 @@ static RPCHelpMan addnode()
                 RPCResult{RPCResult::Type::NONE, "", ""},
                 RPCExamples{
                     HelpExampleCli("addnode", "\"192.168.0.6:9555\" \"onetry\" true")
-            + HelpExampleRpc("addnode", "\"192.168.0.6:9555\", \"onetry\" true")
+            + HelpExampleRpc("addnode", "\"192.168.0.6:9555\", \"onetry\", true")
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -380,7 +377,7 @@ static RPCHelpMan addconnection()
             }},
         RPCExamples{
             HelpExampleCli("addconnection", "\"192.168.0.6:9555\" \"outbound-full-relay\" true")
-            + HelpExampleRpc("addconnection", "\"192.168.0.6:9555\" \"outbound-full-relay\" true")
+            + HelpExampleRpc("addconnection", "\"192.168.0.6:9555\", \"outbound-full-relay\", true")
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -721,7 +718,7 @@ static RPCHelpMan setban()
     return RPCHelpMan{"setban",
                 "\nAttempts to add or remove an IP/Subnet from the banned list.\n",
                 {
-                    {"subnet", RPCArg::Type::STR, RPCArg::Optional::NO, "The IP/Subnet (see getpeerinfo for nodes IP) with an optional netmask (default is /32 = single IP)"},
+                    {"subnet", RPCArg::Type::STR, RPCArg::Optional::NO, "The IP/Subnet with an optional netmask (/32 for one IPv4 address, /128 for one IPv6 address)"},
                     {"command", RPCArg::Type::STR, RPCArg::Optional::NO, "'add' to add an IP/Subnet to the list, 'remove' to remove an IP/Subnet from the list"},
                     {"bantime", RPCArg::Type::NUM, RPCArg::Default{0}, "time in seconds how long (or until when if [absolute] is set) the IP is banned (0 or empty means using the default time of 24h which can also be overwritten by the -bantime startup argument)"},
                     {"absolute", RPCArg::Type::BOOL, RPCArg::Default{false}, "If set, the bantime must be an absolute timestamp expressed in " + UNIX_EPOCH_TIME},
@@ -774,7 +771,7 @@ static RPCHelpMan setban()
 
         const bool absolute{request.params[3].isNull() ? false : request.params[3].get_bool()};
 
-        if (absolute && banTime < GetTime()) {
+        if (absolute && banTime < GetTime<std::chrono::seconds>().count()) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: Absolute timestamp is in the past");
         }
 
@@ -827,7 +824,7 @@ static RPCHelpMan listbanned()
 
     banmap_t banMap;
     banman.GetBanned(banMap);
-    const int64_t current_time{GetTime()};
+    const int64_t current_time{GetTime<std::chrono::seconds>().count()};
 
     UniValue bannedAddresses(UniValue::VARR);
     for (const auto& entry : banMap)
@@ -1023,7 +1020,7 @@ static RPCHelpMan sendmsgtopeer()
         },
         RPCResult{RPCResult::Type::OBJ, "", "", std::vector<RPCResult>{}},
         RPCExamples{
-            HelpExampleCli("sendmsgtopeer", "0 \"addr\" \"ffffff\"") + HelpExampleRpc("sendmsgtopeer", "0 \"addr\" \"ffffff\"")},
+            HelpExampleCli("sendmsgtopeer", "0 \"addr\" \"ffffff\"") + HelpExampleRpc("sendmsgtopeer", "0, \"addr\", \"ffffff\"")},
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue {
             const NodeId peer_id{request.params[0].getInt<int64_t>()};
             const std::string& msg_type{request.params[1].get_str()};
@@ -1096,7 +1093,7 @@ static RPCHelpMan getaddrmaninfo()
     };
 }
 
-UniValue AddrmanEntryToJSON(const AddrInfo& info, const CConnman& connman)
+static UniValue AddrmanEntryToJSON(const AddrInfo& info, const CConnman& connman)
 {
     UniValue ret(UniValue::VOBJ);
     ret.pushKV("address", info.ToStringAddr());
@@ -1117,7 +1114,7 @@ UniValue AddrmanEntryToJSON(const AddrInfo& info, const CConnman& connman)
     return ret;
 }
 
-UniValue AddrmanTableToJSON(const std::vector<std::pair<AddrInfo, AddressPosition>>& tableInfos, const CConnman& connman)
+static UniValue AddrmanTableToJSON(const std::vector<std::pair<AddrInfo, AddressPosition>>& tableInfos, const CConnman& connman)
 {
     UniValue table(UniValue::VOBJ);
     for (const auto& e : tableInfos) {

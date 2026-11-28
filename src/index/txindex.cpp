@@ -5,7 +5,6 @@
 
 #include <index/txindex.h>
 
-#include <clientversion.h>
 #include <common/args.h>
 #include <index/disktxpos.h>
 #include <logging.h>
@@ -76,7 +75,7 @@ BaseIndex::DB& TxIndex::GetDB() const { return *m_db; }
 bool TxIndex::FindTx(const uint256& tx_hash, uint256& block_hash, CTransactionRef& tx) const
 {
     CDiskTxPos postx;
-    if (!m_db->ReadTxPos(tx_hash, postx)) {
+    if (!m_chainstate || !m_db->ReadTxPos(tx_hash, postx)) {
         return false;
     }
 

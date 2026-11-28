@@ -70,8 +70,6 @@ const std::vector<unsigned char>& GetObfuscateKey(const CDBWrapper &w);
 
 }; // namespace dbwrapper_private
 
-bool DestroyDB(const std::string& path_str);
-
 /** Batch of changes queued to be written to a CDBWrapper */
 class CDBBatch
 {

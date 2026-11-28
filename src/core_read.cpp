@@ -28,7 +28,7 @@ private:
 public:
     OpCodeParser()
     {
-        for (unsigned int op = 0; op <= MAX_OPCODE; ++op) {
+        for (unsigned int op = 0; op <= OP_CHECKSIGADD; ++op) {
             // Allow OP_RESERVED to get into mapOpNames
             if (op < OP_NOP && op != OP_RESERVED) {
                 continue;
@@ -232,7 +232,8 @@ bool DecodeHexBlk(CBlock& block, const std::string& strHexBlk)
         return false;
     }
 
-    return true;
+    // Bytes after a complete block are not part of it: refuse rather than ignore them.
+    return ssBlock.empty();
 }
 
 util::Result<int> SighashFromStr(const std::string& sighash)

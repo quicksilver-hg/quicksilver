@@ -8,7 +8,10 @@
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
 
+#include <algorithm>
+#include <cassert>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -43,18 +46,29 @@ FUZZ_TARGET(checkqueue)
         checks_1.emplace_back(result);
         checks_2.emplace_back(result);
     }
+    // S0392-B-02: with zero workers the master thread runs every check in
+    // Complete(), so its result is asserted: the first failing check's value
+    // (1) if any added check fails, otherwise nullopt. When Complete() is not
+    // called, the case only covers teardown with checks still queued.
+    const bool any_failure{std::any_of(checks_1.begin(), checks_1.end(), [](const DumbCheck& c) { return !c.result; })};
+    bool added_1{false};
     if (fuzzed_data_provider.ConsumeBool()) {
         check_queue_1.Add(std::move(checks_1));
+        added_1 = true;
     }
     if (fuzzed_data_provider.ConsumeBool()) {
-        (void)check_queue_1.Complete();
+        const std::optional<int> result{check_queue_1.Complete()};
+        assert(result == ((added_1 && any_failure) ? std::optional<int>{1} : std::nullopt));
     }
 
     CCheckQueueControl<DumbCheck> check_queue_control{&check_queue_2};
+    bool added_2{false};
     if (fuzzed_data_provider.ConsumeBool()) {
         check_queue_control.Add(std::move(checks_2));
+        added_2 = true;
     }
     if (fuzzed_data_provider.ConsumeBool()) {
-        (void)check_queue_control.Complete();
+        const std::optional<int> result{check_queue_control.Complete()};
+        assert(result == ((added_2 && any_failure) ? std::optional<int>{1} : std::nullopt));
     }
 }

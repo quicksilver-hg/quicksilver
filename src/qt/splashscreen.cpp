@@ -16,17 +16,27 @@
 #include <qt/networkstyle.h>
 #include <qt/quicksilverstyle.h>
 #include <qt/vaultmodel.h>
+#include <sync.h>
 #include <util/translation.h>
 
-#include <functional>
+#include <list>
 
 #include <QApplication>
 #include <QCloseEvent>
+#include <QKeyEvent>
 #include <QLinearGradient>
 #include <QPainter>
 #include <QPen>
 #include <QScreen>
 
+
+struct SplashScreen::CoreSignalState {
+    Mutex mutex;
+    bool shutting_down GUARDED_BY(mutex){false};
+    std::unique_ptr<interfaces::Handler> load_vault_handler GUARDED_BY(mutex);
+    std::list<std::unique_ptr<interfaces::Vault>> vaults GUARDED_BY(mutex);
+    std::list<std::unique_ptr<interfaces::Handler>> vault_handlers GUARDED_BY(mutex);
+};
 
 SplashScreen::SplashScreen(const NetworkStyle* networkStyle)
     : QWidget()
@@ -47,7 +57,7 @@ SplashScreen::SplashScreen(const NetworkStyle* networkStyle)
     QString copyrightText   = QString::fromUtf8(CopyrightHolders("\xc2\xA9 ").c_str());
     const QString& titleAddText    = networkStyle->getTitleAddText();
 
-    QString font            = QApplication::font().toString();
+    const QString font = QApplication::font().family();
 
     // create a bitmap according to device pixelratio
     const QSize logicalSize(560, 360);
@@ -67,7 +77,7 @@ SplashScreen::SplashScreen(const NetworkStyle* networkStyle)
     QRect rGradient(QPoint(0,0), logicalSize);
     pixPaint.fillRect(rGradient, gradient);
 
-    pixPaint.setPen(QPen(QColor(210, 64, 45, 34), 1));
+    pixPaint.setPen(QPen(QuicksilverStyle::Color(QuicksilverStyle::Token::CinnabarTrace), 1));
     for (int x = 24; x < logicalSize.width(); x += 28) {
         pixPaint.drawLine(x, 0, x, logicalSize.height());
     }
@@ -78,7 +88,7 @@ SplashScreen::SplashScreen(const NetworkStyle* networkStyle)
     pixPaint.setPen(QPen(QuicksilverStyle::Color(QuicksilverStyle::Token::Vermilion), 2));
     pixPaint.drawLine(32, 36, 222, 36);
     pixPaint.drawLine(32, 36, 32, 246);
-    pixPaint.setPen(QPen(QColor(QStringLiteral("#c9483a")), 2));
+    pixPaint.setPen(QPen(QuicksilverStyle::Color(QuicksilverStyle::Token::Vermilion), 2));
     pixPaint.drawLine(logicalSize.width() - 44, 78, logicalSize.width() - 44, 286);
     pixPaint.drawLine(logicalSize.width() - 218, 286, logicalSize.width() - 44, 286);
 
@@ -93,7 +103,7 @@ SplashScreen::SplashScreen(const NetworkStyle* networkStyle)
     pixPaint.setOpacity(1.0);
     pixPaint.drawPixmap(QRect(QPoint(74, 110), QSize(118, 118)), icon);
 
-    // check font size and drawing with
+    // Fit the title within its available width.
     pixPaint.setFont(QFont(font, 33*fontFactor));
     QFontMetrics fm = pixPaint.fontMetrics();
     const QString displayTitle = titleText.toUpper();
@@ -214,33 +224,67 @@ static void ShowProgress(SplashScreen *splash, const std::string &title, int nPr
 
 void SplashScreen::subscribeToCoreSignals()
 {
-    // Connect signals to client
-    m_handler_init_message = m_node->handleInitMessage(std::bind(InitMessage, this, std::placeholders::_1));
-    m_handler_show_progress = m_node->handleShowProgress(std::bind(ShowProgress, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
-    m_handler_init_vault = m_node->handleInitVault([this]() { handleLoadVault(); });
-}
-
-void SplashScreen::handleLoadVault()
-{
+    // Signals2 disconnects future calls but does not wait for a running slot.
+    // The shared state lets a slot finish even if the splash has been destroyed.
+    m_core_signals = std::make_shared<CoreSignalState>();
+    const auto state = m_core_signals;
+    m_handler_init_message = m_node->handleInitMessage([this, state](const std::string& message) {
+        LOCK(state->mutex);
+        if (!state->shutting_down) InitMessage(this, message);
+    });
+    m_handler_show_progress = m_node->handleShowProgress([this, state](const std::string& title, int progress, bool resume_possible) {
+        LOCK(state->mutex);
+        if (!state->shutting_down) ShowProgress(this, title, progress, resume_possible);
+    });
 #ifdef ENABLE_VAULT
-    if (!VaultModel::isVaultEnabled()) return;
-    m_handler_load_vault = m_node->vaultLoader().handleLoadVault([this](std::unique_ptr<interfaces::Vault> vault) {
-        m_connected_vault_handlers.emplace_back(vault->handleShowProgress(std::bind(ShowProgress, this, std::placeholders::_1, std::placeholders::_2, false)));
-        m_connected_vaults.emplace_back(std::move(vault));
+    m_handler_init_vault = m_node->handleInitVault([this, state, node = m_node] {
+        if (!VaultModel::isVaultEnabled()) return;
+        auto load_handler = node->vaultLoader().handleLoadVault([this, state](std::unique_ptr<interfaces::Vault> vault) {
+            auto progress_handler = vault->handleShowProgress([this, state](const std::string& title, int progress) {
+                LOCK(state->mutex);
+                if (!state->shutting_down) ShowProgress(this, title, progress, false);
+            });
+            LOCK(state->mutex);
+            if (!state->shutting_down) {
+                state->vaults.emplace_back(std::move(vault));
+                state->vault_handlers.emplace_back(std::move(progress_handler));
+            }
+        });
+        {
+            LOCK(state->mutex);
+            if (!state->shutting_down && !state->load_vault_handler) {
+                state->load_vault_handler = std::move(load_handler);
+            }
+        }
+        if (load_handler) load_handler->disconnect();
     });
 #endif
 }
 
 void SplashScreen::unsubscribeFromCoreSignals()
 {
-    // Disconnect signals from client
+    std::unique_ptr<interfaces::Handler> load_vault_handler;
+    {
+        LOCK(m_core_signals->mutex);
+        m_core_signals->shutting_down = true;
+        load_vault_handler = std::move(m_core_signals->load_vault_handler);
+    }
+
     m_handler_init_message->disconnect();
     m_handler_show_progress->disconnect();
-    for (const auto& handler : m_connected_vault_handlers) {
-        handler->disconnect();
+    if (m_handler_init_vault) m_handler_init_vault->disconnect();
+
+    // The vault load callback acquires the splash mutex with vaults_mutex
+    // held. Disconnect without the splash mutex and wait out that callback.
+    if (load_vault_handler) load_vault_handler->disconnect();
+    std::list<std::unique_ptr<interfaces::Vault>> vaults;
+    std::list<std::unique_ptr<interfaces::Handler>> vault_handlers;
+    {
+        LOCK(m_core_signals->mutex);
+        vaults.splice(vaults.end(), m_core_signals->vaults);
+        vault_handlers.splice(vault_handlers.end(), m_core_signals->vault_handlers);
     }
-    m_connected_vault_handlers.clear();
-    m_connected_vaults.clear();
+    for (const auto& handler : vault_handlers) handler->disconnect();
 }
 
 void SplashScreen::showMessage(const QString &message, int alignment, const QColor &color)

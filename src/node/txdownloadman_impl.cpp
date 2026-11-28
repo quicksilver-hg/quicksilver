@@ -6,12 +6,11 @@
 #include <node/txdownloadman_impl.h>
 #include <node/txdownloadman.h>
 
-#include <chain.h>
 #include <consensus/validation.h>
 #include <logging.h>
+#include <primitives/block.h>
 #include <txrelaypool.h>
-#include <validation.h>
-#include <validationinterface.h>
+#include <util/time.h>
 
 namespace node {
 // TxDownloadManager wrappers

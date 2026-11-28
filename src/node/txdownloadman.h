@@ -10,14 +10,16 @@
 #include <policy/packages.h>
 #include <txorphanage.h>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
 class CBlock;
-class CRollingBloomFilter;
 class CTxRelayPool;
 class GenTxid;
-class TxRequestTracker;
 namespace node {
 class TxDownloadManagerImpl;
 

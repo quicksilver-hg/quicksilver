@@ -92,10 +92,13 @@ class BlockchainTest(QuicksilverTestFramework):
                 "-stopatheight=207",
                 "-checkblocks=-1",  # Check all blocks
                 "-prune=1",  # Set pruning after rescan is complete
+                "-fastprune=1",
+                "-debug=rpc",
                 "-txpownocycle=1",
             ),
         )
 
+        self._test_prune_retains_blocks_below_minimum()
         self._test_getblockchaininfo()
         self._test_getchaintxstats()
         self._test_gettxoutsetinfo()
@@ -128,12 +131,17 @@ class BlockchainTest(QuicksilverTestFramework):
         self.log.info("Avoid warning when assumed chain size is enough")
         self.restart_node(0, extra_args=self.node_args("-prune=123456789"))
 
+    def _test_prune_retains_blocks_below_minimum(self):
+        node = self.nodes[0]
+        with node.assert_debug_log(["Retaining the minimum number of blocks."]):
+            assert_equal(node.pruneblockchain(100), -1)
+
     def _test_max_future_block_time(self):
         self.stop_node(0)
         self.log.info("A block tip of more than MAX_FUTURE_BLOCK_TIME in the future raises an error")
         self.nodes[0].assert_start_raises_init_error(
             extra_args=[f"-mocktime={TIME_RANGE_TIP - MAX_FUTURE_BLOCK_TIME - 1}"],
-            expected_msg=": The block database contains a block which appears to be from the future."
+            expected_msg="Error: The block database contains a block which appears to be from the future."
             " This may be due to your computer's date and time being set incorrectly."
             f" Only rebuild the block database if you are sure that your computer's date and time are correct.{os.linesep}"
             "Please restart with -reindex or -reindex-chainstate to recover.",

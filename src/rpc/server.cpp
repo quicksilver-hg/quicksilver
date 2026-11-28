@@ -22,10 +22,13 @@
 #include <util/time.h>
 #include <validation.h>
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <list>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <unordered_map>
 
 using util::SplitString;
@@ -193,7 +196,7 @@ static RPCHelpMan uptime()
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
-    return GetTime() - GetStartupTime();
+    return GetTime<std::chrono::seconds>().count() - GetStartupTime();
 }
     };
 }
@@ -272,6 +275,7 @@ bool CRPCTable::removeCommand(const std::string& name, const CRPCCommand* pcmd)
         auto new_end = std::remove(it->second.begin(), it->second.end(), pcmd);
         if (it->second.end() != new_end) {
             it->second.erase(new_end, it->second.end());
+            if (it->second.empty()) mapCommands.erase(it);
             return true;
         }
     }

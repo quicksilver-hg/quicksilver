@@ -105,7 +105,7 @@ FUNCTIONAL = re.compile(r"^test/functional/")
 NETBASE_OR_NET_TESTS = re.compile(r"^(?:src/netbase\.cpp|src/test/netbase_tests\.cpp)$")
 PUBLIC_QPUB_SCOPE = re.compile(r"^(?:doc/multisig-tutorial\.md|test/functional/vault_gethdkeys\.py)$")
 RPC_QPUB_SCOPE = re.compile(r"^(?:src/rpc/rawtransaction\.cpp|test/functional/rpc_psqt\.py)$")
-SLIP44_EXAMPLE_SCOPE = re.compile(r"^(?:doc/(?:descriptors|external-signer)\.md|src/rpc/output_script\.cpp|src/vault/test/vaultload_tests\.cpp|test/functional/rpc_getdescriptorinfo\.py)$")
+SLIP44_EXAMPLE_SCOPE = re.compile(r"^(?:doc/descriptors\.md|src/rpc/output_script\.cpp|src/vault/test/vaultload_tests\.cpp|test/functional/rpc_getdescriptorinfo\.py)$")
 DEAD_INTERFACE_SCOPE = re.compile(r"^src/(?:interfaces/(?:chain|node|mining|vault)\.h|(?:node|vault)/interfaces\.cpp)$")
 VAULT_DB_SCOPE = re.compile(r"^src/vault/(?:interfaces\.cpp|vaultdb\.(?:h|cpp))$")
 RELAYPOOL_ENTRY_SCOPE = re.compile(r"^src/kernel/relaypool_entry\.h$")
@@ -331,20 +331,19 @@ RULES = [
     Rule(
         "dead AgentClient wrappers",
         re.compile(
-            r"const AgentClientOptions& Options\(\)|AgentPeerSet& Peers\(\)|"
-            r"RemovePeer\(AgentPeerId peer_id\) \{ return m_peers|"
-            r"std::vector<AgentPeerSetAction> AnnounceTransactionToAll|"
+            r"const AgentClientOptions& Options\(\)|\bPeers\(\)|\bPeerCount\(\)|"
+            r"\b(?:AddPeer|RemovePeer|PeerIds|HasPeer|AnnounceTransactionToAll|"
+            r"PopNextOutboundMessage|MaxTxInventory)\(|"
             r"bool HasHeaderStorePath\(\)|"
             r"const std::optional<fs::path>& HeaderStorePath\(\)|"
             r"bool loaded_from_store\(\)|"
             r"bool started_fresh\(\)|"
             r"bool HasAnyOutboundMessages\(\)|"
-            r"size_t TotalOutboundMessageCount\(\)|"
-            r"std::optional<AgentPeerOutboundMessage> PopNextOutboundMessage\(\)|"
-            r"size_t MaxTxInventory\(\) const \{ return m_peers"
+            r"size_t TotalOutboundMessageCount\(\)"
         ),
         AGENT_CLIENT_SCOPE,
     ),
+    Rule("dead AgentPeerSet class", re.compile(r"\bAgentPeerSet\w*\b|\bagentpeerset\b|\bDEFAULT_AGENT_PEER_ID\b")),
     Rule("dead vault database refcount", re.compile(r"\b(?:m_refcount|RemoveRef)\b|virtual void AddRef\(\)|void AddRef\(\) override"), VAULT_DB_REF_SCOPE),
     Rule("BDB rewrite skip-key", re.compile(r"\bpszSkip\b|Rewrite\(const char\*"), re.compile(r"^src/vault/")),
     Rule("dead vault RBF replacement surface", re.compile(r"\b(?:MarkReplaced|replaced_by_txid|replaces_txid)\b")),
@@ -638,19 +637,28 @@ def self_test() -> int:
         ("src/vault/spend.cpp", "util::Result<SelectionResult> ChooseSelectionResult(interfaces::Chain& chain, const CAmount& target, Groups& groups,", "dead vault coin-selection parameters"),
         ("src/script/signingprovider.h", "    virtual bool HaveCScript(const CScriptID &scriptid) const { return false; }", "dead HaveCScript query"),
         ("src/vault/scriptpubkeyman.h", "    virtual bool SetupGeneration(bool force = false) { return false; }", "dead SetupGeneration"),
-        ("src/agent/agentpeerset.h", "    std::vector<AgentPeerSetAction> SendTransactionToAll(const CTransaction& transaction);", "dead SendTransactionToAll"),
+        ("src/agent/agentclient.h", "    std::vector<AgentPeerAction> SendTransactionToAll(const CTransaction& transaction);", "dead SendTransactionToAll"),
         ("src/agent/agentclient.h", "    const AgentClientOptions& Options() const { return m_options; }", "dead AgentClient wrappers"),
-        ("src/agent/agentclient.h", "    AgentPeerSet& Peers() { return m_peers; }", "dead AgentClient wrappers"),
-        ("src/agent/agentclient.h", "    AgentPeerSetAction RemovePeer(AgentPeerId peer_id) { return m_peers.RemovePeer(peer_id); }", "dead AgentClient wrappers"),
-        ("src/agent/agentclient.h", "    std::vector<AgentPeerSetAction> AnnounceTransactionToAll(const CTransaction& transaction,", "dead AgentClient wrappers"),
+        ("src/agent/agentclient.h", "    AgentPeer& Peers() { return m_peer; }", "dead AgentClient wrappers"),
+        ("src/agent/agentclient.h", "    size_t PeerCount() const { return 1; }", "dead AgentClient wrappers"),
+        ("src/agent/agentclient.h", "    bool AddPeer(uint64_t peer_id);", "dead AgentClient wrappers"),
+        ("src/agent/agentclient.h", "    bool RemovePeer(uint64_t peer_id);", "dead AgentClient wrappers"),
+        ("src/agent/agentclient.h", "    std::vector<uint64_t> PeerIds() const;", "dead AgentClient wrappers"),
+        ("src/agent/agentclient.h", "    bool HasPeer(uint64_t peer_id) const;", "dead AgentClient wrappers"),
+        ("src/agent/agentclient.h", "    std::vector<AgentPeerAction> AnnounceTransactionToAll(const CTransaction& transaction,", "dead AgentClient wrappers"),
+        ("src/agent/agentclient.h", "    std::optional<CSerializedNetMsg> PopNextOutboundMessage();", "dead AgentClient wrappers"),
+        ("src/agent/agentclient.h", "    size_t MaxTxInventory() const { return m_peer.MaxTxInventory(); }", "dead AgentClient wrappers"),
+        ("src/agent/agentpeer.h", "    size_t MaxTxInventory() const { return m_tx_peer.MaxTxInventory(); }", None),
+        ("src/agent/agentclient.h", "    AgentPeer m_peer;", None),
+        ("src/agent/agentclient.h", "class AgentPeerSet;", "dead AgentPeerSet class"),
+        ("src/agent/agentpeer.h", "#include <agent/agentpeerset.h>", "dead AgentPeerSet class"),
+        ("src/agent/agentclient.cpp", "    AgentPeerSetAction action{m_peers.StartHeaders(DEFAULT_AGENT_PEER_ID)};", "dead AgentPeerSet class"),
         ("src/agent/agentclient.h", "    bool HasHeaderStorePath() const { return m_options.header_store_path.has_value(); }", "dead AgentClient wrappers"),
         ("src/agent/agentclient.h", "    const std::optional<fs::path>& HeaderStorePath() const { return m_options.header_store_path; }", "dead AgentClient wrappers"),
         ("src/agent/agentclient.h", "    bool loaded_from_store() const { return status == HeaderStoreResult::OK; }", "dead AgentClient wrappers"),
         ("src/agent/agentclient.h", "    bool started_fresh() const { return status == HeaderStoreResult::FILE_NOT_FOUND; }", "dead AgentClient wrappers"),
-        ("src/agent/agentclient.h", "    bool HasAnyOutboundMessages() const { return m_peers.HasOutboundMessages(); }", "dead AgentClient wrappers"),
-        ("src/agent/agentclient.h", "    size_t TotalOutboundMessageCount() const { return m_peers.OutboundMessageCount(); }", "dead AgentClient wrappers"),
-        ("src/agent/agentclient.h", "    std::optional<AgentPeerOutboundMessage> PopNextOutboundMessage() { return m_peers.PopNextOutboundMessage(); }", "dead AgentClient wrappers"),
-        ("src/agent/agentclient.h", "    size_t MaxTxInventory() const { return m_peers.MaxTxInventory(); }", "dead AgentClient wrappers"),
+        ("src/agent/agentclient.h", "    bool HasAnyOutboundMessages() const { return m_peer.HasOutboundMessages(); }", "dead AgentClient wrappers"),
+        ("src/agent/agentclient.h", "    size_t TotalOutboundMessageCount() const { return m_peer.OutboundMessageCount(); }", "dead AgentClient wrappers"),
         ("src/vault/db.h", "    std::atomic<int> m_refcount{0};", "dead vault database refcount"),
         ("src/vault/db.h", "    virtual void AddRef() = 0;", "dead vault database refcount"),
         ("src/vault/sqlite.h", "    void AddRef() override { assert(false); }", "dead vault database refcount"),

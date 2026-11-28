@@ -18,13 +18,14 @@ unsigned int MurmurHash3(unsigned int nHashSeed, Span<const unsigned char> vData
     const uint32_t c1 = 0xcc9e2d51;
     const uint32_t c2 = 0x1b873593;
 
-    const int nblocks = vDataToHash.size() / 4;
+    // size_t, not int: an input of 2^31 bytes or more must not overflow the block count or offsets.
+    const size_t nblocks = vDataToHash.size() / 4;
 
     //----------
     // body
     const uint8_t* blocks = vDataToHash.data();
 
-    for (int i = 0; i < nblocks; ++i) {
+    for (size_t i = 0; i < nblocks; ++i) {
         uint32_t k1 = ReadLE32(blocks + i*4);
 
         k1 *= c1;
@@ -59,7 +60,8 @@ unsigned int MurmurHash3(unsigned int nHashSeed, Span<const unsigned char> vData
 
     //----------
     // finalization
-    h1 ^= vDataToHash.size();
+    // The reference mixes in a 32-bit length; truncating keeps every output unchanged.
+    h1 ^= static_cast<uint32_t>(vDataToHash.size());
     h1 ^= h1 >> 16;
     h1 *= 0x85ebca6b;
     h1 ^= h1 >> 13;

@@ -14,7 +14,6 @@
 #endif
 
 #include <atomic>
-#include <cstdlib>
 
 namespace util {
 /**

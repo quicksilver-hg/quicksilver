@@ -5,21 +5,31 @@
 #include <util/process/contained_child.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <mutex>
 #include <set>
+#include <thread>
 
 namespace cuckatoo {
 namespace {
 std::mutex g_mutex;
+// g_last has its own lock. DiscoverGpus holds g_mutex for the whole listing (up to
+// kListingLimit plus kReapLimit), and LastGpuDiscovery is read by the desktop's
+// once-a-second mining status poll on the GUI thread: behind g_mutex that poll
+// froze the window for as long as a listing ran.
+std::mutex g_last_mutex;
 // A detached GUI discovery thread can still be listing during process teardown.
 // Keep the cache alive so that thread can never touch a destroyed map.
 auto* g_cache = new std::map<std::string, GpuDiscovery>;
-auto* g_last = new std::map<std::string, GpuDiscovery>;
+auto* g_last = new std::map<std::string, GpuDiscovery>; //! Guarded by g_last_mutex.
 //! Guarded by g_mutex. Tests shorten this; production always uses kListingLimit.
 std::chrono::milliseconds g_listing_limit{kListingLimit};
+//! Tests shorten this; production always uses kReapLimit. Atomic: the solver
+//! bridge reads it without g_mutex.
+std::atomic<std::chrono::milliseconds::rep> g_reap_limit_ms{kReapLimit.count()};
 
 // F-606: listing children still running when the process exits. A detached GUI discovery thread is
 // never unwound at exit, so ~ContainedChild never runs for its child, and on POSIX nothing else ties a
@@ -190,7 +200,19 @@ DeviceChoice DeviceChoiceFromEnv()
     if (!env || !env[0]) return {};
     std::vector<std::string> values; std::string_view rest{env};
     for (;;) { const size_t comma = rest.find(','); values.emplace_back(rest.substr(0, comma)); if (comma == std::string_view::npos) break; rest.remove_prefix(comma + 1); }
-    std::string error; return ParseDeviceChoice(values, error).value_or(DeviceChoice{});
+    std::string error;
+    if (auto choice = ParseDeviceChoice(values, error)) return *choice;
+    return DeviceChoice{DeviceChoice::Mode::kChosen, {std::string{env}}};
+}
+
+int ReapClosedHelper(util::ContainedChild& child)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{g_reap_limit_ms.load()};
+    while (!child.Exited()) {
+        if (std::chrono::steady_clock::now() >= deadline) { child.KillGroup(); break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    return child.Wait();
 }
 
 DeviceListing ListDevices(const std::string& helper, std::chrono::milliseconds limit)
@@ -212,7 +234,7 @@ DeviceListing ListDevices(const std::string& helper, std::chrono::milliseconds l
         else if (state == util::ContainedChild::ReadStatus::kClosed) break;
     }
     registration.Release(); // before the reap: see ListingRegistration
-    const int rc = child->Wait();
+    const int rc = ReapClosedHelper(*child);
     out.devices = ParseDeviceListing(text);
     if (rc == 0) out.outcome = ListOutcome::kListed;
     else if (rc == 4) out.outcome = ListOutcome::kNoLoader;
@@ -282,7 +304,10 @@ GpuDiscovery DiscoverGpus(uint8_t edgebits)
     result.listing = helper ? ListDevices(*helper, g_listing_limit) : DeviceListing{};
     result.selection = SelectDevices(result.listing.devices, result.choice);
     result.situation = ClassifySituation(result.listing, result.choice, result.selection);
-    (*g_last)[key] = result;
+    {
+        std::lock_guard<std::mutex> last_lock{g_last_mutex};
+        (*g_last)[key] = result;
+    }
     // A transient helper failure may recover without an application restart.
     // Keep stable outcomes cached, including absent helpers and loaders.
     if (result.listing.outcome != ListOutcome::kFailed && result.listing.outcome != ListOutcome::kTimedOut) {
@@ -293,7 +318,7 @@ GpuDiscovery DiscoverGpus(uint8_t edgebits)
 
 std::optional<GpuDiscovery> LastGpuDiscovery(uint8_t edgebits)
 {
-    std::lock_guard<std::mutex> lock{g_mutex};
+    std::lock_guard<std::mutex> lock{g_last_mutex};
     const auto helper = GpuHelperFor(edgebits);
     const char* configured = std::getenv("CUCKATOO_GPU_DEVICES");
     const std::string key = helper.value_or("") + "\n" + (configured ? configured : "");
@@ -306,8 +331,12 @@ void ResetGpuDiscoveryForTesting()
 {
     std::lock_guard<std::mutex> lock{g_mutex};
     g_cache->clear();
-    g_last->clear();
+    {
+        std::lock_guard<std::mutex> last_lock{g_last_mutex};
+        g_last->clear();
+    }
     g_listing_limit = kListingLimit;
+    g_reap_limit_ms = kReapLimit.count();
     auto& r = Registry();
     std::lock_guard<std::mutex> rlock{r.mutex};
     r.closing = false;
@@ -318,6 +347,11 @@ void SetListingLimitForTesting(std::chrono::milliseconds limit)
     std::lock_guard<std::mutex> lock{g_mutex};
     g_listing_limit = limit;
 }
+void SetReapLimitForTesting(std::chrono::milliseconds limit)
+{
+    g_reap_limit_ms = limit.count();
+}
+
 void KillOutstandingListings()
 {
     auto& r = Registry();

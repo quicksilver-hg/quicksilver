@@ -20,22 +20,31 @@ boost::signals2::connection noui_ThreadSafeMessageBoxConn;
 boost::signals2::connection noui_ThreadSafeQuestionConn;
 boost::signals2::connection noui_InitMessageConn;
 
+//! A style without its buttons and modality: what kind of message it is.
+static constexpr unsigned int MessageKind(unsigned int style)
+{
+    return style & ~(CClientUIInterface::BTN_MASK | CClientUIInterface::MODAL);
+}
+
 bool noui_ThreadSafeMessageBox(const bilingual_str& message, const std::string& caption, unsigned int style)
 {
     bool fSecure = style & CClientUIInterface::SECURE;
     style &= ~CClientUIInterface::SECURE;
 
+    // Classify by kind, not by the whole style word: a question such as the
+    // chainstate-recovery prompt is MSG_ERROR | BTN_ABORT, and its added button must
+    // not demote it to an uncaptioned info line.
     std::string strCaption;
-    switch (style) {
-    case CClientUIInterface::MSG_ERROR:
+    switch (MessageKind(style)) {
+    case MessageKind(CClientUIInterface::MSG_ERROR):
         strCaption = "Error: ";
         if (!fSecure) LogError(HgLog::INIT, "%s\n", message.original);
         break;
-    case CClientUIInterface::MSG_WARNING:
+    case MessageKind(CClientUIInterface::MSG_WARNING):
         strCaption = "Warning: ";
         if (!fSecure) LogWarning(HgLog::INIT, "%s\n", message.original);
         break;
-    case CClientUIInterface::MSG_INFORMATION:
+    case MessageKind(CClientUIInterface::MSG_INFORMATION):
         strCaption = "Information: ";
         if (!fSecure) LogInfo(HgLog::INIT, "%s\n", message.original);
         break;

@@ -30,7 +30,8 @@ class PaymentServer;
 class PlatformStyle;
 class SplashScreen;
 class VaultController;
-class VaultModel;
+class QTimer;
+class QWidget;
 namespace interfaces {
 class Init;
 } // namespace interfaces
@@ -147,6 +148,8 @@ private:
     QTimer* pollShutdownTimer{nullptr};
     bool m_consensus_initialization_requested{false};
     bool m_consensus_failure_cleanup{false};
+    //! appShutdown has run, here or on the executor. It must not run twice.
+    bool m_node_shut_down{false};
     bool m_window_shown{false};
     QString m_restart_executable;
     QStringList m_restart_arguments;
@@ -166,6 +169,8 @@ private:
     void createVaultController();
 #endif
     void cleanupFailedConsensusInitialization();
+    //! Run appShutdown here unless it has already run, here or on the executor.
+    void shutDownNodeOnce();
     void finishShutdown();
     void launchPendingRestart();
 };

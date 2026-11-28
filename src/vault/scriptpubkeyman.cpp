@@ -23,7 +23,6 @@
 #include <optional>
 
 using common::PSQTError;
-using util::ToString;
 
 namespace vault {
 util::Result<CTxDestination> DescriptorScriptPubKeyMan::GetNewDestination(const OutputType type)
@@ -66,7 +65,10 @@ util::Result<CTxDestination> DescriptorScriptPubKeyMan::GetNewDestination(const 
             return util::Error{_("Error: Cannot extract destination from the generated scriptpubkey")}; // shouldn't happen
         }
         m_vault_descriptor.next_index++;
-        VaultBatch(m_storage.GetDatabase()).WriteDescriptor(GetID(), m_vault_descriptor);
+        if (!VaultBatch(m_storage.GetDatabase()).WriteDescriptor(GetID(), m_vault_descriptor)) {
+            --m_vault_descriptor.next_index;
+            return util::Error{_("Error: Could not save the next vault address index.")};
+        }
         return dest;
     }
 }
@@ -119,6 +121,12 @@ bool DescriptorScriptPubKeyMan::Encrypt(const CKeyingMaterial& master_key, Vault
         return false;
     }
 
+    // Build the encrypted keys in a local map and move them into the members
+    // only once every key is encrypted and written. A failure part way leaves
+    // m_map_crypted_keys empty and m_map_keys intact, so a retry can succeed;
+    // the caller aborts its DB transaction, which undoes the writes already
+    // made (S0191-A-05).
+    CryptedKeyMap crypted_keys;
     for (const KeyMap::value_type& key_in : m_map_keys) {
         const CKey& key = key_in.second;
         CPubKey pubkey = key.GetPubKey();
@@ -127,9 +135,10 @@ bool DescriptorScriptPubKeyMan::Encrypt(const CKeyingMaterial& master_key, Vault
         if (!EncryptSecret(master_key, secret, pubkey.GetHash(), crypted_secret)) {
             return false;
         }
-        m_map_crypted_keys[pubkey.GetID()] = make_pair(pubkey, crypted_secret);
+        crypted_keys[pubkey.GetID()] = make_pair(pubkey, crypted_secret);
         if (!batch->WriteCryptedDescriptorKey(GetID(), pubkey, crypted_secret)) return false;
     }
+    m_map_crypted_keys = std::move(crypted_keys);
     m_map_keys.clear();
     return true;
 }
@@ -149,7 +158,9 @@ void DescriptorScriptPubKeyMan::ReturnDestination(int64_t index, bool internal, 
     if (m_vault_descriptor.next_index - 1 == index) {
         m_vault_descriptor.next_index--;
     }
-    VaultBatch(m_storage.GetDatabase()).WriteDescriptor(GetID(), m_vault_descriptor);
+    if (!VaultBatch(m_storage.GetDatabase()).WriteDescriptor(GetID(), m_vault_descriptor)) {
+        VaultLogPrintf("%s: failed to save returned destination index", __func__);
+    }
     NotifyCanGetAddressesChanged();
 }
 
@@ -162,9 +173,14 @@ std::map<CKeyID, CKey> DescriptorScriptPubKeyMan::GetKeys() const
             const CPubKey& pubkey = key_pair.second.first;
             const std::vector<unsigned char>& crypted_secret = key_pair.second.second;
             CKey key;
-            m_storage.WithEncryptionKey([&](const CKeyingMaterial& encryption_key) {
+            if (!m_storage.WithEncryptionKey([&](const CKeyingMaterial& encryption_key) {
                 return DecryptKey(encryption_key, crypted_secret, pubkey, key);
-            });
+            })) {
+                // Leave the key out, so signing reports it missing, rather than hand back an
+                // invalid key (the base did) or throw into a GUI caller.
+                LogInfo(HgLog::VAULT, "GetKeys: could not decrypt key %s\n", pubkey.GetID().ToString());
+                continue;
+            }
             keys[pubkey.GetID()] = key;
         }
         return keys;
@@ -266,7 +282,7 @@ bool DescriptorScriptPubKeyMan::TopUpWithDB(VaultBatch& batch, unsigned int size
         m_max_cached_index++;
     }
     m_vault_descriptor.range_end = new_range_end;
-    batch.WriteDescriptor(GetID(), m_vault_descriptor);
+    if (!batch.WriteDescriptor(GetID(), m_vault_descriptor)) return false;
 
     // By this point, the cache size should be the size of the entire range
     assert(m_vault_descriptor.range_end - 1 == m_max_cached_index);
@@ -366,7 +382,7 @@ bool DescriptorScriptPubKeyMan::SetupDescriptorGeneration(VaultBatch& batch, con
     }
 
     // TopUp
-    TopUpWithDB(batch);
+    if (!TopUpWithDB(batch)) return false;
 
     m_storage.UnsetBlankVaultFlag(batch);
     return true;
@@ -392,12 +408,6 @@ bool DescriptorScriptPubKeyMan::HavePrivateKeys() const
 {
     LOCK(cs_desc_man);
     return m_map_keys.size() > 0 || m_map_crypted_keys.size() > 0;
-}
-
-std::optional<int64_t> DescriptorScriptPubKeyMan::GetOldestKeyPoolTime() const
-{
-    // This is only used for getvaultinfo output and isn't relevant to vaults.
-    return std::nullopt;
 }
 
 
@@ -440,7 +450,7 @@ std::unique_ptr<FlatSigningProvider> DescriptorScriptPubKeyMan::GetSigningProvid
 
     // Always try to get the signing provider with private keys. This function should only be called during signing anyways
     std::unique_ptr<FlatSigningProvider> out = GetSigningProvider(index, true);
-    if (!out->HaveKey(pubkey.GetID())) {
+    if (!out || !out->HaveKey(pubkey.GetID())) {
         return nullptr;
     }
     return out;
@@ -712,6 +722,7 @@ void DescriptorScriptPubKeyMan::WriteDescriptor()
 
 VaultDescriptor DescriptorScriptPubKeyMan::GetVaultDescriptor() const
 {
+    AssertLockHeld(cs_desc_man);
     return m_vault_descriptor;
 }
 
@@ -734,6 +745,7 @@ std::unordered_set<CScript, SaltedSipHasher> DescriptorScriptPubKeyMan::GetScrip
 
 int32_t DescriptorScriptPubKeyMan::GetEndRange() const
 {
+    LOCK(cs_desc_man);
     return m_max_cached_index + 1;
 }
 

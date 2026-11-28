@@ -4,6 +4,5 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <kernel/cs_main.h>
-#include <sync.h>
 
 RecursiveMutex cs_main;

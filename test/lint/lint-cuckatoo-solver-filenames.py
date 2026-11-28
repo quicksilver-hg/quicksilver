@@ -44,7 +44,6 @@ SUFFIXES = (".cpp", ".h", ".cu", ".cuh", ".py", ".txt", ".cmake", ".sh", ".md")
 
 SOLVER_DIR = ROOT / "src" / "crypto" / "cuckatoo"
 EXIT_CODE_SOURCES = (
-    "gpu/qsgpusolve-cuda.cu",
     "gpu/qsgpusolve-opencl.cpp",
 )
 EXIT_CODE_DOC_MARKERS = (
@@ -52,11 +51,6 @@ EXIT_CODE_DOC_MARKERS = (
     "no usable GPU device",
     "faulted while solving",
 )
-STARTUP_PROBE_MARKERS = {
-    "src/crypto/cuckatoo/gpu/device_health.cuh": "gpu_health_startup_kernel<<<1, 1>>>()",
-    "src/crypto/cuckatoo/gpu/qsgpusolve-cuda.cu": "gpu_health_startup_fault()",
-    "src/crypto/cuckatoo/gpu/qsgpucalibrate.cu": "gpu_health_startup_fault()",
-}
 EXEMPT = {
     "test/testrun/qs-solver-dispatch.sh": "runs the fleet's box-local qsgpusolve; retired in F-469 phase 4",
     "test/testrun/harness/scenarios.py": "records an incident on the fleet's box-local qsgpusolve.exe; retired in F-469 phase 4",
@@ -70,8 +64,6 @@ def existing_solver_names() -> set[str]:
     # The built binaries are gitignored, so they may or may not be on disk.
     # Both spellings of each helper are legitimate references either way.
     # The unsuffixed binary name is not: that binary was renamed.
-    names.add("qsgpusolve-cuda")
-    names.add("qsgpusolve-cuda.exe")
     names.add("qsgpusolve-opencl")
     names.add("qsgpusolve-opencl.exe")
     return names
@@ -128,21 +120,6 @@ def check_exit_codes_documented() -> list[str]:
     return failures
 
 
-def check_startup_probe_present() -> list[str]:
-    failures = []
-    for relative, marker in STARTUP_PROBE_MARKERS.items():
-        source = ROOT / relative
-        if not source.is_file():
-            failures.append(f"{relative}: missing")
-            continue
-        if marker not in source.read_text(encoding="utf-8"):
-            failures.append(
-                f"{relative}: CUDA architecture startup probe lost (no {marker!r}); "
-                "a wrong-architecture helper can otherwise report a successful empty run"
-            )
-    return failures
-
-
 def main() -> int:
     verbose = "--verbose" in sys.argv
     if verbose:
@@ -150,7 +127,6 @@ def main() -> int:
             print(f"exempt {path}: {reason}")
     failures = check_filenames(existing_solver_names())
     failures += check_exit_codes_documented()
-    failures += check_startup_probe_present()
 
     for f in failures:
         print(f)

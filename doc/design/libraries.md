@@ -12,6 +12,8 @@
 | *libquicksilver_util*        | Home for common functionality shared by different executables and libraries. Similar to *libquicksilver_common*, but lower-level (see [Dependencies](#dependencies)). |
 | *libquicksilver_vault*      | Vault functionality used by *quicksilver-daemon* and *quicksilver-vault* executables. |
 | *libquicksilver_vault_tool* | Lower-level vault functionality used by *quicksilver-vault* executable. |
+
+`quicksilver-vault create` is for testing and cannot create an encrypted vault.
 | *libquicksilver_zmq*         | [ZeroMQ](../zmq.md) functionality used by *quicksilver-daemon* and *quicksilver* executables. |
 
 ## Conventions

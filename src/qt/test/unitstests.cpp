@@ -33,6 +33,8 @@
 #include <QTextLayout>
 #include <QValidator>
 
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 
@@ -486,4 +488,104 @@ void UnitsTests::amountFieldUnitChangeSignalsAClearedValue()
     field.setDisplayUnit(Unit::HGS);
     QCOMPARE(edit->text(), QString());
     QCOMPARE(changes.count(), 1);
+}
+
+void UnitsTests::parseRefusesALeadingZeroGroup()
+{
+    // S0239-A-09: `0,001` read as 1 Hg, a thousand times what a comma-decimal
+    // user meant. A comma group may not start with a zero.
+    const char* refused[]{"0,001", "00,100", "0,000", "0,000,000", "0,001.5", "000,000"};
+    for (const char* text : refused) {
+        CAmount rejected{0};
+        QVERIFY2(!Parsed(Unit::HG, QString::fromLatin1(text), rejected), text);
+        QVERIFY2(!Parsed(Unit::HGS, QString::fromLatin1(text), rejected), text);
+    }
+    const struct {
+        const char* text;
+        CAmount expected;
+    } accepted[]{
+        {"1,000", 1000 * COIN},
+        {"10,000", 10000 * COIN},
+        {"100,000", 100000 * COIN},
+        {"1,000.5", 1000 * COIN + COIN / 2},
+        {"1,000,000", 1000000 * COIN},
+        {"0.001", COIN / 1000},
+        {"0", 0},
+        {"100,001", 100001 * COIN},
+    };
+    for (const auto& sample : accepted) {
+        CAmount parsed{-1};
+        QVERIFY2(Parsed(Unit::HG, QString::fromLatin1(sample.text), parsed), sample.text);
+        QCOMPARE(parsed, sample.expected);
+    }
+}
+
+void UnitsTests::parseRefusesASignOrABareDot()
+{
+    // S0239-A-01, -A-02: a bare `.` or sign was a valid zero, and a signed
+    // amount parsed with no range check. No caller takes a signed amount.
+    const char* refused[]{".", "-", "+", "-1", "+1", "-0.5", "+0.5", "- 1", "1-", "-1,000", " . "};
+    for (const char* text : refused) {
+        CAmount rejected{0};
+        QVERIFY2(!Parsed(Unit::HG, QString::fromLatin1(text), rejected), text);
+        QVERIFY2(!Parsed(Unit::HGS, QString::fromLatin1(text), rejected), text);
+    }
+    // A dot beside at least one digit is still a number.
+    CAmount half{0};
+    QVERIFY(Parsed(Unit::HG, QStringLiteral(".5"), half));
+    QCOMPARE(half, COIN / 2);
+    CAmount five{0};
+    QVERIFY(Parsed(Unit::HG, QStringLiteral("5."), five));
+    QCOMPARE(five, 5 * COIN);
+}
+
+void UnitsTests::privacyFormattersShowANegativeWithoutAborting()
+{
+    // S0239-A-05: a live `assert(amount >= 0)` ended the GUI on a negative.
+    const CAmount negative = -(5 * COIN + 25);
+    QCOMPARE(QuicksilverUnits::formatWithPrivacy(Unit::HG, negative, Style::ALWAYS, false).trimmed(),
+             QStringLiteral("-5.00000025Hg"));
+    QCOMPARE(QuicksilverUnits::formatInlineWithPrivacy(Unit::HG, negative, Style::ALWAYS, false),
+             QStringLiteral("-5.00000025Hg"));
+    QCOMPARE(QuicksilverUnits::formatInlineValueWithPrivacy(Unit::HGS, negative, Style::ALWAYS, false),
+             QStringLiteral("-500,000,025"));
+    QVERIFY(QuicksilverUnits::formatInlineHtmlWithPrivacy(Unit::HG, negative, Style::ALWAYS, false)
+                .contains(QStringLiteral(">-5.00000025Hg<")));
+    // The mask hides the sign along with the digits.
+    QCOMPARE(QuicksilverUnits::formatWithPrivacy(Unit::HG, negative, Style::ALWAYS, true).trimmed(),
+             QStringLiteral("#.########Hg"));
+    QCOMPARE(QuicksilverUnits::formatInlineValueWithPrivacy(Unit::HG, negative, Style::ALWAYS, true),
+             QStringLiteral("#.########"));
+}
+
+void UnitsTests::formatNegatesInt64MinAndSignsBesideTheDigits()
+{
+    // S0239-A-03: `-n` overflowed for INT64_MIN.
+    const CAmount lowest = std::numeric_limits<int64_t>::min();
+    QCOMPARE(QuicksilverUnits::format(Unit::HGS, lowest, false, Style::ALWAYS),
+             QStringLiteral("-9,223,372,036,854,775,808"));
+    QCOMPARE(QuicksilverUnits::format(Unit::HG, lowest, false, Style::NEVER),
+             QStringLiteral("-92233720368.54775808"));
+    // The sign sits beside the digits, inside the column padding.
+    QCOMPARE(QuicksilverUnits::format(Unit::HG, -5 * COIN, false, Style::ALWAYS, true).trimmed(),
+             QStringLiteral("-5.00000000"));
+    QCOMPARE(QuicksilverUnits::format(Unit::HGS, 7, true, Style::ALWAYS, true).trimmed(), QStringLiteral("+7"));
+}
+
+void UnitsTests::justifiedColumnHoldsMaxMoney()
+{
+    // S0239-A-04: the column was 16 digits wide against an 18-digit MAX_MONEY.
+    const Style styles[]{Style::NEVER, Style::ALWAYS};
+    const Unit units[]{Unit::HG, Unit::HGS};
+    for (const Unit unit : units) {
+        for (const Style style : styles) {
+            const QString zero = QuicksilverUnits::format(unit, 0, false, style, true);
+            const QString most = QuicksilverUnits::format(unit, MAX_MONEY, false, style, true);
+            QVERIFY2(most.size() == zero.size(), qPrintable(QStringLiteral("[%1] vs [%2]").arg(most, zero)));
+            QCOMPARE(most.trimmed(), QuicksilverUnits::format(unit, MAX_MONEY, false, style));
+            const QString masked = QuicksilverUnits::formatWithPrivacy(unit, MAX_MONEY, style, true);
+            // The mask fills the whole column, so it is as wide as the largest value.
+            QVERIFY2(masked.size() >= QuicksilverUnits::formatWithUnit(unit, MAX_MONEY, false, style).size(), qPrintable(masked));
+        }
+    }
 }

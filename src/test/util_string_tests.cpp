@@ -8,10 +8,35 @@
 #include <boost/test/unit_test.hpp>
 #include <test/util/setup_common.h>
 
+#include <ios>
+#include <limits>
+#include <sstream>
+
 using namespace util;
 using util::detail::CheckNumFormatSpecifiers;
 
 BOOST_AUTO_TEST_SUITE(util_string_tests)
+
+BOOST_AUTO_TEST_CASE(tinyformat_range_and_stream_state)
+{
+    const std::string too_wide{"%2147483648d"};
+    BOOST_CHECK_THROW(tfm::format(tfm::RuntimeFormat{too_wide}, 1), tfm::format_error);
+    BOOST_CHECK_THROW(tfm::format(ConstevalFormatString<2>{"%*d"}, std::numeric_limits<int>::min(), 1), tfm::format_error);
+    BOOST_CHECK_THROW(tfm::format(ConstevalFormatString<2>{"%*d"}, 1e100, 1), tfm::format_error);
+    BOOST_CHECK_THROW(tfm::format(ConstevalFormatString<1>{"%c"}, 1e100), tfm::format_error);
+
+    std::ostringstream out;
+    out.width(7);
+    out.precision(3);
+    out.fill('_');
+    out.setf(std::ios::hex, std::ios::basefield);
+    const auto flags = out.flags();
+    BOOST_CHECK_THROW(tfm::format(out, ConstevalFormatString<1>{"%08n"}, 0), tfm::format_error);
+    BOOST_CHECK_EQUAL(out.width(), 7);
+    BOOST_CHECK_EQUAL(out.precision(), 3);
+    BOOST_CHECK_EQUAL(out.fill(), '_');
+    BOOST_CHECK(out.flags() == flags);
+}
 
 template <unsigned NumArgs>
 void TfmFormatZeroes(const std::string& fmt)
@@ -101,6 +126,7 @@ BOOST_AUTO_TEST_CASE(ConstevalFormatString_NumSpec)
     FailFmtWithError<2>("%s", err_num);
     FailFmtWithError<0>("%1$s", err_num);
     FailFmtWithError<2>("%1$s", err_num);
+    FailFmtWithError<1>("%4294967297$s", err_num);
     FailFmtWithError<1>("%*c", err_num);
 
     auto err_0_pos{"Positional format specifier must have position of at least 1"};

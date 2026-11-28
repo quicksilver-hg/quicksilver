@@ -45,6 +45,7 @@ class CVault;
 enum class AddressPurpose;
 enum isminetype : unsigned int;
 struct CRecipient;
+struct SavedBackup;
 struct VaultContext;
 using isminefilter = std::underlying_type<isminetype>::type;
 } // namespace vault
@@ -102,9 +103,9 @@ public:
     //! Abort a rescan.
     virtual void abortRescan() = 0;
 
-    //! Back up vault. The copy alone records nothing (F-567).
-    //! filename is UTF-8 on every platform (F-614).
-    virtual bool backupVault(const std::string& filename) = 0;
+    //! Back up vault through the same save, check and rename procedure as the backupvault RPC (F-687; see
+    //! CVault::SaveCheckedBackup). filename is UTF-8 on every platform (F-614).
+    virtual vault::SavedBackup backupVault(const std::string& filename, bool overwrite) = 0;
 
     //! Reopen a saved backup read-only and check it; with a passphrase, also test it against the backup (F-567).
     virtual vault::BackupCheck verifyBackup(const std::string& filename, const SecureString* passphrase) = 0;
@@ -142,9 +143,6 @@ public:
     // Get a new address.
     virtual util::Result<CTxDestination> getNewDestination(const OutputType type, const std::string& label) = 0;
 
-    //! Get public key.
-    virtual bool getPubKey(const CScript& script, const CKeyID& address, CPubKey& pub_key) = 0;
-
     //! Sign message
     virtual SigningResult signMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) = 0;
 
@@ -172,9 +170,6 @@ public:
     //! Save or remove receive request.
     virtual bool setAddressReceiveRequest(const CTxDestination& dest, const std::string& id, const std::string& value) = 0;
 
-    //! Display address on external signer
-    virtual util::Result<void> displayAddress(const CTxDestination& dest) = 0;
-
     //! Lock coin.
     virtual bool lockCoin(const COutPoint& output, const bool write_to_db) = 0;
 
@@ -196,7 +191,8 @@ public:
 
     //! Create transaction. `tx_proof_cancel` is polled from inside the proof-of-work
     //! grind; returning true abandons it. Without one a grind cannot be stopped
-    //! before it finishes, and it holds the vault for its whole duration.
+    //! before it finishes. The grind runs without the vault lock (cs_vault); the
+    //! vault is locked again only to commit the result.
     virtual util::Result<CTransactionRef> createTransaction(const std::vector<vault::CRecipient>& recipients,
                                                             const vault::CCoinControl& coin_control,
                                                             bool sign,
@@ -209,12 +205,6 @@ public:
     virtual util::Result<CommitOutcome> commitTransaction(CTransactionRef tx,
                                                           VaultValueMap value_map,
                                                           VaultOrderForm order_form) = 0;
-
-    //! Return whether transaction can be abandoned.
-    virtual bool transactionCanBeAbandoned(const uint256& txid) = 0;
-
-    //! Abandon transaction.
-    virtual bool abandonTransaction(const uint256& txid) = 0;
 
     //! Get a transaction.
     virtual CTransactionRef getTx(const uint256& txid) = 0;
@@ -288,20 +278,18 @@ public:
     //! Try to return output information if possible without blocking and with an initialized vault tip.
     virtual bool tryGetCoins(const std::vector<COutPoint>& outputs, std::vector<VaultTxOut>& coins) = 0;
 
-    // Return whether HD enabled.
-    virtual bool hdEnabled() = 0;
-
     // Return whether the vault is blank.
     virtual bool canGetAddresses() = 0;
 
     // Return whether private keys enabled.
     virtual bool privateKeysDisabled() = 0;
 
+    //! Return whether the vault avoids spending from used addresses (the
+    //! avoid_reuse vault flag). Automatic coin selection follows it (F-696).
+    virtual bool avoidAddressReuse() = 0;
+
     // Return whether the vault contains a Taproot scriptPubKeyMan
     virtual bool taprootEnabled() = 0;
-
-    // Return whether vault uses an external signer.
-    virtual bool hasExternalSigner() = 0;
 
     // Get default address type.
     virtual OutputType getDefaultAddressType() = 0;
@@ -468,8 +456,9 @@ struct VaultTxOut {
 //! dummyvault.cpp and throws if the vault component is not compiled.
 std::unique_ptr<Vault> MakeVault(vault::VaultContext& context, const std::shared_ptr<vault::CVault>& vault);
 
-//! Return implementation of ChainClient interface for a vault loader. This
-//! function will be undefined in builds where ENABLE_VAULT is false.
+//! Return implementation of ChainClient interface for a vault loader. It is
+//! defined by vault/interfaces.cpp, or by dummyvault.cpp in builds without the
+//! vault library.
 std::unique_ptr<VaultLoader> MakeVaultLoader(Chain& chain, ArgsManager& args);
 
 } // namespace interfaces

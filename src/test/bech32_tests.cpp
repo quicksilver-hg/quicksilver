@@ -13,6 +13,14 @@
 
 BOOST_AUTO_TEST_SUITE(bech32_tests)
 
+BOOST_AUTO_TEST_CASE(invalid_input_bounds)
+{
+    BOOST_CHECK(bech32::Encode(bech32::Encoding::BECH32, "a", {32}).empty());
+    const auto [message, positions] = bech32::LocateErrors(std::string(10000, 'a'));
+    BOOST_CHECK_EQUAL(message, "Bech32 string too long");
+    BOOST_CHECK_LE(positions.size(), 16U);
+}
+
 BOOST_AUTO_TEST_CASE(bech32_testvectors_valid)
 {
     static const std::string CASES[] = {

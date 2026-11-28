@@ -8,13 +8,14 @@
 #include <common/args.h>
 #include <index/txindex.h>
 #include <kernel/caches.h>
-#include <logging.h>
 #include <util/byte_units.h>
+#include <util/overflow.h>
 
 #include <algorithm>
-#include <string>
+#include <cstdint>
+#include <limits>
+#include <optional>
 
-// Unlike for the UTXO database, for the txindex scenario the leveldb cache make.
 //! Max memory allocated to tx index DB specific cache in bytes.
 static constexpr size_t MAX_TX_INDEX_CACHE{1024_MiB};
 //! Max memory allocated to all block filter index caches combined in bytes.

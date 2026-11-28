@@ -15,6 +15,7 @@
 
 namespace agent {
 
+//! The node's MAX_HEADERS_RESULTS (net_processing.h); headersync.cpp asserts they match.
 inline constexpr size_t DEFAULT_MAX_HEADERS_RESULTS{2000};
 
 struct HeaderSyncRequest {
@@ -53,6 +54,7 @@ const char* HeaderSyncResultCodeString(HeaderSyncResultCode code);
 class HeaderSyncSession
 {
 public:
+    //! Throws std::invalid_argument when max_headers_result is 0.
     explicit HeaderSyncSession(HeaderChain& chain, size_t max_headers_result = DEFAULT_MAX_HEADERS_RESULTS);
 
     HeaderSyncRequest NextHeadersRequest(const uint256& stop_hash = uint256{});
@@ -64,12 +66,12 @@ public:
     const uint256& LastStopHash() const { return m_last_stop_hash; }
 
 private:
-    HeaderSyncProcessResult Result(HeaderSyncResultCode code,
-                                   HeaderAcceptResult header_result,
-                                   size_t accepted_count = 0,
-                                   size_t duplicate_count = 0,
-                                   bool request_more = false,
-                                   bool peer_synced = false) const;
+    static HeaderSyncProcessResult Result(HeaderSyncResultCode code,
+                                          HeaderAcceptResult header_result,
+                                          size_t accepted_count = 0,
+                                          size_t duplicate_count = 0,
+                                          bool request_more = false,
+                                          bool peer_synced = false);
 
     HeaderChain& m_chain;
     size_t m_max_headers_result;

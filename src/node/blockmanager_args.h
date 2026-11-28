@@ -13,7 +13,7 @@
 class ArgsManager;
 
 namespace node {
-[[nodiscard]] util::Result<void> ApplyArgsManOptions(const ArgsManager& args, BlockManager::Options& opts);
+[[nodiscard]] util::Result<void> ApplyArgsManOptions(const ArgsManager& args, BlockManager::Options& opts, bool warn_on_adjustment = false);
 } // namespace node
 
 #endif // QUICKSILVER_NODE_BLOCKMANAGER_ARGS_H

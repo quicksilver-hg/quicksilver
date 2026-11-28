@@ -9,15 +9,14 @@
 #include <QObject>
 #include <QDateTime>
 
-#include <atomic>
 #include <memory>
 #include <sync.h>
 #include <uint256.h>
+#include <util/time.h>
 
 #include <netaddress.h>
 
 class BanTableModel;
-class CBlockIndex;
 class OptionsModel;
 class PeerTableModel;
 class PeerTableSortProxy;
@@ -31,7 +30,6 @@ struct BlockTip;
 }
 
 QT_BEGIN_NAMESPACE
-class QTimer;
 QT_END_NAMESPACE
 
 enum class SyncType {
@@ -76,10 +74,7 @@ public:
     //! Return number of connections, default is in- and outbound (total)
     int getNumConnections(unsigned int flags = CONNECTIONS_ALL) const;
     std::map<CNetAddr, LocalServiceInfo> getNetLocalAddresses() const;
-    int getNumBlocks() const;
     uint256 getBestBlockHash() EXCLUSIVE_LOCKS_REQUIRED(!m_cached_tip_mutex);
-    int getHeaderTipHeight() const;
-    int64_t getHeaderTipTime() const;
 
     //! Return warnings to be displayed in status bar
     QString getStatusBarWarnings() const;
@@ -93,14 +88,14 @@ public:
     bool getProxyInfo(std::string& ip_port) const;
 
     // caches for the best header: hash, number of blocks and block time
-    mutable std::atomic<int> cachedBestHeaderHeight;
-    mutable std::atomic<int64_t> cachedBestHeaderTime;
-    mutable std::atomic<int> m_cached_num_blocks{-1};
 
+private:
+    Mutex m_tip_notification_mutex;
+    SteadyClock::time_point m_last_block_notification GUARDED_BY(m_tip_notification_mutex){};
+    SteadyClock::time_point m_last_header_notification GUARDED_BY(m_tip_notification_mutex){};
     Mutex m_cached_tip_mutex;
     uint256 m_cached_tip_blocks GUARDED_BY(m_cached_tip_mutex){};
 
-private:
     interfaces::Node& m_node;
     std::vector<std::unique_ptr<interfaces::Handler>> m_event_handlers;
     OptionsModel *optionsModel;
@@ -111,7 +106,8 @@ private:
     //! A thread to interact with m_node asynchronously
     QThread* const m_thread;
 
-    void TipChanged(SynchronizationState sync_state, interfaces::BlockTip tip, double verification_progress, SyncType synctype) EXCLUSIVE_LOCKS_REQUIRED(!m_cached_tip_mutex);
+    void TipChanged(SynchronizationState sync_state, interfaces::BlockTip tip, double verification_progress, SyncType synctype)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_cached_tip_mutex, !m_tip_notification_mutex);
     void subscribeToCoreSignals();
     void unsubscribeFromCoreSignals();
 
@@ -123,9 +119,6 @@ Q_SIGNALS:
     void networkActiveChanged(bool networkActive);
     void alertsChanged(const QString &warnings);
     void bytesChanged(quint64 totalBytesIn, quint64 totalBytesOut);
-
-    //! Fired when a message should be reported to the user
-    void message(const QString &title, const QString &message, unsigned int style);
 
     // Show progress dialog e.g. for verifychain
     void showProgress(const QString &title, int nProgress);

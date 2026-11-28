@@ -8,7 +8,6 @@ $(package)_linux_dependencies=freetype fontconfig libxcb libxkbcommon libxcb_uti
 $(package)_qt_libs=corelib network widgets gui plugins testlib
 $(package)_patches = qt.pro
 $(package)_patches += qttools_src.pro
-$(package)_patches += mac-qmake.conf
 $(package)_patches += no-xlib.patch
 $(package)_patches += dont_hardcode_pwd.patch
 $(package)_patches += qtbase-moc-ignore-gcc-macro.patch
@@ -17,10 +16,8 @@ $(package)_patches += rcc_hardcode_timestamp.patch
 $(package)_patches += duplicate_lcqpafonts.patch
 $(package)_patches += guix_cross_lib_path.patch
 $(package)_patches += memory_resource.patch
-$(package)_patches += clang_18_libpng.patch
 $(package)_patches += utc_from_string_no_optimize.patch
 $(package)_patches += windows_lto.patch
-$(package)_patches += darwin_no_libm.patch
 
 $(package)_qttranslations_file_name=qttranslations-$($(package)_suffix)
 $(package)_qttranslations_sha256_hash=415dbbb82a75dfc9a7be969e743bee54c0e6867be37bce4cf8f03da39f20112a
@@ -32,7 +29,6 @@ $(package)_extra_sources  = $($(package)_qttranslations_file_name)
 $(package)_extra_sources += $($(package)_qttools_file_name)
 
 define $(package)_set_vars
-$(package)_config_env = QT_MAC_SDK_NO_VERSION_CHECK=1
 $(package)_config_opts_release = -release
 $(package)_config_opts_release += -silent
 $(package)_config_opts_debug = -debug
@@ -125,27 +121,6 @@ $(package)_config_opts += -no-feature-vnc
 $(package)_config_opts += -no-feature-wizard
 $(package)_config_opts += -no-feature-xml
 
-$(package)_config_opts_darwin = -no-dbus
-$(package)_config_opts_darwin += -no-opengl
-$(package)_config_opts_darwin += -pch
-$(package)_config_opts_darwin += -no-feature-corewlan
-$(package)_config_opts_darwin += -no-freetype
-$(package)_config_opts_darwin += QMAKE_MACOSX_DEPLOYMENT_TARGET=$(OSX_MIN_VERSION)
-
-ifneq ($(build_os),darwin)
-$(package)_config_opts_darwin += -xplatform macx-clang-linux
-$(package)_config_opts_darwin += -device-option MAC_SDK_PATH=$(OSX_SDK)
-$(package)_config_opts_darwin += -device-option MAC_SDK_VERSION=$(OSX_SDK_VERSION)
-$(package)_config_opts_darwin += -device-option CROSS_COMPILE="llvm-"
-$(package)_config_opts_darwin += -device-option MAC_TARGET=$(host)
-$(package)_config_opts_darwin += -device-option XCODE_VERSION=$(XCODE_VERSION)
-endif
-
-ifneq ($(build_arch),$(host_arch))
-$(package)_config_opts_aarch64_darwin += -device-option QMAKE_APPLE_DEVICE_ARCHS=arm64
-$(package)_config_opts_x86_64_darwin += -device-option QMAKE_APPLE_DEVICE_ARCHS=x86_64
-endif
-
 $(package)_config_opts_linux = -xcb
 $(package)_config_opts_linux += -no-xcb-xlib
 $(package)_config_opts_linux += -no-feature-xlib
@@ -209,14 +184,12 @@ endef
 #
 # 1. Apply our patches to the extracted source. See each patch for more info.
 #
-# 2. Create a macOS-Clang-Linux mkspec using our mac-qmake.conf.
-#
-# 3. After making a copy of the mkspec for the linux-arm-gnueabi host, named
+# 2. After making a copy of the mkspec for the linux-arm-gnueabi host, named
 #    quicksilver-linux-g++, replace tool names with $($($(package)_type)_TOOL).
 #
-# 4. Put our C, CXX and LD FLAGS into gcc-base.conf. Only used for non-host builds.
+# 3. Put our C, CXX and LD FLAGS into gcc-base.conf. Only used for non-host builds.
 #
-# 5. In clang.conf, swap out clang & clang++, for our compiler + flags. See #17466.
+# 4. In clang.conf, swap out clang & clang++, for our compiler + flags. See #17466.
 define $(package)_preprocess_cmds
   cp $($(package)_patch_dir)/qt.pro qt.pro && \
   cp $($(package)_patch_dir)/qttools_src.pro qttools/src/src.pro && \
@@ -225,16 +198,11 @@ define $(package)_preprocess_cmds
   patch -p1 -i $($(package)_patch_dir)/qtbase-moc-ignore-gcc-macro.patch && \
   patch -p1 -i $($(package)_patch_dir)/memory_resource.patch && \
   patch -p1 -i $($(package)_patch_dir)/no_warnings_for_symbols.patch && \
-  patch -p1 -i $($(package)_patch_dir)/clang_18_libpng.patch && \
   patch -p1 -i $($(package)_patch_dir)/rcc_hardcode_timestamp.patch && \
   patch -p1 -i $($(package)_patch_dir)/duplicate_lcqpafonts.patch && \
   patch -p1 -i $($(package)_patch_dir)/utc_from_string_no_optimize.patch && \
   patch -p1 -i $($(package)_patch_dir)/guix_cross_lib_path.patch && \
   patch -p1 -i $($(package)_patch_dir)/windows_lto.patch && \
-  patch -p1 -i $($(package)_patch_dir)/darwin_no_libm.patch && \
-  mkdir -p qtbase/mkspecs/macx-clang-linux &&\
-  cp -f qtbase/mkspecs/macx-clang/qplatformdefs.h qtbase/mkspecs/macx-clang-linux/ &&\
-  cp -f $($(package)_patch_dir)/mac-qmake.conf qtbase/mkspecs/macx-clang-linux/qmake.conf && \
   cp -r qtbase/mkspecs/linux-arm-gnueabi-g++ qtbase/mkspecs/quicksilver-linux-g++ && \
   sed -i.old "s|arm-linux-gnueabi-gcc|$($($(package)_type)_CC)|" qtbase/mkspecs/quicksilver-linux-g++/qmake.conf && \
   sed -i.old "s|arm-linux-gnueabi-g++|$($($(package)_type)_CXX)|" qtbase/mkspecs/quicksilver-linux-g++/qmake.conf && \

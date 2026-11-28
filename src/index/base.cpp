@@ -3,7 +3,6 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <chainparams.h>
 #include <common/args.h>
 #include <index/base.h>
 #include <interfaces/chain.h>
@@ -15,7 +14,6 @@
 #include <node/database_args.h>
 #include <node/interface_ui.h>
 #include <tinyformat.h>
-#include <util/string.h>
 #include <util/thread.h>
 #include <util/translation.h>
 #include <validation.h> // For g_chainman
@@ -35,7 +33,7 @@ void BaseIndex::FatalErrorf(util::ConstevalFormatString<sizeof...(Args)> fmt, co
     node::AbortNode(m_chain->context()->shutdown_request, m_chain->context()->exit_status, Untranslated(message), m_chain->context()->warnings.get());
 }
 
-CBlockLocator GetLocator(interfaces::Chain& chain, const uint256& block_hash)
+static CBlockLocator GetLocator(interfaces::Chain& chain, const uint256& block_hash)
 {
     CBlockLocator locator;
     bool found = chain.findBlock(block_hash, interfaces::FoundBlock().locator(locator));
@@ -257,8 +255,8 @@ bool BaseIndex::Rewind(const CBlockIndex* current_tip, const CBlockIndex* new_ti
     // flushed chainstate, otherwise unclean restarts would lead to index corruption.
     // Pruning has a minimum of 288 blocks-to-keep and getting the index
     // out of sync may be possible but a users fault.
-    // In case we reorg beyond the pruned depth, ReadBlock would
-    // throw and lead to a graceful shutdown
+    // If a reorganization reaches past pruned data, a failed block read
+    // is reported through FatalErrorf.
     SetBestBlockIndex(new_tip);
     return true;
 }
@@ -283,7 +281,7 @@ void BaseIndex::BlockConnected(const std::shared_ptr<const CBlock>& block, const
         // m_synced. Consider the case where there is a reorg and the blocks on the stale branch are
         // in the ValidationInterface queue backlog even after the sync thread has caught up to the
         // new chain tip. In this unlikely event, log a warning and let the queue clear.
-        if (best_block_index->GetAncestor(pindex->nHeight - 1) != pindex->pprev) {
+        if (!pindex->pprev || best_block_index->GetAncestor(pindex->nHeight - 1) != pindex->pprev) {
             LogInfo(HgLog::SCAN, "%s: WARNING: Block %s does not connect to an ancestor of "
                       "known best chain (tip=%s); not updating index\n",
                       __func__, pindex->GetBlockHash().ToString(),
@@ -316,6 +314,7 @@ void BaseIndex::ChainStateFlushed(const CBlockLocator& locator)
         return;
     }
 
+    if (locator.vHave.empty()) return;
     const uint256& locator_tip_hash = locator.vHave.front();
     const CBlockIndex* locator_tip_index;
     {
@@ -335,6 +334,7 @@ void BaseIndex::ChainStateFlushed(const CBlockLocator& locator)
     // backlog even after the sync thread has caught up to the new chain tip. In this unlikely
     // event, log a warning and let the queue clear.
     const CBlockIndex* best_block_index = m_best_block_index.load();
+    if (!best_block_index) return;
     if (best_block_index->GetAncestor(locator_tip_index->nHeight) != locator_tip_index) {
         LogInfo(HgLog::SCAN, "%s: WARNING: Locator contains block (hash=%s) not on known best "
                   "chain (tip=%s); not writing index locator\n",
@@ -363,7 +363,7 @@ bool BaseIndex::BlockUntilSyncedToCurrentChain() const
         LOCK(cs_main);
         const CBlockIndex* chain_tip = m_chainstate->m_chain.Tip();
         const CBlockIndex* best_block_index = m_best_block_index.load();
-        if (best_block_index->GetAncestor(chain_tip->nHeight) == chain_tip) {
+        if (chain_tip && best_block_index && best_block_index->GetAncestor(chain_tip->nHeight) == chain_tip) {
             return true;
         }
     }

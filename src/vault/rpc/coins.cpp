@@ -14,6 +14,7 @@
 #include <vault/rpc/util.h>
 #include <vault/spend.h>
 #include <vault/vault.h>
+#include <vault/vaultdb.h>
 
 #include <univalue.h>
 
@@ -322,17 +323,37 @@ RPCHelpMan lockunspent()
         outputs.push_back(outpt);
     }
 
-    std::unique_ptr<VaultBatch> batch = nullptr;
     // Unlock is always persistent
-    if (fUnlock || persistent) batch = std::make_unique<VaultBatch>(pvault->GetDatabase());
+    if (!fUnlock && !persistent) {
+        for (const COutPoint& outpt : outputs) pvault->LockCoin(outpt);
+        return true;
+    }
 
-    // Atomically set (un)locked status for the outputs.
-    for (const COutPoint& outpt : outputs) {
-        if (fUnlock) {
-            if (!pvault->UnlockCoin(outpt, batch.get())) throw JSONRPCError(RPC_VAULT_ERROR, "Unlocking coin failed");
-        } else {
-            if (!pvault->LockCoin(outpt, batch.get())) throw JSONRPCError(RPC_VAULT_ERROR, "Locking coin failed");
+    // All or nothing: one DB transaction, and on failure the outputs this call
+    // changed in memory are put back (S0201-A-01).
+    std::vector<COutPoint> changed;
+    const bool done{RunWithinTxn(pvault->GetDatabase(), /*process_desc=*/"lockunspent", [&](VaultBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(pvault->cs_vault) {
+        for (const COutPoint& outpt : outputs) {
+            if (fUnlock) {
+                if (!pvault->UnlockCoin(outpt, &batch)) return false;
+                changed.push_back(outpt);
+            } else {
+                const bool was_locked{pvault->IsLockedCoin(outpt)};
+                if (!pvault->LockCoin(outpt, &batch)) return false;
+                if (!was_locked) changed.push_back(outpt);
+            }
         }
+        return true;
+    })};
+    if (!done) {
+        for (const COutPoint& outpt : changed) {
+            if (fUnlock) {
+                pvault->LockCoin(outpt);
+            } else {
+                pvault->UnlockCoin(outpt);
+            }
+        }
+        throw JSONRPCError(RPC_VAULT_ERROR, fUnlock ? "Unlocking coin failed" : "Locking coin failed");
     }
 
     return true;

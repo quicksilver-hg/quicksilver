@@ -14,6 +14,8 @@
 #include <vault/vault.h>
 #include <vault/vaultutil.h>
 
+#include <stdexcept>
+
 namespace vault {
 namespace VaultTool {
 
@@ -39,7 +41,9 @@ static void VaultCreate(CVault* vault_instance, uint64_t vault_creation_flags)
     vault_instance->SetupDescriptorScriptPubKeyMans();
 
     tfm::format(std::cout, "Topping up keypool...\n");
-    vault_instance->TopUpKeyPool();
+    // S0196-A-04: a keypool that could not be saved is a failed create; the caller
+    // reports it and removes what this create wrote.
+    if (!vault_instance->TopUpKeyPool()) throw std::runtime_error("could not save the keypool");
 }
 
 static std::shared_ptr<CVault> MakeVault(const std::string& name, const fs::path& path, DatabaseOptions options)
@@ -140,6 +144,7 @@ bool ExecuteVaultToolFunc(const ArgsManager& args, const std::string& command)
     const fs::path path = fsbridge::AbsPathJoin(GetVaultDir(), fs::PathFromString(name));
 
     if (command == "create") {
+        tfm::format(std::cerr, "Warning: quicksilver-vault create is for testing. It creates an unencrypted vault and cannot create an encrypted vault.\n");
         DatabaseOptions options;
         ReadDatabaseArgs(args, options);
         options.require_create = true;
@@ -178,7 +183,6 @@ bool ExecuteVaultToolFunc(const ArgsManager& args, const std::string& command)
             tfm::format(std::cerr, "%s\n", error.original);
             return ret;
         }
-        tfm::format(std::cout, "The dumpfile may contain private keys. To ensure the safety of your coins, do not share the dumpfile.\n");
         return ret;
     } else if (command == "createfromdump") {
         bilingual_str error;

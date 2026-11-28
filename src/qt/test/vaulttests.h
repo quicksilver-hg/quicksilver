@@ -45,6 +45,7 @@ private Q_SLOTS:
     void backupChecksTheSavedFile();
     void agentAllotmentMakesHomeBackupNeeded();
     void backupToANonAsciiFolder();
+    void backupOverAnExistingFile();
     void rpcChangesMakeHomeBackupNeeded();
     void benchTickerMatchesVaultBalances();
     void homeAndMineLinksFollowRail();
@@ -62,6 +63,7 @@ private Q_SLOTS:
     void ledgerPageNamesItsFiltersAndFitsItsColumns();
     void sendConfirmationNamesUnconfirmedChange();
     void coinControlMarksUnconfirmedChange();
+    void transferFollowsTheAvoidReuseFlag();
     void mineMintPageRendersStatus();
     void minePageSeparatesDraftPayoutAndHealthNote();
     void openingVaultDoesNotReplacePayoutOrMintAddress();
@@ -102,8 +104,11 @@ private Q_SLOTS:
     void vaultInterfaceSkipsUninitializedTipWithoutConsensus();
     void vaultModelLoadsStoredConfirmationBeforeConsensus();
     void thinHeaderSourceRefreshesDetachedVault();
+    void thinHeaderSourceDoesNotReloadAnUnchangedFailedStore();
     void vaultModelSkipsCoinControlOutputsBeforeConsensusClientModel();
     void vaultViewMasksValuesWithoutClientModel();
+    void mainWindowKeepsMaskValuesAndVaultRules();
+    void mineMintStartUsesThePayoutShownAtThePress();
     void vaultModelReportsProofOfWorkInFlightWhilePreparing();
     void vaultModelPassesCancelRequestIntoTheGrind();
     void cancelBeforeGrindStartsIsHonoured();
@@ -124,8 +129,8 @@ private Q_SLOTS:
     void cpuFallbackWarningFollowsDiscovery();
     void faultedCardsShowSendWarningDetails();
     void transferPageShowsItsFormAndTransmitButtonTogether();
-    void transferCoinControlQuantityAndBytesUseSeparateRows();
-    void coinControlDialogQuantityAndBytesUseSeparateRows();
+    void transferCoinControlHasNoBytesRow();
+    void coinControlDialogHasNoBytesRow();
     void coinControlIndicatorsMatchDialogCheckboxes();
     void copyAmountActionsCopyTheBareNumber();
     void transferSolverTextNamesRealMenuAndSetting();
@@ -156,6 +161,13 @@ private Q_SLOTS:
     void transferRecipientAreaFitsItsRow();
     void transferSummaryCountsTheRowClearAllLeaves();
     void transactionDescriptionCountsConfirmationsFromFirstBlock();
+    void ledgerCoinbaseMaturesAfter101Blocks();
+    void ledgerOffersNoAbandonButStillShowsAbandoned();
+    void passphraseReachesTheCallerOnlyOnConfirm();
+    void showPassphraseKeepsSensitiveInputHints();
+    void failedPassphraseChangeLeavesVaultUnlocked();
+    void vaultErrorBoxShowsANameAsPlainText();
+    void requestLinkEscapesItsStoredAddress();
     void debugInputsNameOnlyOwnedAddresses();
     void incomingTransferIsNotNamedByReceivingLabel();
     void paymentConfirmsAtTheRecommendedTwentyConfirmations();
@@ -208,6 +220,12 @@ private Q_SLOTS:
     void homeLedgerDetailsRespectMaskValues();
     void networkPageShowsNetworkingOff();
     void networkPageAddPeerRejectsAnyWhitespace();
+    void recentRequestsSkipACorruptRecord();
+    void recentRequestsRemoveListsOnlyWhatWasDeleted();
+    void receiveRequestMenuActsOnTheRowUnderTheCursor();
+    void thinHeaderSourceIgnoresARemovedStoreOnceATipIsApplied();
+    void vaultControllerNoticesAThinHeaderRefusalOncePerChange();
+    void startupVaultThatFailsToLoadIsReported();
 };
 
 #endif // QUICKSILVER_QT_TEST_VAULTTESTS_H

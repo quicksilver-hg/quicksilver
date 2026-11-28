@@ -12,7 +12,7 @@
 #include <exception>
 #include <functional>
 #include <string>
-#include <utility>
+#include <string_view>
 
 void util::TraceThread(std::string_view thread_name, std::function<void()> thread_func)
 {

@@ -1429,66 +1429,19 @@ BOOST_AUTO_TEST_CASE(solved_block_time_follows_the_clock_not_the_template)
     // The template is stamped once. A window that ends with no cycle must pick
     // up a later mock time before the next solve, and the block that lands must
     // carry that later time. The waits below only watch the worker reach a
-    // marker and then a block; the clock under test moves with SetMockTime.
+    // window and then a block; the clock under test moves with SetMockTime.
+    //
+    // S0349-A-03: no consensus field is written while the worker runs. The solve
+    // seam holds window 1 and ends it with no cycle; every later window is the
+    // real node::SolveBlockPoW on the chain's own parameters, which solves.
     auto mining = interfaces::MakeMining(m_node);
     BOOST_REQUIRE(mining);
 
-    Consensus::Params& params = const_cast<Consensus::Params&>(Params().GetConsensus());
-    const std::string tag{ProcessIdTag()};
-    const std::string marker{TempPath("f479-window-" + tag)};
-    const std::string script{TempPath("f479-solver-" + tag + ".stub")};
-    static_cast<void>(std::remove(marker.c_str()));
-
-    const bool had_devices{std::getenv("CUCKATOO_GPU_DEVICES") != nullptr};
-    const bool had_timeout{std::getenv("CUCKATOO_GPU_TIMEOUT") != nullptr};
-    struct TestStateRestorer {
-        Consensus::Params& params;
-        const bool block_pow_no_cycle;
-        const uint8_t edge_bits;
-        const std::string solver;
-        const std::string devices;
-        const std::string timeout;
-        const bool had_devices;
-        const bool had_timeout;
-        const std::string marker;
-        const std::string script;
-        ~TestStateRestorer()
-        {
-            params.fBlockPowNoCycle = block_pow_no_cycle;
-            params.nEdgeBits = edge_bits;
-            SetSolverEnv(solver);
-            if (had_devices) SetEnvVar("CUCKATOO_GPU_DEVICES", devices);
-            else UnsetEnvVar("CUCKATOO_GPU_DEVICES");
-            if (had_timeout) SetEnvVar("CUCKATOO_GPU_TIMEOUT", timeout);
-            else UnsetEnvVar("CUCKATOO_GPU_TIMEOUT");
-            UnsetEnvVar("QS_SOLVER_STUB_SCRIPT");
-            cuckatoo::ResetGpuDiscoveryForTesting();
-            KillSolverStubChildren();
-            static_cast<void>(std::remove(marker.c_str()));
-            static_cast<void>(std::remove(script.c_str()));
-        }
-    } restore{params, params.fBlockPowNoCycle, params.nEdgeBits, EnvOrEmpty("CUCKATOO_GPU_SOLVER"),
-              EnvOrEmpty("CUCKATOO_GPU_DEVICES"), EnvOrEmpty("CUCKATOO_GPU_TIMEOUT"), had_devices, had_timeout,
-              marker, script};
-
-    // Edge bits 19 always falls back to the CPU solver, which would solve the
-    // header the held window already captured. 28 leaves that fallback off, so
-    // the held window can end with no cycle. Restored by the destructor above.
-    params.fBlockPowNoCycle = false;
-    params.nEdgeBits = 28;
-    {
-        std::ofstream out{script};
-        BOOST_REQUIRE(out);
-        out << "append " << marker << "\n";
-        out << "sleep 300000\n";
-        out << "exit 1\n";
-        BOOST_REQUIRE(out);
-    }
-    SetSolverEnv(SOLVER_STUB_PATH);
-    SetEnvVar("QS_SOLVER_STUB_SCRIPT", script);
-    UnsetEnvVar("CUCKATOO_GPU_DEVICES");
-    SetEnvVar("CUCKATOO_GPU_TIMEOUT", "600");
-    cuckatoo::ResetGpuDiscoveryForTesting();
+    std::mutex window_mutex;
+    std::condition_variable window_cv;
+    int windows{0};
+    bool released{false};
+    std::vector<uint32_t> window_times;
 
     const int64_t time_built{GetTime()};
     constexpr int64_t delta{1000};
@@ -1497,22 +1450,64 @@ BOOST_AUTO_TEST_CASE(solved_block_time_follows_the_clock_not_the_template)
 
     const CScript payout = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
     MiningService svc(*m_node.chainman, *mining);
+    svc.SetSolveFunctionForTesting(
+        [&](ChainstateManager& chainman, CBlock& block, uint64_t& max_tries, bool cpu_fallback,
+            const std::function<bool()>& abandon, const std::function<void()>& on_attempt,
+            cuckatoo::GpuSolveStatus* out_status, std::vector<cuckatoo::GpuDeviceFault>* out_faults) {
+            int window;
+            {
+                std::unique_lock lock{window_mutex};
+                window = ++windows;
+                window_times.push_back(block.nTime);
+            }
+            window_cv.notify_all();
+            if (window == 1) {
+                // Hold until the test has moved the clock. Poll the abandon
+                // predicate only so Stop() can end the hold if the test fails.
+                std::unique_lock lock{window_mutex};
+                while (!released) {
+                    window_cv.wait_for(lock, std::chrono::milliseconds{50});
+                    if (!released) {
+                        lock.unlock();
+                        const bool stop{abandon()};
+                        lock.lock();
+                        if (stop) break;
+                    }
+                }
+                // A no-cycle window: the worker keeps this template and goes
+                // straight into the next window (WaitForTipAfterWindow is false
+                // for kNoCycle), so only the per-window UpdateTime can move nTime.
+                if (out_status) *out_status = cuckatoo::GpuSolveStatus::kNoCycle;
+                return false;
+            }
+            return node::SolveBlockPoW(chainman, block, max_tries, cpu_fallback, abandon, on_attempt,
+                                       out_status, out_faults);
+        });
     BOOST_REQUIRE(svc.Start(payout, "test-payout"));
 
-    BOOST_REQUIRE(WaitUntil([&] { return static_cast<bool>(std::ifstream{marker}); }, std::chrono::seconds(5)));
-
+    {
+        std::unique_lock lock{window_mutex};
+        BOOST_REQUIRE(window_cv.wait_for(lock, std::chrono::seconds{5}, [&] { return windows >= 1; }));
+    }
     // The worker is inside the window that captured the template header. Move
     // the clock, then let that window end with no cycle. The next window is the
     // one that must stamp the new time and solve.
+    BOOST_CHECK(!node::WaitForTipAfterWindow(false, cuckatoo::GpuSolveStatus::kNoCycle, /*cpu_fallback=*/false, {}));
     SetMockTime(time_built + delta);
-    params.fBlockPowNoCycle = true;
-    KillSolverStubChildren();
+    {
+        std::lock_guard lock{window_mutex};
+        released = true;
+    }
+    window_cv.notify_all();
 
-    // A killed helper now takes the bounded tip wait before rebuilding the
-    // template. Allow that five-second pause plus the next solve window.
     BOOST_REQUIRE(WaitUntil([&] { return svc.GetStatus().blocks_found >= 1; }, std::chrono::seconds(8)));
     svc.Stop();
 
+    {
+        std::lock_guard lock{window_mutex};
+        BOOST_REQUIRE_GE(windows, 2);
+        BOOST_CHECK_LT(window_times[0], time_built + delta);
+    }
     const CBlockIndex* mined{WITH_LOCK(cs_main, return m_node.chainman->ActiveChain()[start_height + 1])};
     BOOST_REQUIRE(mined);
     BOOST_REQUIRE(mined->pprev);
@@ -1647,6 +1642,10 @@ BOOST_AUTO_TEST_CASE(rpc_generated_block_time_follows_the_clock_not_the_template
     // target, so the block may land a window or two after the next one, and
     // each of those windows must stamp the new time too.
     SetMockTime(time_built + delta);
+    // S0349-A-03, kept: this writes a live consensus field while the RPC thread
+    // solves. The RPC path (GenerateBlock in rpc/mining.cpp) has no solve seam,
+    // unlike MiningService, and CuckatooSolve takes edge bits by value, so the
+    // held window does not read it; later windows read it after the write.
     params.nEdgeBits = 19;
     {
         std::ofstream out{script, std::ios::trunc};

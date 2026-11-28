@@ -37,6 +37,8 @@
 #include <script/solver.h>
 #include <util/strencodings.h>
 #include <streams.h>
+#include <hash.h>
+#include <vault/crypter.h>
 #include <sync.h>
 #include <test/util/logging.h>
 #include <test/util/random.h>
@@ -48,6 +50,7 @@
 #include <vault/coincontrol.h>
 #include <vault/context.h>
 #include <vault/receive.h>
+#include <vault/rpc/util.h>
 #include <vault/spend.h>
 #include <vault/test/util.h>
 #include <vault/test/vault_test_fixture.h>
@@ -192,6 +195,10 @@ public:
     unsigned int retreat_observations{0};
     unsigned int unsafe_height_lookups{0};
 };
+
+RPCHelpMan gettransaction();
+RPCHelpMan listsinceblock();
+RPCHelpMan listtransactions();
 
 BOOST_FIXTURE_TEST_SUITE(vault_tests, VaultTestingSetup)
 
@@ -1036,6 +1043,32 @@ BOOST_FIXTURE_TEST_CASE(expiry_check_waits_for_a_tip, TestChain100Setup)
     BOOST_CHECK(vault.TakeExpiredTransfers().empty());
 }
 
+BOOST_FIXTURE_TEST_CASE(resubmit_keeps_transactions_that_share_an_order_position, TestChain100Setup)
+{
+    // S0195-A-03: nOrderPos is unique only by convention. Two unconfirmed
+    // transactions that share one must both be offered again. Mutation: make
+    // to_submit a std::set again; the second transaction is never offered and
+    // keeps no refusal reason.
+    RejectingChain rejecting_chain{*m_node.chain, node::TransactionError::RELAYPOOL_REJECTED, "refused"};
+    CVault vault{&rejecting_chain, "", CreateMockableVaultDatabase()};
+    vault.SetBroadcastTransactions(true);
+    std::vector<uint256> txids;
+    for (int i = 0; i < 2; ++i) {
+        CMutableTransaction mtx;
+        mtx.vin.emplace_back(Txid::FromUint256(m_rng.rand256()), 0);
+        mtx.vout.emplace_back(COIN, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+        const CTransactionRef tx{MakeTransactionRef(std::move(mtx))};
+        BOOST_REQUIRE(WITH_LOCK(vault.cs_vault, return vault.AddToVault(tx, TxStateInactive{})));
+        txids.push_back(tx->GetHash());
+    }
+    WITH_LOCK(vault.cs_vault, vault.mapVault.at(txids[1]).nOrderPos = vault.mapVault.at(txids[0]).nOrderPos);
+    vault.ResubmitVaultTransactions(/*relay=*/false, /*force=*/true);
+    LOCK(vault.cs_vault);
+    for (const uint256& txid : txids) {
+        BOOST_CHECK(vault.mapVault.at(txid).m_not_accepted_reason == std::optional<std::string>{"refused"});
+    }
+}
+
 BOOST_FIXTURE_TEST_CASE(scan_for_vault_transactions, TestChain100Setup)
 {
     // Cap last block file size, and mine new block in a new block file.
@@ -1510,6 +1543,33 @@ static void EnableDescriptorVault(CVault& vault)
     LOCK(vault.cs_vault);
     vault.SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
     vault.SetupDescriptorScriptPubKeyMans();
+}
+
+// F-687 c04-17 (S0191-A-03): a failed descriptor write must not hand out an address whose index was not saved.
+BOOST_AUTO_TEST_CASE(new_address_fails_when_index_write_fails)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    EnableDescriptorVault(vault);
+    LOCK(vault.cs_vault);
+    BOOST_REQUIRE(vault.GetNewDestination(OutputType::BECH32, ""));
+    GetMockableDatabase(vault).m_fail_write_types = {DBKeys::VAULTDESCRIPTOR};
+    BOOST_CHECK(!vault.GetNewDestination(OutputType::BECH32, ""));
+    GetMockableDatabase(vault).m_fail_write_types.clear();
+    BOOST_CHECK(vault.GetNewDestination(OutputType::BECH32, ""));
+}
+
+// F-687 c04-17: a backup is stamped with the best block first; a failed stamp fails the backup.
+BOOST_AUTO_TEST_CASE(backup_fails_when_best_block_write_fails)
+{
+    CVault vault(m_node.chain.get(), "", CreateMockableVaultDatabase());
+    {
+        LOCK(vault.cs_vault);
+        const CBlockIndex* tip{WITH_LOCK(::cs_main, return m_node.chainman->ActiveChain().Tip())};
+        vault.SetLastBlockProcessed(tip->nHeight, tip->GetBlockHash());
+    }
+    BOOST_CHECK(vault.BackupVault("stamped-backup.dat"));
+    GetMockableDatabase(vault).m_fail_write_types = {DBKeys::BESTBLOCK};
+    BOOST_CHECK(!vault.BackupVault("unstamped-backup.dat"));
 }
 
 //! The agent's key is the first key inside multi_a(2,A,C) on the public descriptor.
@@ -2606,6 +2666,152 @@ BOOST_FIXTURE_TEST_CASE(vault_archive_round_trip, ListCoinsTestingSetup)
     BOOST_CHECK_EQUAL(WITH_LOCK(restored.cs_vault, return restored.mapVault.size()), exported_transactions);
 }
 
+BOOST_FIXTURE_TEST_CASE(vault_archive_v2_preserves_unconfirmed_states, ListCoinsTestingSetup)
+{
+    const uint256 block_hash{Params().GenesisBlock().GetHash()};
+    std::array<TxState, 3> states{
+        TxStateInactive{/*abandoned=*/true},
+        TxStateBlockConflicted{block_hash, /*height=*/0},
+        TxStateInactive{},
+    };
+    std::vector<Txid> ids;
+    for (size_t i = 0; i < states.size(); ++i) {
+        CMutableTransaction mtx;
+        mtx.nLockTime = i + 1;
+        mtx.vin.resize(1);
+        mtx.vin[0].prevout = COutPoint{Txid::FromUint256(uint256::ONE), static_cast<uint32_t>(i)};
+        mtx.vout.emplace_back(COIN, CScript{});
+        CTransactionRef tx{MakeTransactionRef(std::move(mtx))};
+        ids.push_back(tx->GetHash());
+        BOOST_REQUIRE(WITH_LOCK(vault->cs_vault, return vault->AddToVault(tx, states[i])));
+    }
+
+    auto archive{BuildVaultArchive(*vault)};
+    BOOST_REQUIRE_MESSAGE(archive, util::ErrorString(archive).original);
+    const fs::path path{m_path_root / "states.qsva"};
+    const SecureString passphrase{"archive state test"};
+    BOOST_REQUIRE(WriteVaultArchive(*archive, path, passphrase));
+    auto reread{ReadVaultArchive(path, passphrase)};
+    BOOST_REQUIRE_MESSAGE(reread, util::ErrorString(reread).original);
+    BOOST_CHECK_EQUAL(reread->version, 2U);
+
+    CVault restored(m_node.chain.get(), "restored", CreateMockableVaultDatabase());
+    { LOCK(restored.cs_vault); restored.SetVaultFlag(VAULT_FLAG_DESCRIPTORS); }
+    BOOST_REQUIRE(ImportVaultArchive(restored, *reread));
+    LOCK(restored.cs_vault);
+    BOOST_CHECK(restored.mapVault.at(ids[0]).isAbandoned());
+    BOOST_CHECK(!restored.mapVault.at(ids[0]).isUnconfirmed());
+    BOOST_CHECK(restored.mapVault.at(ids[1]).isBlockConflicted());
+    BOOST_CHECK(!restored.mapVault.at(ids[1]).isUnconfirmed());
+    BOOST_CHECK(restored.mapVault.at(ids[2]).isUnconfirmed());
+}
+
+// Written by the b1a45281 base daemon using test/functional/vault_archive.py
+// with --nocleanup. The passphrase is the test's "correct horse battery staple".
+BOOST_FIXTURE_TEST_CASE(vault_archive_reads_base_v1_fixture, ListCoinsTestingSetup)
+{
+    const fs::path path{fs::PathFromString(QS_VAULT_TEST_DATA_DIR) / "archive-v1-base.qsva"};
+    auto archive{ReadVaultArchive(path, SecureString{"correct horse battery staple"})};
+    BOOST_REQUIRE_MESSAGE(archive, util::ErrorString(archive).original);
+    BOOST_CHECK_EQUAL(archive->version, 1U);
+    BOOST_CHECK(!archive->transactions.empty());
+    CVault restored(m_node.chain.get(), "restored", CreateMockableVaultDatabase());
+    { LOCK(restored.cs_vault); restored.SetVaultFlag(VAULT_FLAG_DESCRIPTORS); }
+    auto imported{ImportVaultArchive(restored, *archive)};
+    BOOST_REQUIRE_MESSAGE(imported, util::ErrorString(imported).original);
+    BOOST_CHECK_EQUAL(imported->transactions_imported, archive->transactions.size());
+}
+
+BOOST_FIXTURE_TEST_CASE(vault_archive_rejects_hostile_metadata, ListCoinsTestingSetup)
+{
+    auto archive{BuildVaultArchive(*vault)};
+    BOOST_REQUIRE(archive);
+    const SecureString passphrase{"hostile archive test"};
+    const fs::path path{m_path_root / "hostile.qsva"};
+
+    archive->transactions.front().state = static_cast<VaultArchiveTxState>(255);
+    BOOST_REQUIRE(WriteVaultArchive(*archive, path, passphrase));
+    auto bad_state{ReadVaultArchive(path, passphrase)};
+    BOOST_CHECK(!bad_state);
+    BOOST_CHECK_NE(util::ErrorString(bad_state).original.find("unknown transaction state"), std::string::npos);
+
+    archive->transactions.front().state = VaultArchiveTxState::PENDING;
+    archive->transactions.front().confirmed = true;
+    archive->transactions.front().block_height = -1;
+    CVault restored(m_node.chain.get(), "restored", CreateMockableVaultDatabase());
+    { LOCK(restored.cs_vault); restored.SetVaultFlag(VAULT_FLAG_DESCRIPTORS); }
+    auto bad_position{ImportVaultArchive(restored, *archive)};
+    BOOST_CHECK(!bad_position);
+    BOOST_CHECK_NE(util::ErrorString(bad_position).original.find("invalid confirmed transaction position"), std::string::npos);
+
+    // Container: magic (4), version (4), salt length (1), salt (8), rounds (4).
+    archive->transactions.front().confirmed = false;
+    BOOST_REQUIRE(WriteVaultArchive(*archive, path, passphrase));
+    {
+        std::fstream file{path, std::ios::binary | std::ios::in | std::ios::out};
+        BOOST_REQUIRE(file.is_open());
+        file.seekp(17);
+        const std::array<char, 4> excessive_rounds{char(0xff), char(0xff), char(0xff), char(0x7f)};
+        file.write(excessive_rounds.data(), excessive_rounds.size());
+        BOOST_REQUIRE(file.good());
+    }
+    auto bad_rounds{ReadVaultArchive(path, passphrase)};
+    BOOST_CHECK(!bad_rounds);
+    BOOST_CHECK_NE(util::ErrorString(bad_rounds).original.find("corrupt"), std::string::npos);
+}
+
+//! Seal a hand-built body the way WriteVaultArchive does (hash prefix, AES, container), with one KDF round.
+static void WriteCraftedArchive(const fs::path& path, const SecureString& passphrase, const DataStream& body)
+{
+    const uint256 body_hash{Hash(body)};
+    std::vector<unsigned char> plaintext(body_hash.begin(), body_hash.end());
+    for (const std::byte b : body) plaintext.push_back(static_cast<unsigned char>(b));
+    const std::vector<unsigned char> salt(VAULT_CRYPTO_SALT_SIZE, 7);
+    CCrypter crypter;
+    BOOST_REQUIRE(crypter.SetKeyFromPassphrase(passphrase, salt, 1));
+    std::vector<unsigned char> ciphertext;
+    BOOST_REQUIRE(crypter.Encrypt(std::span{plaintext}, ciphertext));
+    DataStream container;
+    container << uint32_t{0x41565351} << uint32_t{1} << salt << uint32_t{1} << ciphertext;
+    std::ofstream file{path, std::ios::binary};
+    file.write(reinterpret_cast<const char*>(container.data()), container.size());
+    BOOST_REQUIRE(file.good());
+}
+
+// F-687 c04-13 (S0186-B-05): a count is refused when the bytes left cannot hold that many
+// records, before anything is allocated for them, not after a resize from a hostile file.
+BOOST_AUTO_TEST_CASE(vault_archive_counts_capped_by_remaining_bytes)
+{
+    const SecureString passphrase{"crafted"};
+    const fs::path path{m_path_root / "crafted.qsva"};
+    auto header = [] {
+        DataStream body;
+        body << uint32_t{2} << std::string{"regtest"} << uint256{} << std::string{"crafted"} << int64_t{0} << int64_t{0};
+        return body;
+    };
+
+    DataStream descriptors{header()};
+    descriptors << uint64_t{10'000};
+    WriteCraftedArchive(path, passphrase, descriptors);
+    auto read_descriptors{ReadVaultArchive(path, passphrase)};
+    BOOST_REQUIRE(!read_descriptors);
+    BOOST_CHECK_NE(util::ErrorString(read_descriptors).original.find("declares more descriptors"), std::string::npos);
+
+    DataStream addresses{header()};
+    addresses << uint64_t{0} << uint64_t{1'000'000};
+    WriteCraftedArchive(path, passphrase, addresses);
+    auto read_addresses{ReadVaultArchive(path, passphrase)};
+    BOOST_REQUIRE(!read_addresses);
+    BOOST_CHECK_NE(util::ErrorString(read_addresses).original.find("declares more addresses"), std::string::npos);
+
+    DataStream transactions{header()};
+    transactions << uint64_t{0} << uint64_t{0} << uint64_t{1'000'000};
+    WriteCraftedArchive(path, passphrase, transactions);
+    auto read_transactions{ReadVaultArchive(path, passphrase)};
+    BOOST_REQUIRE(!read_transactions);
+    BOOST_CHECK_NE(util::ErrorString(read_transactions).original.find("declares more transactions"), std::string::npos);
+}
+
 BOOST_AUTO_TEST_CASE(vault_archive_large_body_round_trip)
 {
     VaultArchive archive;
@@ -2815,6 +3021,36 @@ BOOST_FIXTURE_TEST_CASE(agent_bundle_export_moves_balance_to_delegated, ListCoin
     BOOST_CHECK_EQUAL(after.m_mine_trusted + after.m_mine_delegated, before.m_mine_trusted);
 }
 
+// S0192-A-02: when the DB transaction that reserves the agent's outputs fails, the
+// export fails and no output stays locked in memory. Mutation: lock through
+// LockCoin inside RunWithinTxn with no roll-back; the outputs then stay locked
+// after the error.
+BOOST_FIXTURE_TEST_CASE(failed_agent_export_leaves_no_coin_locked, ListCoinsTestingSetup)
+{
+    constexpr CAmount funding_amount{COIN / 4};
+    auto record{vault->RecordAgentAllotmentSetup("failing-agent", COIN, COIN / 2)};
+    BOOST_REQUIRE(record);
+    const CTxDestination funding_dest{DecodeDestination(record->funding_address)};
+    BOOST_REQUIRE(IsValidDestination(funding_dest));
+    const CScript funding_script{GetScriptForDestination(funding_dest)};
+    AddTx(CRecipient{funding_dest, funding_amount});
+
+    const std::string policy_request{vault->AgentAllotmentPolicyRequest(*record, funding_amount)};
+    GetMockableDatabase(*vault).m_fail_txn_commit = true;
+    BOOST_CHECK(!vault->ExportAgentAllotmentPolicyBundle(policy_request));
+    GetMockableDatabase(*vault).m_fail_txn_commit = false;
+
+    LOCK(vault->cs_vault);
+    bool found{false};
+    for (const COutput& coin : AvailableCoins(*vault).All()) {
+        if (coin.txout.scriptPubKey == funding_script) found = true;
+    }
+    BOOST_CHECK(found);
+    std::vector<COutPoint> locked;
+    vault->ListLockedCoins(locked);
+    BOOST_CHECK(locked.empty());
+}
+
 BOOST_FIXTURE_TEST_CASE(agent_allotment_reclaim_spends_by_key_path, ListCoinsTestingSetup)
 {
     constexpr CAmount funding_amount{COIN / 4};
@@ -2859,19 +3095,27 @@ struct AgentCosignTestingSetup : ListCoinsTestingSetup {
         vault->SetBroadcastTransactions(true);
     }
 
-    AgentAllotmentPolicyBundle FundAgent()
+    //! Funds the allotment with `outputs` coins of COIN / 4 each.
+    AgentAllotmentPolicyBundle FundAgent(CAmount daily_limit = 0, size_t outputs = 1)
     {
-        auto record{vault->RecordAgentAllotmentSetup("cosigned-agent", COIN, 0)};
+        auto record{vault->RecordAgentAllotmentSetup("cosigned-agent", COIN, daily_limit)};
         BOOST_REQUIRE(record);
-        AddTx(CRecipient{DecodeDestination(record->funding_address), COIN / 4});
-        auto bundle{vault->ExportAgentAllotmentPolicyBundle(vault->AgentAllotmentPolicyRequest(*record, COIN / 4))};
-        BOOST_REQUIRE_MESSAGE(bundle, util::ErrorString(bundle).original);
-        BOOST_REQUIRE_EQUAL(bundle->funding_outputs.size(), 1U);
+        std::optional<AgentAllotmentPolicyBundle> bundle;
+        for (size_t i = 1; i <= outputs; ++i) {
+            AddTx(CRecipient{DecodeDestination(record->funding_address), COIN / 4});
+            // Each export locks the coins funded so far, so the next funding does not spend them.
+            auto exported{vault->ExportAgentAllotmentPolicyBundle(vault->AgentAllotmentPolicyRequest(*record, i * (COIN / 4)))};
+            BOOST_REQUIRE_MESSAGE(exported, util::ErrorString(exported).original);
+            bundle = std::move(*exported);
+        }
+        BOOST_REQUIRE(bundle);
+        BOOST_REQUIRE_EQUAL(bundle->funding_outputs.size(), outputs);
         return *bundle;
     }
 
     //! A nonzero change returns that much to the allotment's own address, as the agent does.
-    PartiallySignedQuicksilverTransaction AgentRequest(const AgentAllotmentPolicyBundle& bundle, bool sign = true, CAmount change = 0)
+    //! `input` picks one funding output; the default spends the first.
+    PartiallySignedQuicksilverTransaction AgentRequest(const AgentAllotmentPolicyBundle& bundle, bool sign = true, CAmount change = 0, size_t input = 0)
     {
         FlatSigningProvider provider;
         std::string error;
@@ -2882,9 +3126,8 @@ struct AgentCosignTestingSetup : ListCoinsTestingSetup {
         const CKey agent{DecodeSecret(bundle.agent_secret)};
         provider.keys.emplace(agent.GetPubKey().GetID(), agent);
         CMutableTransaction tx;
-        for (const auto& coin : bundle.funding_outputs) {
-            tx.vin.emplace_back(Txid::FromHex(coin.txid).value(), coin.vout);
-        }
+        const auto& coin{bundle.funding_outputs.at(input)};
+        tx.vin.emplace_back(Txid::FromHex(coin.txid).value(), coin.vout);
         tx.vout.emplace_back(COIN / 4 - change, GetScriptForDestination(PKHash(GenerateRandomKey().GetPubKey())));
         if (change > 0) tx.vout.emplace_back(change, scripts.at(0));
         PartiallySignedQuicksilverTransaction psqt{tx};
@@ -3019,6 +3262,137 @@ BOOST_FIXTURE_TEST_CASE(agent_cosign_locks_change_returned_to_the_allotment, Age
     BOOST_CHECK(vault->IsLockedCoin(change_outpoint));
     for (const COutput& coin : AvailableCoins(*vault).All()) {
         BOOST_CHECK(coin.outpoint != change_outpoint);
+    }
+}
+
+// F-661 (ruled 2026-11-20, option B): the vault enforces the allotment's daily limit as well as
+// the agent, over the agent's UTC day, and the count survives the vault being closed and reopened.
+BOOST_FIXTURE_TEST_CASE(agent_cosign_enforces_the_daily_limit, AgentCosignTestingSetup)
+{
+    const std::string over_limit{"This spend would take the agent allotment over its daily limit. The limit resets at 00:00 UTC."};
+    // 10:00 UTC on the day after the test chain's clock, so the next day is 14 hours away.
+    const int64_t day{GetTime() / 86400 + 1};
+    SetMockTime(day * 86400 + 10 * 3600);
+    // Limit: one funding coin a day. Two coins are funded.
+    const auto bundle{FundAgent(/*daily_limit=*/COIN / 4, /*outputs=*/2)};
+
+    // A spend up to the limit, here exactly at it, is co-signed.
+    auto first{vault->CosignAgentAllotmentSpend(Encode(AgentRequest(bundle, true, 0, /*input=*/0)))};
+    BOOST_REQUIRE_MESSAGE(first, util::ErrorString(first).original);
+
+    // A second spend the same day would take the total over the limit: refused, nothing signed.
+    Refuses(AgentRequest(bundle, true, 0, /*input=*/1), over_limit);
+
+    // Closed and reopened, the vault still knows what it co-signed today.
+    {
+        auto reopened{std::make_unique<CVault>(m_node.chain.get(), "", DuplicateMockDatabase(vault->GetDatabase()))};
+        BOOST_REQUIRE_EQUAL(reopened->LoadVault(), DBErrors::LOAD_OK);
+        LOCK2(reopened->cs_vault, ::cs_main);
+        const CChain& active{m_node.chainman->ActiveChain()};
+        reopened->SetLastBlockProcessed(active.Height(), active.Tip()->GetBlockHash());
+        vault = std::move(reopened);
+    }
+    {
+        // Catch up with the chain, as a restarted node does: the funding is confirmed again.
+        VaultRescanReserver reserver(*vault);
+        BOOST_REQUIRE(reserver.reserve());
+        const auto scanned{vault->ScanForVaultTransactions(
+            WITH_LOCK(::cs_main, return m_node.chainman->ActiveChain().Genesis()->GetBlockHash()), /*start_height=*/0,
+            /*max_height=*/{}, reserver, /*fUpdate=*/true, /*save_progress=*/false)};
+        BOOST_REQUIRE(scanned.status == CVault::ScanResult::SUCCESS);
+    }
+    vault->SetBroadcastTransactions(true);
+    Refuses(AgentRequest(bundle, true, 0, /*input=*/1), over_limit);
+
+    // Still the same UTC day at 23:59:59: refused.
+    SetMockTime(day * 86400 + 86399);
+    Refuses(AgentRequest(bundle, true, 0, /*input=*/1), over_limit);
+
+    // The limit resets at 00:00 UTC.
+    SetMockTime((day + 1) * 86400);
+    auto next_day{vault->CosignAgentAllotmentSpend(Encode(AgentRequest(bundle, true, 0, /*input=*/1)))};
+    BOOST_CHECK_MESSAGE(next_day, util::ErrorString(next_day).original);
+}
+
+// Change back to the allotment is not spent: only what leaves counts against the limit.
+BOOST_FIXTURE_TEST_CASE(agent_cosign_daily_limit_counts_only_what_leaves, AgentCosignTestingSetup)
+{
+    SetMockTime((GetTime() / 86400 + 1) * 86400 + 3600);
+    const auto bundle{FundAgent(/*daily_limit=*/COIN / 4, /*outputs=*/2)};
+    // COIN / 8 leaves, COIN / 8 returns as change.
+    auto first{vault->CosignAgentAllotmentSpend(Encode(AgentRequest(bundle, true, /*change=*/COIN / 8, /*input=*/0)))};
+    BOOST_REQUIRE_MESSAGE(first, util::ErrorString(first).original);
+    // Another COIN / 8 brings the day to the limit exactly: co-signed.
+    auto second{vault->CosignAgentAllotmentSpend(Encode(AgentRequest(bundle, true, /*change=*/COIN / 8, /*input=*/1)))};
+    BOOST_CHECK_MESSAGE(second, util::ErrorString(second).original);
+}
+
+// A daily limit of 0 means no cap.
+BOOST_FIXTURE_TEST_CASE(agent_cosign_zero_daily_limit_is_no_cap, AgentCosignTestingSetup)
+{
+    SetMockTime((GetTime() / 86400 + 1) * 86400 + 3600);
+    const auto bundle{FundAgent(/*daily_limit=*/0, /*outputs=*/2)};
+    for (size_t input : {0U, 1U}) {
+        auto result{vault->CosignAgentAllotmentSpend(Encode(AgentRequest(bundle, true, 0, input)))};
+        BOOST_CHECK_MESSAGE(result, util::ErrorString(result).original);
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(agent_cosign_transaction_matches_the_rpc_result_docs, AgentCosignTestingSetup)
+{
+    // A co-signed transaction is tagged "agent_allotment" with the allotment it spent.
+    // gettransaction, listtransactions and listsinceblock show that tag, so it must match
+    // their result docs: with the doc check on, a field missing from the docs is an internal bug.
+    SetMockTime((GetTime() / 86400 + 1) * 86400 + 3600);
+    const auto bundle{FundAgent()};
+    auto cosigned{vault->CosignAgentAllotmentSpend(Encode(AgentRequest(bundle)))};
+    BOOST_REQUIRE_MESSAGE(cosigned, util::ErrorString(cosigned).original);
+    const std::string txid{cosigned->tx->GetHash().GetHex()};
+    const std::string allotment{WITH_LOCK(vault->cs_vault, return vault->mapVault.at(cosigned->tx->GetHash()).mapValue.at("agent_allotment"))};
+
+    VaultContext context;
+    context.args = &m_args;
+    context.chain = m_node.chain.get();
+    // The context shares the fixture's vault without owning it.
+    BOOST_REQUIRE(AddVault(context, std::shared_ptr<CVault>(vault.get(), [](CVault*) {})));
+    const bool doc_check{gArgs.GetBoolArg("-rpcdoccheck", DEFAULT_RPC_DOC_CHECK)};
+    gArgs.ForceSetArg("-rpcdoccheck", "1");
+    const auto call{[&](const RPCHelpMan& rpc, UniValue params) {
+        JSONRPCRequest request;
+        request.context = &context;
+        request.params = std::move(params);
+        try {
+            return rpc.HandleRequest(request);
+        } catch (const std::exception& e) {
+            BOOST_ERROR(e.what());
+        } catch (const UniValue& error) {
+            BOOST_ERROR(error.write());
+        }
+        return UniValue{};
+    }};
+    std::vector<UniValue> entries;
+    UniValue params{UniValue::VARR};
+    params.push_back(txid);
+    const UniValue got{call(gettransaction(), params)};
+    if (got.isObject()) entries.push_back(got);
+    const UniValue listed{call(listtransactions(), UniValue{UniValue::VARR})};
+    const UniValue since{call(listsinceblock(), UniValue{UniValue::VARR})};
+    gArgs.ForceSetArg("-rpcdoccheck", doc_check ? "1" : "0");
+    WITH_LOCK(context.vaults_mutex, context.vaults.clear());
+
+    if (listed.isArray()) {
+        for (const UniValue& entry : listed.getValues()) {
+            if (entry["txid"].get_str() == txid) entries.push_back(entry);
+        }
+    }
+    if (since.isObject()) {
+        for (const UniValue& entry : since["transactions"].getValues()) {
+            if (entry["txid"].get_str() == txid) entries.push_back(entry);
+        }
+    }
+    BOOST_CHECK_EQUAL(entries.size(), 3U);
+    for (const UniValue& entry : entries) {
+        BOOST_CHECK_EQUAL(entry["agent_allotment"].get_str(), allotment);
     }
 }
 
@@ -3501,6 +3875,54 @@ BOOST_FIXTURE_TEST_CASE(RemoveTxs, VaultTxPowTestSetup)
     TestUnloadVault(std::move(vault));
 }
 
+BOOST_FIXTURE_TEST_CASE(abandon_leaves_an_unresolved_descendant, TestChain100Setup)
+{
+    // S0195-A-08: AbandonTransaction refuses a transaction whose stored block
+    // reference is unresolved; a descendant in that state must not be abandoned
+    // through its parent either. Mutation: drop the isBlockUnresolved() guard in
+    // try_updating_state; the child is then marked abandoned.
+    CVault vault{m_node.chain.get(), "", CreateMockableVaultDatabase()};
+    CMutableTransaction parent;
+    parent.vin.emplace_back(Txid::FromUint256(m_rng.rand256()), 0);
+    parent.vout.emplace_back(COIN, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    const CTransactionRef parent_tx{MakeTransactionRef(std::move(parent))};
+    CMutableTransaction child;
+    child.vin.emplace_back(parent_tx->GetHash(), 0);
+    child.vout.emplace_back(COIN, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    const CTransactionRef child_tx{MakeTransactionRef(std::move(child))};
+    LOCK(vault.cs_vault);
+    BOOST_REQUIRE(vault.AddToVault(parent_tx, TxStateInactive{}));
+    BOOST_REQUIRE(vault.AddToVault(child_tx, TxStateInactive{}));
+    vault.mapVault.at(child_tx->GetHash()).m_state = TxStateBlockUnresolved{m_rng.rand256(), 0};
+    BOOST_REQUIRE(vault.AbandonTransaction(parent_tx->GetHash()));
+    BOOST_CHECK(vault.mapVault.at(parent_tx->GetHash()).isAbandoned());
+    BOOST_CHECK(vault.mapVault.at(child_tx->GetHash()).isBlockUnresolved());
+}
+
+BOOST_FIXTURE_TEST_CASE(remove_txs_keeps_a_conflicting_spend, TestChain100Setup)
+{
+    // S0195-A-07: removing one of two transactions that spend the same outpoint
+    // must leave the other's spend record. Mutation: erase by outpoint again;
+    // the outpoint then reads as unspent.
+    CVault vault{m_node.chain.get(), "", CreateMockableVaultDatabase()};
+    const COutPoint shared{Txid::FromUint256(m_rng.rand256()), 0};
+    std::vector<uint256> txids;
+    for (int i = 0; i < 2; ++i) {
+        CMutableTransaction mtx;
+        mtx.vin.emplace_back(shared);
+        mtx.vout.emplace_back(COIN + i, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+        const CTransactionRef tx{MakeTransactionRef(std::move(mtx))};
+        BOOST_REQUIRE(WITH_LOCK(vault.cs_vault, return vault.AddToVault(tx, TxStateInactive{})));
+        txids.push_back(tx->GetHash());
+    }
+    LOCK(vault.cs_vault);
+    BOOST_REQUIRE(vault.IsSpent(shared));
+    std::vector<uint256> remove{txids[0]};
+    BOOST_REQUIRE(vault.RemoveTxs(remove));
+    BOOST_CHECK_EQUAL(vault.mapVault.count(txids[0]), 0u);
+    BOOST_CHECK(vault.IsSpent(shared));
+}
+
 /**
  * Checks a vault invalid state where the inputs (prev-txs) of a new arriving transaction are not marked dirty,
  * while the transaction that spends them exist inside the in-memory vault tx map (not stored on db due a db write failure).
@@ -3814,6 +4236,182 @@ BOOST_FIXTURE_TEST_CASE(far_receive_writes_skipped_addresses_in_one_transaction,
     // 100 more skipped addresses must not cost a single extra commit.
     BOOST_CHECK_EQUAL(far_ahead.commits, near_ahead.commits);
     BOOST_TEST_MESSAGE("commits for 101 skipped: " << near_ahead.commits << ", for 201 skipped: " << far_ahead.commits);
+}
+
+BOOST_FIXTURE_TEST_CASE(coinbase_matures_at_101_confirmations, TestChain100Setup)
+{
+    // F-676 (ruled 2026-11-21): consensus lets a coinbase output be spent at 100 confirmations,
+    // and the vault waits one block more, as Bitcoin Core does. At 100 it is still immature with
+    // 1 block to go; at 101 it is mature and coin selection can spend it.
+    const CTransactionRef first{m_coinbase_txns.front()};
+    const COutPoint first_output{first->GetHash(), 0};
+    const auto check{[&](int depth, int to_go) {
+        std::unique_ptr<CVault> vault{CreateSyncedVault(
+            *m_node.chain,
+            WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()),
+            coinbaseKey)};
+        LOCK(vault->cs_vault);
+        const CVaultTx* wtx{vault->GetVaultTx(first->GetHash())};
+        BOOST_REQUIRE(wtx);
+        BOOST_REQUIRE_EQUAL(vault->GetTxDepthInMainChain(*wtx), depth);
+        BOOST_CHECK_EQUAL(vault->GetTxBlocksToMaturity(*wtx), to_go);
+        BOOST_CHECK_EQUAL(vault->IsTxImmatureCoinBase(*wtx), to_go > 0);
+        const auto coins{AvailableCoins(*vault).All()};
+        const bool selectable{std::any_of(coins.begin(), coins.end(), [&](const COutput& c) { return c.outpoint == first_output; })};
+        BOOST_CHECK_EQUAL(selectable, to_go == 0);
+    }};
+    check(/*depth=*/COINBASE_MATURITY, /*to_go=*/1);
+    CreateAndProcessBlock({}, GetScriptForRawPubKey(coinbaseKey.GetPubKey()));
+    check(/*depth=*/COINBASE_MATURITY + 1, /*to_go=*/0);
+}
+
+BOOST_AUTO_TEST_CASE(last_processed_block_is_absent_before_the_first_block)
+{
+    // S0204-A-02: during -reindex a vault can be attached before the first block connects.
+    // getvaultinfo, getbalances and gettransaction then must leave lastprocessedblock out,
+    // not abort the node on the getters' height assertion.
+    CVault vault{m_node.chain.get(), "", CreateMockableVaultDatabase()};
+    LOCK(vault.cs_vault);
+    UniValue entry{UniValue::VOBJ};
+    AppendLastProcessedBlock(entry, vault);
+    BOOST_CHECK(!entry.exists("lastprocessedblock"));
+
+    vault.SetLastBlockProcessed(7, uint256::ONE);
+    AppendLastProcessedBlock(entry, vault);
+    BOOST_REQUIRE(entry.exists("lastprocessedblock"));
+    BOOST_CHECK_EQUAL(entry["lastprocessedblock"]["height"].getInt<int>(), 7);
+    BOOST_CHECK_EQUAL(entry["lastprocessedblock"]["hash"].get_str(), uint256::ONE.GetHex());
+}
+
+namespace {
+//! A block whose first transaction stands in for the coinbase, as blockDisconnected expects.
+CBlock RevivalTestBlock(const uint256& prev, std::vector<CTransactionRef> txs, uint32_t nonce)
+{
+    CBlock block;
+    block.hashPrevBlock = prev;
+    block.nNonce = nonce;
+    CMutableTransaction coinbase;
+    coinbase.vin.emplace_back(COutPoint{});
+    coinbase.vin.back().scriptSig = CScript{} << nonce;
+    coinbase.vout.emplace_back(0, CScript{} << OP_RETURN);
+    block.vtx.push_back(MakeTransactionRef(coinbase));
+    for (auto& tx : txs) block.vtx.push_back(std::move(tx));
+    return block;
+}
+
+void ConnectRevivalTestBlock(CVault& vault, const CBlock& block, int height)
+{
+    const uint256 hash{block.GetHash()};
+    interfaces::BlockInfo info{hash};
+    info.prev_hash = &block.hashPrevBlock;
+    info.height = height;
+    info.data = &block;
+    info.chain_time_max = std::numeric_limits<unsigned int>::max();
+    vault.blockConnected(info);
+}
+
+void DisconnectRevivalTestBlock(CVault& vault, const CBlock& block, int height)
+{
+    const uint256 hash{block.GetHash()};
+    interfaces::BlockInfo info{hash};
+    info.prev_hash = &block.hashPrevBlock;
+    info.height = height;
+    info.data = &block;
+    vault.blockDisconnected(info);
+}
+} // namespace
+
+BOOST_AUTO_TEST_CASE(revived_conflicting_transactions_count_only_the_latest_set)
+{
+    // F-698: block B1 (T1) is disconnected, then a competing B1' (T2 and T3, which spend the
+    // same coins) is mined and disconnected too. All three are revived and none is abandoned.
+    // Only the set from the most recently disconnected block, T2 and T3, counts as pending,
+    // before and after the vault is written, closed and reopened.
+    const CKey key{GenerateRandomKey()};
+    const CScript mine{GetScriptForDestination(PKHash(key.GetPubKey()))};
+    auto vault{std::make_unique<CVault>(m_node.chain.get(), "", CreateMockableVaultDatabase())};
+    {
+        LOCK(vault->cs_vault);
+        vault->SetVaultFlag(VAULT_FLAG_DESCRIPTORS);
+        vault->SetupDescriptorScriptPubKeyMans();
+        FlatSigningProvider provider;
+        std::string error;
+        auto descs{Parse("combo(" + EncodeSecret(key) + ")", provider, error, /*require_checksum=*/false)};
+        BOOST_REQUIRE_EQUAL(descs.size(), 1U);
+        VaultDescriptor w_desc(std::move(descs.at(0)), 0, 0, 1, 1);
+        BOOST_REQUIRE(vault->AddVaultDescriptor(w_desc, provider, "", false));
+    }
+
+    // F pays the vault two coins from outside, so T1, T2 and T3 are the vault's own spends.
+    CMutableTransaction funding;
+    funding.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+    funding.vout.emplace_back(3 * COIN, mine);
+    funding.vout.emplace_back(5 * COIN, mine);
+    const CTransactionRef f{MakeTransactionRef(funding)};
+    CMutableTransaction spend_both;
+    spend_both.vin.emplace_back(COutPoint{f->GetHash(), 0});
+    spend_both.vin.emplace_back(COutPoint{f->GetHash(), 1});
+    // T1 pays 1 coin outside the vault, so its credit (7) tells it apart from T2 + T3 (8).
+    spend_both.vout.emplace_back(7 * COIN, mine);
+    spend_both.vout.emplace_back(1 * COIN, GetScriptForDestination(PKHash(GenerateRandomKey().GetPubKey())));
+    const CTransactionRef t1{MakeTransactionRef(spend_both)};
+    CMutableTransaction spend_first;
+    spend_first.vin.emplace_back(COutPoint{f->GetHash(), 0});
+    spend_first.vout.emplace_back(3 * COIN, mine);
+    const CTransactionRef t2{MakeTransactionRef(spend_first)};
+    CMutableTransaction spend_second;
+    spend_second.vin.emplace_back(COutPoint{f->GetHash(), 1});
+    spend_second.vout.emplace_back(5 * COIN, mine);
+    const CTransactionRef t3{MakeTransactionRef(spend_second)};
+
+    const CBlock b0{RevivalTestBlock(uint256::ONE, {f}, 0)};
+    const CBlock b1{RevivalTestBlock(b0.GetHash(), {t1}, 1)};
+    const CBlock b1_prime{RevivalTestBlock(b0.GetHash(), {t2, t3}, 2)};
+
+    ConnectRevivalTestBlock(*vault, b0, 1);
+    ConnectRevivalTestBlock(*vault, b1, 2);
+    DisconnectRevivalTestBlock(*vault, b1, 2);
+    ConnectRevivalTestBlock(*vault, b1_prime, 2);
+    DisconnectRevivalTestBlock(*vault, b1_prime, 2);
+
+    const auto revived{[](CVault& w, const CTransactionRef& tx) {
+        LOCK(w.cs_vault);
+        const CVaultTx& wtx{w.mapVault.at(tx->GetHash())};
+        return wtx.isInactive() && !wtx.isAbandoned();
+    }};
+    for (const auto& tx : {t1, t2, t3}) BOOST_REQUIRE(revived(*vault, tx));
+    BOOST_CHECK_EQUAL(GetBalance(*vault).m_mine_untrusted_pending, 8 * COIN);
+
+    // Write, close and reopen: the order was stored, so the same set wins.
+    auto reopened{std::make_unique<CVault>(m_node.chain.get(), "", DuplicateMockDatabase(vault->GetDatabase()))};
+    vault.reset();
+    BOOST_REQUIRE_EQUAL(reopened->LoadVault(), DBErrors::LOAD_OK);
+    for (const auto& tx : {t1, t2, t3}) BOOST_REQUIRE(revived(*reopened, tx));
+    BOOST_CHECK_EQUAL(GetBalance(*reopened).m_mine_untrusted_pending, 8 * COIN);
+    // No counter record: the next order continues from the highest stored one.
+    BOOST_CHECK_EQUAL(WITH_LOCK(reopened->cs_vault, return reopened->m_next_revival_sequence), 3);
+
+    // Abandoning the losing transaction erases its order and changes nothing shown.
+    BOOST_REQUIRE(reopened->AbandonTransaction(t1->GetHash()));
+    BOOST_CHECK(!WITH_LOCK(reopened->cs_vault, return reopened->mapVault.at(t1->GetHash()).GetRevivalSequence()));
+    BOOST_CHECK_EQUAL(GetBalance(*reopened).m_mine_untrusted_pending, 8 * COIN);
+
+    // When B1' is mined again, T2 and T3 count as confirmed coins, as before, and their
+    // order is erased.
+    {
+        LOCK(reopened->cs_vault);
+        reopened->SetLastBlockProcessed(1, b0.GetHash());
+    }
+    ConnectRevivalTestBlock(*reopened, b1_prime, 2);
+    const Balance mined{GetBalance(*reopened)};
+    BOOST_CHECK_EQUAL(mined.m_mine_untrusted_pending, 0);
+    BOOST_CHECK_EQUAL(mined.m_mine_trusted, 8 * COIN);
+    for (const auto& tx : {t2, t3}) {
+        LOCK(reopened->cs_vault);
+        const CVaultTx& wtx{reopened->mapVault.at(tx->GetHash())};
+        BOOST_CHECK(wtx.isConfirmed());
+        BOOST_CHECK(!wtx.GetRevivalSequence());
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

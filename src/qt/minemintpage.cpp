@@ -39,7 +39,7 @@
 namespace {
 QLabel* MakeValueLabel(const QString& object_name)
 {
-    auto* label = new QLabel(QStringLiteral("Not connected"));
+    auto* label = new QLabel(MineMintPage::tr("Not connected"));
     label->setObjectName(object_name);
     label->setProperty("class", QStringLiteral("benchValue"));
     label->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
@@ -92,7 +92,6 @@ MineMintPage::MineMintPage(QWidget* parent)
     intro->setObjectName(QStringLiteral("mineMintEmptyState"));
     intro->setProperty("class", QStringLiteral("benchNote"));
     intro->setWordWrap(true);
-
 
     // A miner with no peers is not a miner that is doing badly, it is a miner
     // building a chain nobody else will ever accept -- and every other reading on
@@ -300,13 +299,12 @@ MineMintPage::MineMintPage(QWidget* parent)
     refreshDeveloperOptions();
 }
 
-void MineMintPage::emitStart()
+void MineMintPage::emitStart(const QString& script, const QString& address)
 {
-    const QString script{payoutScript()};
     if (!script.isEmpty()) {
         Q_EMIT startScriptRequested(script);
     } else {
-        Q_EMIT startRequested(payoutAddress());
+        Q_EMIT startRequested(address);
     }
 }
 
@@ -318,8 +316,12 @@ void MineMintPage::handleStartClicked()
     // rather than to block it or, as before, to do it silently.
     // F-610: where the node never mines alone (main) it waits for a peer's
     // headers, so there is no private chain to confirm.
+    // Read at the click: the warning below is answered later, and the payout it starts is the one shown when the
+    // user pressed Start, not whatever the fields hold by then.
+    const QString script{payoutScript()};
+    const QString address{payoutAddress()};
     if (m_peers != 0 || !m_mines_without_peers) {
-        emitStart();
+        emitStart(script, address);
         return;
     }
     auto* box = new QMessageBox{QMessageBox::Warning, tr("Mine with no peers?"),
@@ -336,8 +338,8 @@ void MineMintPage::handleStartClicked()
     proceed_button->setObjectName(QStringLiteral("isolatedMiningProceedButton"));
     box->setDefaultButton(cancel_button);
     box->setEscapeButton(cancel_button);
-    connect(box, &QMessageBox::finished, this, [this, box, proceed_button] {
-        if (box->clickedButton() == proceed_button) emitStart();
+    connect(box, &QMessageBox::finished, this, [this, box, proceed_button, script, address] {
+        if (box->clickedButton() == proceed_button) emitStart(script, address);
     });
     GUIUtil::ShowModalDialogAsynchronously(box);
 }
@@ -439,11 +441,6 @@ MineMintPage::StatusText MineMintPage::statusText(const interfaces::MiningStatus
         rows.health = QString::fromStdString(s.last_solver_error);
     }
     return rows;
-}
-
-MineMintPage::StatusText MineMintPage::statusTextForTesting(const interfaces::MiningStatus& status)
-{
-    return statusText(status);
 }
 
 void MineMintPage::setStatus(const interfaces::MiningStatus& s)

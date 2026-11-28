@@ -24,10 +24,12 @@
 #include <util/vector.h>
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
 #include <numeric>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 using util::Split;
@@ -506,7 +508,7 @@ public:
             out = ToString();
             return true;
         }
-        // Get the path to the last hardened stup
+        // Get the path to the last hardened step
         KeyOriginInfo origin;
         int k = 0;
         for (; k <= i; ++k) {
@@ -579,7 +581,7 @@ protected:
     const std::string m_name;
 
     //! The sub-descriptor arguments (empty for everything but SH and WSH).
-    //! In doc/descriptors.m this is referred to as SCRIPT expressions sh(SCRIPT)
+    //! In doc/descriptors.md this is referred to as SCRIPT expressions sh(SCRIPT)
     //! and wsh(SCRIPT), and distinct from KEY expressions and ADDR expressions.
     //! Subdescriptors can only ever generate a single script.
     const std::vector<std::unique_ptr<DescriptorImpl>> m_subdescriptor_args;
@@ -1015,7 +1017,7 @@ public:
     {
         std::vector<std::unique_ptr<PubkeyProvider>> providers;
         providers.reserve(m_pubkey_args.size());
-        std::transform(m_pubkey_args.begin(), m_pubkey_args.end(), providers.begin(), [](const std::unique_ptr<PubkeyProvider>& p) { return p->Clone(); });
+        std::transform(m_pubkey_args.begin(), m_pubkey_args.end(), std::back_inserter(providers), [](const std::unique_ptr<PubkeyProvider>& p) { return p->Clone(); });
         return std::make_unique<MultisigDescriptor>(m_threshold, std::move(providers), m_sorted);
     }
 };
@@ -1092,7 +1094,8 @@ public:
     std::optional<int64_t> MaxSatisfactionWeight(bool use_max_sig) const override {
         if (const auto sat_size = m_subdescriptor_args[0]->MaxSatSize(use_max_sig)) {
             if (const auto subscript_size = m_subdescriptor_args[0]->ScriptSize()) {
-                const auto subscript_weight = (1 + *subscript_size) * WITNESS_SCALE_FACTOR;
+                const int64_t push_size = *subscript_size <= 75 ? 1 : *subscript_size <= 255 ? 2 : 3;
+                const auto subscript_weight = (push_size + *subscript_size) * WITNESS_SCALE_FACTOR;
                 return subscript_weight + *sat_size * WITNESS_SCALE_FACTOR;
             }
         }
@@ -1248,7 +1251,7 @@ public:
     {
         std::vector<std::unique_ptr<DescriptorImpl>> subdescs;
         subdescs.reserve(m_subdescriptor_args.size());
-        std::transform(m_subdescriptor_args.begin(), m_subdescriptor_args.end(), subdescs.begin(), [](const std::unique_ptr<DescriptorImpl>& d) { return d->Clone(); });
+        std::transform(m_subdescriptor_args.begin(), m_subdescriptor_args.end(), std::back_inserter(subdescs), [](const std::unique_ptr<DescriptorImpl>& d) { return d->Clone(); });
         return std::make_unique<TRDescriptor>(m_pubkey_args.at(0)->Clone(), std::move(subdescs), m_depths);
     }
 };
@@ -2345,7 +2348,7 @@ std::unique_ptr<DescriptorImpl> InferScript(const CScript& script, ParseScriptCo
 } // namespace
 
 /** Check a descriptor checksum, and update desc to be the checksum-less part. */
-bool CheckChecksum(Span<const char>& sp, bool require_checksum, std::string& error, std::string* out_checksum = nullptr)
+static bool CheckChecksum(Span<const char>& sp, bool require_checksum, std::string& error, std::string* out_checksum = nullptr)
 {
     auto check_split = Split(sp, '#');
     if (check_split.size() > 2) {

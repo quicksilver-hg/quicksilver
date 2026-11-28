@@ -11,9 +11,8 @@
 #include <uint256.h>
 
 #include <chrono>
+#include <cstdint>
 #include <limits>
-#include <map>
-#include <vector>
 
 namespace Consensus {
 
@@ -50,7 +49,7 @@ struct BIP9Deployment {
     /** Timeout/expiry MedianTime for the deployment attempt. */
     int64_t nTimeout{NEVER_ACTIVE};
     /** If lock in occurs, delay activation until at least this block
-     *  height.  Note that activation will only occur on a retarget
+     *  height.  Note that activation will only occur on a BIP9 window
      *  boundary.
      */
     int min_activation_height{0};
@@ -75,35 +74,22 @@ struct BIP9Deployment {
  */
 struct Params {
     uint256 hashGenesisBlock;
-    /**
-     * Hashes of blocks that
-     * - are known to be consensus valid, and
-     * - buried in the chain, and
-     * - fail if the default script verify flags are applied.
-     */
-    std::map<uint256, uint32_t> script_flag_exceptions;
-    /** Block height and hash at which BIP34 becomes active */
+    /** Block height at which BIP34 becomes active */
     int BIP34Height;
-    uint256 BIP34Hash;
     /** Block height at which BIP65 becomes active */
     int BIP65Height;
     /** Block height at which BIP66 becomes active */
     int BIP66Height;
     /** Block height at which CSV (BIP68, BIP112 and BIP113) becomes active */
     int CSVHeight;
-    /** Block height at which Segwit (BIP141, BIP143 and BIP147) becomes active.
-     * Note that segwit v0 script rules are enforced on all blocks except the
-     * BIP 16 exception blocks. */
+    /** Block height at which Segwit (BIP141, BIP143 and BIP147) becomes active. */
     int SegwitHeight;
     /** Don't warn about unknown BIP 9 activations below this height.
      * This prevents us from warning about the CSV and segwit activations. */
     int MinBIP9WarningHeight;
-    /**
-     * Minimum blocks including miner confirmation of the total of 2016 blocks in a retargeting period,
-     * (nPowTargetTimespan / nPowTargetSpacing) which is also used for BIP9 deployments.
-     * Examples: 1916 for 95%, 1512 for testchains.
-     */
+    /** Minimum signaling blocks required for lock-in within a BIP9 window. */
     uint32_t nRuleChangeActivationThreshold;
+    /** Number of blocks in a BIP9 window, independent of the difficulty adjustment interval. */
     uint32_t nMinerConfirmationWindow;
     BIP9Deployment vDeployments[MAX_VERSION_BITS_DEPLOYMENTS];
     /** Proof of work parameters */
@@ -127,7 +113,7 @@ struct Params {
     /** Quicksilver congestion-floor parameters. Public-network values
      *  are Phase 3 calibrated; sandbox keeps smaller windows/targets for fast tests. */
     int nCongestionTargetPermille; //!< target block fullness T, in permille (500 = 0.5)
-    int nCongestionStepDenom;      //!< max per-block step s = 1/denom (8 = 0.125)
+    int nCongestionStepDenom;      //!< max per-block step s = 1/denom
     int nCongestionMaxMultiplier;  //!< m_cap: ceiling on the congestion multiplier
     int nBaseWorkMAWindow;         //!< blocks averaged for base_coupled (difficulty smoothing)
     uint32_t nTxWorkCouplingK;     //!< K: divides MA(blockwork) to set the per-tx base floor
@@ -161,8 +147,8 @@ struct Params {
      *  headline subsidy, distinct from the 1-COIN tail. See doc/design/tail-emission.md. */
     CAmount nInitialSubsidy;
     /** Quicksilver tail emission: perpetual per-block tail subsidy, reached at the end of
-     *  bootstrap and paid forever after (no hard cap; economics §7). FINALIZED: 1 COIN
-     *  (economics §4.1). Coupled to C and K (calibration design §3) — not a free knob. */
+     *  bootstrap and paid forever after. Main and publictest pay 1 COIN per block.
+     *  See doc/design/tail-emission.md. */
     CAmount nTailSubsidy;
     /** Quicksilver tail emission: bootstrap length N in blocks. The ramp spans [0, N);
      *  at height >= N the subsidy is exactly nTailSubsidy. FINALIZED: main/publictest

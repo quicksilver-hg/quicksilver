@@ -8,14 +8,14 @@
 
 #include <interfaces/types.h>       // for BlockRef
 #include <node/types.h>             // for BlockCreateOptions
-#include <primitives/block.h>       // for CBlock, CBlockHeader
+#include <primitives/block.h>       // for CBlock
 #include <primitives/transaction.h> // for CTransactionRef
 #include <stdint.h>                 // for int64_t
 #include <uint256.h>                // for uint256
 #include <util/time.h>              // for MillisecondsDouble
 
 #include <array>    // for std::array (Cuckatoo 42-cycle)
-#include <memory>   // for unique_ptr, shared_ptr
+#include <memory>   // for unique_ptr
 #include <optional> // for optional
 #include <vector>   // for vector
 
@@ -23,8 +23,6 @@ namespace node {
 struct NodeContext;
 } // namespace node
 
-class BlockValidationState;
-class CScript;
 
 namespace interfaces {
 
@@ -98,9 +96,6 @@ public:
      */
     virtual std::unique_ptr<BlockTemplate> createNewBlock(const node::BlockCreateOptions& options = {}) = 0;
 
-    //! Get internal node context. Useful for RPC and testing,
-    //! but not accessible across processes.
-    virtual node::NodeContext* context() { return nullptr; }
 };
 
 //! Return implementation of Mining interface.

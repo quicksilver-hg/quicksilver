@@ -20,6 +20,7 @@
 // half lives in util/process/contained_child.cpp, where bundled Tor uses the
 // same code, so the two callers cannot drift the way the two platforms did.
 #include <crypto/cuckatoo/gpu_solver.h>
+#include <crypto/cuckatoo/gpu/opencl_loader.h>
 
 #include <util/process/contained_child.h>
 
@@ -88,17 +89,9 @@ void dispatch_progress_lines(std::string& pending, const char* data, size_t len,
     pending.erase(0, pos);
 }
 
-// No-progress watchdog window, seconds. Calibrated on the rig (SP1b Task 7):
-// a single solve attempt on a P104-100 (sm_61) took ~3.4s at the then-current
-// E29, and the graphics helper emits one progress= heartbeat per attempt, so the max
-// no-progress gap under healthy operation was ~3.44s. The shipped size is now
-// E28, which is ~2x faster per graph, so the gap shrinks and the margin only
-// widens — the 30s window stays valid without recalibration. 30s gave ~8.7x
-// margin over the E29 cadence —
-// tolerant of thermal throttling, multi-card contention, and slower single
-// attempts on weaker cards — while still bounding a genuine hang to 30s
-// (blocks are 5 min apart). See research/tier0-pow/tools/calibration/sp1b-gpu-parity/report.md.
-// -cuckatoosolvertimeout (init sets CUCKATOO_GPU_TIMEOUT) overrides at runtime.
+// The bundled helper sends progress at most once per second when it can report
+// between attempts. The watchdog allows for slow graphs and uses the timeout
+// selected by -cuckatoosolvertimeout through CUCKATOO_GPU_TIMEOUT.
 // The solver's argument vector, exactly as gpu_solver.h states the contract.
 // Built once, in the shared part of this file, so the two branches cannot drift
 // on what the solver is actually asked to do -- and so that neither of them has
@@ -120,9 +113,9 @@ int no_progress_timeout_sec() {
     if (t && t[0]) {
         char* end{nullptr};
         const long v = std::strtol(t, &end, 10);
-        if (end != t && *end == '\0') return static_cast<int>(std::clamp(v, 1L, 86400L));
+        if (end != t && *end == '\0') return static_cast<int>(std::clamp<long>(v, kSolverTimeoutMinSec, kSolverTimeoutMaxSec));
     }
-    return 30;
+    return kSolverTimeoutDefaultSec;
 }
 } // namespace
 
@@ -133,7 +126,7 @@ bool GpuHelperConfigured(uint8_t edgebits)
     return GpuHelperFor(edgebits).has_value() && DeviceChoiceFromEnv().mode != DeviceChoice::Mode::kCpuOnly;
 }
 
-std::optional<std::string> SolverFault(GpuSolveStatus status, bool cpu_fallback)
+std::optional<std::string> SolverFault(GpuSolveStatus status, bool cpu_fallback, std::string_view cpu_option)
 {
     switch (status) {
     case GpuSolveStatus::kSolved:
@@ -142,7 +135,7 @@ std::optional<std::string> SolverFault(GpuSolveStatus status, bool cpu_fallback)
         return std::nullopt;
     case GpuSolveStatus::kNoSolver:
         if (cpu_fallback) return std::nullopt;
-        return "No graphics card is in use; install the quicksilver-gpu package, set -cuckatoodevice, or allow processor mining with -allowcpumining";
+        return "No graphics card is in use; install the quicksilver-gpu package, set -cuckatoodevice, or allow processor mining with " + std::string{cpu_option};
     case GpuSolveStatus::kNoGpuDevice:
         return "No usable graphics card was found; check the card's OpenCL driver with clinfo, and see the debug log for the helper's device list";
     case GpuSolveStatus::kDeviceFault:
@@ -300,8 +293,8 @@ bool GpuSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
         // survives the kill: one we killed reads -1 (POSIX) or 1 (Windows), never
         // 4 or 5, so either of those is the helper's own report of a dead card.
         const int exit_code = child->Wait();
-        if (exit_code == 4) { report(GpuSolveStatus::kNoGpuDevice); return false; }
-        if (exit_code == 5) { report(GpuSolveStatus::kDeviceFault); return false; }
+        if (exit_code == qsgpu::kExitNoDevice) { report(GpuSolveStatus::kNoGpuDevice); return false; }
+        if (exit_code == qsgpu::kExitDeviceFault) { report(GpuSolveStatus::kDeviceFault); return false; }
         report(cancel && cancel() ? GpuSolveStatus::kCancelled : GpuSolveStatus::kTimedOut);
         return false;
     }
@@ -310,16 +303,27 @@ bool GpuSolveBytes(const unsigned char* prepow, size_t len, uint8_t edgebits,
     // exit-code block at the top of the graphics helper. Without them a dead card is
     // byte-identical to an exhausted nonce window. Wait() reports -1 for a child
     // that did not exit normally, which lands on kSolverError with the rest.
-    const int exit_code = child->Wait();
-    if (exit_code == 4) { report(GpuSolveStatus::kNoGpuDevice); return false; }
-    if (exit_code == 5) { report(GpuSolveStatus::kDeviceFault); return false; }
+    // The killed branch above can Wait() as it is: the group has been killed. Here
+    // the child only closed its stdout, and one that keeps running after that would
+    // hang this miner thread, and node shutdown with it, so the reap is bounded.
+    const int exit_code = ReapClosedHelper(*child);
+    if (exit_code == qsgpu::kExitNoDevice) { report(GpuSolveStatus::kNoGpuDevice); return false; }
+    if (exit_code == qsgpu::kExitDeviceFault) { report(GpuSolveStatus::kDeviceFault); return false; }
     if (exit_code != 0) { report(GpuSolveStatus::kSolverError); return false; }
     if (!parse_solver_output(acc, out_nonce, out)) { report(GpuSolveStatus::kNoCycle); return false; }
     // The helper was given [start_nonce, start_nonce + max_attempts). A nonce
     // outside it is not one this call handed out: with several cards it may be
     // another card's, and the caller's arithmetic on how much of the range was
     // used assumes it lies inside. A helper that reports one broke its contract.
-    if (out_nonce < start_nonce || uint64_t{out_nonce} - start_nonce >= max_attempts) {
+    // The distance is taken modulo 2^32, as the helper counts its nonce: a window
+    // that crosses 2^32 wraps there, so its nonces after the wrap are inside it.
+    // MultiDeviceSolveBytes never hands out such a window; a direct caller may.
+    // Counted in 64 bits so no unsigned arithmetic wraps: CI's integer sanitizer
+    // reports every wrap in first-party code, intended or not.
+    const uint64_t distance{out_nonce >= start_nonce
+        ? uint64_t{out_nonce} - start_nonce
+        : (uint64_t{1} << 32) + out_nonce - start_nonce};
+    if (distance >= max_attempts) {
         report(GpuSolveStatus::kSolverError);
         return false;
     }

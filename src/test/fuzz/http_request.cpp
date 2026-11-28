@@ -59,8 +59,18 @@ FUZZ_TARGET(http_request)
     (void)http_request.GetHeader(header);
     (void)http_request.WriteHeader(header, fuzzed_data_provider.ConsumeRandomLengthString(16));
     (void)http_request.GetHeader(header);
+    // S0395-C-02: supply a body in the request's input buffer, as libevent does
+    // for a received request, so ReadBody copies and drains real bytes.
+    const std::vector<uint8_t> body_bytes = ConsumeRandomLengthByteVector(fuzzed_data_provider, 1024);
+    if (!body_bytes.empty()) {
+        evbuffer* input = evhttp_request_get_input_buffer(evreq);
+        assert(input != nullptr);
+        assert(evbuffer_add(input, body_bytes.data(), body_bytes.size()) == 0);
+    }
     const std::string body = http_request.ReadBody();
-    assert(body.empty());
+    assert(body == std::string(body_bytes.begin(), body_bytes.end()));
+    // The body is drained: a second read returns nothing.
+    assert(http_request.ReadBody().empty());
     const CService service = http_request.GetPeer();
     assert(service.ToStringAddrPort() == "[::]:0");
 

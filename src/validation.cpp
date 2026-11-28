@@ -21,7 +21,6 @@
 #include <cuckoocache.h>
 #include <flatfile.h>
 #include <hash.h>
-#include <kernel/chain.h>
 #include <kernel/chainparams.h>
 #include <kernel/disconnected_transactions.h>
 #include <kernel/relaypool_entry.h>
@@ -51,7 +50,6 @@
 #include <util/fs.h>
 #include <util/fs_helpers.h>
 #include <util/hasher.h>
-#include <util/moneystr.h>
 #include <util/signalinterrupt.h>
 #include <util/strencodings.h>
 #include <util/string.h>
@@ -74,7 +72,6 @@
 
 using kernel::Notifications;
 
-using fsbridge::FopenFn;
 using node::BlockManager;
 using node::BlockMap;
 using node::CBlockIndexHeightOnlyComparator;
@@ -260,7 +257,7 @@ static void LimitRelayPoolSize(CTxRelayPool& pool, CCoinsViewCache& coins_cache)
     AssertLockHeld(pool.cs);
     int expired = pool.Expire(GetTime<std::chrono::seconds>() - pool.m_opts.expiry);
     if (expired != 0) {
-        LogDebug(HgLog::RELAYPOOL, "Expired %i transactions from the memory pool\n", expired);
+        LogDebug(HgLog::RELAYPOOL, "Expired %i transactions from the relay pool\n", expired);
     }
 
     std::vector<COutPoint> vNoSpendsRemaining;
@@ -289,7 +286,7 @@ void Chainstate::MaybeUpdateRelayPoolForReorg(
         while (it != queuedTx.rend()) {
             // ignore validation errors in resurrected transactions
             if (!fAddToRelayPool || (*it)->IsCoinBase() ||
-                AcceptToMemoryPool(*this, *it, GetTime(),
+                AcceptToMemoryPool(*this, *it, GetTime<std::chrono::seconds>().count(),
                     /*bypass_limits=*/true, /*test_accept=*/false).m_result_type !=
                         RelayPoolAcceptResult::ResultType::VALID) {
                 // If the transaction doesn't make it in to the relaypool, remove any
@@ -424,7 +421,6 @@ public:
     // We put the arguments we're handed into a struct, so we can pass them
     // around easier.
     struct ATMPArgs {
-        const CChainParams& m_chainparams;
         const int64_t m_accept_time;
         const bool m_bypass_limits;
         /*
@@ -452,11 +448,10 @@ public:
         const bool m_allow_carveouts;
 
         /** Parameters for single transaction relaypool validation. */
-        static ATMPArgs SingleAccept(const CChainParams& chainparams, int64_t accept_time,
+        static ATMPArgs SingleAccept(int64_t accept_time,
                                      bool bypass_limits, std::vector<COutPoint>& coins_to_uncache,
                                      bool test_accept) {
-            return ATMPArgs{/* m_chainparams */ chainparams,
-                            /* m_accept_time */ accept_time,
+            return ATMPArgs{/* m_accept_time */ accept_time,
                             /* m_bypass_limits */ bypass_limits,
                             /* m_coins_to_uncache */ coins_to_uncache,
                             /* m_test_accept */ test_accept,
@@ -468,10 +463,9 @@ public:
         }
 
         /** Parameters for test package relaypool validation through testrelaypoolaccept. */
-        static ATMPArgs PackageTestAccept(const CChainParams& chainparams, int64_t accept_time,
+        static ATMPArgs PackageTestAccept(int64_t accept_time,
                                           std::vector<COutPoint>& coins_to_uncache) {
-            return ATMPArgs{/* m_chainparams */ chainparams,
-                            /* m_accept_time */ accept_time,
+            return ATMPArgs{/* m_accept_time */ accept_time,
                             /* m_bypass_limits */ false,
                             /* m_coins_to_uncache */ coins_to_uncache,
                             /* m_test_accept */ true,
@@ -483,10 +477,9 @@ public:
         }
 
         /** Parameters for child-with-unconfirmed-parents package validation. */
-        static ATMPArgs PackageChildWithParents(const CChainParams& chainparams, int64_t accept_time,
+        static ATMPArgs PackageChildWithParents(int64_t accept_time,
                                                 std::vector<COutPoint>& coins_to_uncache) {
-            return ATMPArgs{/* m_chainparams */ chainparams,
-                            /* m_accept_time */ accept_time,
+            return ATMPArgs{/* m_accept_time */ accept_time,
                             /* m_bypass_limits */ false,
                             /* m_coins_to_uncache */ coins_to_uncache,
                             /* m_test_accept */ false,
@@ -499,8 +492,7 @@ public:
 
         /** Parameters for a single transaction within a package. */
         static ATMPArgs SingleInPackageAccept(const ATMPArgs& package_args) {
-            return ATMPArgs{/* m_chainparams */ package_args.m_chainparams,
-                            /* m_accept_time */ package_args.m_accept_time,
+            return ATMPArgs{/* m_accept_time */ package_args.m_accept_time,
                             /* m_bypass_limits */ false,
                             /* m_coins_to_uncache */ package_args.m_coins_to_uncache,
                             /* m_test_accept */ package_args.m_test_accept,
@@ -514,8 +506,7 @@ public:
     private:
         // Private ctor to avoid exposing details to clients and allowing the possibility of
         // mixing up the order of the arguments. Use static functions above instead.
-        ATMPArgs(const CChainParams& chainparams,
-                 int64_t accept_time,
+        ATMPArgs(int64_t accept_time,
                  bool bypass_limits,
                  std::vector<COutPoint>& coins_to_uncache,
                  bool test_accept,
@@ -523,8 +514,7 @@ public:
                  bool allow_sibling_eviction,
                  bool package_submission,
                  bool allow_carveouts)
-            : m_chainparams{chainparams},
-              m_accept_time{accept_time},
+            : m_accept_time{accept_time},
               m_bypass_limits{bypass_limits},
               m_coins_to_uncache{coins_to_uncache},
               m_test_accept{test_accept},
@@ -1037,8 +1027,7 @@ bool RelayPoolAccept::ReplacementChecks(Workspace& ws)
     // #6: replace-by-surplus-work (BIP125 Rule 6 analog). The replacement must out-rank
     // every direct conflict in surplus-work rate (surplus/vsize) — the same 5c-2
     // by_txwork_rate key used for eviction/mining, so replacement and eviction agree.
-    const double replacement_work_rate = ws.m_txwork_surplus.getdouble() / ws.m_vsize;
-    if (const auto err_string{PaysMoreWorkThanConflicts(ws.m_iters_conflicting, replacement_work_rate, hash)}) {
+    if (const auto err_string{PaysMoreWorkThanConflicts(ws.m_iters_conflicting, ws.m_txwork_surplus, ws.m_vsize, hash)}) {
         // TX_RECONSIDERABLE because validating in a package may change the result.
         return state.Invalid(TxValidationResult::TX_RECONSIDERABLE,
                              strprintf("insufficient surplus work%s", ws.m_sibling_eviction ? " (including sibling eviction)" : ""), *err_string);
@@ -1676,12 +1665,11 @@ RelayPoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, const CT
                                        int64_t accept_time, bool bypass_limits, bool test_accept)
 {
     AssertLockHeld(::cs_main);
-    const CChainParams& chainparams{active_chainstate.m_chainman.GetParams()};
     assert(active_chainstate.GetRelayPool() != nullptr);
     CTxRelayPool& pool{*active_chainstate.GetRelayPool()};
 
     std::vector<COutPoint> coins_to_uncache;
-    auto args = RelayPoolAccept::ATMPArgs::SingleAccept(chainparams, accept_time, bypass_limits, coins_to_uncache, test_accept);
+    auto args = RelayPoolAccept::ATMPArgs::SingleAccept(accept_time, bypass_limits, coins_to_uncache, test_accept);
     RelayPoolAcceptResult result = RelayPoolAccept(pool, active_chainstate).AcceptSingleTransaction(tx, args);
     if (result.m_result_type != RelayPoolAcceptResult::ResultType::VALID) {
         // Remove coins that were not present in the coins cache before calling
@@ -1710,14 +1698,13 @@ PackageRelayPoolAcceptResult ProcessNewPackage(Chainstate& active_chainstate, CT
     assert(std::all_of(package.cbegin(), package.cend(), [](const auto& tx){return tx != nullptr;}));
 
     std::vector<COutPoint> coins_to_uncache;
-    const CChainParams& chainparams = active_chainstate.m_chainman.GetParams();
     auto result = [&]() EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
         AssertLockHeld(cs_main);
         if (test_accept) {
-            auto args = RelayPoolAccept::ATMPArgs::PackageTestAccept(chainparams, GetTime(), coins_to_uncache);
+            auto args = RelayPoolAccept::ATMPArgs::PackageTestAccept(GetTime<std::chrono::seconds>().count(), coins_to_uncache);
             return RelayPoolAccept(pool, active_chainstate).AcceptMultipleTransactions(package, args);
         } else {
-            auto args = RelayPoolAccept::ATMPArgs::PackageChildWithParents(chainparams, GetTime(), coins_to_uncache);
+            auto args = RelayPoolAccept::ATMPArgs::PackageChildWithParents(GetTime<std::chrono::seconds>().count(), coins_to_uncache);
             return RelayPoolAccept(pool, active_chainstate).AcceptPackage(package, args);
         }
     }();
@@ -2162,21 +2149,8 @@ public:
 
 static unsigned int GetBlockScriptFlags(const CBlockIndex& block_index, const ChainstateManager& chainman)
 {
-    const Consensus::Params& consensusparams = chainman.GetConsensus();
-
-    // BIP16 didn't become active until Apr 1 2012 (on mainnet, and
-    // retroactively applied to public test networks)
-    // However, only one historical block violated the P2SH rules (on both
-    // mainnet and public test networks).
-    // Similarly, only one historical block violated the TAPROOT rules on
-    // mainnet.
-    // For simplicity, always leave P2SH+WITNESS+TAPROOT on except for the two
-    // violating blocks.
+    // Quicksilver enforces P2SH, witness and Taproot on every block.
     uint32_t flags{SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_TAPROOT};
-    const auto it{consensusparams.script_flag_exceptions.find(*Assert(block_index.phashBlock))};
-    if (it != consensusparams.script_flag_exceptions.end()) {
-        flags = it->second;
-    }
 
     // Enforce the DERSIG (BIP66) rule
     if (DeploymentActiveAt(block_index, chainman, Consensus::DEPLOYMENT_DERSIG)) {
@@ -4293,7 +4267,7 @@ RelayPoolAcceptResult ChainstateManager::ProcessTransaction(const CTransactionRe
         state.Invalid(TxValidationResult::TX_NO_RELAYPOOL, "no-relaypool");
         return RelayPoolAcceptResult::Failure(state);
     }
-    auto result = AcceptToMemoryPool(active_chainstate, tx, GetTime(), /*bypass_limits=*/ false, test_accept);
+    auto result = AcceptToMemoryPool(active_chainstate, tx, GetTime<std::chrono::seconds>().count(), /*bypass_limits=*/ false, test_accept);
     active_chainstate.GetRelayPool()->check(active_chainstate.CoinsTip(), active_chainstate.m_chain.Height() + 1);
     return result;
 }
@@ -5217,8 +5191,8 @@ double ChainstateManager::GuessVerificationProgress(const CBlockIndex* pindex) c
         return 0.0;
     }
 
-    // GetTime() honors SetMockTime. time() does not, so a test cannot pin this estimate (F-425).
-    int64_t nNow = GetTime();
+    // Use the mockable clock so tests can pin this estimate (F-425).
+    int64_t nNow = GetTime<std::chrono::seconds>().count();
 
     double fTxTotal;
 

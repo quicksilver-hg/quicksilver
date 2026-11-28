@@ -261,7 +261,10 @@ bool CoinStatsIndex::CustomAppend(const interfaces::BlockInfo& block)
     db_it.Seek(key);
 
     for (int height = start_height; height <= stop_height; ++height) {
-        if (!db_it.GetKey(key) || key.height != height) {
+        // An iterator that stopped on an I/O or corruption error is not "no more keys":
+        // CheckStatus() throws for it, as the chainstate scans do (F-634).
+        if (!db_it.Valid()) db_it.CheckStatus();
+        if (!db_it.Valid() || !db_it.GetKey(key) || key.height != height) {
             LogError(HgLog::SCAN, "%s: unexpected key in %s: expected (%c, %d)\n",
                          __func__, index_name, DB_BLOCK_HEIGHT, height);
             return false;
@@ -354,6 +357,7 @@ std::optional<CCoinsStats> CoinStatsIndex::LookUpStats(const CBlockIndex& block_
     stats.nBogoSize = entry.bogo_size;
     stats.total_amount = entry.total_amount;
     stats.total_subsidy = entry.total_subsidy;
+    stats.total_mint_allowance = entry.total_mint_allowance;
     stats.total_unspendable_amount = entry.total_unspendable_amount;
     stats.total_prevout_spent_amount = entry.total_prevout_spent_amount;
     stats.total_new_outputs_ex_coinbase_amount = entry.total_new_outputs_ex_coinbase_amount;

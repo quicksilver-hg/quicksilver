@@ -44,7 +44,7 @@ private:
     std::condition_variable m_master_cv;
 
     //! The queue of elements to be processed.
-    //! As the order of booleans doesn't matter, it is used as a LIFO (stack)
+    //! Workers take checks from the back of the queue.
     std::vector<T> queue GUARDED_BY(m_mutex);
 
     //! The number of workers (including the master) that are idle.
@@ -156,10 +156,8 @@ public:
             // renames the thread, which is why the worker no longer calls
             // ThreadRename itself.
             //
-            // Capture the name in this lambda rather than passing a strprintf
-            // temporary as a string_view argument to std::thread: TraceThread
-            // takes string_view, and the temporary would dangle once
-            // emplace_back returns.
+            // Construct the name in the worker. The temporary string lives
+            // until the synchronous TraceThread call returns.
             m_worker_threads.emplace_back([this, n] {
                 util::TraceThread(strprintf("scriptch.%i", n), [this] {
                     Loop(false /* worker thread */);

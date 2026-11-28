@@ -58,8 +58,7 @@ static UniValue FinishTransaction(const std::shared_ptr<CVault> pvault, const Un
     // Make a blank psqt
     PartiallySignedQuicksilverTransaction psqtx(rawTx);
 
-    // First fill transaction with our data without signing,
-    // so external signers are not asked to sign more than once.
+    // First fill transaction with our data without signing, then sign.
     bool complete;
     pvault->FillPSQT(psqtx, complete, SIGHASH_DEFAULT, /*sign=*/false, /*bip32derivs=*/true);
     const auto err{pvault->FillPSQT(psqtx, complete, SIGHASH_DEFAULT, /*sign=*/true, /*bip32derivs=*/false)};
@@ -1043,6 +1042,7 @@ RPCHelpMan sendall()
             // Scoped: everything that reads vault state runs under the lock, which is
             // then released before FinishTransaction grinds the proof-of-work. It used
             // to stay held across the grind, stalling the whole vault for minutes.
+            std::vector<COutPoint> newly_locked;
             {
             LOCK(pvault->cs_vault);
 
@@ -1118,12 +1118,22 @@ RPCHelpMan sendall()
             const bool lock_unspents{options.exists("lock_unspents") ? options["lock_unspents"].get_bool() : false};
             if (lock_unspents) {
                 for (const CTxIn& txin : rawTx.vin) {
+                    if (pvault->IsLockedCoin(txin.prevout)) continue;
                     pvault->LockCoin(txin.prevout);
+                    newly_locked.push_back(txin.prevout);
                 }
             }
             } // cs_vault released: FinishTransaction below grinds a proof-of-work.
 
-            return FinishTransaction(pvault, options, rawTx);
+            // The inputs stay locked across the grind so nothing else selects them,
+            // but a failed finish must not leave them locked (S0202-A-03).
+            try {
+                return FinishTransaction(pvault, options, rawTx);
+            } catch (...) {
+                LOCK(pvault->cs_vault);
+                for (const COutPoint& outpoint : newly_locked) pvault->UnlockCoin(outpoint);
+                throw;
+            }
         }
     };
 }

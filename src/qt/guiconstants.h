@@ -53,7 +53,8 @@ static const int TOOLTIP_WRAP_THRESHOLD = 80;
 /* One gigabyte (GB) in bytes */
 static constexpr uint64_t GB_BYTES{1000000000};
 
-// Default prune target displayed in GUI.
-static constexpr int DEFAULT_PRUNE_TARGET_GB{2};
+// Default prune target displayed in GUI. 3 GB (2,861 MiB) is below the 2,956 MiB
+// block-file floor (MIN_DISK_SPACE_FOR_BLOCK_FILES), so 4 (owner, 2026-11-22).
+static constexpr int DEFAULT_PRUNE_TARGET_GB{4};
 
 #endif // QUICKSILVER_QT_GUICONSTANTS_H

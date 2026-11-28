@@ -8,6 +8,11 @@
 #include <qt/guiutil.h>
 #include <qt/intro.h>
 
+#include <chainparams.h>
+#include <chainparamsbase.h>
+#include <common/args.h>
+#include <univalue.h>
+#include <util/chaintype.h>
 #include <util/fs.h>
 
 #include <fstream>
@@ -16,11 +21,20 @@
 #include <QDialogButtonBox>
 #include <QPushButton>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QLabel>
+#include <QMessageBox>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QSpinBox>
 #include <QString>
 #include <QTemporaryDir>
+#include <QTimer>
+
+#ifndef WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 //! The first-run walk found both of these live on the first screen of a clean install.
 void IntroTests::explanationLeavesNoPlaceholderAndNoInheritedYear()
@@ -80,14 +94,19 @@ void IntroTests::explanationDoesNotPromiseADownloadOfHistoryThatMayNotExist()
     QVERIFY(second.contains(QStringLiteral("hardware problems")));
     QVERIFY(!second.contains(QRegularExpression(QStringLiteral("%[0-9]"))));
 
+    // The pruning texts below describe the ticked box. Since F-705 the box starts unticked
+    // (a new desktop keeps the full chain), so tick it first; the texts are unchanged.
+    QCheckBox* intro_prune = intro.findChild<QCheckBox*>(QStringLiteral("prune"));
+    QVERIFY(intro_prune);
+    intro_prune->setChecked(true);
     QLabel* pruning = intro.findChild<QLabel*>(QStringLiteral("lblExplanation3"));
     QVERIFY(pruning);
     const QString pruning_text = pruning->text();
     // F-113 asked that the retained split be spelled out. F-601 (owner, 2026-11-12):
-    // at 1 / 1 the default 2 GB limit is larger than a year of block data, so the total
+    // at 1 / 1 the default limit (4 GB since the owner's 2026-11-22 ruling, 3 GB under F-703) is larger than a year of block data, so the total
     // is the smaller of the two plus the chain state, and the old "processed volume"
     // sentence is no longer true.
-    QCOMPARE(pruning_text, QStringLiteral("With the 2 GB limit, the oldest blocks are deleted after validation once block data passes 2 GB. Expect about 2 GB on disk in all, including an estimated 1 GB of chain state."));
+    QCOMPARE(pruning_text, QStringLiteral("With the 4 GB limit, the oldest blocks are deleted after validation once block data passes 4 GB. Expect about 2 GB on disk in all, including an estimated 1 GB of chain state."));
     QVERIFY(!pruning_text.contains(QRegularExpression(QStringLiteral("%[0-9]"))));
 
     // The storage panel carried the same promise in shorter form.
@@ -99,9 +118,12 @@ void IntroTests::explanationDoesNotPromiseADownloadOfHistoryThatMayNotExist()
 
     // A limit below a year of block data: the limit plus the chain state.
     Intro larger(nullptr, /*blockchain_size_gb=*/5, /*chain_state_size_gb=*/1);
+    QCheckBox* larger_prune = larger.findChild<QCheckBox*>(QStringLiteral("prune"));
+    QVERIFY(larger_prune);
+    larger_prune->setChecked(true);
     QCOMPARE(larger.findChild<QLabel*>(QStringLiteral("lblExplanation3"))->text(),
-             QStringLiteral("With the 2 GB limit, the oldest blocks are deleted after validation once block data passes 2 GB. Expect about 3 GB on disk in all, including an estimated 1 GB of chain state."));
-    QVERIFY(larger.findChild<QLabel*>(QStringLiteral("sizeWarningLabel"))->text().contains(QStringLiteral("An estimated 3 GB of data will be stored in this directory.")));
+             QStringLiteral("With the 4 GB limit, the oldest blocks are deleted after validation once block data passes 4 GB. Expect about 5 GB on disk in all, including an estimated 1 GB of chain state."));
+    QVERIFY(larger.findChild<QLabel*>(QStringLiteral("sizeWarningLabel"))->text().contains(QStringLiteral("An estimated 5 GB of data will be stored in this directory.")));
 }
 
 void IntroTests::pruneSuffixReadsGrammaticallyWithNoCatalogue()
@@ -118,9 +140,11 @@ void IntroTests::pruneSuffixReadsGrammaticallyWithNoCatalogue()
     QVERIFY(text.contains(QStringLiteral("day")));
 
     // F-601 B5a (owner, 2026-11-12): the reach is derived from the ruled figure, the
-    // limit divided by a year of block data: 2 GB / 1 GB a year = 730 days. It used to
+    // limit divided by a year of block data: 4 GB / 1 GB a year = 1460 days (1095 at the
+    // 3 GB default of F-703, 730 at the 2 GB default before it; 4 GB since the owner's
+    // 2026-11-22 ruling). It used to
     // come from a fixed full-traffic block size and read "5 days".
-    QCOMPARE(text, QStringLiteral("(sufficient to restore backups 730 days old)"));
+    QCOMPARE(text, QStringLiteral("(sufficient to restore backups 1460 days old)"));
 }
 
 //! First-run walk. The free-space line sits directly under the data-directory chooser on
@@ -223,9 +247,9 @@ void IntroTests::freeSpaceStatusCodesAreOkThenError()
 //! F-123. The dialog is the desktop's first-run experience, not a data directory picker,
 //! so its trigger has to be "has this desktop ever been set up", not "does some directory
 //! exist". The old condition lost the welcome screen, the storage figures, the data
-//! directory choice and -- because no prune setting is then written at all -- the pruning
-//! default that doc/design/chain-storage.md section 3 requires an operator to be shown,
-//! silently leaving them archival. It reproduced on the documented path: getting-started.md
+//! directory choice and -- because no prune setting is then written at all -- the storage
+//! choice that doc/design/chain-storage.md section 3 requires an operator to be shown,
+//! silently leaving them archival without having seen what that costs. It reproduced on the documented path: getting-started.md
 //! leads with quicksilver-daemon, which creates the directory.
 void IntroTests::datadirExistenceIsNotTheFirstRunQuestion()
 {
@@ -310,21 +334,34 @@ void IntroTests::pruneChoiceIsWithheldFromADataDirThatAlreadyHoldsAChain()
     QVERIFY(prune_gb);
     QVERIFY(prune_suffix);
     QVERIFY(existing_chain);
+    const auto* buttons = intro.findChild<QDialogButtonBox*>(QStringLiteral("buttonBox"));
+    QVERIFY(buttons);
+    const auto* ok = buttons->button(QDialogButtonBox::Ok);
+    QVERIFY(ok);
 
-    // A directory with no chain in it: the choice is offered, and it is the pruning
-    // default chain-storage.md section 3 settled.
+    // A directory with no chain in it: the choice is offered, and it starts at the default
+    // chain-storage.md section 3 settles. F-705 (owner, 2026-11-21) reversed that default:
+    // a new desktop keeps the full chain, so the box starts unticked and the dialog writes
+    // an explicit "no pruning" (0) rather than leaving the setting unwritten.
     intro.setDataDirectory(GUIUtil::PathToQString(fresh));
+    QTRY_VERIFY(ok->isEnabled());
     QVERIFY(!prune->isHidden());
     QVERIFY(!prune_gb->isHidden());
     QVERIFY(!prune_suffix->isHidden());
     QVERIFY(existing_chain->isHidden());
-    QVERIFY(prune->isChecked());
+    QVERIFY(!prune->isChecked());
     QVERIFY(intro.getPruneMiB().has_value());
-    QVERIFY(*intro.getPruneMiB() > 0);
+    QCOMPARE(*intro.getPruneMiB(), int64_t{0});
+    // Pruning stays one tick away, at the default target: 4 GB = 4e9 bytes = 3814 MiB (owner,
+    // 2026-11-22; it was 3 GB = 2861 MiB under F-703, below the 2,956 MiB floor).
+    prune->setChecked(true);
+    QCOMPARE(*intro.getPruneMiB(), int64_t{3814});
+    prune->setChecked(false);
 
     // Point it at a directory that already holds a chain: the control goes away and
     // nothing is returned to write.
     intro.setDataDirectory(GUIUtil::PathToQString(with_chain));
+    QTRY_VERIFY(ok->isEnabled());
     QVERIFY(prune->isHidden());
     QVERIFY(prune_gb->isHidden());
     QVERIFY(prune_suffix->isHidden());
@@ -339,7 +376,271 @@ void IntroTests::pruneChoiceIsWithheldFromADataDirThatAlreadyHoldsAChain()
 
     // And back again, so the withholding tracks the selection rather than latching.
     intro.setDataDirectory(GUIUtil::PathToQString(fresh));
+    QTRY_VERIFY(ok->isEnabled());
     QVERIFY(!prune->isHidden());
     QVERIFY(existing_chain->isHidden());
     QVERIFY(intro.getPruneMiB().has_value());
+}
+
+void IntroTests::pruneChoiceWaitsForTheLatestDirectoryCheck()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const fs::path root{GUIUtil::QStringToPath(temp.path())};
+    QVERIFY(fs::create_directories(root / "existing" / "blocks"));
+
+    Intro intro(nullptr, 128, 26);
+    const auto* prune = intro.findChild<QCheckBox*>(QStringLiteral("prune"));
+    const auto* size = intro.findChild<QSpinBox*>(QStringLiteral("pruneGB"));
+    const auto* buttons = intro.findChild<QDialogButtonBox*>(QStringLiteral("buttonBox"));
+    QVERIFY(prune && size && buttons);
+    const auto* ok = buttons->button(QDialogButtonBox::Ok);
+    QVERIFY(ok);
+
+    intro.setDataDirectory(GUIUtil::PathToQString(root / "existing"));
+    intro.setDataDirectory(GUIUtil::PathToQString(root / "fresh"));
+    QVERIFY(prune->isHidden());
+    QVERIFY(size->isHidden());
+    QVERIFY(!ok->isEnabled());
+    QTRY_VERIFY(ok->isEnabled());
+    QVERIFY(!prune->isHidden());
+    QVERIFY(!size->isHidden());
+}
+
+void IntroTests::vaultFolderFailureDoesNotRejectNewDataDirectory()
+{
+#ifdef WIN32
+    QSKIP("Requires POSIX directory permissions.");
+#else
+    if (geteuid() == 0) QSKIP("Requires a user subject to directory permissions.");
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const fs::path fresh = GUIUtil::QStringToPath(temp.path()) / "fresh";
+
+    QSettings settings;
+    const QVariant saved = settings.value("strDataDir");
+    const QVariant saved_reset = settings.value("fReset");
+    settings.setValue("strDataDir", GUIUtil::PathToQString(fresh));
+    settings.sync();
+    const auto saved_datadir = gArgs.GetArg("-datadir");
+    gArgs.ForceSetArg("-datadir", "");
+    const ChainType saved_chain = Params().GetChainType();
+
+    bool saw_error{false};
+    bool timed_out{false};
+    std::optional<mode_t> saved_umask;
+    QTimer driver;
+    QElapsedTimer deadline;
+    deadline.start();
+    connect(&driver, &QTimer::timeout, [&] {
+        QWidget* modal = QApplication::activeModalWidget();
+        if (auto* error = qobject_cast<QMessageBox*>(modal)) {
+            saw_error = true;
+            error->accept();
+        } else if (auto* intro = qobject_cast<Intro*>(modal)) {
+            timed_out = deadline.hasExpired(5000);
+            auto* buttons = intro->findChild<QDialogButtonBox*>(QStringLiteral("buttonBox"));
+            auto* ok = buttons ? buttons->button(QDialogButtonBox::Ok) : nullptr;
+            if (saw_error || timed_out) {
+                intro->reject();
+            } else if (ok && ok->isEnabled() && !saved_umask) {
+                // Creating fresh succeeds in the writable temporary parent. Its
+                // permissions prohibit creating fresh/vaults on the next line.
+                saved_umask = umask(0222);
+                ok->click();
+            }
+        }
+    });
+    driver.start(10);
+    bool shown{false};
+    std::optional<int64_t> prune;
+    const bool accepted = Intro::showIfNeeded(shown, prune);
+    driver.stop();
+    if (saved_umask) umask(*saved_umask);
+    SelectParams(saved_chain);
+    if (saved_datadir) gArgs.ForceSetArg("-datadir", *saved_datadir);
+    else gArgs.LockSettings([](common::Settings& s) { s.forced_settings.erase("datadir"); });
+    if (saved.isValid()) settings.setValue("strDataDir", saved);
+    else settings.remove("strDataDir");
+    if (saved_reset.isValid()) settings.setValue("fReset", saved_reset);
+    else settings.remove("fReset");
+
+    const bool created = fs::is_directory(fresh);
+    const bool vaults_created = fs::is_directory(fresh / "vaults");
+    if (created) fs::permissions(fresh, fs::perms::owner_write, fs::perm_options::add);
+    QVERIFY(shown);
+    QVERIFY(!timed_out);
+    QVERIFY(saved_umask.has_value());
+    QVERIFY(created);
+    QVERIFY(!vaults_created);
+    QVERIFY(!saw_error);
+    QVERIFY(accepted);
+#endif
+}
+
+//! S0225-C-01: the caution line said "needed for full chain" whatever the box said. With
+//! pruning on, the requirement is the prune target plus the chain state, not the chain.
+void IntroTests::freeSpaceCautionNamesTheFullChainOnlyWhenThatIsTheRequirement()
+{
+    constexpr int ST_OK{0};
+    Intro intro(nullptr, /*blockchain_size_gb=*/128, /*chain_state_size_gb=*/26);
+    QLabel* free_space = intro.findChild<QLabel*>(QStringLiteral("freeSpace"));
+    QCheckBox* prune = intro.findChild<QCheckBox*>(QStringLiteral("prune"));
+    QVERIFY(free_space);
+    QVERIFY(prune);
+
+    // Pruned at the 4 GB default target: 4 + 26 = 30 GB, within 10 GB of 35.
+    prune->setChecked(true);
+    intro.setStatus(ST_OK, QString(), 35 * GB_BYTES);
+    QCOMPARE(free_space->text(), QStringLiteral("35 GB of space available (30 GB needed)."));
+    intro.setStatus(ST_OK, QString(), 10 * GB_BYTES);
+    QCOMPARE(free_space->text(), QStringLiteral("10 GB of space available (of 30 GB needed)."));
+
+    // Unticking makes it the full chain again, and the line says so.
+    prune->setChecked(false);
+    intro.setStatus(ST_OK, QString(), 160 * GB_BYTES);
+    QCOMPARE(free_space->text(), QStringLiteral("160 GB of space available (154 GB needed for full chain)."));
+
+    // A pruned target cannot go below the block-file floor (MIN_DISK_SPACE_FOR_BLOCK_FILES,
+    // 2,956 MiB, shown as 4 GB): 1 is raised to it, and the line counts the raised target.
+    Intro tiny(nullptr, /*blockchain_size_gb=*/5, /*chain_state_size_gb=*/0);
+    QCheckBox* tiny_prune = tiny.findChild<QCheckBox*>(QStringLiteral("prune"));
+    QSpinBox* tiny_target = tiny.findChild<QSpinBox*>(QStringLiteral("pruneGB"));
+    QVERIFY(tiny_prune);
+    QVERIFY(tiny_target);
+    tiny_prune->setChecked(true);
+    tiny_target->setValue(1);
+    QCOMPARE(tiny_target->value(), 4);
+    tiny.setStatus(ST_OK, QString(), 5 * GB_BYTES);
+    QCOMPARE(tiny.findChild<QLabel*>(QStringLiteral("freeSpace"))->text(),
+             QStringLiteral("5 GB of space available (4 GB needed)."));
+
+    // The singular, now reachable only unpruned: a 1 GB full chain and no chain state.
+    Intro one(nullptr, /*blockchain_size_gb=*/1, /*chain_state_size_gb=*/0);
+    QCheckBox* one_prune = one.findChild<QCheckBox*>(QStringLiteral("prune"));
+    QVERIFY(one_prune);
+    one_prune->setChecked(false);
+    one.setStatus(ST_OK, QString(), 5 * GB_BYTES);
+    QCOMPARE(one.findChild<QLabel*>(QStringLiteral("freeSpace"))->text(),
+             QStringLiteral("5 GB of space available (1 GB needed for full chain)."));
+}
+
+//! S0225-C-03 and S0225-COORD-01: the throwing fs::exists / fs::is_directory raise for a
+//! path under a directory the user may not search. The free-space check ran one outside
+//! its try, on a worker thread with no handler, and the chain probe ran them on the UI
+//! thread for every keystroke. Such a path is now an error the dialog states.
+void IntroTests::pathUnderAnUnsearchableDirectoryIsReportedNotThrown()
+{
+#ifdef WIN32
+    QSKIP("Needs a directory without search permission, which fs::permissions cannot make on Windows (NTFS ACLs).");
+#else
+    if (geteuid() == 0) QSKIP("Root may search any directory, so the permission error cannot be produced.");
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const fs::path locked{GUIUtil::QStringToPath(temp.path()) / "locked"};
+    QVERIFY(fs::create_directories(locked));
+    fs::permissions(locked, fs::perms::none);
+    // Restore the permission however the test ends, or QTemporaryDir cannot clean up.
+    struct Unlock {
+        fs::path path;
+        ~Unlock() { std::error_code ec; fs::permissions(path, fs::perms::owner_all, ec); }
+    } unlock{locked};
+    const fs::path datadir{locked / "datadir"};
+    // Precondition: this really is the case the throwing overload raises on.
+    std::error_code probe_ec;
+    (void)fs::status(datadir, probe_ec);
+    QVERIFY2(probe_ec, "expected permission denied on a path under a mode-000 directory");
+
+    QVERIFY(!Intro::DataDirHasChainData(datadir, ""));
+    QVERIFY(!Intro::DataDirHasChainData(locked, "publictest"));
+
+    Intro intro(nullptr, /*blockchain_size_gb=*/128, /*chain_state_size_gb=*/26);
+    QLabel* error_message = intro.findChild<QLabel*>(QStringLiteral("errorMessage"));
+    QDialogButtonBox* buttons = intro.findChild<QDialogButtonBox*>(QStringLiteral("buttonBox"));
+    QVERIFY(error_message);
+    QVERIFY(buttons);
+    intro.setDataDirectory(GUIUtil::PathToQString(datadir));
+    QTRY_COMPARE(error_message->text(), QStringLiteral("Error: Cannot create data directory here."));
+    QVERIFY(!buttons->button(QDialogButtonBox::Ok)->isEnabled());
+    // The choice stays offered: nothing visible says a chain is there.
+    QVERIFY(!intro.findChild<QCheckBox*>(QStringLiteral("prune"))->isHidden());
+#endif
+}
+
+//! S0225-C-04: the dialog runs before InitConfig reads the config file, so a chain= set
+//! only there was invisible and the existing-chain probe looked in main's directory.
+void IntroTests::chainSetOnlyInTheConfigFileSelectsTheProbedNetwork()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const fs::path datadir{GUIUtil::QStringToPath(temp.path())};
+    const auto write_conf = [&](const char* text) {
+        std::ofstream conf{datadir / "quicksilver.conf", std::ios::trunc};
+        conf << text;
+    };
+    const auto fresh_args = [] {
+        auto args{std::make_unique<ArgsManager>()};
+        SetupChainParamsBaseOptions(*args);
+        return args;
+    };
+
+    // No config file: main.
+    QCOMPARE(Intro::ChainTypeForDataDir(*fresh_args(), datadir), ChainType::MAIN);
+
+    // chain= in the file, among keys the probe does not know (which must not stop it).
+    write_conf("rpcuser=someone\nchain=publictest # the test network\nlisten=1\n");
+    QCOMPARE(Intro::ChainTypeForDataDir(*fresh_args(), datadir), ChainType::PUBLIC_TEST);
+
+    // The shorthand form.
+    write_conf("publictest=1\n");
+    QCOMPARE(Intro::ChainTypeForDataDir(*fresh_args(), datadir), ChainType::PUBLIC_TEST);
+
+    // A key inside a network section does not choose the network.
+    write_conf("[publictest]\nchain=publictest\n");
+    QCOMPARE(Intro::ChainTypeForDataDir(*fresh_args(), datadir), ChainType::MAIN);
+
+    // The command line wins over the file, as it does in InitConfig.
+    write_conf("chain=publictest\n");
+    {
+        const auto args{fresh_args()};
+        args->ForceSetArg("-chain", "sandbox");
+        QCOMPARE(Intro::ChainTypeForDataDir(*args, datadir), ChainType::SANDBOX);
+    }
+
+    // A conflicting combination is InitConfig's to report: the probe uses the command line.
+    {
+        const auto args{fresh_args()};
+        args->ForceSetArg("-sandbox", "1");
+        QCOMPARE(Intro::ChainTypeForDataDir(*args, datadir), ChainType::SANDBOX);
+    }
+
+    // -conf names another file, relative to the data directory.
+    {
+        std::ofstream other{datadir / "other.conf"};
+        other << "chain=sandbox\n";
+    }
+    {
+        const auto args{fresh_args()};
+        args->ForceSetArg("-conf", "other.conf");
+        QCOMPARE(Intro::ChainTypeForDataDir(*args, datadir), ChainType::SANDBOX);
+    }
+}
+
+//! S0225-C-06: -prune given to this run locks the box, so no choice is made in the
+//! dialog. The value it returned was forced over the argument and written to settings,
+//! so -prune=1 (manual pruning) came back as the automatic default target, this run and
+//! every later one.
+void IntroTests::pruneArgumentLocksTheChoiceAndNothingIsWritten()
+{
+    gArgs.ForceSetArg("-prune", "1");
+    struct Unforce {
+        ~Unforce() { gArgs.LockSettings([](common::Settings& s) { s.forced_settings.erase("prune"); }); }
+    } unforce;
+
+    Intro intro(nullptr, /*blockchain_size_gb=*/128, /*chain_state_size_gb=*/26);
+    QCheckBox* prune = intro.findChild<QCheckBox*>(QStringLiteral("prune"));
+    QVERIFY(prune);
+    QVERIFY(prune->isChecked());
+    QVERIFY(!prune->isEnabled());
+    QVERIFY(!intro.getPruneMiB().has_value());
 }

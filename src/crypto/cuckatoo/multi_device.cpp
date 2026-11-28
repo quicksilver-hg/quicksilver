@@ -45,7 +45,7 @@ std::chrono::steady_clock::time_point StatsNow()
 bool ProofValidForNonce(const unsigned char* prepow, size_t len, uint8_t edgebits,
                         const Cycle& cycle, uint32_t nonce)
 {
-    if (len < 4) return false;
+    if (len < 4 || len > std::numeric_limits<uint32_t>::max()) return false;
     std::vector<unsigned char> bytes(prepow, prepow + len);
     bytes[len - 4] = static_cast<unsigned char>(nonce);
     bytes[len - 3] = static_cast<unsigned char>(nonce >> 8);
@@ -170,6 +170,10 @@ MultiDeviceResult MultiDeviceSolveBytes(const unsigned char* prepow, size_t len,
                 if (coordinated_cancel()) { last = GpuSolveStatus::kCancelled; break; }
                 const uint64_t offset = next.fetch_add(BLOCK_ATTEMPTS, std::memory_order_relaxed);
                 if (offset >= budget) break;
+                // Per block: a block whose only cycle the caller rejected ended on
+                // kSolved, and without this the device was booked idle with
+                // last_status kSolved and no accepted proof (S0119-B-02).
+                last = GpuSolveStatus::kNoCycle;
                 const uint32_t block_start = static_cast<uint32_t>(uint64_t{start_nonce} + offset);
                 uint32_t block_left = static_cast<uint32_t>(std::min<uint64_t>(BLOCK_ATTEMPTS, budget - offset));
                 uint32_t from = block_start;
@@ -209,6 +213,7 @@ MultiDeviceResult MultiDeviceSolveBytes(const unsigned char* prepow, size_t len,
                         last = GpuSolveStatus::kSolved;
                         break;
                     }
+                    last = GpuSolveStatus::kNoCycle;  // the caller rejected it: nothing accepted yet
                     const uint64_t consumed = uint64_t{won} - from + 1;
                     if (won == std::numeric_limits<uint32_t>::max() || consumed >= block_left) {
                         block_left = 0;

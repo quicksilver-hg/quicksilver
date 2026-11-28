@@ -156,7 +156,6 @@ else()
 endif()
 
 set(CMAKE_CXX_FLAGS_COVERAGE "-g -Og --coverage")
-set(CMAKE_OBJCXX_FLAGS_COVERAGE "-g -Og --coverage")
 set(CMAKE_EXE_LINKER_FLAGS_COVERAGE "--coverage")
 set(CMAKE_SHARED_LINKER_FLAGS_COVERAGE "--coverage")
 get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)

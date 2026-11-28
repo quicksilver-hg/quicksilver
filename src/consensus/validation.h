@@ -29,9 +29,7 @@ enum class TxValidationResult {
     TX_MISSING_INPUTS,        //!< transaction was missing some of its inputs
     TX_PREMATURE_SPEND,       //!< transaction spends a coinbase too early, or violates locktime/sequence locks
     /**
-     * Transaction might have a witness prior to SegWit
-     * activation, or witness may have been malleated (which includes
-     * non-standard witnesses).
+     * The witness may have been malleated, including non-standard witnesses.
      */
     TX_WITNESS_MUTATED,
     /**
@@ -39,15 +37,15 @@ enum class TxValidationResult {
      */
     TX_WITNESS_STRIPPED,
     /**
-     * Tx already in relaypool or conflicts with a tx in the chain
-     * (if it conflicts with another tx in relaypool, we use RELAYPOOL_POLICY as it failed to reach the replacement threshold)
-     * Currently this is only used if the transaction already exists in the relaypool or on chain.
+     * The transaction is already known or has the same non-witness data as
+     * a relay pool entry. Replacements may fail with TX_RELAYPOOL_POLICY
+     * for policy limits or TX_RECONSIDERABLE if the replacement has
+     * insufficient surplus work.
      */
     TX_CONFLICT,
     TX_RELAYPOOL_POLICY,        //!< violated relaypool policy limits
     TX_NO_RELAYPOOL,            //!< this node does not have a relaypool so can't validate the transaction
     TX_RECONSIDERABLE,        //!< fails some policy, but might be acceptable if submitted in a (different) package
-    TX_UNKNOWN,               //!< transaction was not validated because package failed
 };
 
 /** A "reason" why a block was invalid, suitable for determining whether the
@@ -79,7 +77,7 @@ class ValidationState
 private:
     enum class ModeState {
         M_VALID,   //!< everything ok
-        M_INVALID, //!< network rule violation (DoS value may be set)
+        M_INVALID, //!< validation failed
         M_ERROR,   //!< run-time error
     } m_mode{ModeState::M_VALID};
     Result m_result{};

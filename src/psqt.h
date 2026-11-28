@@ -6,7 +6,6 @@
 #ifndef QUICKSILVER_PSQT_H
 #define QUICKSILVER_PSQT_H
 
-#include <node/transaction.h>
 #include <primitives/transaction.h>
 #include <pubkey.h>
 #include <script/keyorigin.h>
@@ -17,16 +16,12 @@
 
 #include <optional>
 
-namespace node {
-enum class TransactionError;
-} // namespace node
-
 // Magic bytes
 static constexpr uint8_t PSQT_MAGIC_BYTES[5] = {'p', 's', 'q', 't', 0xff};
 
 // Global types
 static constexpr uint8_t PSQT_GLOBAL_UNSIGNED_TX = 0x00;
-static constexpr uint8_t PSQT_GLOBAL_XPUB = 0x01;
+static constexpr uint8_t PSQT_GLOBAL_QPUB = 0x01;
 static constexpr uint8_t PSQT_GLOBAL_VERSION = 0xFB;
 static constexpr uint8_t PSQT_GLOBAL_PROPRIETARY = 0xFC;
 
@@ -952,7 +947,7 @@ struct PartiallySignedQuicksilverTransaction
     std::optional<CMutableTransaction> tx;
     // We use a vector of CExtPubKey in the event that there happens to be the same KeyOriginInfos for different CExtPubKeys
     // Note that this map swaps the key and values from the serialization
-    std::map<KeyOriginInfo, std::set<CExtPubKey>> m_xpubs;
+    std::map<KeyOriginInfo, std::set<CExtPubKey>> m_qpubs;
     std::vector<PSQTInput> inputs;
     std::vector<PSQTOutput> outputs;
     std::map<std::vector<unsigned char>, std::vector<unsigned char>> unknown;
@@ -990,15 +985,15 @@ struct PartiallySignedQuicksilverTransaction
         // Write serialized tx to a stream
         SerializeToVector(s, TX_NO_WITNESS(*tx));
 
-        // Write xpubs
-        for (const auto& xpub_pair : m_xpubs) {
-            for (const auto& xpub : xpub_pair.second) {
-                unsigned char ser_xpub[BIP32_EXTKEY_WITH_VERSION_SIZE];
-                xpub.EncodeWithVersion(ser_xpub);
+        // Write qpubs
+        for (const auto& qpub_pair : m_qpubs) {
+            for (const auto& qpub : qpub_pair.second) {
+                unsigned char ser_qpub[BIP32_EXTKEY_WITH_VERSION_SIZE];
+                qpub.EncodeWithVersion(ser_qpub);
                 // Note that the serialization swaps the key and value
-                // The xpub is the key (for uniqueness) while the path is the value
-                SerializeToVector(s, PSQT_GLOBAL_XPUB, ser_xpub);
-                SerializeHDKeypath(s, xpub_pair.first);
+                // The qpub is the key (for uniqueness) while the path is the value
+                SerializeToVector(s, PSQT_GLOBAL_QPUB, ser_qpub);
+                SerializeHDKeypath(s, qpub_pair.first);
             }
         }
 
@@ -1088,33 +1083,33 @@ struct PartiallySignedQuicksilverTransaction
                     }
                     break;
                 }
-                case PSQT_GLOBAL_XPUB:
+                case PSQT_GLOBAL_QPUB:
                 {
                     if (key.size() != BIP32_EXTKEY_WITH_VERSION_SIZE + 1) {
                         throw std::ios_base::failure("Size of key was not the expected size for the type global qpub");
                     }
                     // Read in the qpub from key
-                    CExtPubKey xpub;
-                    xpub.DecodeWithVersion(&key.data()[1]);
-                    if (!xpub.pubkey.IsFullyValid()) {
+                    CExtPubKey qpub;
+                    qpub.DecodeWithVersion(&key.data()[1]);
+                    if (!qpub.pubkey.IsFullyValid()) {
                        throw std::ios_base::failure("Invalid pubkey");
                     }
-                    if (global_qpubs.count(xpub) > 0) {
+                    if (global_qpubs.count(qpub) > 0) {
                        throw std::ios_base::failure("Duplicate key, global qpub already provided");
                     }
-                    global_qpubs.insert(xpub);
+                    global_qpubs.insert(qpub);
                     // Read in the keypath from stream
                     KeyOriginInfo keypath;
                     DeserializeHDKeypath(s, keypath);
 
                     // Note that we store these swapped to make searches faster.
-                    // Serialization uses xpub -> keypath to enqure key uniqueness
-                    if (m_xpubs.count(keypath) == 0) {
-                        // Make a new set to put the xpub in
-                        m_xpubs[keypath] = {xpub};
+                    // Serialization uses qpub -> keypath to ensure key uniqueness
+                    if (m_qpubs.count(keypath) == 0) {
+                        // Make a new set to put the qpub in
+                        m_qpubs[keypath] = {qpub};
                     } else {
-                        // Insert xpub into existing set
-                        m_xpubs[keypath].insert(xpub);
+                        // Insert qpub into existing set
+                        m_qpubs[keypath].insert(qpub);
                     }
                     break;
                 }

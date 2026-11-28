@@ -18,7 +18,7 @@
 static RPCHelpMan verifymessage()
 {
     return RPCHelpMan{"verifymessage",
-        "Verify a signed message.",
+        "Verify a signed message for a public-key-hash address.",
         {
             {"address", RPCArg::Type::STR, RPCArg::Optional::NO, "The Quicksilver address to use for the signature."},
             {"signature", RPCArg::Type::STR, RPCArg::Optional::NO, "The signature provided by the signer in base 64 encoding (see signmessage)."},

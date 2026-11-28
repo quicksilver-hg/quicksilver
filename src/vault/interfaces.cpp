@@ -162,7 +162,11 @@ public:
         return m_vault->ChangeVaultPassphrase(old_vault_passphrase, new_vault_passphrase);
     }
     void abortRescan() override { m_vault->AbortRescan(); }
-    bool backupVault(const std::string& filename) override { return m_vault->BackupVault(filename); }
+    SavedBackup backupVault(const std::string& filename, bool overwrite) override
+    {
+        const bool corrupt_for_test{m_context.args && HasTestOption(*m_context.args, "corruptbackup")};
+        return m_vault->SaveCheckedBackup(filename, overwrite, corrupt_for_test);
+    }
     BackupCheck verifyBackup(const std::string& filename, const SecureString* passphrase) override
     {
         return m_vault->VerifyBackup(fs::PathFromString(filename), passphrase);
@@ -198,14 +202,6 @@ public:
     {
         LOCK(m_vault->cs_vault);
         return m_vault->GetNewDestination(type, label);
-    }
-    bool getPubKey(const CScript& script, const CKeyID& address, CPubKey& pub_key) override
-    {
-        std::unique_ptr<SigningProvider> provider = m_vault->GetSolvingProvider(script);
-        if (provider) {
-            return provider->GetPubKey(address, pub_key);
-        }
-        return false;
     }
     SigningResult signMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) override
     {
@@ -280,11 +276,6 @@ public:
         LOCK(m_vault->cs_vault);
         VaultBatch batch{m_vault->GetDatabase()};
         return value.empty() ? m_vault->EraseAddressReceiveRequest(batch, dest, id) : m_vault->SetAddressReceiveRequest(batch, dest, id, value);
-    }
-    util::Result<void> displayAddress(const CTxDestination& dest) override
-    {
-        LOCK(m_vault->cs_vault);
-        return m_vault->DisplayAddress(dest);
     }
     bool lockCoin(const COutPoint& output, const bool write_to_db) override
     {
@@ -361,12 +352,6 @@ public:
                 : Untranslated(strprintf("%s: %s", error.original, committed.reject_reason))};
         }
         return ToCommitOutcome(committed);
-    }
-    bool transactionCanBeAbandoned(const uint256& txid) override { return m_vault->TransactionCanBeAbandoned(txid); }
-    bool abandonTransaction(const uint256& txid) override
-    {
-        LOCK(m_vault->cs_vault);
-        return m_vault->AbandonTransaction(txid);
     }
     CTransactionRef getTx(const uint256& txid) override
     {
@@ -591,10 +576,9 @@ public:
         }
         return true;
     }
-    bool hdEnabled() override { return m_vault->IsHDEnabled(); }
     bool canGetAddresses() override { return m_vault->CanGetAddresses(); }
-    bool hasExternalSigner() override { return m_vault->IsVaultFlagSet(VAULT_FLAG_EXTERNAL_SIGNER); }
     bool privateKeysDisabled() override { return m_vault->IsVaultFlagSet(VAULT_FLAG_DISABLE_PRIVATE_KEYS); }
+    bool avoidAddressReuse() override { return m_vault->IsVaultFlagSet(VAULT_FLAG_AVOID_REUSE); }
     bool taprootEnabled() override
     {
         auto spk_man = m_vault->GetScriptPubKeyMan(OutputType::BECH32M, /*internal=*/false);

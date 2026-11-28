@@ -16,11 +16,10 @@
 #include <script/signingprovider.h>
 #include <uint256.h>
 
-class CKey;
-class CKeyID;
-class CScript;
-class CTransaction;
-class SigningProvider;
+#include <map>
+#include <optional>
+#include <set>
+#include <vector>
 
 struct bilingual_str;
 struct CMutableTransaction;

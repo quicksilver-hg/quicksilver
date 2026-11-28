@@ -311,8 +311,8 @@ inline void UpdateDE(Num3072Signed& d, Num3072Signed& e, const SignedMatrix& t)
     md -= (MODULUS_INVERSE * limb_t(cd) + md) & MAX_SIGNED_LIMB;
     me -= (MODULUS_INVERSE * limb_t(ce) + me) & MAX_SIGNED_LIMB;
     /* Update the beginning of computation for t*[d,e]+modulus*[md,me] now md,me are known. */
-    cd -= (signed_double_limb_t)1103717 * md;
-    ce -= (signed_double_limb_t)1103717 * me;
+    cd -= (signed_double_limb_t)MAX_PRIME_DIFF * md;
+    ce -= (signed_double_limb_t)MAX_PRIME_DIFF * me;
     /* Verify that the low SIGNED_LIMB_SIZE bits of the computation are indeed zero, and then throw them away. */
     Assume((cd & MAX_SIGNED_LIMB) == 0);
     Assume((ce & MAX_SIGNED_LIMB) == 0);
@@ -338,7 +338,7 @@ inline void UpdateDE(Num3072Signed& d, Num3072Signed& e, const SignedMatrix& t)
     ce += (signed_double_limb_t)me << FINAL_LIMB_MODULUS_BITS;
     d.limbs[SIGNED_LIMBS - 2] = (signed_limb_t)cd & MAX_SIGNED_LIMB; cd >>= SIGNED_LIMB_SIZE;
     e.limbs[SIGNED_LIMBS - 2] = (signed_limb_t)ce & MAX_SIGNED_LIMB; ce >>= SIGNED_LIMB_SIZE;
-    /* What remains goes into output limb SINGED_LIMBS-1 */
+    /* What remains goes into output limb SIGNED_LIMBS-1 */
     d.limbs[SIGNED_LIMBS - 1] = (signed_limb_t)cd;
     e.limbs[SIGNED_LIMBS - 1] = (signed_limb_t)ce;
 }
@@ -359,13 +359,13 @@ inline void UpdateFG(Num3072Signed& f, Num3072Signed& g, const SignedMatrix& t, 
     gi = g.limbs[0];
     cf = (signed_double_limb_t)u * fi + (signed_double_limb_t)v * gi;
     cg = (signed_double_limb_t)q * fi + (signed_double_limb_t)r * gi;
-    /* Verify that the bottom SIGNED_LIMB_BITS bits of the result are zero, and then throw them away. */
+    /* Verify that the bottom SIGNED_LIMB_SIZE bits of the result are zero, and then throw them away. */
     Assume((cf & MAX_SIGNED_LIMB) == 0);
     Assume((cg & MAX_SIGNED_LIMB) == 0);
     cf >>= SIGNED_LIMB_SIZE;
     cg >>= SIGNED_LIMB_SIZE;
     /* Now iteratively compute limb i=1..SIGNED_LIMBS-1 of t*[f,g], and store them in output limb i-1 (shifting
-     * down by SIGNED_LIMB_BITS bits). */
+     * down by SIGNED_LIMB_SIZE bits). */
     for (int i = 1; i < len; ++i) {
         fi = f.limbs[i];
         gi = g.limbs[i];

@@ -154,6 +154,12 @@ class ListTransactionsTest(QuicksilverTestFramework):
         assert_raises_rpc_error(-8, "Negative count", self.nodes[0].listtransactions, count=-1)
         assert_raises_rpc_error(-8, "Negative from", self.nodes[0].listtransactions, skip=-1)
 
+        self.log.info("count + skip must not overflow int (S0203-A-01)")
+        all_txs = self.nodes[0].listtransactions(count=1000)
+        assert len(all_txs) > 1
+        assert_equal(self.nodes[0].listtransactions(count=2**31 - 1, skip=1), all_txs[:-1])
+        assert_equal(self.nodes[0].listtransactions(count=2**31 - 1, skip=2**31 - 1), [])
+
     def test_op_return(self):
         """Test if OP_RETURN outputs will be displayed correctly."""
         raw_tx = self.nodes[0].createrawtransaction([], [

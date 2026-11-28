@@ -507,7 +507,12 @@ class PSQTTest(QuicksilverTestFramework):
         utxo = self.create_outpoints(self.nodes[0], outputs=[{addr: 7}])[0]
         addrinfo = self.nodes[1].getaddressinfo(addr)
         self.generate(self.nodes[0], 6)[0]
-        psqt = self.nodes[1].createpsqt([utxo], [{self.nodes[0].getnewaddress("", "bech32"):Decimal('6.999')}])
+        destination = self.nodes[0].getnewaddress("", "bech32")
+        invalid_amount_psqt = self.nodes[1].createpsqt([utxo], [{destination: Decimal('6.999')}])
+        invalid_amount_psqt = self.nodes[1].vaultprocesspsqt(invalid_amount_psqt, False, 'ALL', True)['psqt']
+        assert_equal(self.nodes[0].analyzepsqt(invalid_amount_psqt)['error'],
+                     'PSQT is not valid. Input and output amounts differ')
+        psqt = self.nodes[1].createpsqt([utxo], [{destination: Decimal('7')}])
         analyzed = self.nodes[0].analyzepsqt(psqt)
         assert not analyzed['inputs'][0]['has_utxo'] and not analyzed['inputs'][0]['is_final'] and analyzed['inputs'][0]['next'] == 'updater' and analyzed['next'] == 'updater'
 

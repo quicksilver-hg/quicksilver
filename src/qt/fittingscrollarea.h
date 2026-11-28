@@ -11,7 +11,7 @@
  *
  * QScrollArea keeps the contents' size hint from when the widget was set, so
  * an area capped at its own hint clips contents that grow later, and it does
- * not count an as-needed horizontal bar. This one asks the contents each time,
+ * not count an as-needed horizontal bar. This one uses the live contents height, keeps the base width hint,
  * adds the horizontal bar while it is shown, and keeps QScrollArea's cap of
  * 24 lines, past which the contents scroll.
  */

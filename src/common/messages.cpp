@@ -25,10 +25,6 @@ bilingual_str PSQTErrorString(PSQTError err)
             return Untranslated("Inputs missing or spent");
         case PSQTError::SIGHASH_MISMATCH:
             return Untranslated("Specified sighash value does not match value stored in PSQT");
-        case PSQTError::EXTERNAL_SIGNER_NOT_FOUND:
-            return Untranslated("External signer not found");
-        case PSQTError::EXTERNAL_SIGNER_FAILED:
-            return Untranslated("External signer failed to sign");
         case PSQTError::UNSUPPORTED:
             return Untranslated("Signer does not support PSQT");
         // no default case, so the compiler can warn about missing cases
@@ -68,15 +64,5 @@ bilingual_str ResolveErrMsg(const std::string& optname, const std::string& strBi
 bilingual_str InvalidPortErrMsg(const std::string& optname, const std::string& invalid_value)
 {
     return strprintf(_("Invalid port specified in %s: '%s'"), optname, invalid_value);
-}
-
-bilingual_str AmountHighWarn(const std::string& optname)
-{
-    return strprintf(_("%s is set very high!"), optname);
-}
-
-bilingual_str AmountErrMsg(const std::string& optname, const std::string& strValue)
-{
-    return strprintf(_("Invalid amount for -%s=<amount>: '%s'"), optname, strValue);
 }
 } // namespace common

@@ -178,18 +178,23 @@ FUZZ_TARGET(vault_notifications, .init = initialize_setup)
                 block.SetNull();
                 disconnected = true;
             });
-        // Right after a disconnect the balance is not checked: the harness has no relay pool, and the
-        // vault counts a disconnected transaction as pending only when it spends the vault's own coins
-        // (receive.cpp GetBalance, F-579), so value paid by the other vault is not in the balance until
-        // a block confirms it again.
+        const auto balance_a{GetBalance(*a.vault)};
+        const auto balance_b{GetBalance(*b.vault)};
+        // On every iteration, a disconnect included, the two vaults never show more than exists.
+        // Revived transactions that spend the same coins count once: only the set from the most
+        // recently disconnected block is pending (F-698).
+        assert(balance_a.m_mine_trusted + balance_b.m_mine_trusted +
+                   balance_a.m_mine_untrusted_pending + balance_b.m_mine_untrusted_pending <=
+               total_amount);
+        assert(balance_a.m_mine_immature == 0 && balance_b.m_mine_immature == 0);
+        // Once a block has been mined since the last disconnect, every coin is confirmed: the total is
+        // trusted and nothing is pending (S0212-B-02). Right after a disconnect the total can fall
+        // short, not exceed: the harness has no relay pool, and the vault counts a disconnected
+        // transaction as pending only when it spends the vault's own coins (receive.cpp GetBalance,
+        // F-579), so value paid by the other vault waits for a block to confirm it again.
         if (!disconnected && chain.size() > 1) {
-            // Only check balance when at least one block was submitted
-            const auto balance_a{GetBalance(*a.vault)};
-            const auto balance_b{GetBalance(*b.vault)};
             assert(total_amount == balance_a.m_mine_trusted + balance_b.m_mine_trusted);
-            // Every coin is confirmed here, so nothing is pending or immature (S0212-B-02).
             assert(balance_a.m_mine_untrusted_pending == 0 && balance_b.m_mine_untrusted_pending == 0);
-            assert(balance_a.m_mine_immature == 0 && balance_b.m_mine_immature == 0);
         }
     }
 }

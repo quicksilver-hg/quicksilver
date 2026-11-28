@@ -456,6 +456,20 @@ BOOST_AUTO_TEST_CASE(logargs)
     BOOST_CHECK(str.find("private42") == std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(sensitive_double_negative_is_redacted)
+{
+    ArgsManager local_args;
+    SetupArgs(local_args, {{"-rpcpassword", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE}});
+
+    std::string logged;
+    auto callback = LogInstance().PushBackCallback([&](const std::string& line) { logged += line; });
+    ResetArgs(local_args, "-norpcpassword=secret");
+    LogInstance().DeleteCallback(callback);
+
+    BOOST_CHECK(logged.find("double-negative -rpcpassword=****") != std::string::npos);
+    BOOST_CHECK(logged.find("secret") == std::string::npos);
+}
+
 BOOST_AUTO_TEST_CASE(logargs_settings_file)
 {
     ArgsManager local_args;

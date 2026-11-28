@@ -701,7 +701,6 @@ BOOST_AUTO_TEST_CASE(mainnet_has_no_inherited_activation_heights)
     const auto consensus = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
 
     BOOST_CHECK_EQUAL(consensus.BIP34Height, 1);
-    BOOST_CHECK(consensus.BIP34Hash.IsNull());
     BOOST_CHECK_EQUAL(consensus.BIP65Height, 1);
     BOOST_CHECK_EQUAL(consensus.BIP66Height, 1);
     BOOST_CHECK_EQUAL(consensus.CSVHeight, 1);
@@ -710,7 +709,6 @@ BOOST_AUTO_TEST_CASE(mainnet_has_no_inherited_activation_heights)
 
     // The two exceptions are keyed to upstream Bitcoin block hashes and can
     // never be reached on this chain.
-    BOOST_CHECK(consensus.script_flag_exceptions.empty());
 
     const auto& taproot = consensus.vDeployments[Consensus::DEPLOYMENT_TAPROOT];
     BOOST_CHECK_EQUAL(taproot.nStartTime, Consensus::BIP9Deployment::ALWAYS_ACTIVE);
@@ -1018,7 +1016,7 @@ BOOST_AUTO_TEST_CASE(congestion_header_prepow_layout_keeps_nonce_at_the_tail)
     // THE hazard of header-field congestion pricing. Every Cuckatoo solver entry point grinds the last
     // four bytes of the pre-pow in place: solve_19/solve_28 via mutate_nonce,
     // Solve28Bytes explicitly, dispatch.cpp's key reconstruction, the bench
-    // KeyedPrepow helpers, and the external CUDA solver gpu/qsgpusolve-cuda.cu. Appending
+    // KeyedPrepow helpers, and the external graphics helper gpu/qsgpusolve-opencl.cpp. Appending
     // nCongestion AFTER nNonce would leave every one of them grinding the congestion
     // field while the nonce sat frozen — and it would not fail loudly. This assertion
     // is the permanent fence against that, so it must stay exact.
@@ -1117,6 +1115,41 @@ BOOST_AUTO_TEST_CASE(genesis_congestion_is_the_floor_on_every_network)
     BOOST_CHECK_EQUAL(main->GenesisBlock().nCongestion, CONGESTION_ONE);
     BOOST_CHECK_EQUAL(publictest->GenesisBlock().nCongestion, CONGESTION_ONE);
     BOOST_CHECK_EQUAL(sandbox->GenesisBlock().nCongestion, CONGESTION_ONE);
+}
+
+// c01a-23 / S0034-C-01: BaseTxWork sums up to nBaseWorkMAWindow block proofs in a wrapping
+// arith_uint256 before averaging. Analysis only (consensus code, not changed): the sum can
+// wrap only when the average proof reaches 2^256 / window, i.e. a target of about `window`
+// (2^256 / (T + 1) >= 2^256 / 144 needs T < 144). This pins that bound for the real chains.
+BOOST_AUTO_TEST_CASE(base_tx_work_sum_cannot_wrap_at_reachable_targets)
+{
+    for (const auto chain : {ChainType::MAIN, ChainType::PUBLIC_TEST}) {
+        const auto params{CreateChainParams(*m_node.args, chain)};
+        const auto& cp{params->GetConsensus()};
+        BOOST_REQUIRE_LE(cp.nBaseWorkMAWindow, 144);
+
+        // A target of 2^10: every block worth about 2^246 expected attempts, beyond any
+        // reachable difficulty (powLimit blocks are worth 4). 144 of them still sum below
+        // 2^256, so the average is exact. (Much closer to the boundary, base * m trips the
+        // existing saturating guard first, which answers "maximum work", never less.)
+        arith_uint256 target{1024};
+        const uint32_t bits{target.GetCompact()};
+        std::vector<CBlockIndex> blocks(cp.nBaseWorkMAWindow);
+        for (int h = 0; h < cp.nBaseWorkMAWindow; ++h) {
+            blocks[h].nHeight = h;
+            blocks[h].pprev = h ? &blocks[h - 1] : nullptr;
+            blocks[h].nBits = bits;
+            blocks[h].m_congestion = CONGESTION_ONE;
+        }
+        const arith_uint256 proof{GetBlockProof(blocks.back())};
+        BOOST_CHECK_EQUAL(BaseTxWork(&blocks.back(), cp).GetHex(),
+                          (proof / arith_uint256(cp.nTxWorkCouplingK)).GetHex());
+
+        // The boundary is real, and far below that: at target 1 (proof 2^255) the sum of
+        // 144 proofs would wrap. Only a chain at that difficulty could reach it.
+        const arith_uint256 max_proof{(~arith_uint256{1} / arith_uint256{2}) + 1};
+        BOOST_CHECK(max_proof * 144 < max_proof);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

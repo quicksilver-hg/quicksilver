@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string.h>
 #include <stdint.h>    // for types uint32_t,uint64_t
 
 #if defined(__CUDACC__)
@@ -82,10 +83,12 @@ public:
 // header is included at global scope across multiple translation units
 // (the per-EDGEBITS verify/solve units).
 inline void siphash_keys::setkeys(const char *keybuf) {
-  k0 = qs_cuckatoo_htole64(((uint64_t *)keybuf)[0]);
-  k1 = qs_cuckatoo_htole64(((uint64_t *)keybuf)[1]);
-  k2 = qs_cuckatoo_htole64(((uint64_t *)keybuf)[2]);
-  k3 = qs_cuckatoo_htole64(((uint64_t *)keybuf)[3]);
+  uint64_t words[4];
+  memcpy(words, keybuf, sizeof(words));
+  k0 = qs_cuckatoo_htole64(words[0]);
+  k1 = qs_cuckatoo_htole64(words[1]);
+  k2 = qs_cuckatoo_htole64(words[2]);
+  k3 = qs_cuckatoo_htole64(words[3]);
 }
 
 inline uint64_t siphash_keys::siphash24(const uint64_t nonce) const {

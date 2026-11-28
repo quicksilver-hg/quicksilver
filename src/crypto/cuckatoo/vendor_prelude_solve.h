@@ -22,11 +22,10 @@
 
 #include <assert.h>
 #include <atomic>
-#include <bit>       // std::countl_zero for SIZEMASK (portable __builtin_clz replacement)
+#include <bit>       // std::countr_zero for the solver bitmap scans
 #include <chrono>
 #include <condition_variable>  // trim_barrier (ported from pthread to std threading for MSVC)
 #include <ctime>
-#include <errno.h>
 #include <immintrin.h>
 #include <mutex>               // trim_barrier
 #include <new>

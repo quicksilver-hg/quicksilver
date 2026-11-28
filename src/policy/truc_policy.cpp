@@ -5,19 +5,15 @@
 
 #include <policy/truc_policy.h>
 
-#include <coins.h>
-#include <consensus/amount.h>
-#include <logging.h>
 #include <tinyformat.h>
 #include <util/check.h>
 
 #include <algorithm>
-#include <numeric>
 #include <vector>
 
 /** Helper for PackageTRUCChecks: Returns a vector containing the indices of transactions (within
  * package) that are direct parents of ptx. */
-std::vector<size_t> FindInPackageParents(const Package& package, const CTransactionRef& ptx)
+static std::vector<size_t> FindInPackageParents(const Package& package, const CTransactionRef& ptx)
 {
     std::vector<size_t> in_package_parents;
 

@@ -54,9 +54,9 @@ class MiningZeroClaimTest(QuicksilverTestFramework):
     def coinbase(self, node, height):
         return node.getblock(node.getblockhash(height), 2)["tx"][0]
 
-    def assert_zero_claim_block(self, height, *, mint=ZERO):
+    def assert_zero_claim_block(self, height):
         """The block at `height` claims 0 on both nodes, and the whole ceiling,
-        the subsidy read from the node plus `mint`, is booked as unclaimed."""
+        the subsidy and capped mint allowance reported by the node, is booked as unclaimed."""
         subsidy = Decimal(self.nodes[0].getblockstats(height, ["subsidy"])["subsidy"]) / COIN
         assert_greater_than(subsidy, ZERO)
         for node in self.nodes:
@@ -69,11 +69,11 @@ class MiningZeroClaimTest(QuicksilverTestFramework):
             after = self.block_stats(node, height)
             info = after["block_info"]
             assert_equal(info["coinbase"], ZERO)
-            assert_equal(info["unspendables"]["unclaimed_rewards"], subsidy + mint)
+            assert_equal(info["unspendables"]["unclaimed_rewards"], subsidy)
             assert_equal(info["unspendables"]["scripts"], ZERO)
-            assert_equal(info["unspendable"], subsidy + mint)
+            assert_equal(info["unspendable"], subsidy)
             assert_equal(after["total_amount"], before["total_amount"])
-            assert_equal(after["total_unspendable_amount"], before["total_unspendable_amount"] + subsidy + mint)
+            assert_equal(after["total_unspendable_amount"], before["total_unspendable_amount"] + subsidy)
         return before, after
 
     def assert_full_claim(self, node, block_hash, expected_value):
@@ -178,7 +178,7 @@ class MiningZeroClaimTest(QuicksilverTestFramework):
         for node in self.nodes:
             assert tx["txid"] in node.getblock(node.getblockhash(tx_height))["tx"]
             assert_equal(node.getrawrelaypool(), [])
-        before, after = self.assert_zero_claim_block(tx_height, mint=mint)
+        before, after = self.assert_zero_claim_block(tx_height)
         self.log.info("height=%d tx=%s mint=%s txouts=%d->%d unclaimed_rewards=%s coinbase=%s",
                       tx_height, tx["txid"], mint, before["txouts"], after["txouts"],
                       after["block_info"]["unspendables"]["unclaimed_rewards"], after["block_info"]["coinbase"])

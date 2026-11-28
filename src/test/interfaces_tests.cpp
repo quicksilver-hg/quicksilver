@@ -94,6 +94,9 @@ BOOST_AUTO_TEST_CASE(findAncestorByHash)
     BOOST_CHECK(chain->findAncestorByHash(active[20]->GetBlockHash(), active[10]->GetBlockHash(), FoundBlock().height(height)));
     BOOST_CHECK_EQUAL(height, 10);
     BOOST_CHECK(!chain->findAncestorByHash(active[10]->GetBlockHash(), active[20]->GetBlockHash()));
+    uint256 unknown;
+    unknown.SetNull();
+    BOOST_CHECK(!chain->findAncestorByHash(unknown, active[10]->GetBlockHash()));
 }
 
 BOOST_AUTO_TEST_CASE(findCommonAncestor)
@@ -124,6 +127,14 @@ BOOST_AUTO_TEST_CASE(findCommonAncestor)
     BOOST_CHECK(!chain->findCommonAncestor({}, orig_tip->GetBlockHash(), {}, {}, FoundBlock().hash(orig_hash)));
     BOOST_CHECK_EQUAL(active_hash, active.Tip()->GetBlockHash());
     BOOST_CHECK_EQUAL(orig_hash, orig_tip->GetBlockHash());
+}
+
+BOOST_AUTO_TEST_CASE(hasBlocks_negative_max_height)
+{
+    LOCK(::cs_main);
+    const auto* tip{Assert(m_node.chainman)->ActiveChain().Tip()};
+    BOOST_CHECK(!m_node.chain->hasBlocks(tip->GetBlockHash(), 0, -1));
+    BOOST_CHECK(m_node.chain->hasBlocks(tip->GetBlockHash(), 0, 0));
 }
 
 BOOST_AUTO_TEST_CASE(hasBlocks)

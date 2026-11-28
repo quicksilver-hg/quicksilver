@@ -5,12 +5,13 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <bech32.h>
-#include <util/vector.h>
 
+#include <algorithm>
 #include <array>
 #include <assert.h>
 #include <numeric>
 #include <optional>
+#include <vector>
 
 namespace bech32
 {
@@ -366,23 +367,27 @@ std::string Encode(Encoding encoding, const std::string& hrp, const data& values
     ret.reserve(hrp.size() + 1 + values.size() + CHECKSUM_SIZE);
     ret += hrp;
     ret += SEPARATOR;
-    for (const uint8_t& i : values) ret += CHARSET[i];
+    for (const uint8_t& i : values) {
+        if (i >= 32) return {};
+        ret += CHARSET[i];
+    }
     for (const uint8_t& i : CreateChecksum(encoding, hrp, values)) ret += CHARSET[i];
     return ret;
 }
 
 /** Decode a Bech32 or Bech32m string. */
 DecodeResult Decode(const std::string& str, CharLimit limit) {
+    if (str.size() > limit) return {};
     std::vector<int> errors;
     if (!CheckCharacters(str, errors)) return {};
     size_t pos = str.rfind(SEPARATOR);
-    if (str.size() > limit) return {};
     if (pos == str.npos || pos == 0 || pos + CHECKSUM_SIZE >= str.size()) {
         return {};
     }
     data values(str.size() - 1 - pos);
     for (size_t i = 0; i < str.size() - 1 - pos; ++i) {
         unsigned char c = str[i + pos + 1];
+        if (c >= std::size(CHARSET_REV)) return {};
         int8_t rev = CHARSET_REV[c];
 
         if (rev == -1) {
@@ -405,7 +410,7 @@ std::pair<std::string, std::vector<int>> LocateErrors(const std::string& str, Ch
     std::vector<int> error_locations{};
 
     if (str.size() > limit) {
-        error_locations.resize(str.size() - limit);
+        error_locations.resize(std::min<size_t>(str.size() - limit, 16));
         std::iota(error_locations.begin(), error_locations.end(), static_cast<int>(limit));
         return std::make_pair("Bech32 string too long", std::move(error_locations));
     }
@@ -433,6 +438,10 @@ std::pair<std::string, std::vector<int>> LocateErrors(const std::string& str, Ch
     data values(length);
     for (size_t i = pos + 1; i < str.size(); ++i) {
         unsigned char c = str[i];
+        if (c >= std::size(CHARSET_REV)) {
+            error_locations.push_back(i);
+            return std::make_pair("Invalid Base 32 character", std::move(error_locations));
+        }
         int8_t rev = CHARSET_REV[c];
         if (rev == -1) {
             error_locations.push_back(i);

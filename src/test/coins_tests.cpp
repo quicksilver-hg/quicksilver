@@ -986,10 +986,12 @@ void TestFlushBehavior(
     }
 
     // Can't overwrite an entry without specifying that an overwrite is
-    // expected.
+    // expected. The refusal leaves the cache's memory accounting untouched.
+    const size_t usage_before_refusal{view->DynamicMemoryUsage()};
     BOOST_CHECK_THROW(
         view->AddCoin(outp, Coin(coin), /*possible_overwrite=*/ false),
         std::logic_error);
+    BOOST_CHECK_EQUAL(view->DynamicMemoryUsage(), usage_before_refusal);
 
     // --- 6. Spend the coin.
     //

@@ -6,7 +6,6 @@
 #include <zmq/zmqnotificationinterface.h>
 
 #include <common/args.h>
-#include <kernel/relaypool_entry.h>
 #include <logging.h>
 #include <netbase.h>
 #include <primitives/block.h>
@@ -19,6 +18,8 @@
 #include <zmq.h>
 
 #include <cassert>
+#include <cstdint>
+#include <limits>
 #include <map>
 #include <string>
 #include <utility>
@@ -65,7 +66,13 @@ std::unique_ptr<CZMQNotificationInterface> CZMQNotificationInterface::Create(std
             std::unique_ptr<CZMQAbstractNotifier> notifier = factory();
             notifier->SetType(entry.first);
             notifier->SetAddress(address);
-            notifier->SetOutboundMessageHighWaterMark(static_cast<int>(gArgs.GetIntArg(arg + "hwm", CZMQAbstractNotifier::DEFAULT_ZMQ_SNDHWM)));
+            const int64_t hwm{gArgs.GetIntArg(arg + "hwm", CZMQAbstractNotifier::DEFAULT_ZMQ_SNDHWM)};
+            if (hwm < 0 || hwm > std::numeric_limits<int>::max()) {
+                // Narrowing would wrap the value into some other limit; refuse it instead.
+                LogError(HgLog::ZMQ, "%shwm=%d is out of range (0 to %d), ZMQ notifications not started\n", arg, hwm, std::numeric_limits<int>::max());
+                return nullptr;
+            }
+            notifier->SetOutboundMessageHighWaterMark(static_cast<int>(hwm));
             notifiers.push_back(std::move(notifier));
         }
     }

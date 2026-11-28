@@ -145,7 +145,7 @@ QGridLayout* MakeRows(QWidget* host)
 
 QLabel* AddRow(QGridLayout* rows, const QString& key, const QString& value_name, QWidget* parent, QLabel** key_out)
 {
-    const int row = rows->rowCount();
+    const int row = rows->count() == 0 ? 0 : rows->rowCount();
     auto* key_label = new QLabel(key, parent);
     key_label->setProperty("class", QStringLiteral("benchKey"));
     auto* value = new QLabel(parent);

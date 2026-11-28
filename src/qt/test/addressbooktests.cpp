@@ -235,28 +235,11 @@ void TestAddAddressesToSendBook(interfaces::Node& node)
 
 void AddressBookTests::addressBookTests()
 {
-#ifdef Q_OS_MACOS
-    if (QApplication::platformName() == "minimal") {
-        // Disable for mac on "minimal" platform to avoid crashes inside the Qt
-        // framework when it tries to look up unimplemented cocoa functions,
-        // and fails to handle returned nulls
-        // (https://bugreports.qt.io/browse/QTBUG-49686).
-        qWarning() << "Skipping AddressBookTests on mac build with 'minimal' platform set due to Qt bugs. To run AppTests, invoke "
-                      "with 'QT_QPA_PLATFORM=cocoa test_quicksilver-qt' on mac, or else use a linux or windows build.";
-        return;
-    }
-#endif
     TestAddAddressesToSendBook(m_node);
 }
 
 void AddressBookTests::newSendingAddressDoesNotNestEventLoop()
 {
-#ifdef Q_OS_MACOS
-    if (QApplication::platformName() == "minimal") {
-        qWarning() << "Skipping AddressBookTests on mac build with 'minimal' platform set due to Qt bugs.";
-        return;
-    }
-#endif
     TestChain100Setup test;
     auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
     test.m_node.vault_loader = vault_loader.get();
@@ -290,12 +273,6 @@ void AddressBookTests::newSendingAddressDoesNotNestEventLoop()
 
 void AddressBookTests::exportDoesNotNestEventLoop()
 {
-#ifdef Q_OS_MACOS
-    if (QApplication::platformName() == "minimal") {
-        qWarning() << "Skipping AddressBookTests on mac build with 'minimal' platform set due to Qt bugs.";
-        return;
-    }
-#endif
     TestChain100Setup test;
     auto vault_loader = interfaces::MakeVaultLoader(*test.m_node.chain, *Assert(test.m_node.args));
     test.m_node.vault_loader = vault_loader.get();

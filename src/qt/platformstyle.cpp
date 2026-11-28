@@ -10,21 +10,6 @@
 #include <QImage>
 #include <QPalette>
 
-static const struct {
-    const char *platformId;
-    /** Show images on push buttons */
-    const bool imagesOnButtons;
-    /** Colorize single-color icons */
-    const bool colorizeIcons;
-    /** Extra padding/spacing in transactionview */
-    const bool useExtraSpacing;
-} platform_styles[] = {
-    {"macosx", false, true, true},
-    {"windows", true, true, false},
-    /* Other: linux, unix, ... */
-    {"other", true, true, false}
-};
-
 namespace {
 /* Local functions for colorizing single-color images */
 
@@ -68,11 +53,7 @@ QIcon ColorizeIcon(const QString& filename, const QColor& colorbase)
 }
 
 
-PlatformStyle::PlatformStyle(const QString &_name, bool _imagesOnButtons, bool _colorizeIcons, bool _useExtraSpacing):
-    name(_name),
-    imagesOnButtons(_imagesOnButtons),
-    colorizeIcons(_colorizeIcons),
-    useExtraSpacing(_useExtraSpacing)
+PlatformStyle::PlatformStyle(const QString& platform_name) : name(platform_name)
 {
 }
 
@@ -83,38 +64,24 @@ QColor PlatformStyle::TextColor() const
 
 QColor PlatformStyle::SingleColor() const
 {
-    if (colorizeIcons) {
-        QColor colorHighlightBg(QApplication::palette().color(QPalette::Highlight));
-        QColor colorHighlightFg(QApplication::palette().color(QPalette::HighlightedText));
-        const QColor colorText(QApplication::palette().color(QPalette::WindowText));
-        const int colorTextLightness = colorText.lightness();
-        if (abs(colorHighlightBg.lightness() - colorTextLightness) < abs(colorHighlightFg.lightness() - colorTextLightness)) {
-            return colorHighlightBg;
-        }
-        return colorHighlightFg;
+    QColor colorHighlightBg(QApplication::palette().color(QPalette::Highlight));
+    QColor colorHighlightFg(QApplication::palette().color(QPalette::HighlightedText));
+    const QColor colorText(QApplication::palette().color(QPalette::WindowText));
+    const int colorTextLightness = colorText.lightness();
+    if (abs(colorHighlightBg.lightness() - colorTextLightness) < abs(colorHighlightFg.lightness() - colorTextLightness)) {
+        return colorHighlightBg;
     }
-    return {0, 0, 0};
+    return colorHighlightFg;
 }
 
 QImage PlatformStyle::SingleColorImage(const QString& filename) const
 {
-    if (!colorizeIcons)
-        return QImage(filename);
     return ColorizeImage(filename, SingleColor());
 }
 
 QIcon PlatformStyle::SingleColorIcon(const QString& filename) const
 {
-    if (!colorizeIcons)
-        return QIcon(filename);
     return ColorizeIcon(filename, SingleColor());
-}
-
-QIcon PlatformStyle::SingleColorIcon(const QIcon& icon) const
-{
-    if (!colorizeIcons)
-        return icon;
-    return ColorizeIcon(icon, SingleColor());
 }
 
 QIcon PlatformStyle::TextColorIcon(const QIcon& icon) const
@@ -127,16 +94,10 @@ QIcon PlatformStyle::ColorIcon(const QString& filename, const QColor& color) con
     return ColorizeIcon(filename, color);
 }
 
-const PlatformStyle *PlatformStyle::instantiate(const QString &platformId)
+const PlatformStyle* PlatformStyle::instantiate(const QString& platformId)
 {
-    for (const auto& platform_style : platform_styles) {
-        if (platformId == platform_style.platformId) {
-            return new PlatformStyle(
-                    platform_style.platformId,
-                    platform_style.imagesOnButtons,
-                    platform_style.colorizeIcons,
-                    platform_style.useExtraSpacing);
-        }
+    if (platformId == QStringLiteral("windows") || platformId == QStringLiteral("other")) {
+        return new PlatformStyle(platformId);
     }
     return nullptr;
 }

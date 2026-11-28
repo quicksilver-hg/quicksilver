@@ -6,13 +6,11 @@
 #include <logging.h>
 #include <util/syserror.h>
 
-#if (defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__DragonFly__))
-#include <pthread.h>
-#include <pthread_np.h>
-#endif
-
 #ifndef WIN32
 #include <sched.h>
+#ifdef SCHED_BATCH
+#include <pthread.h>
+#endif
 #endif
 
 void ScheduleBatchPriority()

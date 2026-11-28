@@ -37,12 +37,16 @@ struct HeaderTip {
 //! instances, like the reference to the chain interface, and the list of opened
 //! vaults.
 //!
+//! It also holds the thin-client chain tip (`header_tip`), which is not a
+//! pointer: its height only moves forward, and a tip at the same height must
+//! carry the same hash (enforced where it is set, in vault/interfaces.cpp).
+//!
 //! Future shared state can be added here as an alternative to adding global
 //! variables.
 //!
-//! The struct isn't intended to have any member functions. It should just be a
-//! collection of state pointers that doesn't pull in dependencies or implement
-//! behavior.
+//! The struct has no member functions other than its constructor and destructor.
+//! It is mostly a collection of state pointers that doesn't pull in
+//! dependencies or implement behavior.
 struct VaultContext {
     interfaces::Chain* chain{nullptr};
     CScheduler* scheduler{nullptr};

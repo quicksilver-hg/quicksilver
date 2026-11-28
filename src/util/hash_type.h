@@ -6,6 +6,10 @@
 #ifndef QUICKSILVER_UTIL_HASH_TYPE_H
 #define QUICKSILVER_UTIL_HASH_TYPE_H
 
+#include <cstddef>
+#include <string>
+#include <vector>
+
 template <typename HashType>
 class BaseHash
 {

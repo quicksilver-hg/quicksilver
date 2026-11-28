@@ -16,12 +16,15 @@
  * Returns a pair <status, string>.
  * If an error occurred, status will be false, otherwise status will be true and the data will be returned in string.
  *
- * @param maxsize Puts a maximum size limit on the file that is read. If the file is larger than this, truncated data
- *         (with len > maxsize) will be returned.
+ * @param maxsize Puts a maximum size limit on the file that is read. If the file is larger than this, the first
+ *         maxsize bytes are returned with status true: the result is indistinguishable from a file of exactly
+ *         maxsize bytes, so a caller that must detect truncation has to read with a larger limit.
  */
 std::pair<bool,std::string> ReadBinaryFile(const fs::path &filename, size_t maxsize=std::numeric_limits<size_t>::max());
 
-/** Write contents of std::string to a file.
+/** Write contents of std::string to a file, atomically: the data goes to "<filename>.tmp",
+ * is synced to disk and is then renamed over filename. On any failure filename keeps its
+ * previous contents (or stays absent) and the temp file is removed.
  * @return true on success.
  */
 bool WriteBinaryFile(const fs::path &filename, const std::string &data);

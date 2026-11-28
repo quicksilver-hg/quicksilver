@@ -17,7 +17,6 @@
 #define NSIPHASH 1
 #define ATOMIC
 #define SQUASH_OUTPUT 1
-#define CUCKATOO_NO_MAIN
 namespace cuckatoo_f265_capture_e19 {
 #include <crypto/cuckatoo/vendor/lean.cpp>
 }
@@ -26,7 +25,6 @@ namespace cuckatoo_f265_capture_e19 {
 #undef NSIPHASH
 #undef ATOMIC
 #undef SQUASH_OUTPUT
-#undef CUCKATOO_NO_MAIN
 #undef MAXEDGES // lean.hpp's macro would otherwise rewrite graph::MAXEDGES below
 
 #include <boost/test/unit_test.hpp>
@@ -219,7 +217,7 @@ static E::SolverSolutions SolveCaptured(uint32_t nonce)
     params.nthreads = 4;
     E::SolverCtx* ctx = E::create_solver_ctx(&params);
     E::SolverSolutions sols{};
-    E::run_solver(ctx, buf.data(), (E::u32)len, nonce, /*range=*/1, &sols, nullptr);
+    E::run_solver(ctx, buf.data(), (E::u32)len, nonce, /*range=*/1, &sols);
     E::destroy_solver_ctx(ctx);
     return sols;
 }

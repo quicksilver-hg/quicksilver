@@ -3,8 +3,6 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <quicksilver-build-config.h> // IWYU pragma: keep
-
 #include <core_io.h>
 #include <key_io.h>
 #include <rpc/util.h>
@@ -476,7 +474,7 @@ RPCHelpMan getaddressinfo()
         if (const std::unique_ptr<CKeyMetadata> meta = spk_man->GetMetadata(dest)) {
             ret.pushKV("timestamp", meta->nCreateTime);
             if (meta->has_key_origin) {
-                ret.pushKV("hdkeypath", WriteHDKeypath(meta->key_origin.path, /*apostrophe=*/!desc_spk_man));
+                ret.pushKV("hdkeypath", WriteHDKeypath(meta->key_origin.path, /*apostrophe=*/false));
                 ret.pushKV("hdmasterfingerprint", HexStr(meta->key_origin.fingerprint));
             }
         }
@@ -613,46 +611,4 @@ RPCHelpMan listlabels()
     };
 }
 
-
-#ifdef ENABLE_EXTERNAL_SIGNER
-RPCHelpMan vaultdisplayaddress()
-{
-    return RPCHelpMan{
-        "vaultdisplayaddress",
-        "Display address on an external signer for verification.",
-        {
-            {"address", RPCArg::Type::STR, RPCArg::Optional::NO, "Quicksilver address to display"},
-        },
-        RPCResult{
-            RPCResult::Type::OBJ,"","",
-            {
-                {RPCResult::Type::STR, "address", "The address as confirmed by the signer"},
-            }
-        },
-        RPCExamples{""},
-        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
-        {
-            std::shared_ptr<CVault> const vault = GetVaultForJSONRPCRequest(request);
-            if (!vault) return UniValue::VNULL;
-            CVault* const pvault = vault.get();
-
-            LOCK(pvault->cs_vault);
-
-            CTxDestination dest = DecodeDestination(request.params[0].get_str());
-
-            // Make sure the destination is valid
-            if (!IsValidDestination(dest)) {
-                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address");
-            }
-
-            util::Result<void> res = pvault->DisplayAddress(dest);
-            if (!res) throw JSONRPCError(RPC_MISC_ERROR, util::ErrorString(res).original);
-
-            UniValue result(UniValue::VOBJ);
-            result.pushKV("address", request.params[0].get_str());
-            return result;
-        }
-    };
-}
-#endif // ENABLE_EXTERNAL_SIGNER
 } // namespace vault

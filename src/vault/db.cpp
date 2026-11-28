@@ -45,7 +45,17 @@ std::vector<std::pair<fs::path, std::string>> ListDatabases(const fs::path& vaul
             const fs::path path{it->path().lexically_relative(vault_dir)};
 
             if (it->status().type() == fs::file_type::directory) {
-                if (IsSQLiteFile(SQLiteDataFile(it->path()))) {
+                // The probe below does not throw (S0188-A-08), so report an unreadable
+                // directory here, as the throw used to, and skip it.
+                std::error_code probe_ec;
+                // status() reports a missing file through probe_ec too; that is not an error here.
+                const bool has_data_file{fs::status(SQLiteDataFile(it->path()), probe_ec).type() != fs::file_type::not_found};
+                if (probe_ec && has_data_file) {
+                    LogInfo(HgLog::VAULTDB, "%s: Error scanning %s: %s\n", __func__, fs::PathToString(it->path()), probe_ec.message());
+                    it.disable_recursion_pending();
+                    continue;
+                }
+                if (has_data_file && IsSQLiteFile(SQLiteDataFile(it->path()))) {
                     // Found a directory which contains vault.dat sqlite file, add it as a vault with SQLITE format.
                     paths.emplace_back(path, "sqlite");
                 }
@@ -74,12 +84,14 @@ fs::path SQLiteDataFile(const fs::path& path)
 
 std::optional<MessageStartChars> ReadSQLiteApplicationId(const fs::path& path)
 {
-    if (!fs::exists(path)) return std::nullopt;
-
     // A SQLite Database file is at least 512 bytes.
     std::error_code ec;
+    if (fs::status(path, ec).type() == fs::file_type::not_found || ec) return std::nullopt;
     auto size = fs::file_size(path, ec);
-    if (ec) LogInfo(HgLog::VAULTDB, "%s: %s %s\n", __func__, ec.message(), fs::PathToString(path));
+    if (ec) {
+        LogInfo(HgLog::VAULTDB, "%s: %s %s\n", __func__, ec.message(), fs::PathToString(path));
+        return std::nullopt;
+    }
     if (size < 512) return std::nullopt;
 
     std::ifstream file{path, std::ios::binary};
@@ -88,11 +100,13 @@ std::optional<MessageStartChars> ReadSQLiteApplicationId(const fs::path& path)
     // Magic is at beginning and is 16 bytes long
     char magic[16];
     file.read(magic, 16);
+    if (!file) return std::nullopt;
 
     // Application id is at offset 68 and 4 bytes long
     file.seekg(68, std::ios::beg);
     MessageStartChars app_id;
     file.read(reinterpret_cast<char*>(app_id.data()), app_id.size());
+    if (!file) return std::nullopt;
 
     file.close();
 

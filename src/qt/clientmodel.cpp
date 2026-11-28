@@ -30,18 +30,12 @@
 #include <QThread>
 #include <QTimer>
 
-static SteadyClock::time_point g_last_header_tip_update_notification{};
-static SteadyClock::time_point g_last_block_tip_update_notification{};
-
 ClientModel::ClientModel(interfaces::Node& node, OptionsModel *_optionsModel, QObject *parent) :
     QObject(parent),
     m_node(node),
     optionsModel(_optionsModel),
     m_thread(new QThread(this))
 {
-    cachedBestHeaderHeight = -1;
-    cachedBestHeaderTime = -1;
-
     peerTableModel = new PeerTableModel(m_node, this);
     m_peer_table_sort_proxy = new PeerTableSortProxy(this);
     m_peer_table_sort_proxy->setSourceModel(peerTableModel);
@@ -95,48 +89,12 @@ int ClientModel::getNumConnections(unsigned int flags) const
     return m_node.getNodeCount(connections);
 }
 
-int ClientModel::getHeaderTipHeight() const
-{
-    if (cachedBestHeaderHeight == -1) {
-        // make sure we initially populate the cache via a cs_main lock
-        // otherwise we need to wait for a tip update
-        int height;
-        int64_t blockTime;
-        if (m_node.getHeaderTip(height, blockTime)) {
-            cachedBestHeaderHeight = height;
-            cachedBestHeaderTime = blockTime;
-        }
-    }
-    return cachedBestHeaderHeight;
-}
-
-int64_t ClientModel::getHeaderTipTime() const
-{
-    if (cachedBestHeaderTime == -1) {
-        int height;
-        int64_t blockTime;
-        if (m_node.getHeaderTip(height, blockTime)) {
-            cachedBestHeaderHeight = height;
-            cachedBestHeaderTime = blockTime;
-        }
-    }
-    return cachedBestHeaderTime;
-}
-
 
 std::map<CNetAddr, LocalServiceInfo> ClientModel::getNetLocalAddresses() const
 {
     return m_node.getNetLocalAddresses();
 }
 
-
-int ClientModel::getNumBlocks() const
-{
-    if (m_cached_num_blocks == -1) {
-        m_cached_num_blocks = m_node.getNumBlocks();
-    }
-    return m_cached_num_blocks;
-}
 
 uint256 ClientModel::getBestBlockHash()
 {
@@ -213,25 +171,21 @@ QString ClientModel::blocksDir() const
 
 void ClientModel::TipChanged(SynchronizationState sync_state, interfaces::BlockTip tip, double verification_progress, SyncType synctype)
 {
-    if (synctype == SyncType::HEADER_SYNC) {
-        // cache best headers time and height to reduce future cs_main locks
-        cachedBestHeaderHeight = tip.block_height;
-        cachedBestHeaderTime = tip.block_time;
-    } else if (synctype == SyncType::BLOCK_SYNC) {
-        m_cached_num_blocks = tip.block_height;
+    if (synctype == SyncType::BLOCK_SYNC) {
         WITH_LOCK(m_cached_tip_mutex, m_cached_tip_blocks = tip.block_hash;);
     }
 
     // Throttle GUI notifications about (a) blocks during initial sync, and (b) both blocks and headers during reindex.
     const bool throttle = (sync_state != SynchronizationState::POST_INIT && synctype == SyncType::BLOCK_SYNC) || sync_state == SynchronizationState::INIT_REINDEX;
     const auto now{throttle ? SteadyClock::now() : SteadyClock::time_point{}};
-    auto& nLastUpdateNotification = synctype != SyncType::BLOCK_SYNC ? g_last_header_tip_update_notification : g_last_block_tip_update_notification;
-    if (throttle && now < nLastUpdateNotification + MODEL_UPDATE_DELAY) {
-        return;
+    {
+        LOCK(m_tip_notification_mutex);
+        auto& last_notification = synctype == SyncType::BLOCK_SYNC ? m_last_block_notification : m_last_header_notification;
+        if (throttle && now < last_notification + MODEL_UPDATE_DELAY) return;
+        last_notification = now;
     }
 
     Q_EMIT numBlocksChanged(tip.block_height, QDateTime::fromSecsSinceEpoch(tip.block_time), verification_progress, synctype, sync_state);
-    nLastUpdateNotification = now;
 }
 
 ClientModel::SyncState ClientModel::syncState(int blocks, int peers, int answered, bool behind_known_headers)
@@ -256,6 +210,7 @@ QString ClientModel::syncStateText(SyncState state)
         return QCoreApplication::translate("QuicksilverGUI", "Synchronized");
     }
     assert(false);
+    return {};
 }
 
 void ClientModel::subscribeToCoreSignals()
@@ -283,8 +238,11 @@ void ClientModel::subscribeToCoreSignals()
         }));
     m_event_handlers.emplace_back(m_node.handleBannedListChanged(
         [this]() {
-            qDebug() << "ClienModel: Requesting update for peer banlist";
-            QMetaObject::invokeMethod(banTableModel, [this] { banTableModel->refresh(); });
+            qDebug() << "ClientModel: Requesting update for peer banlist";
+            // Queued even on the GUI thread: refresh() reads the list through
+            // getBanned, which can send this notification again while the table
+            // is in the middle of its layout change (S0008-A-01).
+            QMetaObject::invokeMethod(banTableModel, [this] { banTableModel->refresh(); }, Qt::QueuedConnection);
         }));
     m_event_handlers.emplace_back(m_node.handleNotifyBlockTip(
         [this](SynchronizationState sync_state, interfaces::BlockTip tip, double verification_progress) {
@@ -298,13 +256,15 @@ void ClientModel::subscribeToCoreSignals()
 
 void ClientModel::unsubscribeFromCoreSignals()
 {
+    // This disconnects future node notifications. The timer thread is joined
+    // by stop(); Signals2 has no equivalent join for a slot already in flight.
     m_event_handlers.clear();
 }
 
 bool ClientModel::getProxyInfo(std::string& ip_port) const
 {
     Proxy ipv4, ipv6;
-    if (m_node.getProxy((Network) 1, ipv4) && m_node.getProxy((Network) 2, ipv6)) {
+    if (m_node.getProxy(NET_IPV4, ipv4) && m_node.getProxy(NET_IPV6, ipv6)) {
       ip_port = ipv4.proxy.ToStringAddrPort();
       return true;
     }

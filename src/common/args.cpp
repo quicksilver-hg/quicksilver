@@ -116,7 +116,8 @@ std::optional<common::SettingsValue> InterpretValue(const KeyInfo& key, const st
         }
         // Double negatives like -nofoo=0 are supported (but discouraged)
         if (value && !InterpretBool(*value)) {
-            LogInfo(HgLog::INIT, "Warning: parsed potentially confusing double-negative -%s=%s\n", key.name, *value);
+            LogInfo(HgLog::INIT, "Warning: parsed potentially confusing double-negative -%s=%s\n", key.name,
+                    (flags & ArgsManager::SENSITIVE) ? std::string{"****"} : *value);
             return true;
         }
         return false;
@@ -183,13 +184,6 @@ bool ArgsManager::ParseParameters(int argc, const char* const argv[], std::strin
     for (int i = 1; i < argc; i++) {
         std::string key(argv[i]);
 
-#ifdef __APPLE__
-        // At the first time when a user gets the "App downloaded from the
-        // internet" warning, and clicks the Open button, macOS passes
-        // a unique process serial number (PSN) as -psn_... command-line
-        // argument, which we filter out.
-        if (key.substr(0, 5) == "-psn_") continue;
-#endif
 
         if (key == "-") break; //quicksilver-tx using stdin
         std::optional<std::string> val;
@@ -731,13 +725,7 @@ fs::path GetDefaultDataDir()
         pathRet = fs::path("/");
     else
         pathRet = fs::path(pszHome);
-#ifdef __APPLE__
-    // macOS
-    return pathRet / "Library/Application Support/Quicksilver";
-#else
-    // Unix-like
     return pathRet / ".quicksilver";
-#endif
 #endif
 }
 

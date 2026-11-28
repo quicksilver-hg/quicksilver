@@ -14,10 +14,10 @@
 #include <qt/vaultmodel.h>
 #include <qt/vaultview.h>
 
-#include <external_signer.h>
 #include <interfaces/handler.h>
 #include <interfaces/node.h>
 #include <logging.h>
+#include <univalue.h>
 #include <util/string.h>
 #include <util/threadnames.h>
 #include <util/translation.h>
@@ -39,10 +39,7 @@
 #include <QWindow>
 
 using util::Join;
-using vault::VAULT_FLAG_BLANK_VAULT;
 using vault::VAULT_FLAG_DESCRIPTORS;
-using vault::VAULT_FLAG_DISABLE_PRIVATE_KEYS;
-using vault::VAULT_FLAG_EXTERNAL_SIGNER;
 
 namespace {
 bool ModalIsParentedUnderVault(QWidget* modal, const VaultModel* vault_model)
@@ -108,12 +105,29 @@ void VaultController::refreshThinHeaderSource()
     std::string error;
     if (m_thin_header_source->refresh(m_node.vaultLoader(), error)) {
         m_last_thin_header_error.clear();
+        setThinHeaderNotice({});
         return;
     }
     if (error != m_last_thin_header_error) {
         qWarning() << "Thin vault header refresh failed:" << QString::fromStdString(error);
         m_last_thin_header_error = std::move(error);
+        // S0245-C-01: a refused store was only a log line. Tell the user once per change.
+        setThinHeaderNotice(tr("Vault balances are not being updated from the header store. %1")
+                                .arg(QString::fromStdString(m_last_thin_header_error)));
     }
+}
+
+void VaultController::setThinHeaderNotice(const QString& notice)
+{
+    if (notice == m_thin_header_notice) return;
+    m_thin_header_notice = notice;
+    // Queued, so a refusal found by the constructor's refresh reaches the window,
+    // which connects only after the controller exists. Announced once per change.
+    QMetaObject::invokeMethod(this, [this] {
+        if (m_thin_header_notice == m_announced_thin_header_notice) return;
+        m_announced_thin_header_notice = m_thin_header_notice;
+        Q_EMIT thinHeaderNoticeChanged(m_announced_thin_header_notice);
+    }, Qt::QueuedConnection);
 }
 
 // Not using the default destructor because not all member types definitions are
@@ -153,10 +167,11 @@ void VaultController::removeVault(VaultModel* vault_model)
     vault_model->vault().remove();
 }
 
-void VaultController::openVaultsRecordedForStartup()
+std::vector<bilingual_str> VaultController::openVaultsRecordedForStartup()
 {
+    std::vector<bilingual_str> failures;
     const common::SettingsValue setting = m_node.getPersistentSetting("vault");
-    if (!setting.isArray()) return;
+    if (!setting.isArray()) return failures;
 
     std::set<std::string> already_open;
     {
@@ -173,11 +188,24 @@ void VaultController::openVaultsRecordedForStartup()
 
         std::vector<bilingual_str> warnings;
         auto vault = m_node.vaultLoader().loadVault(name, warnings);
-        // A name that will not open is left to the vault menu, which lists the vault
-        // directory as it finds it. Refusing to start over a stale settings entry
-        // would be a worse failure than the one being fixed here.
-        if (vault) getOrCreateVault(std::move(*vault));
+        // A name that will not open stays out of the vault menu as before, and the
+        // desktop still starts: refusing to start over a stale settings entry would be
+        // a worse failure. The user is told once which vaults did not open (S0250-A-11).
+        if (vault) {
+            getOrCreateVault(std::move(*vault));
+        } else {
+            failures.push_back(Untranslated(GUIUtil::VaultDisplayName(name).toStdString() + ": ") + util::ErrorString(vault));
+        }
     }
+    return failures;
+}
+
+QString VaultController::startupLoadNotice(const std::vector<bilingual_str>& failures)
+{
+    if (failures.empty()) return {};
+    QStringList lines;
+    for (const bilingual_str& failure : failures) lines << QString::fromStdString(failure.translated);
+    return tr("These vaults were open last time but could not be opened now:") + QStringLiteral("\n\n") + lines.join(QLatin1Char('\n'));
 }
 
 bool VaultController::proofOfWorkInFlight() const
@@ -554,15 +582,6 @@ void CreateVaultActivity::createVault()
     uint64_t flags = 0;
     // Enable descriptors by default.
     flags |= VAULT_FLAG_DESCRIPTORS;
-    if (m_create_vault_dialog->isDisablePrivateKeysChecked()) {
-        flags |= VAULT_FLAG_DISABLE_PRIVATE_KEYS;
-    }
-    if (m_create_vault_dialog->isMakeBlankVaultChecked()) {
-        flags |= VAULT_FLAG_BLANK_VAULT;
-    }
-    if (m_create_vault_dialog->isExternalSignerChecked()) {
-        flags |= VAULT_FLAG_EXTERNAL_SIGNER;
-    }
 
     QTimer::singleShot(500ms, worker(), [this, name, flags] {
         auto vault{node().vaultLoader().createVault(name, m_passphrase, flags, m_warning_message)};
@@ -583,11 +602,13 @@ void CreateVaultActivity::finish()
         auto* box = new QMessageBox(QMessageBox::Critical, tr("Create vault failed"),
             QString::fromStdString(m_error_message.translated), QMessageBox::Ok, m_parent_widget);
         box->setObjectName(QStringLiteral("createVaultFailed"));
+        box->setTextFormat(Qt::PlainText); // a vault name or path is not markup (S0250-A-19)
         GUIUtil::ShowModalDialogAsynchronously(box);
     } else if (!m_warning_message.empty()) {
         auto* box = new QMessageBox(QMessageBox::Warning, tr("Create vault warning"),
             QString::fromStdString(Join(m_warning_message, Untranslated("\n")).translated), QMessageBox::Ok, m_parent_widget);
         box->setObjectName(QStringLiteral("createVaultWarning"));
+        box->setTextFormat(Qt::PlainText); // a vault name or path is not markup (S0250-A-19)
         GUIUtil::ShowModalDialogAsynchronously(box);
     }
 
@@ -599,55 +620,22 @@ void CreateVaultActivity::finish()
 void CreateVaultActivity::create()
 {
     m_create_vault_dialog = new CreateVaultDialog(m_parent_widget);
+    m_create_vault_dialog->setWindowModality(Qt::ApplicationModal);
+    m_create_vault_dialog->show();
 
-    std::vector<std::unique_ptr<interfaces::ExternalSigner>> signers;
-    QString signer_error_title;
-    QString signer_error_text;
-    QString signer_error_name;
-    try {
-        signers = node().listExternalSigners();
-    } catch (const std::runtime_error& e) {
-        signer_error_title = tr("Can't list signers");
-        signer_error_text = e.what();
-        signer_error_name = QStringLiteral("listSignersFailed");
-    }
-    if (signer_error_title.isEmpty() && signers.size() > 1) {
-        signer_error_title = tr("Too many external signers found");
-        signer_error_text = QString::fromStdString("More than one external signer found. Please connect only one at a time.");
-        signer_error_name = QStringLiteral("tooManyExternalSigners");
-        signers.clear();
-    }
-    m_create_vault_dialog->setSigners(signers);
-
-    auto present_dialog = [this]() {
-        m_create_vault_dialog->setWindowModality(Qt::ApplicationModal);
-        m_create_vault_dialog->show();
-
-        connect(m_create_vault_dialog, &QObject::destroyed, [this] {
-            m_create_vault_dialog = nullptr;
-        });
-        connect(m_create_vault_dialog, &QDialog::rejected, [this] {
-            Q_EMIT finished();
-        });
-        connect(m_create_vault_dialog, &QDialog::accepted, [this] {
-            if (m_create_vault_dialog->isEncryptVaultChecked()) {
-                askPassphrase();
-            } else {
-                createVault();
-            }
-        });
-    };
-
-    if (!signer_error_title.isEmpty()) {
-        auto* box = new QMessageBox(QMessageBox::Critical, signer_error_title, signer_error_text, QMessageBox::Ok, m_parent_widget);
-        box->setObjectName(signer_error_name);
-        QPointer<CreateVaultActivity> self{this};
-        GUIUtil::ShowModalMessageBoxAsynchronously(box, [self, present_dialog](int, QAbstractButton*) {
-            if (self) present_dialog();
-        });
-        return;
-    }
-    present_dialog();
+    connect(m_create_vault_dialog, &QObject::destroyed, [this] {
+        m_create_vault_dialog = nullptr;
+    });
+    connect(m_create_vault_dialog, &QDialog::rejected, [this] {
+        Q_EMIT finished();
+    });
+    connect(m_create_vault_dialog, &QDialog::accepted, [this] {
+        if (m_create_vault_dialog->isEncryptVaultChecked()) {
+            askPassphrase();
+        } else {
+            createVault();
+        }
+    });
 }
 
 OpenVaultActivity::OpenVaultActivity(VaultController* vault_controller, QWidget* parent_widget)
@@ -661,11 +649,13 @@ void OpenVaultActivity::finish()
         auto* box = new QMessageBox(QMessageBox::Critical, tr("Open vault failed"),
             QString::fromStdString(m_error_message.translated), QMessageBox::Ok, m_parent_widget);
         box->setObjectName(QStringLiteral("openVaultFailed"));
+        box->setTextFormat(Qt::PlainText); // a vault name or path is not markup (S0250-A-19)
         GUIUtil::ShowModalDialogAsynchronously(box);
     } else if (!m_warning_message.empty()) {
         auto* box = new QMessageBox(QMessageBox::Warning, tr("Open vault warning"),
             QString::fromStdString(Join(m_warning_message, Untranslated("\n")).translated), QMessageBox::Ok, m_parent_widget);
         box->setObjectName(QStringLiteral("openVaultWarning"));
+        box->setTextFormat(Qt::PlainText); // a vault name or path is not markup (S0250-A-19)
         GUIUtil::ShowModalDialogAsynchronously(box);
     }
 
@@ -719,9 +709,19 @@ void LoadVaultsActivity::load(bool show_loading_minimized)
         }
         // getVaults() reports what node initialisation loaded, and with consensus off
         // there was no node initialisation. Open what the startup list names.
-        m_vault_controller->openVaultsRecordedForStartup();
+        m_warning_message = m_vault_controller->openVaultsRecordedForStartup();
 
-        QTimer::singleShot(0, this, [this] { Q_EMIT finished(); });
+        QTimer::singleShot(0, this, [this] {
+            // One notice per session, after the startup load (S0250-A-11, -B-09).
+            const QString notice = VaultController::startupLoadNotice(m_warning_message);
+            if (!notice.isEmpty()) {
+                auto* box = new QMessageBox(QMessageBox::Warning, tr("Load vaults"), notice, QMessageBox::Ok, m_parent_widget);
+                box->setObjectName(QStringLiteral("loadVaultsFailed"));
+                box->setTextFormat(Qt::PlainText); // vault names and errors are not markup
+                GUIUtil::ShowModalDialogAsynchronously(box);
+            }
+            Q_EMIT finished();
+        });
     });
 }
 
@@ -761,12 +761,14 @@ void RestoreVaultActivity::finish()
         auto* box = new QMessageBox(QMessageBox::Critical, tr("Restore vault failed"),
             QString::fromStdString(m_error_message.translated), QMessageBox::Ok, m_parent_widget);
         box->setObjectName(QStringLiteral("restoreVaultFailed"));
+        box->setTextFormat(Qt::PlainText); // a vault name or path is not markup (S0250-A-19)
         GUIUtil::ShowModalDialogAsynchronously(box);
     } else if (!m_warning_message.empty()) {
         //: Title of message box which is displayed when the vault is restored with some warning.
         auto* box = new QMessageBox(QMessageBox::Warning, tr("Restore vault warning"),
             QString::fromStdString(Join(m_warning_message, Untranslated("\n")).translated), QMessageBox::Ok, m_parent_widget);
         box->setObjectName(QStringLiteral("restoreVaultWarning"));
+        box->setTextFormat(Qt::PlainText); // a vault name or path is not markup (S0250-A-19)
         GUIUtil::ShowModalDialogAsynchronously(box);
     } else {
         //: Title of message box which is displayed when the vault is successfully restored.

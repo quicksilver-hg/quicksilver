@@ -7,6 +7,7 @@
 #include <common/signmessage.h> // For MessageSign(), MessageVerify(), MESSAGE_MAGIC
 #include <hash.h> // For Hash()
 #include <key.h>  // For CKey
+#include <memusage.h>
 #include <script/parsing.h>
 #include <span.h>
 #include <sync.h>
@@ -14,14 +15,15 @@
 #include <test/util/setup_common.h>
 #include <uint256.h>
 #include <util/bitdeque.h>
+#include <util/asmap.h>
 #include <util/byte_units.h>
 #include <util/fs.h>
 #include <util/fs_helpers.h>
 #include <util/moneystr.h>
 #include <util/overflow.h>
+#include <util/process/contained_child.h>
 #include <util/readwritefile.h>
 #include <util/strencodings.h>
-#include <util/subprocess.h>
 #include <util/string.h>
 #include <util/syserror.h>
 #include <util/time.h>
@@ -40,6 +42,7 @@
 #include <thread>
 #include <univalue.h>
 #include <utility>
+#include <unordered_set>
 #include <vector>
 
 #include <sys/types.h>
@@ -49,7 +52,9 @@
 #include <boost/test/unit_test.hpp>
 
 #ifndef WIN32
+#include <csignal>
 #include <fcntl.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #else
 #include <windows.h>
@@ -76,6 +81,17 @@ namespace HgLog {
 }
 
 BOOST_FIXTURE_TEST_SUITE(util_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(unordered_set_memory_usage)
+{
+    const std::unordered_set<int> values{1, 2};
+    BOOST_CHECK(memusage::DynamicUsage(values) > 0);
+}
+
+BOOST_AUTO_TEST_CASE(asmap_invalid_input)
+{
+    BOOST_CHECK_EQUAL(Interpret({}, std::vector<bool>(128)), 0U);
+}
 
 BOOST_AUTO_TEST_CASE(daemonwait_token_decision)
 {
@@ -324,6 +340,8 @@ BOOST_AUTO_TEST_CASE(util_ReplaceAll)
     test_replaceall("%s", "foo", "A test \"foo\" string 'foo'.");
     test_replaceall("\"", "foo", "A test foo%sfoo string '%s'.");
     test_replaceall("'", "foo", "A test \"%s\" string foo%sfoo.");
+    test_replaceall("%s", "$&$1", "A test \"$&$1\" string '$&$1'.");
+    test_replaceall(".", "$&$1", "A test \"%s\" string '%s'$&$1");
 }
 
 BOOST_AUTO_TEST_CASE(util_TrimString)
@@ -1187,11 +1205,13 @@ constexpr char kStubErrorLock{'L'};
 //! never reports fails the test instead of wedging the suite.
 constexpr auto kStubTimeout{std::chrono::seconds(30)};
 
-subprocess::Popen SpawnLockStub(const std::vector<std::string>& args)
+std::unique_ptr<util::ContainedChild> SpawnLockStub(const std::vector<std::string>& args)
 {
     std::vector<std::string> argv{LOCK_DIR_STUB_PATH};
     argv.insert(argv.end(), args.begin(), args.end());
-    return subprocess::Popen(argv);
+    auto child{util::ContainedChild::Spawn(argv, util::ChildStdout::kDiscard)};
+    BOOST_REQUIRE(child);
+    return child;
 }
 
 bool AwaitStubFile(const fs::path& path)
@@ -1335,7 +1355,7 @@ BOOST_AUTO_TEST_CASE(test_LockDirectory)
     {
         auto child{SpawnLockStub({dir_arg, lock_arg, "try", fs::PathToString(ready_missing)})};
         BOOST_CHECK_EQUAL(StubOutcome(ready_missing), kStubErrorWrite);
-        BOOST_CHECK_EQUAL(child.wait(), 0);
+        BOOST_CHECK_EQUAL(child->Wait(), 0);
     }
 
     // Lock on non-existent directory should fail
@@ -1363,7 +1383,7 @@ BOOST_AUTO_TEST_CASE(test_LockDirectory)
     {
         auto child{SpawnLockStub({dir_arg, lock_arg, "try", fs::PathToString(ready_blocked)})};
         BOOST_CHECK_EQUAL(StubOutcome(ready_blocked), kStubErrorLock);
-        BOOST_CHECK_EQUAL(child.wait(), 0);
+        BOOST_CHECK_EQUAL(child->Wait(), 0);
     }
 
     // Give up our lock
@@ -1392,7 +1412,7 @@ BOOST_AUTO_TEST_CASE(test_LockDirectory)
         BOOST_CHECK_EQUAL(util::LockDirectory(dirname, lockname, true), util::LockResult::Success);
 
         TouchStubFile(go_exit);
-        BOOST_CHECK_EQUAL(child.wait(), 0);
+        BOOST_CHECK_EQUAL(child->Wait(), 0);
     }
 
     // Finally: a holder that exits WITHOUT releasing must still free the lock,
@@ -1406,7 +1426,7 @@ BOOST_AUTO_TEST_CASE(test_LockDirectory)
         BOOST_CHECK_EQUAL(util::LockDirectory(dirname, lockname, true), util::LockResult::ErrorLock);
 
         TouchStubFile(go_die);
-        BOOST_CHECK_EQUAL(child.wait(), 0);
+        BOOST_CHECK_EQUAL(child->Wait(), 0);
     }
     BOOST_CHECK_EQUAL(util::LockDirectory(dirname, lockname, true), util::LockResult::Success);
 
@@ -1959,6 +1979,44 @@ BOOST_AUTO_TEST_CASE(util_WriteBinaryFile)
     const std::string actual_text{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
     BOOST_REQUIRE(valid);
     BOOST_CHECK_EQUAL(actual_text, expected_text);
+}
+
+// F-682 c01b-11: a write that fails leaves the previous file whole, never a truncated one.
+BOOST_AUTO_TEST_CASE(util_WriteBinaryFile_failure_keeps_old_content)
+{
+    const fs::path target = m_args.GetDataDirBase() / "atomic_write.dat";
+    const std::string old_text{"the old key"};
+    BOOST_REQUIRE(WriteBinaryFile(target, old_text));
+    BOOST_CHECK(!fs::exists(target + ".tmp"));
+
+    // The write cannot even start (its temp path is taken): target untouched.
+    fs::create_directory(target + ".tmp");
+    BOOST_CHECK(!WriteBinaryFile(target, "the new key"));
+    BOOST_CHECK_EQUAL(ReadBinaryFile(target).second, old_text);
+    fs::remove(target + ".tmp");
+
+#ifndef WIN32
+    // The write fails part-way: cap the process's file size below the payload, so fwrite
+    // stops with EFBIG after the first bytes are on disk.
+    struct rlimit saved;
+    BOOST_REQUIRE_EQUAL(getrlimit(RLIMIT_FSIZE, &saved), 0);
+    void (*saved_handler)(int) = signal(SIGXFSZ, SIG_IGN);
+    struct rlimit capped = saved;
+    capped.rlim_cur = 4096;
+    BOOST_REQUIRE_EQUAL(setrlimit(RLIMIT_FSIZE, &capped), 0);
+    const bool wrote = WriteBinaryFile(target, std::string(1 << 20, 'x'));
+    setrlimit(RLIMIT_FSIZE, &saved);
+    signal(SIGXFSZ, saved_handler);
+    BOOST_CHECK(!wrote);
+    BOOST_CHECK_EQUAL(ReadBinaryFile(target).second, old_text);
+    BOOST_CHECK(!fs::exists(target + ".tmp"));
+#endif
+
+    // A successful replace is whole and leaves no temp file behind.
+    const std::string new_text(100000, 'k');
+    BOOST_REQUIRE(WriteBinaryFile(target, new_text));
+    BOOST_CHECK_EQUAL(ReadBinaryFile(target).second, new_text);
+    BOOST_CHECK(!fs::exists(target + ".tmp"));
 }
 
 BOOST_AUTO_TEST_CASE(clearshrink_test)

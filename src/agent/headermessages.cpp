@@ -53,19 +53,6 @@ CSerializedNetMsg MakeGetHeadersMessage(const HeaderSyncRequest& request)
     return NetMsg::Make(NetMsgType::GETHEADERS, request.locator, request.stop_hash);
 }
 
-CSerializedNetMsg MakeHeadersMessage(std::span<const CBlockHeader> headers)
-{
-    CSerializedNetMsg message;
-    message.m_type = NetMsgType::HEADERS;
-    VectorWriter writer{message.data, 0};
-    WriteCompactSize(writer, headers.size());
-    for (const CBlockHeader& header : headers) {
-        writer << header;
-        WriteCompactSize(writer, 0);
-    }
-    return message;
-}
-
 HeaderMessageDecodeResult DecodeHeadersMessage(const CSerializedNetMsg& message, size_t max_headers_result)
 {
     if (message.m_type != NetMsgType::HEADERS) {

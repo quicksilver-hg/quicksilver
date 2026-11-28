@@ -32,10 +32,19 @@ bool ThinVaultHeaderSource::refresh(interfaces::VaultLoader& loader, std::string
         }
         write_time = observed_write_time;
         if (write_time == m_last_write_time && size == m_last_size) return true;
+        // A store that failed to load, or whose tip was refused, fails the same way
+        // until it changes, so do not revalidate it on every tick (S0245-C-02).
+        if (m_failed_error && write_time == m_failed_write_time && size == m_failed_size) {
+            error = *m_failed_error;
+            return false;
+        }
     } else if (file_error != std::errc::no_such_file_or_directory) {
         error = strprintf("Could not inspect thin header store %s: %s", fs::PathToString(m_path), file_error.message());
         return false;
-    } else if (m_loaded_missing) {
+    } else if (m_loaded_missing || m_last_write_time) {
+        // Not written yet, or removed after a tip was applied: either way there is
+        // no new information. A removed store would read as genesis only, which the
+        // loader refuses as older on every tick (S0245-C-01).
         return true;
     }
     const bool exists{write_time.has_value()};
@@ -48,6 +57,7 @@ bool ThinVaultHeaderSource::refresh(interfaces::VaultLoader& loader, std::string
         error = strprintf("Could not load thin header store %s: %s",
                           fs::PathToString(m_path),
                           agent::HeaderStoreResultString(loaded.status));
+        rememberFailure(write_time, size, error);
         return false;
     }
 
@@ -55,14 +65,28 @@ bool ThinVaultHeaderSource::refresh(interfaces::VaultLoader& loader, std::string
     if (!loader.setHeaderTip(tip.nHeight, tip.GetBlockHash(), tip.GetBlockTime())) {
         error = strprintf("Thin header store %s tried to replace the current tip with an older or conflicting tip.",
                           fs::PathToString(m_path));
+        rememberFailure(write_time, size, error);
         return false;
     }
 
+    m_failed_error.reset();
     m_loaded_missing = !exists;
     m_last_write_time = write_time;
     m_last_size = size;
     error.clear();
     return true;
+}
+
+void ThinVaultHeaderSource::rememberFailure(std::optional<fs::file_time_type> write_time, std::optional<uintmax_t> size, const std::string& error)
+{
+    // Only a store that exists has a write time and size to compare against.
+    if (!write_time) {
+        m_failed_error.reset();
+        return;
+    }
+    m_failed_write_time = write_time;
+    m_failed_size = size;
+    m_failed_error = error;
 }
 
 fs::path DefaultThinVaultHeaderStorePath()

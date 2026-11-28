@@ -267,8 +267,7 @@ FUZZ_TARGET(coins_view, .init = initialize_coins_view)
                 TxValidationState state;
                 const CTransaction transaction{random_mutable_transaction};
                 if (ContainsSpentInput(transaction, coins_view_cache)) {
-                    // Avoid:
-                    // consensus/tx_verify.cpp:171: bool Consensus::CheckTxInputs(const CTransaction &, TxValidationState &, const CCoinsViewCache &, int): Assertion `!coin.IsSpent()' failed.
+                    // The check below requires unspent prevouts.
                     return;
                 }
                 TxValidationState dummy;
@@ -282,8 +281,7 @@ FUZZ_TARGET(coins_view, .init = initialize_coins_view)
             [&] {
                 const CTransaction transaction{random_mutable_transaction};
                 if (ContainsSpentInput(transaction, coins_view_cache)) {
-                    // Avoid:
-                    // consensus/tx_verify.cpp:130: unsigned int GetP2SHSigOpCount(const CTransaction &, const CCoinsViewCache &): Assertion `!coin.IsSpent()' failed.
+                    // The check below requires unspent prevouts.
                     return;
                 }
                 (void)GetP2SHSigOpCount(transaction, coins_view_cache);
@@ -291,8 +289,7 @@ FUZZ_TARGET(coins_view, .init = initialize_coins_view)
             [&] {
                 const CTransaction transaction{random_mutable_transaction};
                 if (ContainsSpentInput(transaction, coins_view_cache)) {
-                    // Avoid:
-                    // consensus/tx_verify.cpp:130: unsigned int GetP2SHSigOpCount(const CTransaction &, const CCoinsViewCache &): Assertion `!coin.IsSpent()' failed.
+                    // The check below requires unspent prevouts.
                     return;
                 }
                 const auto flags{fuzzed_data_provider.ConsumeIntegral<uint32_t>()};

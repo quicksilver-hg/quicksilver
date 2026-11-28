@@ -17,12 +17,14 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <thread>
 #include <vector>
 
 class ArgsManager;
+class CBlock;
 class ChainstateManager;
 namespace interfaces { class Mining; }
 
@@ -163,8 +165,21 @@ public:
                              const std::vector<cuckatoo::GpuDeviceFault>& gpu_faults)
         EXCLUSIVE_LOCKS_REQUIRED(!m_stats_mutex);
 
+    //! Same signature as node::SolveBlockPoW.
+    using SolveFn = std::function<bool(ChainstateManager&, CBlock&, uint64_t&, bool,
+                                       const std::function<bool()>&, const std::function<void()>&,
+                                       cuckatoo::GpuSolveStatus*, std::vector<cuckatoo::GpuDeviceFault>*)>;
+    //! Tests only: the worker calls `solve` in place of node::SolveBlockPoW for
+    //! every window. Call before Start() only: the worker copies it once when it
+    //! starts, so a later call races with nothing and changes nothing until the
+    //! next Start(). Empty (the production state) means node::SolveBlockPoW.
+    void SetSolveFunctionForTesting(SolveFn solve) { m_solve_for_testing = std::move(solve); }
+
 private:
     void Run(CScript payout_script) EXCLUSIVE_LOCKS_REQUIRED(!m_stats_mutex);
+
+    //! Empty in production; see SetSolveFunctionForTesting.
+    SolveFn m_solve_for_testing;
 
     ChainstateManager& m_chainman;
     interfaces::Mining& m_mining;

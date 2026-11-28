@@ -36,7 +36,6 @@ public:
     //! Pure formatting for the Mine/Mint status readings.
     //! Pure: no widget. setStatus applies this and nothing else decides those rows.
     static StatusText statusText(const interfaces::MiningStatus& status);
-    static StatusText statusTextForTesting(const interfaces::MiningStatus& status);
 
     void setStatus(const interfaces::MiningStatus& status);
     void setDisplayUnit(QuicksilverUnit unit);
@@ -72,7 +71,7 @@ Q_SIGNALS:
 
 private:
     void handleStartClicked();
-    void emitStart();
+    void emitStart(const QString& script, const QString& address);
     //! Puts an address-in-disguise script in the payout field (G1 5h, option A).
     void convertAddressScript();
     void refreshDeveloperOptions();

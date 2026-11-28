@@ -126,7 +126,7 @@ bool MiningService::Start(const CScript& payout_script, const std::string& payou
         m_status.active = true;
         m_status.address = payout_address;
         m_status.payout_script = HexStr(payout_script);
-        m_status.start_time = GetTime();
+        m_status.start_time = GetTime<std::chrono::seconds>().count();
         // Publish the permit before the thread is observable. Run() reads it
         // again for the solve itself; both reads are live args, so a change
         // made after the previous arming is already in this snapshot.
@@ -252,6 +252,9 @@ void MiningService::Run(CScript payout_script)
         }
     }
 
+    // Copied once, before the loop: the setter is documented as before-Start() only.
+    const SolveFn solve_for_testing{m_solve_for_testing};
+
     bool logged_sync_wait{false};
     while (m_active.load() && !m_interrupt.load() && !m_chainman.m_interrupt) {
         if (node::MiningShouldWaitForSync(m_chainman, m_mine_without_peers.load())) {
@@ -313,23 +316,25 @@ void MiningService::Run(CScript payout_script)
             cuckatoo::GpuSolveStatus solver_status{cuckatoo::GpuSolveStatus::kNoCycle};
             std::vector<cuckatoo::GpuDeviceFault> gpu_faults;
             bool template_changed{false};
-            const bool solved = node::SolveBlockPoW(
-                m_chainman, block, budget, cpu_fallback,
-                /*abandon=*/[this, &parent, template_pool_updates, &template_changed] {
-                    if (m_interrupt.load() || !m_active.load()) {
-                        template_changed = true;
-                        return true;
-                    }
-                    const auto t = m_mining.getTip();
-                    template_changed = (t && t->hash != parent) ||
-                        m_mining.getTransactionsUpdated() != template_pool_updates;
-                    return template_changed;
-                },
-                /*on_attempt=*/[this] {
-                    m_attempts.fetch_add(1, std::memory_order_relaxed);
-                    m_rate.Record(Now<SteadySeconds>());
-                },
-                /*out_status=*/&solver_status, /*out_faults=*/&gpu_faults);
+            const std::function<bool()> abandon{[this, &parent, template_pool_updates, &template_changed] {
+                if (m_interrupt.load() || !m_active.load()) {
+                    template_changed = true;
+                    return true;
+                }
+                const auto t = m_mining.getTip();
+                template_changed = (t && t->hash != parent) ||
+                    m_mining.getTransactionsUpdated() != template_pool_updates;
+                return template_changed;
+            }};
+            const std::function<void()> on_attempt{[this] {
+                m_attempts.fetch_add(1, std::memory_order_relaxed);
+                m_rate.Record(Now<SteadySeconds>());
+            }};
+            const bool solved = solve_for_testing
+                ? solve_for_testing(m_chainman, block, budget, cpu_fallback, abandon, on_attempt,
+                                    &solver_status, &gpu_faults)
+                : node::SolveBlockPoW(m_chainman, block, budget, cpu_fallback, abandon, on_attempt,
+                                      /*out_status=*/&solver_status, /*out_faults=*/&gpu_faults);
 
             // Publish the solver's health every window, not only on failure: a
             // card that comes back must clear the error it left behind.
@@ -348,7 +353,7 @@ void MiningService::Run(CScript payout_script)
                     LOCK(m_stats_mutex);
                     m_status.blocks_found += 1;
                     m_status.coins_minted_session += minted;
-                    m_status.last_block_time = GetTime();
+                    m_status.last_block_time = GetTime<std::chrono::seconds>().count();
                 } else {
                     LogInfo(HgLog::FORGE, "rejected reason=processnewblock-refused\n");
                     wait_for_tip = true;
@@ -395,7 +400,7 @@ bool WaitForTipAfterWindow(bool solved, cuckatoo::GpuSolveStatus status, bool cp
 interfaces::MiningStatus BuildMiningStatus(const MiningService& svc, ChainstateManager& chainman)
 {
     const MiningStatus s = svc.GetStatus();
-    const int64_t now = GetTime();
+    const int64_t now = GetTime<std::chrono::seconds>().count();
     const int64_t elapsed = s.start_time ? (now - s.start_time) : 0;
 
     interfaces::MiningStatus out;

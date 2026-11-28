@@ -52,9 +52,6 @@ void VaultInit::AddVaultOptions(ArgsManager& argsman) const
                    ArgsManager::ALLOW_ANY, OptionsCategory::VAULT);
     argsman.AddArg("-disablevault", "Do not load the vault and disable vault RPC calls", ArgsManager::ALLOW_ANY, OptionsCategory::VAULT);
     argsman.AddArg("-keypool=<n>", strprintf("Set key pool size to <n> (default: %u). Warning: Smaller sizes may increase the risk of losing funds when restoring from an old backup, if none of the addresses in the original keypool have been used.", DEFAULT_KEYPOOL_SIZE), ArgsManager::ALLOW_ANY, OptionsCategory::VAULT);
-#ifdef ENABLE_EXTERNAL_SIGNER
-    argsman.AddArg("-signer=<cmd>", "External signing tool, see doc/external-signer.md", ArgsManager::ALLOW_ANY, OptionsCategory::VAULT);
-#endif
     argsman.AddArg("-spendzeroconfchange", strprintf("Spend change from transfers that have not confirmed yet. A transfer that does depends on the earlier one: if the earlier one is dropped from the relay pool, the new one fails too and its work is lost. Spending the change does not help the earlier transfer confirm (default: %u)", DEFAULT_SPEND_ZEROCONF_CHANGE), ArgsManager::ALLOW_ANY, OptionsCategory::VAULT);
     argsman.AddArg("-vault=<path>", "Specify vault path to load at startup. Can be used multiple times to load multiple vaults. Path is to a directory containing vault data. If the path is not absolute, it is interpreted relative to <vaultdir>. This only loads existing vaults and does not create new ones.", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::VAULT);
     argsman.AddArg("-vaultbroadcast",  strprintf("Make the vault broadcast transactions (default: %u)", DEFAULT_VAULTBROADCAST), ArgsManager::ALLOW_ANY, OptionsCategory::VAULT);
@@ -63,17 +60,14 @@ void VaultInit::AddVaultOptions(ArgsManager& argsman) const
     argsman.AddArg("-vaultnotify=<cmd>", "Execute command when a vault transaction changes. %s in cmd is replaced by TxID, %w is replaced by vault name, %b is replaced by the hash of the block including the transaction (set to 'unconfirmed' if the transaction is not included) and %h is replaced by the block height (-1 if not included). %w is not currently implemented on windows. On systems where %w is supported, it should NOT be quoted because this would break shell escaping used to invoke the command.", ArgsManager::ALLOW_ANY, OptionsCategory::VAULT);
 #endif
 
+    // Accept old configurations; SQLite commits each transaction without a periodic flush.
     argsman.AddHiddenArgs({"-flushvault"});
 
     argsman.AddArg("-headerstore=<file>", "Read the validated thin header chain used by a node-free desktop vault. Relative paths are resolved under the network data directory. (default: agent/headers.dat)", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::VAULT);
     argsman.AddArg("-receiptstore=<file>", "Read and update the durable agent payment receipt store. Relative paths are resolved under the network data directory. (default: agent/payment-receipts.dat)", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::VAULT);
     argsman.AddArg("-paymentreceiptdir=<dir>", "Scan agent payment receipt JSON files for desktop UTXO refresh. Relative paths are resolved under the network data directory. (default: agent/payment-receipts.d)", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::VAULT);
 
-#ifdef USE_SQLITE
     argsman.AddArg("-unsafesqlitesync", "Set SQLite synchronous=OFF to disable waiting for the database to sync to disk. This is unsafe and can cause data loss and corruption. This option is only used by tests to improve their performance (default: false)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::VAULT_DEBUG_TEST);
-#else
-    argsman.AddHiddenArgs({"-unsafesqlitesync"});
-#endif
 
     argsman.AddArg("-vaultrejectlongchains", strprintf("Vault will not create transactions that violate relay pool chain limits (default: %u)", DEFAULT_VAULT_REJECT_LONG_CHAINS), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::VAULT_DEBUG_TEST);
     argsman.AddArg("-vaultcrosschain", strprintf("Allow reusing vault files across chains (default: %u)", DEFAULT_VAULTCROSSCHAIN), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::VAULT_DEBUG_TEST);

@@ -5,6 +5,7 @@
 #include <charconv>
 #include <common/executable.h>
 #include <crypto/cuckatoo/gpu_devices.h>
+#include <crypto/cuckatoo/gpu_solver.h>
 #include <cstdlib>
 #include <gpu/helper_config.h>
 #include <util/string.h>
@@ -55,7 +56,7 @@ void AddGpuHelperArgs(ArgsManager& argsman)
     constexpr unsigned int flags{ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION};
     argsman.AddArg("-cuckatoosolver=<path>", "Path to a custom graphics helper, used instead of the one that comes with Quicksilver (mining and transfer proofs; never consensus). Returned proofs are verified before use.", flags, OptionsCategory::OPTIONS);
     argsman.AddArg("-cuckatoodevice=<id>", "Graphics card to use, by the id its helper lists (for example pci:0000:04:00.0). Repeat for several cards. Use cpu to prepare proofs on the processor only. Default: every graphics card except built-in graphics.", flags, OptionsCategory::OPTIONS);
-    argsman.AddArg("-cuckatoosolvertimeout=<sec>", "No-progress watchdog for the graphics helper, in seconds. A helper that prints nothing for this long is stopped, and work falls back as configured.", flags, OptionsCategory::OPTIONS);
+    argsman.AddArg("-cuckatoosolvertimeout=<sec>", strprintf("No-progress watchdog for the graphics helper, in seconds, from %d to %d (default: %d). A helper that prints nothing for this long is stopped, and work falls back as configured.", cuckatoo::kSolverTimeoutMinSec, cuckatoo::kSolverTimeoutMaxSec, cuckatoo::kSolverTimeoutDefaultSec), flags, OptionsCategory::OPTIONS);
 }
 
 util::Result<void> ApplyGpuHelperArgs(const ArgsManager& args, const std::optional<fs::path>& bundled)
@@ -72,8 +73,8 @@ util::Result<void> ApplyGpuHelperArgs(const ArgsManager& args, const std::option
         unsigned int seconds{0};
         const auto [end, ec] = std::from_chars(trimmed.data(), trimmed.data() + trimmed.size(), seconds);
         if (trimmed.empty() || ec != std::errc{} || end != trimmed.data() + trimmed.size() ||
-            seconds < 1 || seconds > 86400) {
-            return util::Error{Untranslated(strprintf("-cuckatoosolvertimeout must be a whole number of seconds from 1 to 86400, not '%s'.", timeout))};
+            seconds < cuckatoo::kSolverTimeoutMinSec || seconds > cuckatoo::kSolverTimeoutMaxSec) {
+            return util::Error{Untranslated(strprintf("-cuckatoosolvertimeout must be a whole number of seconds from %d to %d, not '%s'.", cuckatoo::kSolverTimeoutMinSec, cuckatoo::kSolverTimeoutMaxSec, timeout))};
         }
         timeout = trimmed;
     }

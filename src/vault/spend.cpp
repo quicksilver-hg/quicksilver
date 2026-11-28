@@ -3,6 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <agent/allotmentstore.h>
 #include <algorithm>
 #include <arith_uint256.h>
 #include <chainparams.h>
@@ -25,11 +26,13 @@
 #include <script/script.h>
 #include <script/signingprovider.h>
 #include <script/solver.h>
+#include <support/cleanse.h>
 #include <util/strencodings.h>
 #include <univalue.h>
 #include <util/check.h>
 #include <util/moneystr.h>
 #include <util/string.h>
+#include <util/time.h>
 #include <util/trace.h>
 #include <util/translation.h>
 #include <vault/coincontrol.h>
@@ -42,6 +45,7 @@
 
 #include <cmath>
 #include <limits>
+#include <optional>
 
 using common::TransactionErrorString;
 using interfaces::FoundBlock;
@@ -49,8 +53,6 @@ using node::TransactionError;
 
 TRACEPOINT_SEMAPHORE(coin_selection, selected_coins);
 TRACEPOINT_SEMAPHORE(coin_selection, normal_create_tx_internal);
-TRACEPOINT_SEMAPHORE(coin_selection, attempting_aps_create_tx);
-TRACEPOINT_SEMAPHORE(coin_selection, aps_create_tx_internal);
 
 namespace vault {
 
@@ -223,14 +225,14 @@ TxSize CalculateMaximumSignedTxSize(const CTransaction &tx, const CVault *vault,
     // Add the size of the transaction inputs as if they were signed.
     for (uint32_t i = 0; i < txouts.size(); i++) {
         const auto txin_size = GetSignedTxinSize(vault, coin_control, tx.vin[i], txouts[i], is_segwit, vault->CanGrindR());
-        if (!txin_size) return TxSize{-1, -1, -1};
+        if (!txin_size) return TxSize{-1, -1};
         assert(txin_size->weight > -1);
         weight += txin_size->weight;
         bytes += txin_size->bytes;
     }
 
     // It's ok to use 0 as the number of sigops since we never create any pathological transaction.
-    return TxSize{GetVirtualTransactionSize(weight, 0, 0), weight, bytes};
+    return TxSize{weight, bytes};
 }
 
 TxSize CalculateMaximumSignedTxSize(const CTransaction &tx, const CVault *vault, const CCoinControl* coin_control)
@@ -245,10 +247,10 @@ TxSize CalculateMaximumSignedTxSize(const CTransaction &tx, const CVault *vault,
             txouts.emplace_back(mi->second.tx->vout.at(input.prevout.n));
         } else if (coin_control) {
             const auto& txout{coin_control->GetExternalOutput(input.prevout)};
-            if (!txout) return TxSize{-1, -1, -1};
+            if (!txout) return TxSize{-1, -1};
             txouts.emplace_back(*txout);
         } else {
-            return TxSize{-1, -1, -1};
+            return TxSize{-1, -1};
         }
     }
     return CalculateMaximumSignedTxSize(tx, vault, txouts, coin_control);
@@ -383,8 +385,6 @@ CoinsResult AvailableCoins(const CVault& vault,
     const int max_depth = {coinControl ? coinControl->m_max_depth : DEFAULT_MAX_DEPTH};
     const bool only_safe = {coinControl ? !coinControl->m_include_unsafe_inputs : true};
     const bool can_grind_r = vault.CanGrindR();
-    std::vector<COutPoint> outpoints;
-
     std::set<uint256> trusted_parents;
     for (const auto& entry : vault.mapVault)
     {
@@ -465,8 +465,6 @@ CoinsResult AvailableCoins(const CVault& vault,
 
             result.Add(GetOutputType(type, is_from_p2sh),
                        COutput(outpoint, output, nDepth, input_bytes, solvable, safeTx, wtx.GetTxTime(), tx_from_me));
-
-            outpoints.push_back(outpoint);
 
             // Checks the sum amount of all UTXO's.
             if (params.min_sum_amount != MAX_MONEY) {
@@ -867,7 +865,7 @@ static bool IsCurrentForLocktimeFreshness(interfaces::Chain& chain, const uint25
     constexpr int64_t MAX_LOCKTIME_FRESHNESS_TIP_AGE = 8 * 60 * 60; // in seconds
     int64_t block_time;
     CHECK_NONFATAL(chain.findBlock(block_hash, FoundBlock().time(block_time)));
-    if (block_time < (GetTime() - MAX_LOCKTIME_FRESHNESS_TIP_AGE)) {
+    if (block_time < (TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()) - MAX_LOCKTIME_FRESHNESS_TIP_AGE)) {
         return false;
     }
     return true;
@@ -984,6 +982,42 @@ static std::optional<bilingual_str> CheckLocktimeOutlivesProof(CVault& vault, co
     if (!too_far) return std::nullopt;
     const int span{cp.nMaxAnchorAge - VAULT_ANCHOR_DEPTH};
     return strprintf(_("This locktime is too far ahead. A transfer's proof of work expires about %d blocks after it is made, so this transfer could never be accepted. Use a locktime at most %d blocks ahead."), span, span);
+}
+
+//! Lock `outpoints` in one DB transaction. If the transaction fails, or anything in
+//! it throws, the outpoints this call newly locked are unlocked in memory again, so
+//! the in-memory and stored lock sets stay the same (S0192-A-02).
+static bool LockCoinsWithinTxn(CVault& vault, const std::vector<COutPoint>& outpoints, std::string_view process_desc)
+    EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault)
+{
+    AssertLockHeld(vault.cs_vault);
+    std::vector<COutPoint> added;
+    const auto roll_back{[&]() EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault) {
+        for (const COutPoint& outpoint : added) vault.UnlockCoin(outpoint);
+    }};
+    bool locked{false};
+    try {
+        locked = RunWithinTxn(vault.GetDatabase(), process_desc, [&](VaultBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(vault.cs_vault) {
+            for (const COutPoint& outpoint : outpoints) {
+                const bool was_locked{vault.IsLockedCoin(outpoint)};
+                if (!vault.LockCoin(outpoint, &batch)) return false;
+                if (!was_locked) added.push_back(outpoint);
+            }
+            return true;
+        });
+    } catch (...) {
+        roll_back();
+        throw;
+    }
+    if (!locked) roll_back();
+    return locked;
+}
+
+bool AllowsTxPowCpuFallback(uint8_t edgebits)
+{
+    static const uint8_t sandbox_edgebits{CChainParams::Sandbox({})->GetConsensus().nTxEdgeBits};
+    static const uint8_t real_edgebits{CChainParams::Main()->GetConsensus().nTxEdgeBits};
+    return edgebits == sandbox_edgebits || edgebits == real_edgebits;
 }
 
 std::optional<bilingual_str> GrindTransactionPow(CVault& vault, CMutableTransaction& txNew,
@@ -1116,7 +1150,8 @@ struct BuiltTransaction {
     //! Carried purely so the coin-selection log line reads the same as it always has.
     std::string algo_name;
     size_t inputs;
-    int nBytes;
+    //! Upper bound on the signed transaction's serialized size.
+    int64_t nBytes;
 };
 
 static util::Result<BuiltTransaction> BuildTransactionForProof(
@@ -1303,7 +1338,7 @@ static util::Result<BuiltTransaction> BuildTransactionForProof(
     }
 
     TxSize tx_sizes = CalculateMaximumSignedTxSize(CTransaction(txNew), &vault, &coin_control);
-    int nBytes = tx_sizes.vsize;
+    const int64_t nBytes{tx_sizes.bytes};
     if (nBytes == -1) {
         return util::Error{_("Missing solving data for estimating transaction size")};
     }
@@ -1460,6 +1495,20 @@ util::Result<CreatedTransactionResult> CreateTransaction(
         }
         built.emplace(std::move(*res));
     }
+    // If anything below throws (the grind, the chain lookups, bad_alloc), `built`
+    // and its reserved change key must still be destroyed with cs_vault held, as
+    // returning an unkept key touches the vault (S0192-A-04). Declared after
+    // `built`, so it runs first; the explicit resets below leave it nothing to do.
+    struct ResetUnderVaultLock {
+        CVault& vault;
+        std::optional<BuiltTransaction>& built;
+        ~ResetUnderVaultLock()
+        {
+            if (!built) return;
+            LOCK(vault.cs_vault);
+            built.reset();
+        }
+    } reset_under_lock{vault, built};
 
     // Phase 2 — grind the proof, unlocked.
     const auto grind_pow = [&](uint64_t bytes) -> std::optional<bilingual_str> {
@@ -1520,7 +1569,7 @@ util::Result<CreatedTransactionResult> CreateTransaction(
     built->reservedest->KeepDestination();
 
     vault.VaultLogPrintf("Coin Selection: Algorithm:%s Inputs:%u\n", built->algo_name, built->inputs);
-    vault.VaultLogPrintf("Transaction construction: Bytes:%u (exact value)\n", built->nBytes);
+    vault.VaultLogPrintf("Transaction construction: Bytes:%d (upper bound once signed), exact value\n", built->nBytes);
 
     const std::optional<unsigned int> final_change_pos{built->change_pos};
     const uint64_t final_pow_bytes{built->pow_bytes};
@@ -1678,13 +1727,7 @@ util::Result<AgentAllotmentPolicyBundle> CVault::ExportAgentAllotmentPolicyBundl
     // double-spend, but it would waste a full grind: 50 seconds on a GPU and about 16
     // minutes on a CPU.
     if (!outpoints_to_lock.empty()) {
-        if (!RunWithinTxn(GetDatabase(), /*process_desc=*/"lock agent funding outputs",
-                          [&](VaultBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(cs_vault) {
-                              for (const COutPoint& outpoint : outpoints_to_lock) {
-                                  if (!LockCoin(outpoint, &batch)) return false;
-                              }
-                              return true;
-                          })) {
+        if (!LockCoinsWithinTxn(*this, outpoints_to_lock, /*process_desc=*/"lock agent funding outputs")) {
             return util::Error{Untranslated("Agent allotment funding outputs could not be reserved for the agent.")};
         }
     }
@@ -1718,8 +1761,35 @@ util::Result<AgentAllotmentPolicyBundle> CVault::ExportAgentAllotmentPolicyBundl
     }
     bundle_json.pushKV("funding_outputs", std::move(funding_outputs_json));
     bundle.bundle_json = bundle_json.write();
+    // bundle.agent_secret and bundle.bundle_json are the hand-over itself and stay
+    // plain strings (the GUI reads them). The UniValue's own copy of the WIF is
+    // wiped here before it is freed (c04-21); the object is not const, so writing
+    // through the accessor's reference is defined.
+    {
+        std::string& wif_copy{const_cast<std::string&>(bundle_json.find_value("agent_secret_wif").get_str())};
+        memory_cleanse(wif_copy.data(), wif_copy.size());
+    }
     return bundle;
 }
+namespace {
+//! The agent's day is agent::SECONDS_PER_UTC_DAY (agent/allotmentstore.h): the vault
+//! uses the same boundary for the daily limit (F-661).
+using agent::SECONDS_PER_UTC_DAY;
+
+//! What an agent spend sends away from its allotment: every output that is not change back to
+//! the funding script. The chain is feeless, so this equals inputs minus change, the amount the
+//! agent counts against its daily limit. nullopt if an amount is out of range.
+std::optional<CAmount> AgentSpendAmount(const std::vector<CTxOut>& outputs, const CScript& funding_script)
+{
+    CAmount sent{0};
+    for (const CTxOut& out : outputs) {
+        if (!MoneyRange(out.nValue) || !MoneyRange(sent + out.nValue)) return std::nullopt;
+        if (out.scriptPubKey != funding_script) sent += out.nValue;
+    }
+    return sent;
+}
+} // namespace
+
 util::Result<AgentCosignResult> CVault::CosignAgentAllotmentSpend(const std::string& psqt_base64)
 {
     PartiallySignedQuicksilverTransaction request;
@@ -1827,6 +1897,32 @@ util::Result<AgentCosignResult> CVault::CosignAgentAllotmentSpend(const std::str
         return util::Error{Untranslated("Agent spend request's proof has expired. Ask the agent for a fresh request.")};
     }
 
+    // F-661: the vault enforces the allotment's daily limit too, not only the agent. What it has
+    // co-signed is the transactions it committed with this allotment's tag, which vault.dat
+    // already holds, so the count survives a restart without a record of its own. Every one
+    // counts whatever its state: a co-signed transaction is fully signed, and anyone holding it
+    // can still broadcast it.
+    if (record->daily_limit > 0) {
+        const auto amount{AgentSpendAmount(request.tx->vout, scripts[0])};
+        if (!amount) return util::Error{Untranslated("Agent spend request's amounts are out of range.")};
+        const int64_t today{TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()) / SECONDS_PER_UTC_DAY};
+        CAmount cosigned_today{0};
+        for (const auto& [_, wtx] : mapVault) {
+            const auto tag{wtx.mapValue.find("agent_allotment")};
+            if (tag == wtx.mapValue.end() || tag->second != record->id) continue;
+            if (static_cast<int64_t>(wtx.nTimeReceived) / SECONDS_PER_UTC_DAY != today) continue;
+            const auto sent{AgentSpendAmount(wtx.tx->vout, scripts[0])};
+            if (!sent || !MoneyRange(cosigned_today + *sent)) {
+                return util::Error{Untranslated("Agent spend request's amounts are out of range.")};
+            }
+            cosigned_today += *sent;
+        }
+        const CAmount remaining{cosigned_today >= record->daily_limit ? 0 : record->daily_limit - cosigned_today};
+        if (*amount > remaining) {
+            return util::Error{Untranslated("This spend would take the agent allotment over its daily limit. The limit resets at 00:00 UTC.")};
+        }
+    }
+
     if (IsLocked()) return util::Error{Untranslated("Unlock this vault to co-sign an agent spend request.")};
     VaultDescriptor stored{descriptor, /*creation_time=*/0, /*range_start=*/0, /*range_end=*/0, /*next_index=*/0};
     auto* manager{GetDescriptorScriptPubKeyMan(stored)};
@@ -1865,23 +1961,28 @@ util::Result<AgentCosignResult> CVault::CosignAgentAllotmentSpend(const std::str
         if (tx->vout[i].scriptPubKey == scripts[0]) change_outpoints.emplace_back(tx->GetHash(), i);
     }
     if (!change_outpoints.empty() &&
-        !RunWithinTxn(GetDatabase(), /*process_desc=*/"lock agent change outputs",
-                      [&](VaultBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(cs_vault) {
-                          for (const COutPoint& outpoint : change_outpoints) {
-                              if (!LockCoin(outpoint, &batch)) return false;
-                          }
-                          return true;
-                      })) {
+        !LockCoinsWithinTxn(*this, change_outpoints, /*process_desc=*/"lock agent change outputs")) {
         return util::Error{Untranslated("Agent spend request's change could not be reserved for the agent.")};
     }
-    const auto committed{CommitTransaction(tx, {{"agent_allotment", record->id}}, {})};
-    if (!committed) {
+    const auto unlock_change{[&]() EXCLUSIVE_LOCKS_REQUIRED(cs_vault) {
         VaultBatch batch(GetDatabase());
         for (const COutPoint& outpoint : change_outpoints) UnlockCoin(outpoint, &batch);
-        return util::Error{Untranslated(committed.reject_reason)};
+    }};
+    // CommitTransaction can throw; the change of a transaction that was never
+    // committed must not stay locked, in memory or on disk (S0192-A-02).
+    std::optional<CommitTransactionResult> committed;
+    try {
+        committed.emplace(CommitTransaction(tx, {{"agent_allotment", record->id}}, {}));
+    } catch (...) {
+        unlock_change();
+        throw;
+    }
+    if (!*committed) {
+        unlock_change();
+        return util::Error{Untranslated(committed->reject_reason)};
     }
     // A spend the node did not accept yet is still committed: the change stays
     // reserved for the agent, and the refusal goes back to the caller.
-    return AgentCosignResult{tx, committed};
+    return AgentCosignResult{tx, *committed};
 }
 } // namespace vault

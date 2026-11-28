@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array> // For std::begin and std::end.
 #include <bit>
+#include <cassert>
 
 #include <stdint.h>
 

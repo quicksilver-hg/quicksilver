@@ -27,9 +27,6 @@ enum class Token {
     Silver,
     SilverHi,
     SilverMuted,
-    Teal,
-    Amber,
-    Violet,
     // Assay Bench roles the earlier palette does not name. A concept colour that
     // sits within a shade of a token above keeps that token.
     BenchSurface,
@@ -40,11 +37,11 @@ enum class Token {
     TickerText,
     // Rail row text and icon tint, and the same for a destination that is
     // not available yet.
-    RailText,
+    RailText, // Shares its colour with BenchLabel.
     RailDisabled,
-    // Ledger state: a transfer waiting for a block, and an outgoing amount or
-    // a maturing reward.
+    // Ledger state for a transfer waiting for a block.
     StatePending,
+    // Outgoing amount colour.
     CinnabarSoft,
     // A row's key and the notes under it: as legible as the values they name.
     BenchLabel,

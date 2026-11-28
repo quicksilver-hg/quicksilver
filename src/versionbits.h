@@ -21,16 +21,16 @@ static const int32_t VERSIONBITS_TOP_MASK = 0xE0000000UL;
 static const int32_t VERSIONBITS_NUM_BITS = 29;
 
 /** BIP 9 defines a finite-state-machine to deploy a softfork in multiple stages.
- *  State transitions happen during retarget period if conditions are met
+ *  State transitions happen at BIP9 window boundaries if conditions are met
  *  In case of reorg, transitions can go backward. Without transition, state is
  *  inherited between periods. All blocks of a period share the same state.
  */
 enum class ThresholdState {
     DEFINED,   // First state that each softfork starts out as. The genesis block is by definition in this state for each deployment.
     STARTED,   // For blocks past the starttime.
-    LOCKED_IN, // For at least one retarget period after the first retarget period with STARTED blocks of which at least threshold have the associated bit set in nVersion, until min_activation_height is reached.
-    ACTIVE,    // For all blocks after the LOCKED_IN retarget period (final state)
-    FAILED,    // For all blocks once the first retarget period after the timeout time is hit, if LOCKED_IN wasn't already reached (final state)
+    LOCKED_IN, // For at least one BIP9 window after the first BIP9 window with STARTED blocks of which at least threshold have the associated bit set in nVersion, until min_activation_height is reached.
+    ACTIVE,    // For all blocks after the LOCKED_IN BIP9 window (final state)
+    FAILED,    // For all blocks once the first BIP9 window after the timeout time is hit, if LOCKED_IN wasn't already reached (final state)
 };
 
 // A map that gives the state for blocks whose height is a multiple of Period().

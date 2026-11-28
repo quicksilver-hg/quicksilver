@@ -114,6 +114,10 @@ PSQTAnalysis AnalyzePSQT(PartiallySignedQuicksilverTransaction psqtx)
         // Compare inputs and outputs; Quicksilver PSQTs must be exact-value.
         CAmount value_delta = in_amt - out_amt;
         result.value_delta = value_delta;
+        if (value_delta != 0) {
+            result.SetInvalid("PSQT is not valid. Input and output amounts differ");
+            return result;
+        }
 
         // Estimate the size
         CMutableTransaction mtx(*psqtx.tx);

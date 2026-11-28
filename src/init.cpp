@@ -81,7 +81,6 @@
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/fs_helpers.h>
-#include <util/moneystr.h>
 #include <util/result.h>
 #include <util/signalinterrupt.h>
 #include <util/strencodings.h>
@@ -96,6 +95,7 @@
 #include <vaultinitinterface.h>
 
 #include <algorithm>
+#include <limits>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -120,7 +120,6 @@
 #include <zmq/zmqrpc.h>
 #endif
 
-using common::AmountErrMsg;
 using common::InvalidPortErrMsg;
 using common::ResolveErrMsg;
 
@@ -145,7 +144,6 @@ using util::ReplaceAll;
 using util::ToString;
 
 static constexpr bool DEFAULT_PROXYRANDOMIZE{true};
-static constexpr bool DEFAULT_REST_ENABLE{false};
 static constexpr bool DEFAULT_I2P_ACCEPT_INCOMING{true};
 static constexpr bool DEFAULT_STOPAFTERBLOCKIMPORT{false};
 
@@ -271,7 +269,6 @@ void Interrupt(NodeContext& node)
     InterruptHTTPServer();
     InterruptHTTPRPC();
     InterruptRPC();
-    InterruptREST();
     InterruptTorControl();
     InterruptMapPort();
     if (node.connman)
@@ -294,11 +291,9 @@ void Shutdown(NodeContext& node)
     /// for example if the data directory was found to be locked.
     /// Be sure that anything that writes files or flushes caches only does this if the respective
     /// module was initialized.
-    util::ThreadRename("shutoff");
     if (node.relaypool) node.relaypool->AddTransactionsUpdated(1);
 
     StopHTTPRPC();
-    StopREST();
     StopRPC();
     StopHTTPServer();
 
@@ -491,7 +486,7 @@ void SetupServerArgs(ArgsManager& argsman)
     argsman.AddArg("-conf=<file>", strprintf("Specify path to read-only configuration file. Relative paths will be prefixed by datadir location (only useable from command line, not configuration file) (default: %s)", QUICKSILVER_CONF_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-datadir=<dir>", "Specify data directory", ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION, OptionsCategory::OPTIONS);
     argsman.AddArg("-dbbatchsize", strprintf("Maximum database write batch size in bytes (default: %u)", nDefaultDbBatchSize), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-dbcache=<n>", strprintf("Maximum database cache size <n> MiB (minimum %d, default: %d). Make sure you have enough RAM. In addition, unused memory allocated to the relay pool is shared with this cache (see -maxrelaypool).", MIN_DB_CACHE >> 20, DEFAULT_DB_CACHE >> 20), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-dbcache=<n>", strprintf("Maximum database cache size <n> MiB (minimum %d, default: %d). Make sure you have enough RAM.", MIN_DB_CACHE >> 20, DEFAULT_DB_CACHE >> 20), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-includeconf=<file>", "Specify additional configuration file, relative to the -datadir path (only useable from configuration file, not command line)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-loadblock=<file>", "Imports blocks from external file on startup", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-maxrelaypool=<n>", strprintf("Keep the relay pool below <n> megabytes (default: %u)", DEFAULT_MAX_RELAYPOOL_SIZE_MB), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -504,7 +499,9 @@ void SetupServerArgs(ArgsManager& argsman)
     argsman.AddArg("-pid=<file>", strprintf("Specify pid file. Relative paths will be prefixed by a net-specific datadir location. (default: %s)", QUICKSILVER_PID_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-prune=<n>", strprintf("Reduce storage requirements by enabling pruning (deleting) of old blocks. This allows the pruneblockchain RPC to be called to delete specific blocks and enables automatic pruning of old blocks if a target size in MiB is provided. This mode is incompatible with -txindex. "
             "Warning: Reverting this setting requires re-downloading the entire blockchain. "
-            "(default: 0 = disable pruning blocks, 1 = allow manual pruning via RPC, >=%u = automatically prune block files to stay under the specified target size in MiB)", MIN_DISK_SPACE_FOR_BLOCK_FILES / 1024 / 1024), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+            "(default: 0 = disable pruning blocks, 1 = allow manual pruning via RPC, >=2 = automatically prune block files to stay under the specified target size in MiB). "
+            "On main and publictest, targets below %u MiB are raised to %u MiB with a warning; sandbox keeps a 550 MiB floor.",
+            MIN_DISK_SPACE_FOR_BLOCK_FILES / 1024 / 1024, MIN_DISK_SPACE_FOR_BLOCK_FILES / 1024 / 1024), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-reindex", "If enabled, wipe chain state and ledger index, and rebuild them from blk*.dat files on disk. Also wipe and rebuild other optional indexes that are active.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-reindex-chainstate", "If enabled, wipe chain state, and rebuild it from blk*.dat files on disk.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-settings=<file>", strprintf("Specify path to dynamic settings data file. Can be disabled with -nosettings. File is written at runtime and not meant to be edited by users (use %s instead for custom settings). Relative paths will be prefixed by datadir location. (default: %s)", QUICKSILVER_CONF_FILENAME, QUICKSILVER_SETTINGS_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -563,7 +560,7 @@ void SetupServerArgs(ArgsManager& argsman)
     argsman.AddArg("-natpmp", strprintf("Use PCP or NAT-PMP to map the listening port (default: %u)", DEFAULT_NATPMP), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-whitebind=<[permissions@]addr>", "Bind to the given address and add permission flags to the peers connecting to it. "
         "Use [host]:port notation for IPv6. Allowed permissions: " + Join(NET_PERMISSIONS_DOC, ", ") + ". "
-        "Specify multiple permissions separated by commas (default: download,noban,relay). Can be specified multiple times.", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+        "Specify multiple permissions separated by commas (default: download,noban,relay; relay is omitted with -blocksonly). Can be specified multiple times.", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
 
     argsman.AddArg("-whitelist=<[permissions@]IP address or network>", "Add permission flags to the peers using the given IP address (e.g. 1.2.3.4) or "
         "CIDR-notated network (e.g. 1.2.3.0/24). Uses the same permissions as "
@@ -640,7 +637,9 @@ void SetupServerArgs(ArgsManager& argsman)
     argsman.AddArg("-minewithoutpeers", "Let the background miner start before any peer has sent block headers, so a lone node can mine a test chain. Not available on main, where mining waits until a peer's headers show the node has caught up with the network (default: 1 on sandbox and publictest)", ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
     argsman.AddArg("-minezeroclaim", "Mine blocks that claim no reward: the coinbase pays 0, so neither the block subsidy nor the per-transaction mint allowance is created. Blocks still include and confirm transactions. Requires -minescript with a provably unspendable script, such as 6a. Not for anyone mining for income (default: 0)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::BLOCK_CREATION);
 
-    argsman.AddArg("-rest", strprintf("Accept public REST requests (default: %u)", DEFAULT_REST_ENABLE), ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
+    // The REST interface was removed (F-643). -rest stays accepted, hidden and ignored,
+    // so a configuration that still sets it starts.
+    argsman.AddHiddenArgs({"-rest"});
     argsman.AddArg("-rpcallowip=<ip>", "Allow JSON-RPC connections from specified source. Valid values for <ip> are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0), a network/CIDR (e.g. 1.2.3.4/24), all ipv4 (0.0.0.0/0), or all ipv6 (::/0). This option can be specified multiple times", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     argsman.AddArg("-rpcauth=<userpw>", "Username and HMAC-SHA-256 hashed password for JSON-RPC connections. The field <userpw> comes in the format: <USERNAME>:<SALT>$<HASH>. A canonical python script is included in share/rpcauth. The client then connects normally using the rpcuser=<USERNAME>/rpcpassword=<PASSWORD> pair of arguments. This option can be specified multiple times", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::RPC);
     argsman.AddArg("-rpcbind=<addr>[:port]", "Bind to given address to listen for JSON-RPC connections. Do not expose the RPC server to untrusted networks such as the public internet! This option is ignored unless -rpcallowip is also passed. Port is optional and overrides -rpcport. Use [host]:port notation for IPv6. This option can be specified multiple times (default: 127.0.0.1 and ::1 i.e., localhost)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::RPC);
@@ -690,7 +689,7 @@ static bool AppInitServers(NodeContext& node)
     node.rpc_interruption_point = RpcInterruptionPoint;
     if (!StartHTTPRPC(&node))
         return false;
-    if (args.GetBoolArg("-rest", DEFAULT_REST_ENABLE)) StartREST(&node);
+    if (args.IsArgSet("-rest")) LogInfo(HgLog::INIT, "The REST interface was removed; -rest is ignored\n");
     StartHTTPServer();
     return true;
 }
@@ -992,7 +991,11 @@ bool AppInitParameterInteraction(const ArgsManager& args)
         }
     }
 
-    nBytesPerSigOp = args.GetIntArg("-bytespersigop", nBytesPerSigOp);
+    const int64_t bytes_per_sigop{args.GetIntArg("-bytespersigop", nBytesPerSigOp)};
+    if (bytes_per_sigop < 0 || bytes_per_sigop > std::numeric_limits<unsigned int>::max()) {
+        return InitError(_("-bytespersigop is outside the supported range"));
+    }
+    nBytesPerSigOp = static_cast<unsigned int>(bytes_per_sigop);
 
     if (!g_vault_init_interface.ParameterInteraction()) return false;
 
@@ -1044,7 +1047,7 @@ bool AppInitParameterInteraction(const ArgsManager& args)
                 .cache_bytes = 0,
             },
         };
-        auto blockman_result{ApplyArgsManOptions(args, blockman_opts_dummy)};
+        auto blockman_result{ApplyArgsManOptions(args, blockman_opts_dummy, /*warn_on_adjustment=*/true)};
         if (!blockman_result) {
             return InitError(util::ErrorString(blockman_result));
         }
@@ -1610,6 +1613,13 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
             return chainman->m_blockman.ReadRawBlock(block, WITH_LOCK(cs_main, return index.GetBlockPos()));
         });
 
+    const bool zmq_requested = args.IsArgSet("-zmqpubhashblock") || args.IsArgSet("-zmqpubhashtx") ||
+                               args.IsArgSet("-zmqpubrawblock") || args.IsArgSet("-zmqpubrawtx") ||
+                               args.IsArgSet("-zmqpubsequence");
+    if (zmq_requested && !g_zmq_notification_interface) {
+        return InitError(_("Unable to initialize the configured ZMQ notification interface"));
+    }
+
     if (g_zmq_notification_interface) {
         validation_signals.RegisterValidationInterface(g_zmq_notification_interface.get());
     }
@@ -1860,8 +1870,14 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     connOptions.uiInterface = &uiInterface;
     connOptions.m_banman = node.banman.get();
     connOptions.m_msgproc = node.peerman.get();
-    connOptions.nSendBufferMaxSize = 1000 * args.GetIntArg("-maxsendbuffer", DEFAULT_MAXSENDBUFFER);
-    connOptions.nReceiveFloodSize = 1000 * args.GetIntArg("-maxreceivebuffer", DEFAULT_MAXRECEIVEBUFFER);
+    const int64_t send_buffer{args.GetIntArg("-maxsendbuffer", DEFAULT_MAXSENDBUFFER)};
+    const int64_t receive_buffer{args.GetIntArg("-maxreceivebuffer", DEFAULT_MAXRECEIVEBUFFER)};
+    if (send_buffer < 0 || send_buffer > std::numeric_limits<unsigned int>::max() / 1000 ||
+        receive_buffer < 0 || receive_buffer > std::numeric_limits<unsigned int>::max() / 1000) {
+        return InitError(_("-maxsendbuffer and -maxreceivebuffer must be between 0 and 4294967"));
+    }
+    connOptions.nSendBufferMaxSize = static_cast<unsigned int>(1000 * send_buffer);
+    connOptions.nReceiveFloodSize = static_cast<unsigned int>(1000 * receive_buffer);
     connOptions.m_added_nodes = args.GetArgs("-addnode");
     connOptions.nMaxOutboundLimit = *opt_max_upload;
     connOptions.m_peer_connect_timeout = peer_connect_timeout;
@@ -1905,6 +1921,10 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
                 const std::string truncated_bind_arg = bind_arg.substr(0, index);
                 bind_addr = Lookup(truncated_bind_arg, default_bind_port_onion, false);
                 if (bind_addr.has_value()) {
+                    if (args.IsArgSet("-port") && default_bind_port == std::numeric_limits<uint16_t>::max() &&
+                        bind_addr->GetPort() == 0) {
+                        return InitError(_("-port=65535 leaves no port for the onion service"));
+                    }
                     connOptions.onion_binds.push_back(bind_addr.value());
                     continue;
                 }
@@ -1943,6 +1963,9 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         } else if (!connOptions.vBinds.empty()) {
             onion_service_target = connOptions.vBinds.front();
         } else {
+            if (args.IsArgSet("-port") && default_bind_port == std::numeric_limits<uint16_t>::max()) {
+                return InitError(_("-port=65535 leaves no port for the onion service"));
+            }
             onion_service_target = DefaultOnionServiceTarget(default_bind_port_onion);
             if (args.GetBoolArg("-server", false) && RPCServerBindsOnPort(args, onion_service_target.GetPort())) {
                 return InitError(strprintf(

@@ -27,6 +27,11 @@ private Q_SLOTS:
     void unitGlyphCmapHasWindowsBmpEncoding();
     void failedFontLoadsChangeNothing();
     void amountFieldUnitChangeSignalsAClearedValue();
+    void parseRefusesALeadingZeroGroup();
+    void parseRefusesASignOrABareDot();
+    void privacyFormattersShowANegativeWithoutAborting();
+    void formatNegatesInt64MinAndSignsBesideTheDigits();
+    void justifiedColumnHoldsMaxMoney();
 };
 
 #endif // QUICKSILVER_QT_TEST_UNITSTESTS_H

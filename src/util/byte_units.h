@@ -8,6 +8,8 @@
 
 #include <util/overflow.h>
 
+#include <cstddef>
+#include <limits>
 #include <stdexcept>
 
 //! Overflow-safe conversion of MiB to bytes.

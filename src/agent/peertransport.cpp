@@ -28,8 +28,11 @@
 #include <chrono>
 #include <cstring>
 #include <exception>
+#include <ios>
 #include <memory>
+#include <optional>
 #include <limits>
+#include <string>
 #include <vector>
 
 namespace agent {
@@ -48,20 +51,6 @@ std::vector<unsigned char> FrameWireMessage(const CSerializedNetMsg& message)
     VectorWriter{bytes, 0, header};
     bytes.insert(bytes.end(), message.data.begin(), message.data.end());
     return bytes;
-}
-
-util::Result<size_t> SendWireMessage(const Sock& sock,
-                                     const CSerializedNetMsg& message,
-                                     std::chrono::milliseconds timeout)
-{
-    const std::vector<unsigned char> bytes{FrameWireMessage(message)};
-    CThreadInterrupt interrupt;
-    try {
-        sock.SendComplete(bytes, timeout, interrupt);
-    } catch (const std::exception& e) {
-        return util::Error{Untranslated(strprintf("Could not send %s message: %s", message.m_type, e.what()))};
-    }
-    return bytes.size();
 }
 
 util::Result<std::vector<unsigned char>> ReceiveBytes(const Sock& sock,
@@ -105,6 +94,22 @@ util::Result<std::vector<unsigned char>> ReceiveBytes(const Sock& sock,
     return bytes;
 }
 
+} // namespace
+
+util::Result<size_t> SendWireMessage(const Sock& sock,
+                                     const CSerializedNetMsg& message,
+                                     std::chrono::milliseconds timeout)
+{
+    const std::vector<unsigned char> bytes{FrameWireMessage(message)};
+    CThreadInterrupt interrupt;
+    try {
+        sock.SendComplete(bytes, timeout, interrupt);
+    } catch (const std::exception& e) {
+        return util::Error{Untranslated(strprintf("Could not send %s message: %s", message.m_type, e.what()))};
+    }
+    return bytes.size();
+}
+
 util::Result<CSerializedNetMsg> ReceiveWireMessage(const Sock& sock, std::chrono::milliseconds timeout)
 {
     const auto deadline{std::chrono::steady_clock::now() + timeout};
@@ -145,6 +150,8 @@ util::Result<CSerializedNetMsg> ReceiveWireMessage(const Sock& sock, std::chrono
     return message;
 }
 
+namespace {
+
 CSerializedNetMsg MakeAgentVersionMessage(const CService& peer)
 {
     const int64_t now{count_seconds(GetTime<std::chrono::seconds>())};
@@ -161,6 +168,29 @@ CSerializedNetMsg MakeAgentVersionMessage(const CService& peer)
                         FormatSubVersion(CLIENT_NAME, CLIENT_VERSION, {"agent"}),
                         int32_t{0},
                         true);
+}
+
+//! The fields the node itself requires of a version message (net_processing's
+//! VERSION handler), and its minimum protocol version. Anything less is refused
+//! before the agent answers with verack.
+std::optional<std::string> PeerVersionError(const CSerializedNetMsg& message)
+{
+    int32_t version{0};
+    try {
+        DataStream stream{MakeByteSpan(message.data)};
+        uint64_t services{0};
+        int64_t time{0};
+        CService addr_me;
+        stream >> version >> services >> time;
+        stream.ignore(8); // addr_me's service bits
+        stream >> CNetAddr::V1(addr_me);
+    } catch (const std::ios_base::failure&) {
+        return "peer sent a malformed version message";
+    }
+    if (version < MIN_PEER_PROTO_VERSION) {
+        return strprintf("peer protocol version %d is older than the minimum %d", version, MIN_PEER_PROTO_VERSION);
+    }
+    return std::nullopt;
 }
 
 util::Result<void> SendHandshakeFeatureMessages(const Sock& sock, std::chrono::milliseconds timeout)
@@ -195,6 +225,10 @@ PeerHandshakeResult CompletePeerHandshake(const Sock& sock, const CService& peer
         if (peer_message->m_type == NetMsgType::VERSION) {
             if (result.peer_version_received) {
                 result.error = "peer sent duplicate version message";
+                return result;
+            }
+            if (const auto version_error{PeerVersionError(*peer_message)}) {
+                result.error = *version_error;
                 return result;
             }
             result.peer_version_received = true;

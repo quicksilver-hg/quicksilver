@@ -179,9 +179,10 @@ static inline size_t DynamicUsage(const std::list<X>& l)
 }
 
 template<typename X>
-struct unordered_node : private X
+struct unordered_node
 {
 private:
+    X value;
     void* ptr;
 };
 

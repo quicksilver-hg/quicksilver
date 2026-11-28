@@ -169,8 +169,7 @@ CAmount GetBlockMintAllowance(const CBlock& block, const Consensus::Params& para
  * old value for blocks at the difficulty adjustment interval, and otherwise
  * requires the values to be the same.
  *
- * Always returns true on networks where min difficulty blocks are allowed,
- * such as sandbox/publictest.
+ * Always returns true on sandbox, which allows minimum-difficulty blocks.
  */
 bool PermittedDifficultyTransition(const Consensus::Params& params, int64_t height, uint32_t old_nbits, uint32_t new_nbits);
 

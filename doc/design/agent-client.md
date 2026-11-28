@@ -54,7 +54,7 @@ bearing rather than cosmetic.
 
 The client never scans blocks and stores no chain history. It speaks the ordinary
 peer-to-peer protocol — `getheaders`/`headers` for the chain, `inv`/`tx` for
-transactions — rather than REST or RPC, because those require a cooperating node
+transactions — rather than RPC, because that requires a cooperating node
 operator to have opted in.
 
 Compact block filters (BIP157/158) are not used. At Quicksilver's block size they
@@ -148,9 +148,11 @@ discovery harness.
   `tx` payload construction/decoding. Serialized transactions preserve witness
   data and the Quicksilver transaction proof-of-work tail.
 - **Client facade:** [agentclient.h](../../src/agent/agentclient.h),
-  [agentpeer.h](../../src/agent/agentpeer.h), and
-  [agentpeerset.h](../../src/agent/agentpeerset.h) combine header and transaction
-  state behind default-peer and multi-peer APIs.
+  and [agentpeer.h](../../src/agent/agentpeer.h) combine header and transaction
+  state for the one peer the command-line agent talks to at a time.
+- **Peer transport:** [peertransport.h](../../src/agent/peertransport.h) frames,
+  sends and receives wire messages, completes the version handshake, and sends a
+  transaction to one peer. The command-line agent's socket commands all use it.
 - **Allotment policy:** [allotmentpolicy.h](../../src/agent/allotmentpolicy.h) implements the
   policy-request decoder and client-side daily guardrail check that
   allotment-consuming callers must apply before creating an agent spend. It also
@@ -303,11 +305,11 @@ agent's request into the desktop and chooses to co-sign it (see "Coordination
 between vault and agent"). This has consequences that the interface must state
 rather than obscure:
 
-**Spending limits are the agent's own check, not protocol guarantees.** The
-script does not contain a limit, and the vault does not enforce one: it co-signs
-any request for an active allotment that passes its checks. The agent's client
-applies the limits to itself. No interface text may describe them as guaranteed,
-enforced, or protected.
+**Spending limits are not protocol guarantees.** The script does not contain a
+limit. The agent's client applies the funding and daily limits to itself, and the
+vault also refuses to co-sign a spend that would take what it has co-signed for
+the allotment in the UTC day over the daily limit (F-661). No interface text may
+describe the limits as guaranteed or protected.
 
 Two distinct risks are disclosed at allotment creation, and acceptance is recorded:
 

@@ -15,6 +15,7 @@
 #include <test/util/txrelaypool.h>
 #include <txrelaypool.h>
 #include <util/check.h>
+#include <util/fs.h>
 #include <util/time.h>
 #include <util/translation.h>
 #include <validation.h>
@@ -59,5 +60,15 @@ FUZZ_TARGET(validation_load_relaypool, .init = initialize_validation_load_relayp
                           .mockable_fopen_function = fuzzed_fopen,
                       });
     pool.SetLoadTried(true);
-    (void)DumpRelayPool(pool, RelayPoolPath(g_setup->m_args), fuzzed_fopen, true);
+    const fs::path dump_path{RelayPoolPath(g_setup->m_args)};
+    if (fuzzed_data_provider.ConsumeBool()) {
+        (void)DumpRelayPool(pool, dump_path, fuzzed_fopen, true);
+    } else {
+        // S0406-C-01: a real file, so the dumper's .new file exists and the
+        // rename over the dump path (relaypool_persist.cpp) actually runs.
+        Assert(DumpRelayPool(pool, dump_path, fsbridge::fopen, /*skip_file_commit=*/true));
+        Assert(fs::exists(dump_path));
+        Assert(!fs::exists(dump_path + ".new"));
+        fs::remove(dump_path);
+    }
 }

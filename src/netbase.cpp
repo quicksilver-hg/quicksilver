@@ -232,6 +232,9 @@ bool IsUnixSocketPath(const std::string& name)
     // Split off "unix:" prefix
     std::string str{name.substr(ADDR_PREFIX_UNIX.length())};
 
+    // A bare "unix:" names no socket at all.
+    if (str.empty()) return false;
+
     // Path size limit is platform-dependent
     // see https://manpages.ubuntu.com/manpages/xenial/en/man7/unix.7.html
     if (str.size() + 1 > sizeof(((sockaddr_un*)nullptr)->sun_path)) return false;
@@ -409,7 +412,8 @@ bool Socks5(const std::string& strDest, uint16_t port, const ProxyCredentials* a
             vAuth.push_back(auth->password.size());
             vAuth.insert(vAuth.end(), auth->password.begin(), auth->password.end());
             sock.SendComplete(vAuth, g_socks5_recv_timeout, g_socks5_interrupt);
-            LogDebug(HgLog::PROXY, "SOCKS5 sending proxy authentication %s:%s\n", auth->username, auth->password);
+            // The credentials are Tor stream-isolation tokens: never write them to the log.
+            LogDebug(HgLog::PROXY, "SOCKS5 sending proxy authentication\n");
             uint8_t pchRetA[2];
             if (InterruptibleRecv(pchRetA, 2, g_socks5_recv_timeout, sock) != IntrRecvError::OK) {
                 LogError(HgLog::MESH, "Error reading proxy authentication response\n");
@@ -727,6 +731,7 @@ std::unique_ptr<Sock> ConnectThroughProxy(const Proxy& proxy,
                                           uint16_t port,
                                           bool& proxy_connection_failed)
 {
+    proxy_connection_failed = false;
     // first connect to proxy server
     auto sock = proxy.Connect();
     if (!sock) {

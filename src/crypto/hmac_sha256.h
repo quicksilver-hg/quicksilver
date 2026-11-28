@@ -22,6 +22,7 @@ public:
     static const size_t OUTPUT_SIZE = 32;
 
     CHMAC_SHA256(const unsigned char* key, size_t keylen);
+    ~CHMAC_SHA256();
     CHMAC_SHA256& Write(const unsigned char* data, size_t len)
     {
         inner.Write(data, len);

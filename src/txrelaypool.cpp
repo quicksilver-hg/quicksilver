@@ -15,11 +15,9 @@
 #include <consensus/validation.h>
 #include <logging.h>
 #include <policy/policy.h>
-#include <policy/settings.h>
 #include <random.h>
 #include <tinyformat.h>
 #include <util/check.h>
-#include <util/moneystr.h>
 #include <util/overflow.h>
 #include <util/result.h>
 #include <util/time.h>
@@ -91,7 +89,7 @@ void CTxRelayPool::UpdateForDescendants(txiter updateIt, cacheMap& cachedDescend
             cachedDescendants[updateIt].insert(mapTx.iterator_to(descendant));
             // Update ancestor state for each descendant
             mapTx.modify(mapTx.iterator_to(descendant), [=](CTxRelayPoolEntry& e) {
-              e.UpdateAncestorState(updateIt->GetTxSize(), 1, updateIt->GetSigOpCost());
+              e.UpdateAncestorState(updateIt->GetTxSize(), 1);
             });
             // Don't directly remove the transaction here -- doing so would
             // invalidate iterators in cachedDescendants. Mark it for removal
@@ -303,12 +301,10 @@ void CTxRelayPool::UpdateEntryForAncestors(txiter it, const setEntries &setAnces
 {
     int64_t updateCount = setAncestors.size();
     int64_t updateSize = 0;
-    int64_t updateSigOpsCost = 0;
     for (txiter ancestorIt : setAncestors) {
         updateSize += ancestorIt->GetTxSize();
-        updateSigOpsCost += ancestorIt->GetSigOpCost();
     }
-    mapTx.modify(it, [=](CTxRelayPoolEntry& e){ e.UpdateAncestorState(updateSize, updateCount, updateSigOpsCost); });
+    mapTx.modify(it, [=](CTxRelayPoolEntry& e){ e.UpdateAncestorState(updateSize, updateCount); });
 }
 
 void CTxRelayPool::UpdateChildrenForRemoval(txiter it)
@@ -335,9 +331,8 @@ void CTxRelayPool::UpdateForRemoveFromRelayPool(const setEntries &entriesToRemov
             CalculateDescendants(removeIt, setDescendants);
             setDescendants.erase(removeIt); // don't update state for self
             int32_t modifySize = -removeIt->GetTxSize();
-            int modifySigOps = -removeIt->GetSigOpCost();
             for (txiter dit : setDescendants) {
-                mapTx.modify(dit, [=](CTxRelayPoolEntry& e){ e.UpdateAncestorState(modifySize, -1, modifySigOps); });
+                mapTx.modify(dit, [=](CTxRelayPoolEntry& e){ e.UpdateAncestorState(modifySize, -1); });
             }
         }
     }
@@ -383,14 +378,12 @@ void CTxRelayPoolEntry::UpdateDescendantState(int32_t modifySize, int64_t modify
     assert(m_count_with_descendants > 0);
 }
 
-void CTxRelayPoolEntry::UpdateAncestorState(int32_t modifySize, int64_t modifyCount, int64_t modifySigOps)
+void CTxRelayPoolEntry::UpdateAncestorState(int32_t modifySize, int64_t modifyCount)
 {
     nSizeWithAncestors += modifySize;
     assert(nSizeWithAncestors > 0);
     m_count_with_ancestors += modifyCount;
     assert(m_count_with_ancestors > 0);
-    nSigOpCostWithAncestors += modifySigOps;
-    assert(int(nSigOpCostWithAncestors) >= 0);
 }
 
 //! Clamp option values and populate the error if options are not valid.
@@ -582,7 +575,7 @@ void CTxRelayPool::CalculateDescendants(txiter entryit, setEntries& setDescendan
 
 void CTxRelayPool::removeRecursive(const CTransaction &origTx, RelayPoolRemovalReason reason)
 {
-    // Remove transaction from memory pool
+    // Remove transaction from the relay pool.
     AssertLockHeld(cs);
     Assume(!m_have_changeset);
         setEntries txToRemove;
@@ -716,16 +709,13 @@ void CTxRelayPool::check(const CCoinsViewCache& active_coins_tip, int64_t spendh
         auto ancestors{AssumeCalculateRelayPoolAncestors(__func__, *it, Limits::NoLimits())};
         uint64_t nCountCheck = ancestors.size() + 1;
         int32_t nSizeCheck = it->GetTxSize();
-        int64_t nSigOpCheck = it->GetSigOpCost();
 
         for (txiter ancestorIt : ancestors) {
             nSizeCheck += ancestorIt->GetTxSize();
-            nSigOpCheck += ancestorIt->GetSigOpCost();
         }
 
         assert(it->GetCountWithAncestors() == nCountCheck);
         assert(it->GetSizeWithAncestors() == nSizeCheck);
-        assert(it->GetSigOpCostWithAncestors() == nSigOpCheck);
         // Sanity check: we are walking in ascending ancestor count order.
         assert(prev_ancestor_count <= it->GetCountWithAncestors());
         prev_ancestor_count = it->GetCountWithAncestors();

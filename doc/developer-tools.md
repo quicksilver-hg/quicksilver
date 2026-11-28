@@ -42,13 +42,7 @@ default. They install to `developer-tools\` beside the application.
 | `quicksilver-daemon` | The headless node. Run this on a server, or where you want consensus without a desktop. The application runs its own node, so you do not need both. |
 | `quicksilver-cli` | Sends RPC calls to a running node. The tool you use to script against `quicksilver-daemon`. |
 | `quicksilver-tx` | Builds and modifies raw transactions offline. No node required. |
-| `quicksilver-vault` | Offline vault file maintenance: inspect, salvage or dump a vault without starting a node. |
-
-One more is built only when explicitly enabled, and is experimental:
-
-| Program | What it is for |
-|---|---|
-| `quicksilver-chainstate` | Applies blocks to a chainstate using the kernel library directly. Requires `-DBUILD_UTIL_CHAINSTATE=ON`, and is not installed even then. |
+| `quicksilver-vault` | Offline vault file maintenance: inspect, salvage or dump a vault without starting a node. Its `create` command is for testing and cannot create an encrypted vault. |
 
 ## What is not here
 
@@ -62,5 +56,5 @@ their own directory or beside their own executable. On Ubuntu it is the
 `quicksilver-gpu` package, which these tools recommend. It runs on AMD, NVIDIA
 and Intel cards that have an OpenCL driver. Choose cards with
 `-cuckatoodevice=<id>`, using the ids `qsgpusolve-opencl --list-devices`
-prints. Building a CUDA or ROCm helper and pointing `-cuckatoosolver` at it is
-described in [GPU Solver](gpu-solver.md).
+prints. Pointing `-cuckatoosolver` at a helper you built yourself, and the
+contract that helper must keep, is described in [GPU Solver](gpu-solver.md).

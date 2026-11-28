@@ -158,6 +158,13 @@ std::optional<CService> GetLocalAddrForPeer(CNode& node);
 bool AddLocal(const CService& addr, int nScore = LOCAL_NONE);
 bool AddLocal(const CNetAddr& addr, int nScore = LOCAL_NONE);
 void RemoveLocal(const CService& addr);
+/**
+ * Withdraw an endpoint the port mapper added with LOCAL_MAPPED, once its mapping
+ * lapsed or the mapper stopped. An endpoint that any other source also claims
+ * (an interface, -bind, -externalip) is kept.
+ * @returns whether the endpoint was removed.
+ */
+bool RemoveMappedLocal(const CService& addr);
 bool SeenLocal(const CService& addr);
 bool IsLocal(const CService& addr);
 CService GetLocalAddress(const CNode& peer);
@@ -171,6 +178,8 @@ extern std::string strSubVersion;
 struct LocalServiceInfo {
     int nScore;
     uint16_t nPort;
+    //! Only the port mapper claims this endpoint (see RemoveMappedLocal).
+    bool m_mapped_only{false};
 };
 
 extern GlobalMutex g_maplocalhost_mutex;
@@ -1207,7 +1216,7 @@ public:
      * Attempts to open a connection. Currently only used from tests.
      *
      * @param[in]   address     Address of node to try connecting to
-     * @param[in]   conn_type   ConnectionType::OUTBOUND, ConnectionType::BLOCK_RELAY,
+     * @param[in]   conn_type   ConnectionType::OUTBOUND_FULL_RELAY, ConnectionType::BLOCK_RELAY,
      *                          ConnectionType::ADDR_FETCH or ConnectionType::FEELER
      * @param[in]   use_v2transport  Set to true if node attempts to connect using BIP 324 v2 transport protocol.
      * @return      bool        Returns false if there are no available
@@ -1637,6 +1646,10 @@ private:
                 std::shuffle(m_nodes_copy.begin(), m_nodes_copy.end(), FastRandomContext{});
             }
         }
+
+        // Holds one reference per node: a copy would release each twice.
+        NodesSnapshot(const NodesSnapshot&) = delete;
+        NodesSnapshot& operator=(const NodesSnapshot&) = delete;
 
         ~NodesSnapshot()
         {

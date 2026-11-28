@@ -4,14 +4,16 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <common/args.h>
 #include <rpc/client.h>
 #include <tinyformat.h>
 
 #include <set>
 #include <stdint.h>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 class CRPCConvertParam
 {
@@ -225,7 +227,7 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "createvault", 2, "blank"},
     { "createvault", 4, "avoid_reuse"},
     { "createvault", 5, "load_on_startup"},
-    { "createvault", 6, "external_signer"},
+    { "backupvault", 1, "overwrite"},
     { "restorevault", 2, "load_on_startup"},
     { "loadvault", 1, "load_on_startup"},
     { "unloadvault", 1, "load_on_startup"},

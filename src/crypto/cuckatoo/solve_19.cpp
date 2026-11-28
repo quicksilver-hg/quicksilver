@@ -13,7 +13,6 @@
 #define NSIPHASH 1        // scalar siphash (compiles out the AVX paths)
 #define ATOMIC            // atomic edge bitmap (matches the validated lean19x1 build)
 #define SQUASH_OUTPUT 1   // silence the solver's stdout chatter
-#define CUCKATOO_NO_MAIN  // drop the standalone CLI main()
 namespace cuckatoo_solve_e19 {
 #include "vendor/lean.cpp"  // run_solver/create_solver_ctx/... + the whole solver chain
 }
@@ -22,9 +21,10 @@ namespace cuckatoo_solve_e19 {
 #undef NSIPHASH
 #undef ATOMIC
 #undef SQUASH_OUTPUT
-#undef CUCKATOO_NO_MAIN
 
 #include <cstring>
+#include <limits>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -42,7 +42,8 @@ bool Solve19(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint32_t sta
     const unsigned hw = std::thread::hardware_concurrency();
     params.nthreads = hw == 0 ? 1 : (hw < 4 ? hw : 4);
 
-    E::SolverCtx* ctx = E::create_solver_ctx(&params);  // created once, reused across the sweep
+    std::unique_ptr<E::SolverCtx, decltype(&E::destroy_solver_ctx)> ctx{
+        E::create_solver_ctx(&params), E::destroy_solver_ctx};
     char hdr[PREPOW_BYTES];
     std::memcpy(hdr, prepow.data(), sizeof(hdr));
 
@@ -52,7 +53,7 @@ bool Solve19(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint32_t sta
         if (cancel && cancel()) break;  // shutdown: abandon the sweep between graphs
         if (progress) progress(nonce);
         E::SolverSolutions sols{};
-        E::run_solver(ctx, hdr, sizeof(hdr), nonce, /*range=*/1, &sols, nullptr);
+        E::run_solver(ctx.get(), hdr, sizeof(hdr), nonce, /*range=*/1, &sols);
         if (sols.num_sols > 0) {
             for (int j = 0; j < cuckatoo::PROOFSIZE; ++j) {
                 out[j] = static_cast<uint32_t>(sols.sols[0].proof[j]);
@@ -61,7 +62,6 @@ bool Solve19(const std::array<unsigned char, PREPOW_BYTES>& prepow, uint32_t sta
             found = true;
         }
     }
-    E::destroy_solver_ctx(ctx);
     return found;
 }
 
@@ -77,7 +77,12 @@ bool Solve19Bytes(const unsigned char* prepow, size_t len, uint32_t start_nonce,
     const unsigned hw = std::thread::hardware_concurrency();
     params.nthreads = hw == 0 ? 1 : (hw < 4 ? hw : 4);
 
-    E::SolverCtx* ctx = E::create_solver_ctx(&params);
+    // The nonce goes in buf[len-4..len-1] and run_solver takes a uint32_t length.
+    // CuckatooSolveBytes refuses such a buffer first; this keeps the entry point
+    // safe on its own.
+    if (len < 4 || len > std::numeric_limits<uint32_t>::max()) return false;
+    std::unique_ptr<E::SolverCtx, decltype(&E::destroy_solver_ctx)> ctx{
+        E::create_solver_ctx(&params), E::destroy_solver_ctx};
     std::vector<char> buf(prepow, prepow + len);
 
     bool found = false;
@@ -90,7 +95,7 @@ bool Solve19Bytes(const unsigned char* prepow, size_t len, uint32_t start_nonce,
         buf[len - 2] = (char)((nonce >> 16) & 0xff);
         buf[len - 1] = (char)((nonce >> 24) & 0xff);
         E::SolverSolutions sols{};
-        E::run_solver(ctx, buf.data(), (E::u32)len, nonce, /*range=*/1, &sols, nullptr);
+        E::run_solver(ctx.get(), buf.data(), (E::u32)len, nonce, /*range=*/1, &sols);
         if (sols.num_sols > 0) {
             for (int j = 0; j < cuckatoo::PROOFSIZE; ++j) {
                 out[j] = static_cast<uint32_t>(sols.sols[0].proof[j]);
@@ -99,7 +104,6 @@ bool Solve19Bytes(const unsigned char* prepow, size_t len, uint32_t start_nonce,
             found = true;
         }
     }
-    E::destroy_solver_ctx(ctx);
     return found;
 }
 
