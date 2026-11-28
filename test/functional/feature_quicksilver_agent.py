@@ -348,7 +348,9 @@ class QuicksilverAgentTest(QuicksilverTestFramework):
         imported = 0
         refused = None
         for n in range(4):
-            result = self.agent_process(datadir, [f"-peeraddresses={batch(n)}", "importnodeaddresses"], check=False)
+            # Through standard input: a 1000-peer batch is ~48 KB, past Windows' 32,767-character
+            # command line, so the inline form never starts the agent there.
+            result = self.agent_process(datadir, ["-peeraddresses=-", "importnodeaddresses"], check=False, input_text=batch(n))
             if result.returncode != 0:
                 refused = result
                 break
