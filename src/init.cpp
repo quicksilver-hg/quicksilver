@@ -61,6 +61,7 @@
 #include <node/miner.h>
 #include <node/mining_service.h>
 #include <node/peerman_args.h>
+#include <node/warnings.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <protocol.h>
@@ -1523,6 +1524,13 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
             // gArgs, not `args`: TorControlThread reads the global, and `args`
             // is a const reference here.
             gArgs.ForceSetArg("-torcontrol", *control_endpoint);
+            // Start registered a live Tor, but one can die at any moment after
+            // that check (F-717). Raise a warning once if it does.
+            scheduler.scheduleEvery([&node] {
+                if (tor::BundledTorStopped() && Assert(node.warnings)->Set(node::Warning::BUNDLED_TOR_STOPPED, tor::BundledTorStoppedMessage())) {
+                    LogError(HgLog::TOR, "tor: bundled tor exited after start; onion peers unreachable\n");
+                }
+            }, std::chrono::seconds{10});
         }
     }
 

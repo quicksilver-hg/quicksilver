@@ -13,6 +13,7 @@
 #include <test/util/setup_common.h>
 #include <util/fs_helpers.h>
 #include <util/readwritefile.h>
+#include <util/time.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -215,7 +216,10 @@ BOOST_AUTO_TEST_CASE(a_reported_control_port_is_returned_and_the_child_is_superv
     BOOST_REQUIRE(ok);
     BOOST_CHECK(torrc.find("ControlPort auto\n") != std::string::npos);
 
+    // A live Tor is not reported stopped, and none is once it has been stopped.
+    BOOST_CHECK(!tor::BundledTorStopped());
     tor::StopBundledTor();
+    BOOST_CHECK(!tor::BundledTorStopped());
 }
 
 BOOST_AUTO_TEST_CASE(startup_reserves_the_bundled_tor_slot)
@@ -281,12 +285,41 @@ BOOST_AUTO_TEST_CASE(a_tor_that_reports_a_port_and_exits_is_not_running)
 {
     // The port file alone is not proof of a live Tor: one that wrote it and died
     // must fail the start, not be registered as the supervised bundled Tor.
+    // Start checks the child once, after reading the port file, so which way this
+    // goes depends on whether the stub has exited by then (F-717). Both ways end
+    // with the exit known: start refuses it, or the watcher reports it stopped.
     const fs::path stub = arrange_stub(m_args.GetDataDirNet(),
                                        "port PORT=127.0.0.1:41234\\n\nexit 0\n");
     const auto result = tor::StartBundledTor(m_args.GetDataDirNet(), stub);
-    BOOST_CHECK_MESSAGE(!result, "a Tor that had already exited was reported as running");
-    BOOST_CHECK(util::ErrorString(result).original.find("exited") != std::string::npos);
+    if (result) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+        while (!tor::BundledTorStopped() && std::chrono::steady_clock::now() < deadline) {
+            UninterruptibleSleep(std::chrono::milliseconds{20});
+        }
+        BOOST_CHECK_MESSAGE(tor::BundledTorStopped(), "a bundled Tor that exited was never reported stopped");
+    } else {
+        BOOST_CHECK(util::ErrorString(result).original.find("exited") != std::string::npos);
+    }
     tor::StopBundledTor();
+    BOOST_CHECK(!tor::BundledTorStopped());
+}
+
+BOOST_AUTO_TEST_CASE(a_tor_that_dies_after_start_is_reported_stopped)
+{
+    // Alive for two seconds after reporting: start registers it, then it dies.
+    // The watcher in node startup asks this question every ten seconds (F-717).
+    const fs::path stub = arrange_stub(m_args.GetDataDirNet(),
+                                       "port PORT=127.0.0.1:41234\\n\nsleep 2000\nexit 0\n");
+    const auto result = tor::StartBundledTor(m_args.GetDataDirNet(), stub);
+    BOOST_REQUIRE_MESSAGE(result, util::ErrorString(result).original);
+    BOOST_CHECK(!tor::BundledTorStopped());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{15};
+    while (!tor::BundledTorStopped() && std::chrono::steady_clock::now() < deadline) {
+        UninterruptibleSleep(std::chrono::milliseconds{50});
+    }
+    BOOST_CHECK_MESSAGE(tor::BundledTorStopped(), "a bundled Tor that died after start was never reported stopped");
+    tor::StopBundledTor();
+    BOOST_CHECK(!tor::BundledTorStopped());
 }
 
 BOOST_AUTO_TEST_CASE(a_malformed_control_port_file_is_an_error_not_a_wait)

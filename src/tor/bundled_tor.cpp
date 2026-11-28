@@ -276,4 +276,16 @@ void StopBundledTor()
     child->Wait();
 }
 
+bool BundledTorStopped()
+    EXCLUSIVE_LOCKS_REQUIRED(!g_bundled_tor_mutex)
+{
+    LOCK(g_bundled_tor_mutex);
+    return g_bundled_tor && g_bundled_tor->Exited();
+}
+
+bilingual_str BundledTorStoppedMessage()
+{
+    return _("The bundled Tor has stopped, so this node cannot reach onion peers. Restart Quicksilver to start it again.");
+}
+
 } // namespace tor

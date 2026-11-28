@@ -26,6 +26,7 @@ enum class Warning {
     UNRELEASED_BUILD,
     FATAL_INTERNAL_ERROR,
     HANDSHAKE_FAILURES,
+    BUNDLED_TOR_STOPPED,
 };
 
 /**

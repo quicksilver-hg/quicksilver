@@ -129,6 +129,17 @@ util::Result<std::string> StartBundledTor(const fs::path& datadir, const fs::pat
 //! Kill the bundled Tor and its group. Idempotent; safe when none was started.
 void StopBundledTor();
 
+/**
+ * True when a bundled Tor was registered by StartBundledTor and has since exited.
+ * Start checks the child once, after reading the port file, so a Tor that dies
+ * just after that check is registered anyway; node startup polls this to notice
+ * it (F-717). False when none was started, or after StopBundledTor.
+ */
+bool BundledTorStopped();
+
+//! The warning shown when the bundled Tor has stopped while the node runs.
+bilingual_str BundledTorStoppedMessage();
+
 } // namespace tor
 
 #endif // QUICKSILVER_TOR_BUNDLED_TOR_H
