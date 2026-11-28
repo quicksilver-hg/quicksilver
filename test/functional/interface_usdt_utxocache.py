@@ -14,6 +14,7 @@ try:
     from bcc import BPF, USDT # type: ignore[import]
 except ImportError:
     pass
+from test_framework.blocktools import KEEP_WINDOW_GROWTH
 from test_framework.messages import COIN
 from test_framework.test_framework import QuicksilverTestFramework
 from test_framework.util import (
@@ -395,7 +396,9 @@ class UTXOCacheTracepointTest(QuicksilverTestFramework):
         self.log.info("restart the node with -prune")
         self.start_node(0, ["-fastprune=1", "-prune=1"])
 
-        BLOCKS_TO_MINE = 350
+        # pruneblockchain(315) keeps MIN_BLOCKS_TO_KEEP below the tip: grow the chain by the
+        # difference from upstream's 288 so the request is clamped to the same height as before.
+        BLOCKS_TO_MINE = 350 + KEEP_WINDOW_GROWTH
         self.log.info(f"mine {BLOCKS_TO_MINE} blocks to be able to prune")
         self.generate(self.vault, BLOCKS_TO_MINE)
 
